@@ -46,7 +46,7 @@ def expand_startup_integrations(
 
 
 def build_actor_startup_config(resolved: ResolvedAssistantDeployment) -> dict[str, Any]:
-    """Build the config payload consumed by Unity actor initialization."""
+    """Build the config payload consumed by Droid actor initialization."""
 
     from unity_deploy.runtime import get_runtime_backend_overrides
 

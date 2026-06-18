@@ -1,6 +1,6 @@
 """Thin HTTP client for Orchestra admin endpoints.
 
-Uses ``SETTINGS`` from :mod:`unity.settings` for the base URL and admin
+Uses ``SETTINGS`` from :mod:`droid.settings` for the base URL and admin
 bearer token — the same pydantic-settings singleton that
 ``assistant_key_resolver.py`` and the rest of the codebase already
 depend on.  Follows the httpx pattern established there: typed errors,
@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from unity.settings import SETTINGS
+from droid.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def _admin_headers() -> dict[str, str]:
 def _build_url(path: str) -> str:
     """Build a versioned Orchestra URL from SETTINGS.ORCHESTRA_URL.
 
-    Unity convention is for ORCHESTRA_URL to include /v0, but local/dev
+    Droid convention is for ORCHESTRA_URL to include /v0, but local/dev
     callers may provide the host only.  Accept either versioned or
     unversioned paths to avoid accidental /v0/v0 duplication.
     """

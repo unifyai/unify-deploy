@@ -1,6 +1,6 @@
-"""Tests for the Unity assistant Job manifest contract.
+"""Tests for the Droid assistant Job manifest contract.
 
-After the ``build_unity_job_manifest`` / ``create_unity_job`` split,
+After the ``build_droid_job_manifest`` / ``create_droid_job`` split,
 manifest-shape assertions go directly against the dict returned by
 the builder (no FakeBatchApi dance). Tests that verify the submit
 side of the wrapper (calls ``create_namespaced_job`` exactly once,
@@ -14,8 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from communication.infra.helpers import (
-    build_unity_job_manifest,
-    create_unity_job,
+    build_droid_job_manifest,
+    create_droid_job,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def _container(manifest: dict) -> dict:
-    """The single ``unity-assistant`` container in the pod template."""
+    """The single ``droid-assistant`` container in the pod template."""
     return manifest["spec"]["template"]["spec"]["containers"][0]
 
 
@@ -51,42 +51,42 @@ def test_no_envFrom_bulk_secret_or_configmap_injection() -> None:
     deleted legacy ``create_job.py`` used and is exactly what we don't
     want here, because it makes the per-env contract invisible.
     """
-    manifest = build_unity_job_manifest(job_name="env-allowlist-staging")
+    manifest = build_droid_job_manifest(job_name="env-allowlist-staging")
     pod_spec = manifest["spec"]["template"]["spec"]
     assert "envFrom" not in pod_spec
     for container in pod_spec["containers"]:
         assert "envFrom" not in container
 
 
-def test_orchestra_admin_key_sourced_from_unity_secrets() -> None:
-    manifest = build_unity_job_manifest(job_name="orch-admin-key-staging")
+def test_orchestra_admin_key_sourced_from_droid_secrets() -> None:
+    manifest = build_droid_job_manifest(job_name="orch-admin-key-staging")
     entry = _env_by_name(manifest)["ORCHESTRA_ADMIN_KEY"]
     assert entry["valueFrom"]["secretKeyRef"] == {
-        "name": "unity-secrets",
+        "name": "droid-secrets",
         "key": "ORCHESTRA_ADMIN_KEY",
     }
 
 
-def test_gcp_project_id_sourced_from_unity_config() -> None:
-    manifest = build_unity_job_manifest(job_name="gcp-project-staging")
+def test_gcp_project_id_sourced_from_droid_config() -> None:
+    manifest = build_droid_job_manifest(job_name="gcp-project-staging")
     entry = _env_by_name(manifest)["GCP_PROJECT_ID"]
     # Required key -> no "optional" flag.
     assert entry["valueFrom"]["configMapKeyRef"] == {
-        "name": "unity-config",
+        "name": "droid-config",
         "key": "GCP_PROJECT_ID",
     }
 
 
-def test_runtime_reconcile_mode_is_optional_unity_config_key() -> None:
-    """``UNITY_DEPLOY_RUNTIME_RECONCILE_MODE`` is the one ConfigMap
+def test_runtime_reconcile_mode_is_optional_droid_config_key() -> None:
+    """``DROID_DEPLOY_RUNTIME_RECONCILE_MODE`` is the one ConfigMap
     key that's allowed to be missing -- the assistant uses a default
     when it isn't set. Other ConfigMap-sourced keys are required.
     """
-    manifest = build_unity_job_manifest(job_name="reconcile-mode-staging")
-    entry = _env_by_name(manifest)["UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"]
+    manifest = build_droid_job_manifest(job_name="reconcile-mode-staging")
+    entry = _env_by_name(manifest)["DROID_DEPLOY_RUNTIME_RECONCILE_MODE"]
     config_ref = entry["valueFrom"]["configMapKeyRef"]
-    assert config_ref["name"] == "unity-config"
-    assert config_ref["key"] == "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"
+    assert config_ref["name"] == "droid-config"
+    assert config_ref["key"] == "DROID_DEPLOY_RUNTIME_RECONCILE_MODE"
     assert config_ref.get("optional") is True
 
     # And the other ConfigMap keys are NOT marked optional.
@@ -95,16 +95,16 @@ def test_runtime_reconcile_mode_is_optional_unity_config_key() -> None:
         assert ref.get("optional") is not True
 
 
-def test_unity_startup_timing_is_disabled_literal_not_configmap_sourced() -> None:
+def test_droid_startup_timing_is_disabled_literal_not_configmap_sourced() -> None:
     """Startup timing remains a manifest literal, not a ConfigMap key."""
-    staging = build_unity_job_manifest(job_name="x", deploy_env="staging")
-    production = build_unity_job_manifest(job_name="x", deploy_env="production")
+    staging = build_droid_job_manifest(job_name="x", deploy_env="staging")
+    production = build_droid_job_manifest(job_name="x", deploy_env="production")
 
-    staging_entry = _env_by_name(staging)["UNITY_STARTUP_TIMING"]
-    production_entry = _env_by_name(production)["UNITY_STARTUP_TIMING"]
+    staging_entry = _env_by_name(staging)["DROID_STARTUP_TIMING"]
+    production_entry = _env_by_name(production)["DROID_STARTUP_TIMING"]
 
-    assert staging_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
-    assert production_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
+    assert staging_entry == {"name": "DROID_STARTUP_TIMING", "value": "0"}
+    assert production_entry == {"name": "DROID_STARTUP_TIMING", "value": "0"}
 
 
 # ---------------------------------------------------------------------------
@@ -113,19 +113,19 @@ def test_unity_startup_timing_is_disabled_literal_not_configmap_sourced() -> Non
 
 
 def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
-    """Per-deploy ORCHESTRA_URL / UNITY_COMMS_URL / UNITY_ADAPTERS_URL
+    """Per-deploy ORCHESTRA_URL / DROID_COMMS_URL / DROID_ADAPTERS_URL
     overrides arrive via ``extra_env``. The override must replace the
     default (not duplicate it) so the container sees exactly one value
     per env name.
     """
-    manifest = build_unity_job_manifest(
-        job_name="unity-override-1207-staging",
+    manifest = build_droid_job_manifest(
+        job_name="droid-override-1207-staging",
         namespace="staging",
         deploy_env="staging",
         extra_env={
             "ORCHESTRA_URL": "https://internal.example.com/v0",
-            "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-            "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+            "DROID_COMMS_URL": "https://myslug---droid-comms-app-staging.run.app",
+            "DROID_ADAPTERS_URL": "https://myslug---droid-adapters-staging.run.app",
         },
     )
 
@@ -133,17 +133,17 @@ def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
     env_names = _env_names(manifest)
 
     assert env_names.count("ORCHESTRA_URL") == 1
-    assert env_names.count("UNITY_COMMS_URL") == 1
-    assert env_names.count("UNITY_ADAPTERS_URL") == 1
+    assert env_names.count("DROID_COMMS_URL") == 1
+    assert env_names.count("DROID_ADAPTERS_URL") == 1
 
     assert env_by_name["ORCHESTRA_URL"]["value"] == (
         "https://internal.example.com/v0"
     )
-    assert env_by_name["UNITY_COMMS_URL"]["value"] == (
-        "https://myslug---unity-comms-app-staging.run.app"
+    assert env_by_name["DROID_COMMS_URL"]["value"] == (
+        "https://myslug---droid-comms-app-staging.run.app"
     )
-    assert env_by_name["UNITY_ADAPTERS_URL"]["value"] == (
-        "https://myslug---unity-adapters-staging.run.app"
+    assert env_by_name["DROID_ADAPTERS_URL"]["value"] == (
+        "https://myslug---droid-adapters-staging.run.app"
     )
 
 
@@ -153,33 +153,33 @@ def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
 
 
 def test_latest_image_tag_always_pulls() -> None:
-    manifest = build_unity_job_manifest(
-        job_name="unity-offline-latest-staging",
+    manifest = build_droid_job_manifest(
+        job_name="droid-offline-latest-staging",
         namespace="staging",
-        image="registry/unity-staging:latest",
+        image="registry/droid-staging:latest",
     )
     assert _container(manifest)["imagePullPolicy"] == "Always"
 
 
 def test_immutable_image_tag_uses_layer_cache() -> None:
-    manifest = build_unity_job_manifest(
-        job_name="unity-offline-sha-staging",
+    manifest = build_droid_job_manifest(
+        job_name="droid-offline-sha-staging",
         namespace="staging",
-        image="registry/unity-staging:4f25e7cbd9a4",
+        image="registry/droid-staging:4f25e7cbd9a4",
     )
     assert _container(manifest)["imagePullPolicy"] == "IfNotPresent"
 
 
-def test_unity_image_hash_label_matches_image_tag() -> None:
-    """The ``unity-image-hash`` label is what the AssistantSession
+def test_droid_image_hash_label_matches_image_tag() -> None:
+    """The ``droid-image-hash`` label is what the AssistantSession
     controller filters on when claiming idle Jobs for the current
     build. It must equal the image tag exactly.
     """
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="image-hash-staging",
-        image="registry/unity-staging:abc123def456",
+        image="registry/droid-staging:abc123def456",
     )
-    assert manifest["metadata"]["labels"]["unity-image-hash"] == "abc123def456"
+    assert manifest["metadata"]["labels"]["droid-image-hash"] == "abc123def456"
 
 
 # ---------------------------------------------------------------------------
@@ -188,23 +188,23 @@ def test_unity_image_hash_label_matches_image_tag() -> None:
 
 
 def test_staging_deploy_env_activates_both_gateway_transports() -> None:
-    """Staging Jobs must opt in to both ``unity.gateway`` transports.
+    """Staging Jobs must opt in to both ``droid.gateway`` transports.
 
     Pins the staging-soak configuration described in
-    ``unity/gateway/PHASES.md`` (Phase A.bis). Activating these env
+    ``droid/gateway/PHASES.md`` (Phase A.bis). Activating these env
     vars routes both inbound Pub/Sub envelopes and outbound
     publisher.publish() calls through the newly-extracted transports,
     exposing any subtle regressions before the production cutover
     ever ships.
     """
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="gateway-transports-staging",
         namespace="staging",
         deploy_env="staging",
     )
     env_by_name = _env_by_name(manifest)
-    assert env_by_name["UNITY_CONVERSATION_INGRESS_TRANSPORT"]["value"] == "pubsub"
-    assert env_by_name["UNITY_CONVERSATION_OUTBOUND_TRANSPORT"]["value"] == "pubsub"
+    assert env_by_name["DROID_CONVERSATION_INGRESS_TRANSPORT"]["value"] == "pubsub"
+    assert env_by_name["DROID_CONVERSATION_OUTBOUND_TRANSPORT"]["value"] == "pubsub"
 
 
 def test_production_deploy_env_does_not_activate_gateway_transports() -> None:
@@ -216,14 +216,14 @@ def test_production_deploy_env_does_not_activate_gateway_transports() -> None:
     This test guards against accidentally moving either env var out
     of the staging-only block before that point.
     """
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="gateway-transports-prod",
         namespace="production",
         deploy_env="production",
     )
     env_names = _env_names(manifest)
-    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" not in env_names
-    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" not in env_names
+    assert "DROID_CONVERSATION_INGRESS_TRANSPORT" not in env_names
+    assert "DROID_CONVERSATION_OUTBOUND_TRANSPORT" not in env_names
 
 
 def test_no_legacy_staging_flag_in_any_environment() -> None:
@@ -231,7 +231,7 @@ def test_no_legacy_staging_flag_in_any_environment() -> None:
     boolean must never be injected into job manifests.
     """
     for deploy_env in ("staging", "production"):
-        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        manifest = build_droid_job_manifest(job_name="x", deploy_env=deploy_env)
         assert "STAGING" not in _env_names(manifest)
         assert _env_by_name(manifest)["DEPLOY_ENV"]["value"] == deploy_env
 
@@ -242,15 +242,15 @@ def test_no_legacy_staging_flag_in_any_environment() -> None:
 
 
 def test_pipeline_artifact_bucket_production_uses_canonical_name() -> None:
-    manifest = build_unity_job_manifest(job_name="x", deploy_env="production")
-    bucket = _env_by_name(manifest)["UNITY_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
-    assert bucket == "unity-pipeline-artifacts"
+    manifest = build_droid_job_manifest(job_name="x", deploy_env="production")
+    bucket = _env_by_name(manifest)["DROID_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
+    assert bucket == "droid-pipeline-artifacts"
 
 
 def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
-    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
-    bucket = _env_by_name(manifest)["UNITY_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
-    assert bucket == "unity-pipeline-artifacts-staging"
+    manifest = build_droid_job_manifest(job_name="x", deploy_env="staging")
+    bucket = _env_by_name(manifest)["DROID_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
+    assert bucket == "droid-pipeline-artifacts-staging"
 
 
 # ---------------------------------------------------------------------------
@@ -258,23 +258,23 @@ def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_default_priority_class_is_unity_idle() -> None:
-    manifest = build_unity_job_manifest(job_name="x")
+def test_default_priority_class_is_droid_idle() -> None:
+    manifest = build_droid_job_manifest(job_name="x")
     pod_spec = manifest["spec"]["template"]["spec"]
-    assert pod_spec["priorityClassName"] == "unity-idle"
+    assert pod_spec["priorityClassName"] == "droid-idle"
 
 
 def test_priority_class_override() -> None:
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="x",
-        priority_class_name="unity-critical",
+        priority_class_name="droid-critical",
     )
     pod_spec = manifest["spec"]["template"]["spec"]
-    assert pod_spec["priorityClassName"] == "unity-critical"
+    assert pod_spec["priorityClassName"] == "droid-critical"
 
 
 def test_extra_labels_merge_onto_job_metadata() -> None:
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="x",
         extra_labels={"assistant-session": "abc-123", "binding-id": "bind-xyz"},
     )
@@ -282,12 +282,12 @@ def test_extra_labels_merge_onto_job_metadata() -> None:
     assert labels["assistant-session"] == "abc-123"
     assert labels["binding-id"] == "bind-xyz"
     # Defaults still present.
-    assert labels["app"] == "unity"
-    assert labels["unity-status"] == "idle"
+    assert labels["app"] == "droid"
+    assert labels["droid-status"] == "idle"
 
 
 def test_extra_annotations_appear_on_both_job_and_pod_template() -> None:
-    manifest = build_unity_job_manifest(
+    manifest = build_droid_job_manifest(
         job_name="x",
         extra_annotations={"unify.ai/session-id": "ses-123"},
     )
@@ -302,24 +302,24 @@ def test_extra_annotations_appear_on_both_job_and_pod_template() -> None:
 def test_app_label_override_for_offline_and_dashboard_jobs() -> None:
     """`task_activation` and `dashboard_actions` use distinct
     ``app`` labels so the controller's idle-pool selector
-    (``app=unity``) doesn't accidentally pick up those one-shot Jobs.
+    (``app=droid``) doesn't accidentally pick up those one-shot Jobs.
     """
-    offline = build_unity_job_manifest(job_name="x", app_label="unity-offline")
-    dashboard = build_unity_job_manifest(
+    offline = build_droid_job_manifest(job_name="x", app_label="droid-offline")
+    dashboard = build_droid_job_manifest(
         job_name="x",
-        app_label="unity-dashboard-action",
+        app_label="droid-dashboard-action",
     )
-    assert offline["metadata"]["labels"]["app"] == "unity-offline"
-    assert offline["spec"]["template"]["metadata"]["labels"]["app"] == "unity-offline"
-    assert dashboard["metadata"]["labels"]["app"] == "unity-dashboard-action"
+    assert offline["metadata"]["labels"]["app"] == "droid-offline"
+    assert offline["spec"]["template"]["metadata"]["labels"]["app"] == "droid-offline"
+    assert dashboard["metadata"]["labels"]["app"] == "droid-dashboard-action"
 
 
 def test_ttl_and_active_deadline_only_appear_when_set() -> None:
-    bare = build_unity_job_manifest(job_name="x")
+    bare = build_droid_job_manifest(job_name="x")
     assert "ttlSecondsAfterFinished" not in bare["spec"]
     assert "activeDeadlineSeconds" not in bare["spec"]
 
-    bounded = build_unity_job_manifest(
+    bounded = build_droid_job_manifest(
         job_name="x",
         ttl_seconds_after_finished=300,
         active_deadline_seconds=3600,
@@ -334,7 +334,7 @@ def test_container_resources_are_right_sized() -> None:
     the previous 2 vCPU / 16 GiB / 100 GiB shape (which was actually
     billed as 2.46 vCPU on Autopilot's 1:6.5 ratio).
     """
-    resources = _container(build_unity_job_manifest(job_name="x"))["resources"]
+    resources = _container(build_droid_job_manifest(job_name="x"))["resources"]
     expected = {
         "cpu": "2",
         "memory": "8Gi",
@@ -345,7 +345,7 @@ def test_container_resources_are_right_sized() -> None:
 
 
 def test_job_top_level_shape() -> None:
-    manifest = build_unity_job_manifest(job_name="shape-staging", namespace="staging")
+    manifest = build_droid_job_manifest(job_name="shape-staging", namespace="staging")
     assert manifest["apiVersion"] == "batch/v1"
     assert manifest["kind"] == "Job"
     assert manifest["metadata"]["name"] == "shape-staging"
@@ -356,7 +356,7 @@ def test_job_top_level_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Submission wrapper: `create_unity_job` calls the K8s API exactly once
+# Submission wrapper: `create_droid_job` calls the K8s API exactly once
 # ---------------------------------------------------------------------------
 
 
@@ -381,13 +381,13 @@ class _FakeBatchApi:
         )
 
 
-def test_create_unity_job_submits_built_manifest_to_kube_api_once() -> None:
-    """The wrapper passes whatever ``build_unity_job_manifest`` produced
+def test_create_droid_job_submits_built_manifest_to_kube_api_once() -> None:
+    """The wrapper passes whatever ``build_droid_job_manifest`` produced
     to ``create_namespaced_job``, with the right namespace, exactly
     one time.
     """
     batch_api = _FakeBatchApi()
-    response = create_unity_job(
+    response = create_droid_job(
         batch_api,
         job_name="submit-once-staging",
         namespace="staging",
@@ -397,10 +397,10 @@ def test_create_unity_job_submits_built_manifest_to_kube_api_once() -> None:
     assert len(batch_api.calls) == 1
     submitted_namespace, submitted_body = batch_api.calls[0]
     assert submitted_namespace == "staging"
-    # The submitted body equals what build_unity_job_manifest would
+    # The submitted body equals what build_droid_job_manifest would
     # produce for the same args -- pins that the wrapper doesn't
     # rewrite the manifest between build and submit.
-    expected_body = build_unity_job_manifest(
+    expected_body = build_droid_job_manifest(
         job_name="submit-once-staging",
         namespace="staging",
         deploy_env="staging",
@@ -409,7 +409,7 @@ def test_create_unity_job_submits_built_manifest_to_kube_api_once() -> None:
     assert response.metadata.name == "submit-once-staging"
 
 
-def test_create_unity_job_swallows_409_conflict_and_returns_none() -> None:
+def test_create_droid_job_swallows_409_conflict_and_returns_none() -> None:
     """The idle-pool replenish path races itself by design. A 409
     Conflict from the K8s API means another worker already created
     the Job; we must return None rather than raising so the racing
@@ -418,7 +418,7 @@ def test_create_unity_job_swallows_409_conflict_and_returns_none() -> None:
     from kubernetes.client.rest import ApiException
 
     batch_api = _FakeBatchApi(exception=ApiException(status=409, reason="Conflict"))
-    result = create_unity_job(
+    result = create_droid_job(
         batch_api,
         job_name="conflict-test-staging",
         namespace="staging",
@@ -427,16 +427,16 @@ def test_create_unity_job_swallows_409_conflict_and_returns_none() -> None:
     assert len(batch_api.calls) == 1  # We did attempt the submit before 409
 
 
-def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
+def test_create_droid_job_returns_none_on_other_api_exceptions() -> None:
     """Non-409 K8s API failures (5xx, auth, etc.) are surfaced via
     return-None + printed message rather than raising. Production
     callers depend on this swallow-and-return-None contract -- if
-    you change it, audit every caller of create_unity_job first.
+    you change it, audit every caller of create_droid_job first.
     """
     from kubernetes.client.rest import ApiException
 
     batch_api = _FakeBatchApi(exception=ApiException(status=500, reason="Server"))
-    result = create_unity_job(
+    result = create_droid_job(
         batch_api,
         job_name="server-error-test-staging",
         namespace="staging",
@@ -452,13 +452,13 @@ def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
 
 
 def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
-    text = (ROOT / "cloudbuild/unity-comms-app-staging.yaml").read_text()
+    text = (ROOT / "cloudbuild/droid-comms-app-staging.yaml").read_text()
 
     canonical_runtime_env = (
         "--update-env-vars=DEPLOY_ENV=staging,"
         "ORCHESTRA_URL=${_ORCHESTRA_URL},"
-        "UNITY_COMMS_URL=https://${_COMMS_HOST},"
-        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
+        "DROID_COMMS_URL=https://${_COMMS_HOST},"
+        "DROID_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
     )
 
     assert canonical_runtime_env in text
@@ -476,6 +476,6 @@ def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
     staging_text = (ROOT / "cloudbuild/adapters-staging.yaml").read_text()
     production_text = (ROOT / "cloudbuild/adapters.yaml").read_text()
 
-    assert "UNITY_ADAPTERS_URL=https://" not in staging_text
-    assert "UNITY_ADAPTERS_URL=https://" not in production_text
-    assert "UNITY_COMMS_URL=https://" not in production_text
+    assert "DROID_ADAPTERS_URL=https://" not in staging_text
+    assert "DROID_ADAPTERS_URL=https://" not in production_text
+    assert "DROID_COMMS_URL=https://" not in production_text

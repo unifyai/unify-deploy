@@ -9,10 +9,10 @@ from typing import Any
 
 from google.cloud import pubsub_v1
 
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.artifact_store import ArtifactStore
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity.common.pipeline.work_queue import (
+from droid.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline.artifact_store import ArtifactStore
+from droid.common.pipeline.retry_policy import ResilientRequestPolicy
+from droid.common.pipeline.work_queue import (
     ReceivedWorkItem,
     WorkQueueMessage,
 )
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class PubSubWorkQueue:
-    """Pub/Sub-backed work queue implementing the unity WorkQueue protocol.
+    """Pub/Sub-backed work queue implementing the droid WorkQueue protocol.
 
     All blocking GCP client calls are dispatched via
     ``asyncio.to_thread`` so the event loop is never blocked.
@@ -65,7 +65,7 @@ class PubSubWorkQueue:
     def _env_suffix(self) -> str:
         """Return the environment suffix used in shared resource names.
 
-        Matches the convention used across unity/communication:
+        Matches the convention used across droid/communication:
         production -> no suffix; other envs -> ``-{env}``.
         """
         return "" if self._environment == "production" else f"-{self._environment}"

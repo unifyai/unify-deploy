@@ -88,12 +88,12 @@ def test_coordinator_delegate_attaches_wake_reason_for_cold_start():
     with (
         patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
-        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch("adapters.main.uses_local_droid_runtime", return_value=False),
         patch(
-            "adapters.main.dispatch_unity_start_intent",
+            "adapters.main.dispatch_droid_start_intent",
             return_value=start_response,
         ) as mock_dispatch,
-        patch("adapters.main._publish_unity_system_event") as mock_publish,
+        patch("adapters.main._publish_droid_system_event") as mock_publish,
     ):
         response = client.post(
             "/assistant/coordinator-delegate",
@@ -130,12 +130,12 @@ def test_coordinator_delegate_publishes_event_for_running_session():
     with (
         patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
-        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch("adapters.main.uses_local_droid_runtime", return_value=False),
         patch(
-            "adapters.main.dispatch_unity_start_intent",
+            "adapters.main.dispatch_droid_start_intent",
             return_value=start_response,
         ),
-        patch("adapters.main._publish_unity_system_event") as mock_publish,
+        patch("adapters.main._publish_droid_system_event") as mock_publish,
     ):
         response = client.post(
             "/assistant/coordinator-delegate",
@@ -165,9 +165,9 @@ def test_coordinator_delegate_local_runtime_publishes_directly():
     with (
         patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
-        patch("adapters.main.uses_local_unity_runtime", return_value=True),
-        patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
-        patch("adapters.main._publish_unity_system_event") as mock_publish,
+        patch("adapters.main.uses_local_droid_runtime", return_value=True),
+        patch("adapters.main.dispatch_droid_start_intent") as mock_dispatch,
+        patch("adapters.main._publish_droid_system_event") as mock_publish,
     ):
         response = client.post(
             "/assistant/coordinator-delegate",

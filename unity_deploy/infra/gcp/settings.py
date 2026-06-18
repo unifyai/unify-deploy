@@ -7,7 +7,7 @@ the process is running in (staging / production / development).  All
 environment-dependent defaults — bucket names, Pub/Sub topic suffixes,
 subscription names — are derived from it so that a single env var
 controls the entire pipeline surface.  Explicit env-var overrides
-(``UNITY_GCP_PIPELINE_ENVIRONMENT``, ``UNITY_GCS_ARTIFACT_BUCKET``,
+(``DROID_GCP_PIPELINE_ENVIRONMENT``, ``DROID_GCS_ARTIFACT_BUCKET``,
 etc.) still take precedence for K8s manifests and CI, but when they
 are absent the ``ORCHESTRA_URL`` inference prevents cross-environment
 leaks like staging dispatches uploading to the production bucket.
@@ -20,7 +20,7 @@ import os
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
-_BUCKET_BASE = "unity-pipeline-artifacts"
+_BUCKET_BASE = "droid-pipeline-artifacts"
 
 
 def _infer_environment() -> str:
@@ -45,7 +45,7 @@ def _bucket_for_env(env: str) -> str:
 class GcsArtifactStoreSettings(BaseSettings):
     """Settings for the GCS-backed artifact store."""
 
-    model_config = {"env_prefix": "UNITY_GCS_ARTIFACT_"}
+    model_config = {"env_prefix": "DROID_GCS_ARTIFACT_"}
 
     bucket: str = ""
     prefix: str = ""
@@ -55,15 +55,15 @@ class GcsArtifactStoreSettings(BaseSettings):
 class PubSubQueueSettings(BaseSettings):
     """Settings for the Pub/Sub-backed work queue."""
 
-    model_config = {"env_prefix": "UNITY_PUBSUB_"}
+    model_config = {"env_prefix": "DROID_PUBSUB_"}
 
     project_id: str = ""
-    parse_topic: str = "unity-parse"
-    ingest_topic: str = "unity-ingest"
-    dead_letter_topic: str = "unity-dead-letter"
-    parse_subscription: str = "unity-parse-sub"
-    ingest_subscription: str = "unity-ingest-sub"
-    dead_letter_subscription: str = "unity-dead-letter-sub"
+    parse_topic: str = "droid-parse"
+    ingest_topic: str = "droid-ingest"
+    dead_letter_topic: str = "droid-dead-letter"
+    parse_subscription: str = "droid-parse-sub"
+    ingest_subscription: str = "droid-ingest-sub"
+    dead_letter_subscription: str = "droid-dead-letter-sub"
     sa_key_json: str = ""
     ack_deadline_seconds: int = 600
     max_messages: int = 1
@@ -78,7 +78,7 @@ class GcpPipelineSettings(BaseSettings):
     overridden for staging, causing cross-environment leaks.
     """
 
-    model_config = {"env_prefix": "UNITY_GCP_PIPELINE_"}
+    model_config = {"env_prefix": "DROID_GCP_PIPELINE_"}
 
     environment: str = ""
     artifact_store: GcsArtifactStoreSettings = Field(
@@ -97,7 +97,7 @@ class GcpPipelineSettings(BaseSettings):
     def env_suffix(self) -> str:
         """Return the environment suffix used in shared resource names.
 
-        Matches the convention used across unity/communication:
+        Matches the convention used across droid/communication:
         production -> no suffix; other envs -> ``-{env}``.
         """
         return "" if self.environment == "production" else f"-{self.environment}"

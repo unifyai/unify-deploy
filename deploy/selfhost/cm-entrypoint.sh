@@ -6,7 +6,7 @@ RUNTIME_FILE="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-/runtime/coordinator-runtime
 POLL_SECONDS="${SELF_HOST_CM_POLL_SECONDS:-2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-log() { echo "[unity-cm] $*"; }
+log() { echo "[droid-cm] $*"; }
 
 wait_for_runtime() {
   while [[ ! -f "$RUNTIME_FILE" ]]; do
@@ -46,22 +46,22 @@ build_cm_env() {
   export ASSISTANT_IS_COORDINATOR=True
   export EVENTBUS_PUBLISHING_ENABLED="${EVENTBUS_PUBLISHING_ENABLED:-true}"
   export EVENTBUS_PUBSUB_STREAMING="${EVENTBUS_PUBSUB_STREAMING:-true}"
-  export UNITY_LOCAL_SCHEDULER="${UNITY_LOCAL_SCHEDULER:-true}"
+  export DROID_LOCAL_SCHEDULER="${DROID_LOCAL_SCHEDULER:-true}"
   export GRPC_VERBOSITY="${GRPC_VERBOSITY:-ERROR}"
-  export UNITY_RUNTIME_OWNER="${UNITY_RUNTIME_OWNER:-compose}"
-  export UNITY_DESKTOP_SHARED_MOUNT="${UNITY_DESKTOP_SHARED_MOUNT:-1}"
-  export UNITY_LOCAL_ROOT="${UNITY_LOCAL_ROOT:-/Unity/Local}"
+  export DROID_RUNTIME_OWNER="${DROID_RUNTIME_OWNER:-compose}"
+  export DROID_DESKTOP_SHARED_MOUNT="${DROID_DESKTOP_SHARED_MOUNT:-1}"
+  export DROID_LOCAL_ROOT="${DROID_LOCAL_ROOT:-/Droid/Local}"
 
   export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-pubsub-emulator:8085}"
   export GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
   export ORCHESTRA_URL="${ORCHESTRA_URL:-http://orchestra:8000/v0}"
-  export UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://gateway:8001}"
-  export UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://gateway:8001}"
+  export DROID_COMMS_URL="${DROID_COMMS_URL:-http://gateway:8001}"
+  export DROID_ADAPTERS_URL="${DROID_ADAPTERS_URL:-http://gateway:8001}"
 
-  export UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=true
-  export UNITY_CONVERSATION_LOCAL_COMMS_MODE=local
-  export UNITY_CONVERSATION_LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"
-  export UNITY_CONVERSATION_LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+  export DROID_CONVERSATION_LOCAL_COMMS_ENABLED=true
+  export DROID_CONVERSATION_LOCAL_COMMS_MODE=local
+  export DROID_CONVERSATION_LOCAL_COMMS_HOST="${DROID_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"
+  export DROID_CONVERSATION_LOCAL_COMMS_PORT="${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 
   export LIVEKIT_URL="${LIVEKIT_URL:-ws://livekit:7880}"
   export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"
@@ -144,7 +144,7 @@ start_cm() {
 
   build_cm_env "$unify_key" "$agent_id"
   log "Starting ConversationManager for assistant ${agent_id}..."
-  python3 -m unity.conversation_manager.main &
+  python3 -m droid.conversation_manager.main &
   CM_PID=$!
 }
 

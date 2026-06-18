@@ -59,7 +59,7 @@ secrets:
   description: >
     Email of the Salto KS user account that acts as the resource
     owner for ROPC.  Best practice: a dedicated service-account
-    user with an email like ``svc-unity@customer.com`` and the KS
+    user with an email like ``svc-droid@customer.com`` and the KS
     role(s) required for the resources the assistant needs to read
     and write.  Created in the customer's Salto KS dashboard.
   required: true

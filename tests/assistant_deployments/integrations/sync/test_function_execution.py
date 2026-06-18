@@ -9,7 +9,7 @@ namespace.
 Mocks are deliberately included here because they are exactly the surface
 that scenario E2Es and offline task activations register at runtime, so we
 must guarantee they survive AST extraction and decorator stripping just
-like any production connector. The full Unity backend is required because
+like any production connector. The full Droid backend is required because
 ``FunctionManager`` resolves manager contexts; ``sync/conftest.py``
 installs an explicit per-test base context for real manager instances.
 
@@ -29,9 +29,9 @@ from tests.assistant_deployments.integrations.integration_test_helpers import (
     build_implementations_for_integration,
     discover_all_function_dirs,
 )
-from unity.common.context_registry import ContextRegistry
-from unity.function_manager.execution_env import create_base_globals
-from unity.function_manager.function_manager import FunctionManager
+from droid.common.context_registry import ContextRegistry
+from droid.function_manager.execution_env import create_base_globals
+from droid.function_manager.function_manager import FunctionManager
 
 # ---------------------------------------------------------------------------
 # Per-integration execution configuration
@@ -81,7 +81,7 @@ _FM_CONTEXTS = (
     "Functions/Meta",
 )
 
-_UNITY_DEPLOY_TEST_VENV = """
+_DROID_DEPLOY_TEST_VENV = """
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
@@ -150,13 +150,13 @@ dependencies = []
     # registered functions. FunctionManager correctly treats that as an
     # external import boundary for registration, even though the integration
     # suite only checks add_functions here and does not execute these callables.
-    "employment_hero": _UNITY_DEPLOY_TEST_VENV,
-    "hubspot": _UNITY_DEPLOY_TEST_VENV,
-    "matterport": _UNITY_DEPLOY_TEST_VENV,
-    "salesforce": _UNITY_DEPLOY_TEST_VENV,
-    "salto_ks": _UNITY_DEPLOY_TEST_VENV,
-    "valos": _UNITY_DEPLOY_TEST_VENV,
-    "webex": _UNITY_DEPLOY_TEST_VENV,
+    "employment_hero": _DROID_DEPLOY_TEST_VENV,
+    "hubspot": _DROID_DEPLOY_TEST_VENV,
+    "matterport": _DROID_DEPLOY_TEST_VENV,
+    "salesforce": _DROID_DEPLOY_TEST_VENV,
+    "salto_ks": _DROID_DEPLOY_TEST_VENV,
+    "valos": _DROID_DEPLOY_TEST_VENV,
+    "webex": _DROID_DEPLOY_TEST_VENV,
 }
 
 

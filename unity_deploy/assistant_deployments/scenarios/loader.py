@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Iterable
 
 import yaml
-from unity.secret_manager.types import Secret
+from droid.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.integrations.discovery import (
     _BUILTIN_DIR,
     _CLIENT_DIR,

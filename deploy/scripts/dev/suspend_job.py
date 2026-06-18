@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Suspend a running Unity Kubernetes job.
+Suspend a running Droid Kubernetes job.
 
 Usage:
     python scripts/dev/suspend_job.py                                           # auto-detect latest running staging job
-    python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00                 # explicit job, staging (default)
+    python scripts/dev/suspend_job.py droid-2026-02-25-12-00-00                 # explicit job, staging (default)
     python scripts/dev/suspend_job.py --env production                          # auto-detect latest running production job
-    python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00 --namespace my-ns
+    python scripts/dev/suspend_job.py droid-2026-02-25-12-00-00 --namespace my-ns
 """
 
 import os
@@ -35,8 +35,8 @@ import requests
 from job_utils import resolve_latest_job
 
 COMMS_URLS = {
-    "production": "https://unity-comms-app-000000000000.us-central1.run.app",
-    "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+    "production": "https://service.a.run.app",
+    "staging": "https://service.a.run.app",
 }
 
 
@@ -66,7 +66,7 @@ def suspend_job(comms_url: str, admin_key: str, job_name: str, namespace: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Suspend a running Unity Kubernetes job.",
+        description="Suspend a running Droid Kubernetes job.",
         epilog=(
             "When no job name is provided, the script auto-detects the latest\n"
             "running job by resolving your identity from UNIFY_KEY and searching\n"
@@ -75,7 +75,7 @@ def main():
             "Examples:\n"
             "  python scripts/dev/suspend_job.py                          # latest running staging job\n"
             "  python scripts/dev/suspend_job.py --env production         # latest running production job\n"
-            "  python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00-staging"
+            "  python scripts/dev/suspend_job.py droid-2026-02-25-12-00-00-staging"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

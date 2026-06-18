@@ -4,7 +4,7 @@ Brain operator deployment for the Unify company tenant.
 The brain operator is a dedicated virtual colleague that owns every
 recurring + trigger-based job declared in the ``brain.scheduled``
 registry.  Its job is to fire those ticks deterministically through
-Unity's ``TaskScheduler`` -> ``FunctionManager`` -> brain entrypoint
+Droid's ``TaskScheduler`` -> ``FunctionManager`` -> brain entrypoint
 loop, with no laptop process required.
 
 What lives here:
@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unity.guidance_manager.types.guidance import Guidance
+from droid.guidance_manager.types.guidance import Guidance
 
 from unity_deploy.assistant_deployments.clients.unify_company._brain_operator import (
     brain_operator_assistant_id,
@@ -149,7 +149,7 @@ def get_deployment() -> DeploymentSpec:
                 ),
             ),
         ],
-        # Secrets are provisioned directly in the assistant's Unity
+        # Secrets are provisioned directly in the assistant's Droid
         # SecretManager (Orchestra ``Secrets`` context), NOT declared here.
         #
         # The previous ``Secret(name=X, value="${X}")`` entries were a
@@ -161,7 +161,7 @@ def get_deployment() -> DeploymentSpec:
         # overwrote the pod's valid key, so every Orchestra call 401'd and the
         # assistant could neither sync_custom nor seed tasks.
         #
-        # Correct model: the runtime gets ``UNIFY_KEY`` / ``UNITY_COMMS_URL`` /
+        # Correct model: the runtime gets ``UNIFY_KEY`` / ``DROID_COMMS_URL`` /
         # ``ORCHESTRA_ADMIN_KEY`` from the pod environment, and brain-specific
         # credentials (``X_CLIENT_ID``, ``X_CLIENT_SECRET``,
         # ``X_OAUTH_TOKENS_<USER>``, ``FIREFLIES_API_KEY``, ``LEMLIST_API_KEY``,

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-base-staging:latest
+ARG BASE_IMAGE=us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-base-staging:latest
 FROM ${BASE_IMAGE}
 
 USER root
@@ -26,4 +26,4 @@ RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "htt
     uv pip install --system --no-cache -e /app/brain && \
     git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
-USER unity
+USER droid

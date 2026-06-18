@@ -1,7 +1,7 @@
-"""Enterprise startup hook for Unity.
+"""Enterprise startup hook for Droid.
 
 Discovered at runtime via Python entry points when the
-``_UNITY_STARTUP_HOOK_GROUP`` environment variable is set to the
+``_DROID_STARTUP_HOOK_GROUP`` environment variable is set to the
 group name declared in this package's ``pyproject.toml``.
 
 Keeps the wake-time path intentionally thin:
@@ -25,13 +25,13 @@ import os
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
-from unity.logger import LOGGER as logger
+from droid.logger import LOGGER as logger
 from unity_deploy.timing import log_startup_timing
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
 
 if TYPE_CHECKING:
-    from unity.conversation_manager.conversation_manager import ConversationManager
-    from unity.session_details import SessionDetails
+    from droid.conversation_manager.conversation_manager import ConversationManager
+    from droid.session_details import SessionDetails
 
 
 @contextmanager
@@ -143,7 +143,7 @@ def startup_hook(
         resolved = expand_startup_integrations(resolved)
 
     runtime_reconcile_mode = (
-        os.environ.get("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "async").strip().lower()
+        os.environ.get("DROID_DEPLOY_RUNTIME_RECONCILE_MODE", "async").strip().lower()
     )
     if runtime_reconcile_mode not in {"async", "off", "blocking"}:
         logger.warning(
@@ -205,7 +205,7 @@ def startup_hook(
         reconcile_handle = RuntimeReconcileHandle(status=status)
 
     if resolved.console_config and os.environ.get(
-        "UNITY_DEPLOY_WAKE_CONSOLE_REPAIR",
+        "DROID_DEPLOY_WAKE_CONSOLE_REPAIR",
         "",
     ).lower() in {"1", "true", "yes"}:
         with _timed_hook_phase("sync_console_config"):

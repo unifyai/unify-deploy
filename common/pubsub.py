@@ -1,6 +1,6 @@
 """Shared Pub/Sub publisher for the Communication service.
 
-Centralises the ``unity-{assistant_id}{env_suffix}`` topic convention so
+Centralises the ``droid-{assistant_id}{env_suffix}`` topic convention so
 both the FastAPI service (``communication/...``) and the adapters Cloud
 Functions (``adapters/helpers.py``) emit identical envelopes.
 
@@ -19,7 +19,7 @@ Pub/Sub attributes
 ------------------
 
 A single ``thread`` attribute is set on the Pub/Sub message so
-subscribers can filter server-side when needed (Unity's comms_manager
+subscribers can filter server-side when needed (Droid's comms_manager
 reads the body, but future filters / Cloud Tasks can use the
 attribute).  The ``thread`` attribute value matches the one inside the
 body.
@@ -64,7 +64,7 @@ def publish_assistant_event(
     event: Mapping[str, Any],
     timeout_s: float = 10.0,
 ) -> str:
-    """Publish an event envelope to ``unity-{assistant_id}{env_suffix}``.
+    """Publish an event envelope to ``droid-{assistant_id}{env_suffix}``.
 
     Returns the Pub/Sub message ID.  Raises if the publish future fails
     — callers that treat publish failures as non-fatal should wrap in

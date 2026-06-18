@@ -4,9 +4,9 @@ tests/conftest.py
 
 Lightweight pytest configuration for unity-deploy.
 
-Unity-deploy tests are mostly offline unit tests.  The heavy session lifecycle
+Droid-deploy tests are mostly offline unit tests.  The heavy session lifecycle
 (project create/delete, per-test context isolation, cost tracking, stub
-patching) from the unity repo is NOT replicated here — it's unnecessary.
+patching) from the droid repo is NOT replicated here — it's unnecessary.
 
 Integration tests that need a live Unify project use ``@_handle_project``
 from ``tests.helpers`` and are gated behind ``@pytest.mark.requires_orchestra``.
@@ -25,7 +25,7 @@ import pytest
 import unify
 
 from tests.settings import SETTINGS
-from unity.manager_registry import ManagerRegistry
+from droid.manager_registry import ManagerRegistry
 
 _logger = logging.getLogger(__name__)
 

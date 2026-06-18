@@ -10,7 +10,7 @@ Mirrors hubspot/sync.py.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -317,7 +317,7 @@ async def probe_employmenthero_tier(force: bool = False, mock: bool = True) -> d
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )

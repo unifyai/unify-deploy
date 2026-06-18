@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, List
 
 if TYPE_CHECKING:
-    from unity.contact_manager.contact_manager import ContactManager
-    from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.events.event_bus import EVENT_BUS
-from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+    from droid.contact_manager.contact_manager import ContactManager
+    from droid.task_scheduler.task_scheduler import TaskScheduler
+from droid.events.event_bus import EVENT_BUS
+from droid.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
 from tests.settings import SETTINGS
 
@@ -37,7 +37,7 @@ def get_session_tags() -> List[str]:
 # ---------- CURSOR DEBUG LOGGER --------------------------------
 # Re-export the leaf logger from the production module to keep a single
 # grep-able function name while avoiding circular imports in production code.
-from unity.common.debug import CURSOR_DEBUG_LOG  # noqa: E402,F401
+from droid.common.debug import CURSOR_DEBUG_LOG  # noqa: E402,F401
 
 
 # ---------- helper -------------------------------------------------
@@ -67,8 +67,8 @@ def _derive_socket_name() -> str:
     consistent naming whether tests are run via parallel_run.sh or directly via pytest.
 
     Returns:
-        - 'unity_dev_ttysXXX' if running in a TTY (e.g., terminal session)
-        - 'unity_pidXXX' if not running in a TTY (e.g., background process)
+        - 'droid_dev_ttysXXX' if running in a TTY (e.g., terminal session)
+        - 'droid_pidXXX' if not running in a TTY (e.g., background process)
     """
     import os
     import sys
@@ -76,31 +76,31 @@ def _derive_socket_name() -> str:
     try:
         # Try to get the TTY device path (e.g., '/dev/ttys042')
         tty_path = os.ttyname(sys.stdout.fileno())
-        # Sanitize: /dev/ttys042 -> unity_dev_ttys042
+        # Sanitize: /dev/ttys042 -> droid_dev_ttys042
         tty_id = tty_path.replace("/", "_")
-        return f"unity{tty_id}"
+        return f"droid{tty_id}"
     except (OSError, AttributeError):
         # Not a TTY (e.g., piped output, background process)
-        return f"unity_pid{os.getpid()}"
+        return f"droid_pid{os.getpid()}"
 
 
 def _get_socket_subdir() -> str:
     """Determine the log subdirectory for test-related files.
 
     Returns a datetime-prefixed directory name for natural time-based ordering:
-        - UNITY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
-        - Falls back to UNITY_TEST_SOCKET for legacy compatibility
+        - DROID_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_droid_dev_ttys042')
+        - Falls back to DROID_TEST_SOCKET for legacy compatibility
         - Derives terminal ID for direct pytest invocations (same as parallel_run.sh would)
     """
     import os
     from datetime import datetime
 
     # Prefer the datetime-prefixed log subdir if available
-    log_subdir = os.environ.get("UNITY_LOG_SUBDIR", "").strip()
+    log_subdir = os.environ.get("DROID_LOG_SUBDIR", "").strip()
     if log_subdir:
         return log_subdir
     # Fallback to socket name for backward compatibility
-    socket = os.environ.get("UNITY_TEST_SOCKET", "").strip()
+    socket = os.environ.get("DROID_TEST_SOCKET", "").strip()
     if socket:
         return socket
     # Derive terminal ID (same logic as _shell_common.sh) for direct pytest invocations
@@ -111,7 +111,7 @@ def _get_socket_subdir() -> str:
 def _get_repo_root() -> Path:
     """Determine the repository root directory.
 
-    Prefers UNITY_LOG_ROOT env var if set, allowing explicit worktree targeting.
+    Prefers DROID_LOG_ROOT env var if set, allowing explicit worktree targeting.
     Otherwise derives from this file's location, which correctly resolves to
     the worktree when running from one.
 
@@ -121,7 +121,7 @@ def _get_repo_root() -> Path:
     import os
 
     # Allow explicit override for flexibility
-    log_root = os.environ.get("UNITY_LOG_ROOT", "").strip()
+    log_root = os.environ.get("DROID_LOG_ROOT", "").strip()
     if log_root:
         return Path(log_root)
 
@@ -141,7 +141,7 @@ def _get_llm_io_dir() -> Path | None:
         logs/unillm/{datetime}_{socket_name}/{session_id}/
     """
     try:
-        from unity.logger import SESSION_ID
+        from droid.logger import SESSION_ID
     except ImportError:
         return None
 
@@ -242,11 +242,11 @@ def _should_include_span(span: dict) -> bool:
     """Check if a span should be included based on SETTINGS filters.
 
     Filters:
-        - UNITY_TRACE_SERVICES: "all" or comma-separated list of services
-        - UNITY_TRACE_EXCLUDE_PATTERNS: comma-separated span name patterns to exclude
+        - DROID_TRACE_SERVICES: "all" or comma-separated list of services
+        - DROID_TRACE_EXCLUDE_PATTERNS: comma-separated span name patterns to exclude
     """
     # Service filter
-    services_setting = SETTINGS.UNITY_TRACE_SERVICES.strip().lower()
+    services_setting = SETTINGS.DROID_TRACE_SERVICES.strip().lower()
     if services_setting != "all":
         allowed_services = {s.strip() for s in services_setting.split(",") if s.strip()}
         span_service = (span.get("service") or "").lower()
@@ -254,7 +254,7 @@ def _should_include_span(span: dict) -> bool:
             return False
 
     # Exclusion pattern filter
-    exclude_setting = SETTINGS.UNITY_TRACE_EXCLUDE_PATTERNS.strip()
+    exclude_setting = SETTINGS.DROID_TRACE_EXCLUDE_PATTERNS.strip()
     if exclude_setting:
         exclude_patterns = [p.strip() for p in exclude_setting.split(",") if p.strip()]
         span_name = span.get("name") or ""
@@ -273,9 +273,9 @@ def _upload_trace_to_context(
     """Upload trace data from JSONL file to {TestContext}/Trace context.
 
     Controlled by SETTINGS:
-        - UNITY_TRACE_UPLOAD: Enable/disable upload entirely
-        - UNITY_TRACE_SERVICES: Filter by service (e.g., "unity" or "unity,orchestra")
-        - UNITY_TRACE_EXCLUDE_PATTERNS: Exclude spans matching patterns
+        - DROID_TRACE_UPLOAD: Enable/disable upload entirely
+        - DROID_TRACE_SERVICES: Filter by service (e.g., "droid" or "droid,orchestra")
+        - DROID_TRACE_EXCLUDE_PATTERNS: Exclude spans matching patterns
 
     Args:
         test_ctx: The test context path (e.g., tests/.../test_name/{user_id}/{assistant_id})
@@ -283,7 +283,7 @@ def _upload_trace_to_context(
         max_spans: Maximum number of spans to upload (default 1000 to avoid slow uploads)
     """
     # Check if upload is enabled
-    if not SETTINGS.UNITY_TRACE_UPLOAD:
+    if not SETTINGS.DROID_TRACE_UPLOAD:
         return
 
     if not trace_id:
@@ -431,7 +431,7 @@ class _TestContext:
         or clear managers that delete contexts.
         """
         try:
-            test_fn_name = getattr(self.wrapper, "_unity_pytest_nodeid")
+            test_fn_name = getattr(self.wrapper, "_droid_pytest_nodeid")
         except AttributeError:
             test_fn_name = self.test_fn.__name__
 
@@ -834,7 +834,7 @@ def scenario_file_lock(lock_name: str, timeout: float | None = None):
         lock_name: Unique name for this scenario's lock file.
                    Will be created in system temp directory.
         timeout: Maximum seconds to wait for the lock. Defaults to
-                 SETTINGS.UNITY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
+                 SETTINGS.DROID_FILE_LOCK_TIMEOUT (3600s / 1 hour).
 
     Raises:
         TimeoutError: If the lock cannot be acquired within the timeout.
@@ -850,8 +850,8 @@ def scenario_file_lock(lock_name: str, timeout: float | None = None):
                 seed_all_data()
     """
     if timeout is None:
-        timeout = SETTINGS.UNITY_FILE_LOCK_TIMEOUT
-    lock_path = os.path.join(tempfile.gettempdir(), f"unity_{lock_name}.lock")
+        timeout = SETTINGS.DROID_FILE_LOCK_TIMEOUT
+    lock_path = os.path.join(tempfile.gettempdir(), f"droid_{lock_name}.lock")
     lock_file = open(lock_path, "w")
     try:
         _acquire_file_lock_with_timeout(lock_file, timeout, lock_name)
@@ -880,7 +880,7 @@ def mutation_test_lock(lock_name: str, timeout: float | None = None):
         lock_name: Unique name for this lock (e.g., "cm_mutation").
                    Will be created in system temp directory.
         timeout: Maximum seconds to wait for the lock. Defaults to
-                 SETTINGS.UNITY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
+                 SETTINGS.DROID_FILE_LOCK_TIMEOUT (3600s / 1 hour).
 
     Raises:
         TimeoutError: If the lock cannot be acquired within the timeout.
@@ -894,8 +894,8 @@ def mutation_test_lock(lock_name: str, timeout: float | None = None):
                 yield cm, id_map
     """
     if timeout is None:
-        timeout = SETTINGS.UNITY_FILE_LOCK_TIMEOUT
-    lock_path = os.path.join(tempfile.gettempdir(), f"unity_{lock_name}.lock")
+        timeout = SETTINGS.DROID_FILE_LOCK_TIMEOUT
+    lock_path = os.path.join(tempfile.gettempdir(), f"droid_{lock_name}.lock")
     lock_file = open(lock_path, "w")
     try:
         _acquire_file_lock_with_timeout(lock_file, timeout, lock_name)

@@ -8,12 +8,12 @@ Start async seeding for all hosted Builtins artifacts.
 Required:
   --environment staging|production
   --manifest PATH
-  --unity-image IMAGE
+  --droid-image IMAGE
 
 Optional:
   --async | --wait
   --setup-only
-  --unity-project PROJECT
+  --droid-project PROJECT
   --job-manifest-path PATH_IN_IMAGE
   --workers N
   --batch-size N
@@ -21,7 +21,7 @@ Optional:
   --backend-id BACKEND
   --dry-run
 
-The job runs from the Unity image and seeds all Builtins artifacts:
+The job runs from the Droid image and seeds all Builtins artifacts:
 functions, guidance, and provider-backed integrations. Orchestra remains the
 backend API/materializer for integration context writes; it is not exposed as a
 separate Cloud Run Job.
@@ -30,8 +30,8 @@ USAGE
 
 environment=""
 manifest=""
-unity_image=""
-unity_project=""
+droid_image=""
+droid_project=""
 job_manifest_path=""
 workers="4"
 batch_size="25"
@@ -45,8 +45,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --environment) environment="$2"; shift 2 ;;
     --manifest) manifest="$2"; shift 2 ;;
-    --unity-image) unity_image="$2"; shift 2 ;;
-    --unity-project) unity_project="$2"; shift 2 ;;
+    --droid-image) droid_image="$2"; shift 2 ;;
+    --droid-project) droid_project="$2"; shift 2 ;;
     --job-manifest-path) job_manifest_path="$2"; shift 2 ;;
     --workers) workers="$2"; shift 2 ;;
     --batch-size) batch_size="$2"; shift 2 ;;
@@ -61,7 +61,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$environment" || -z "$unity_image" || -z "$manifest" ]]; then
+if [[ -z "$environment" || -z "$droid_image" || -z "$manifest" ]]; then
   usage >&2
   exit 2
 fi
@@ -69,22 +69,22 @@ fi
 case "$environment" in
   staging)
     orchestra_service="orchestra-staging"
-    job_name="unity-seed-builtins-staging"
+    job_name="droid-seed-builtins-staging"
     orchestra_url="https://internal.example.com/v0"
     job_manifest_path="${job_manifest_path:-deploy/integrations/bootstrap.staging.toml}"
     ;;
   production)
     orchestra_service="orchestra"
-    job_name="unity-seed-builtins"
+    job_name="droid-seed-builtins"
     orchestra_url="https://api.unify.ai/v0"
     job_manifest_path="${job_manifest_path:-deploy/integrations/bootstrap.production.toml}"
     ;;
   *) echo "Unsupported environment: ${environment}" >&2; exit 2 ;;
 esac
 
-unity_region="us-central1"
-if [[ -z "$unity_project" ]]; then
-  unity_project="$(python3 - "$unity_image" <<'PY'
+droid_region="us-central1"
+if [[ -z "$droid_project" ]]; then
+  droid_project="$(python3 - "$droid_image" <<'PY'
 import re
 import sys
 match = re.match(r"^[^.]+-docker\.pkg\.dev/([^/]+)/", sys.argv[1])
@@ -92,8 +92,8 @@ print(match.group(1) if match else "")
 PY
 )"
 fi
-if [[ -z "$unity_project" ]]; then
-  echo "Could not derive Unity GCP project from --unity-image; pass --unity-project." >&2
+if [[ -z "$droid_project" ]]; then
+  echo "Could not derive Droid GCP project from --droid-image; pass --droid-project." >&2
   exit 2
 fi
 
@@ -104,7 +104,7 @@ cleanup() {
 trap cleanup EXIT
 
 ensure_toml_parser() {
-  if [[ "${UNITY_FORCE_TOMLI_BOOTSTRAP:-false}" != "true" ]] && python3 - <<'PY' >/dev/null 2>&1
+  if [[ "${DROID_FORCE_TOMLI_BOOTSTRAP:-false}" != "true" ]] && python3 - <<'PY' >/dev/null 2>&1
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -179,7 +179,7 @@ print(json.dumps({
     "executor": "cloud_run_jobs",
     "environment": "$environment",
     "job_name": "$job_name",
-    "unity_project": "$unity_project",
+    "droid_project": "$droid_project",
     "job_manifest_path": "$job_manifest_path",
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",
@@ -191,28 +191,28 @@ PY
   exit 0
 fi
 
-unity_project_number="$(gcloud projects describe "$unity_project" --format='value(projectNumber)')"
-job_service_account="${unity_project_number}-compute@developer.gserviceaccount.com"
+droid_project_number="$(gcloud projects describe "$droid_project" --format='value(projectNumber)')"
+job_service_account="${droid_project_number}-compute@developer.gserviceaccount.com"
 # Secret access for this service account is a one-time environment prerequisite.
 # Cloud Build should not mutate Secret Manager IAM on every deploy: the build
 # service account may deploy jobs without being allowed to read or update secret
 # IAM policies.
 
 job_flags=(
-  "--region=${unity_region}"
-  "--image=${unity_image}"
+  "--region=${droid_region}"
+  "--image=${droid_image}"
   "--command=python3"
   "--args=scripts/seed_builtins_catalog.py,--integration-bootstrap-manifest,${job_manifest_path}"
   "--task-timeout=${timeout}"
   "--max-retries=0"
   "--service-account=${job_service_account}"
-  "--set-env-vars=ORCHESTRA_URL=${orchestra_url},UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT=${api_timeout_seconds}"
+  "--set-env-vars=ORCHESTRA_URL=${orchestra_url},DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=api,DROID_INTEGRATION_BOOTSTRAP_TIMEOUT=${api_timeout_seconds}"
   "--update-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,UNIFY_KEY=GLOBAL_UNIFY_KEY:latest"
 )
-if gcloud --project "$unity_project" run jobs describe "$job_name" --region "$unity_region" >/dev/null 2>&1; then
-  gcloud --project "$unity_project" run jobs update "$job_name" "${job_flags[@]}"
+if gcloud --project "$droid_project" run jobs describe "$job_name" --region "$droid_region" >/dev/null 2>&1; then
+  gcloud --project "$droid_project" run jobs update "$job_name" "${job_flags[@]}"
 else
-  gcloud --project "$unity_project" run jobs create "$job_name" "${job_flags[@]}"
+  gcloud --project "$droid_project" run jobs create "$job_name" "${job_flags[@]}"
 fi
 
 if [[ "$setup_only" == "true" ]]; then
@@ -223,7 +223,7 @@ print(json.dumps({
     "executor": "cloud_run_jobs",
     "environment": "$environment",
     "job_name": "$job_name",
-    "unity_project": "$unity_project",
+    "droid_project": "$droid_project",
     "job_manifest_path": "$job_manifest_path",
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",
@@ -241,7 +241,7 @@ if [[ "$wait_mode" == "async" ]]; then
 else
   execute_flags+=("--wait")
 fi
-gcloud --project "$unity_project" run jobs execute "$job_name" --region "$unity_region" "${execute_flags[@]}"
+gcloud --project "$droid_project" run jobs execute "$job_name" --region "$droid_region" "${execute_flags[@]}"
 
 python3 - <<PY
 import json
@@ -250,7 +250,7 @@ print(json.dumps({
     "executor": "cloud_run_jobs",
     "environment": "$environment",
     "job_name": "$job_name",
-    "unity_project": "$unity_project",
+    "droid_project": "$droid_project",
     "job_manifest_path": "$job_manifest_path",
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",

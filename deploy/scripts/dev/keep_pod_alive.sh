@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Periodically publish keepalive pings to a Unity pod's Pub/Sub topic,
+# Periodically publish keepalive pings to a Droid pod's Pub/Sub topic,
 # preventing the inactivity timeout from shutting down the container.
 #
 # Uses the same Ping(kind="keepalive") mechanism that idle containers use
@@ -29,7 +29,7 @@ DEFAULT_INTERVAL=30
 usage() {
     echo "Usage: $0 [assistant_id] [--env ENV] [--interval SECONDS]"
     echo
-    echo "Keep a Unity pod alive by sending periodic keepalive pings via Pub/Sub."
+    echo "Keep a Droid pod alive by sending periodic keepalive pings via Pub/Sub."
     echo
     echo "Arguments:"
     echo "  assistant_id          The assistant's numeric ID (optional; auto-detected from"
@@ -89,7 +89,7 @@ fi
 
 # --- Build topic name ---
 
-TOPIC="unity-${ASSISTANT_ID}"
+TOPIC="droid-${ASSISTANT_ID}"
 if [[ "$DEPLOY_ENV" != "production" ]]; then
     TOPIC="${TOPIC}-${DEPLOY_ENV}"
 fi

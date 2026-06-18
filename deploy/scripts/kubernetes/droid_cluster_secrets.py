@@ -1,9 +1,9 @@
-"""Pure helpers for Unity GKE secret sync (no Kubernetes client imports)."""
+"""Pure helpers for Droid GKE secret sync (no Kubernetes client imports)."""
 
 GCP_SECRETS_PROJECT_ID = "gcp-project-runtime"
 
 # (Secret Manager secret id, key written into the Kubernetes Secret)
-UNITY_SECRET_KEYS_FROM_GCP = (
+DROID_SECRET_KEYS_FROM_GCP = (
     ("LIVEKIT_SIP_URI", "LIVEKIT_SIP_URI"),
     ("LIVEKIT_URL", "LIVEKIT_URL"),
     ("LIVEKIT_API_KEY", "LIVEKIT_API_KEY"),

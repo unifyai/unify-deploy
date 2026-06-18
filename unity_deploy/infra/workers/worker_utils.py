@@ -14,14 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, TYPE_CHECKING
 
-from unity.common.pipeline.artifact_store import ArtifactStore
-from unity.common.pipeline.cost_ledger import CostLedger
-from unity.common.pipeline.deployment.types import (
+from droid.common.pipeline.artifact_store import ArtifactStore
+from droid.common.pipeline.cost_ledger import CostLedger
+from droid.common.pipeline.deployment.types import (
     DeploymentBundleStore,
     DeploymentJobStore,
 )
-from unity.common.pipeline.run_ledger import RunLedger
-from unity.common.pipeline.work_queue import WorkQueue
+from droid.common.pipeline.run_ledger import RunLedger
+from droid.common.pipeline.work_queue import WorkQueue
 
 from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
@@ -52,7 +52,7 @@ class WorkerInfra:
     """Typed bag of protocol-level adapters assembled during worker bootstrap.
 
     All fields except ``settings`` and ``storage_client`` reference
-    protocol types defined in ``unity.common.pipeline``, keeping the
+    protocol types defined in ``droid.common.pipeline``, keeping the
     workers decoupled from the concrete GCP adapter classes.
     """
 
@@ -243,7 +243,7 @@ class LeaseController:
         if ledger is None or self._run_id is None or self._stage is None:
             return
         try:
-            from unity.common.pipeline import PipelineHeartbeatManifest
+            from droid.common.pipeline import PipelineHeartbeatManifest
 
             manifest = PipelineHeartbeatManifest(
                 run_id=self._run_id,
@@ -493,7 +493,7 @@ def build_worker_infra(
 
     # Ledgers intentionally share ``artifact_store`` settings — the
     # bucket is env-scoped via the bucket name (e.g.
-    # ``unity-pipeline-artifacts-staging``), so staging ledgers cannot
+    # ``droid-pipeline-artifacts-staging``), so staging ledgers cannot
     # leak into the production bucket by construction.
     ledger_settings = settings.artifact_store
 
@@ -554,14 +554,14 @@ def activate_unify_context(
     assistant_id: str,
     managers: list | None = None,
 ) -> None:
-    """Lightweight ``unity.init``-style activation for worker processes.
+    """Lightweight ``droid.init``-style activation for worker processes.
 
-    Mirrors the core sequence from :pyfunc:`unity.init` — project
+    Mirrors the core sequence from :pyfunc:`droid.init` — project
     activation, SDK context setup, and ``ContextRegistry`` provisioning —
     but scoped to an explicitly supplied identity and manager list rather
     than ``SESSION_DETAILS`` and the full manager catalogue.
 
-    Steps (matching ``unity.init`` order):
+    Steps (matching ``droid.init`` order):
 
     1. ``unify.activate(project_name)``  (once per process)
     2. Reset the SDK context via ``unset_context()`` to prevent the
@@ -590,7 +590,7 @@ def activate_unify_context(
     """
     import unify as _unify
 
-    from unity.common.context_registry import ContextRegistry
+    from droid.common.context_registry import ContextRegistry
 
     if not os.environ.get("UNIFY_KEY"):
         raise EnvironmentError(
@@ -604,7 +604,7 @@ def activate_unify_context(
     if not _unify.active_project():
         _unify.activate(project_name)
 
-    # --- 2+3. Context reset & set (mirrors unity.init lines 92-102) ---
+    # --- 2+3. Context reset & set (mirrors droid.init lines 92-102) ---
     # The SDK's set_context defaults to relative=True, which _joins_ the
     # new path onto the current one.  In a long-lived worker that
     # processes many messages, this would produce
@@ -621,7 +621,7 @@ def activate_unify_context(
         else:
             raise
 
-    # --- 4. ContextRegistry (mirrors unity.init line 104) ---
+    # --- 4. ContextRegistry (mirrors droid.init line 104) ---
     ContextRegistry.clear()
     if managers:
         ContextRegistry.setup_for_managers(managers)

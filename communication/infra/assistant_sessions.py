@@ -51,8 +51,8 @@ _RELEASED_BINDINGS_HISTORY_LIMIT = 20
 SERVICE_URLS_SPEC_FIELD = "serviceUrls"
 _SERVICE_URL_ENV_BY_SPEC_KEY = {
     "orchestra": "ORCHESTRA_URL",
-    "comms": "UNITY_COMMS_URL",
-    "adapters": "UNITY_ADAPTERS_URL",
+    "comms": "DROID_COMMS_URL",
+    "adapters": "DROID_ADAPTERS_URL",
 }
 
 
@@ -148,7 +148,7 @@ def build_runtime_service_urls(
     comms_url: str | None = None,
     adapters_url: str | None = None,
 ) -> dict[str, str]:
-    """Return the peer-service URLs a Unity runtime should use."""
+    """Return the peer-service URLs a Droid runtime should use."""
 
     urls = {
         "orchestra": SETTINGS.orchestra_url if orchestra_url is None else orchestra_url,
@@ -163,7 +163,7 @@ def build_runtime_service_urls(
 
 
 def session_runtime_service_env(session: dict[str, Any] | None) -> dict[str, str]:
-    """Return Unity Job env overrides recorded on an AssistantSession."""
+    """Return Droid Job env overrides recorded on an AssistantSession."""
 
     spec = (session or {}).get("spec") or {}
     service_urls = spec.get(SERVICE_URLS_SPEC_FIELD)
@@ -207,9 +207,9 @@ def session_binding(session: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def session_image_override(session: dict[str, Any] | None) -> str | None:
-    """Return the per-session Unity image override, or ``None``.
+    """Return the per-session Droid image override, or ``None``.
 
-    Pins the spawned assistant Job to a specific Unity image instead of
+    Pins the spawned assistant Job to a specific Droid image instead of
     the canonical one.  Empty strings are normalized to ``None`` so
     callers only need to check truthiness.
     """
@@ -806,18 +806,18 @@ def _get_storage_client():
     return storage.Client()
 
 
-def get_latest_unity_image() -> str:
-    """Return the Unity container image to spawn assistant jobs from.
+def get_latest_droid_image() -> str:
+    """Return the Droid container image to spawn assistant jobs from.
 
     Reads the active commit hash from the GCS blob named by
     ``SETTINGS.image_hash_blob`` and combines it with the environment's
     image registry and image name.
     """
     storage_client = _get_storage_client()
-    bucket = storage_client.bucket("unity-image-hash")
+    bucket = storage_client.bucket("droid-image-hash")
     blob = bucket.blob(SETTINGS.image_hash_blob)
     commit_hash = blob.download_as_text().strip()
-    return f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{commit_hash}"
+    return f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:{commit_hash}"
 
 
 def get_custom_objects_api() -> k8s_client.CustomObjectsApi | None:

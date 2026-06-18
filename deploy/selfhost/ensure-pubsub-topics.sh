@@ -14,7 +14,7 @@ fi
 emulator_url="http://${emulator_host#http://}"
 emulator_url="${emulator_url%/}"
 
-topic_name="unity-${agent_id}${suffix}"
+topic_name="droid-${agent_id}${suffix}"
 
 topic_http="$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
   "${emulator_url}/v1/projects/${project_id}/topics/${topic_name}")"

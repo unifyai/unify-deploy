@@ -123,18 +123,18 @@ on_signal() {
 trap on_signal SIGTERM SIGINT
 
 # Create log directories for file-based traces in background
-mkdir -p /var/log/unity /var/log/unify /var/log/unillm &
+mkdir -p /var/log/droid /var/log/unify /var/log/unillm &
 
 # Announce where logs will be preserved after shutdown
-if [ ! -z "$UNITY_CONVERSATION_JOB_NAME" ]; then
-    _GCS_BUCKET="${GCS_LOG_BUCKET:-unity-pod-logs}"
+if [ ! -z "$DROID_CONVERSATION_JOB_NAME" ]; then
+    _GCS_BUCKET="${GCS_LOG_BUCKET:-droid-pod-logs}"
     # Derive namespace from job name suffix
-    case "$UNITY_CONVERSATION_JOB_NAME" in
+    case "$DROID_CONVERSATION_JOB_NAME" in
         *-staging)    _NS="staging" ;;
         *-production) _NS="production" ;;
         *)            _NS="unknown" ;;
     esac
-    _GCS_PATH="gs://${_GCS_BUCKET}/${_NS}/${UNITY_CONVERSATION_JOB_NAME}/"
+    _GCS_PATH="gs://${_GCS_BUCKET}/${_NS}/${DROID_CONVERSATION_JOB_NAME}/"
     echo "═══════════════════════════════════════════════════════════"
     echo "  Pod logs will be uploaded on shutdown to:"
     echo "  ${_GCS_PATH}"
@@ -150,7 +150,7 @@ if [ -d /opt/hf-cache ] && [ ! -d /tmp/huggingface ]; then
 fi
 
 # Headless offline task jobs bypass the live conversation runtime entirely.
-# UNITY_OFFLINE_TASK_MODE is set (currently to "actor"; see
+# DROID_OFFLINE_TASK_MODE is set (currently to "actor"; see
 # offline_runner_contract.build_offline_runner_env +
 # tests/task_scheduler/test_offline_runner_contract.test_mode_is_actor) ONLY
 # for offline-task jobs, so any non-empty value means "run the headless offline
@@ -159,9 +159,9 @@ fi
 # through to the live ConversationManager below, booted, idled on a startup
 # reply, and exited WITHOUT ever executing their scheduled function (the run
 # row was left stale at "running"). Matching on non-empty is rename-proof.
-if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
-    echo "⬥ Starting offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
-    python3 -m unity.task_scheduler.offline_runner
+if [ -n "${DROID_OFFLINE_TASK_MODE:-}" ]; then
+    echo "⬥ Starting offline task runner (mode=${DROID_OFFLINE_TASK_MODE})..."
+    python3 -m droid.task_scheduler.offline_runner
     exit $?
 fi
 
@@ -169,7 +169,7 @@ fi
 # Reuses deploy/desktop/display.sh and deploy/desktop/device.sh to provide the
 # same TigerVNC + XFCE + PipeWire/PulseAudio environment as the desktop container.
 # Required for non-headless browser sessions (e.g. Google Meet join).
-export XDG_RUNTIME_DIR=/tmp/runtime-unity
+export XDG_RUNTIME_DIR=/tmp/runtime-droid
 mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
@@ -192,7 +192,7 @@ sleep 3
 
 # Start the main application
 echo "⬥ Starting convo manager..."
-python3 unity/conversation_manager/main.py &
+python3 droid/conversation_manager/main.py &
 MAIN_PID=$!
 echo "⬥ Main application started with PID: $MAIN_PID"
 

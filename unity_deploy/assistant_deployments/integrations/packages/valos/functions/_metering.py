@@ -1,6 +1,6 @@
 """Per-process usage metering and daily caps for the Valos package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`droid.function_manager.custom_functions.collect_custom_functions`
 skips this file.
 
 The package wraps two paid upstream services (OS Data Hub Premium and

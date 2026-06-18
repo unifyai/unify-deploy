@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from unity.common.pipeline.types import IngestCheckpoint
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from droid.common.pipeline.types import IngestCheckpoint
+from droid.common.pipeline.work_queue import ReceivedWorkItem
 
 from unity_deploy.infra.gcp.artifact_store import LeaseRecord
 from unity_deploy.infra.gcp.pipeline_observability import (
@@ -24,14 +24,14 @@ def test_native_dlq_record_preserves_source_metadata() -> None:
             "dispatch_id": "dispatch-1",
             "_pubsub_attributes": {
                 "CloudPubSubDeadLetterSourceSubscription": (
-                    "projects/proj/subscriptions/unity-ingest-sub-staging"
+                    "projects/proj/subscriptions/droid-ingest-sub-staging"
                 ),
                 "CloudPubSubDeadLetterSourceDeliveryCount": "5",
             },
         },
         receipt_id="ack-1",
         pubsub_message_id="dlq-msg-1",
-        source_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+        source_subscription="projects/proj/subscriptions/droid-dead-letter-sub-staging",
         raw_payload='{"kind":"ingest_requested","job_id":"job-1"}',
     )
 
@@ -39,14 +39,14 @@ def test_native_dlq_record_preserves_source_metadata() -> None:
         item,
         environment="staging",
         project_id="proj",
-        dlq_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+        dlq_subscription="projects/proj/subscriptions/droid-dead-letter-sub-staging",
         previous_job_status="running",
     )
 
     assert record.job_id == "job-1"
     assert record.dispatch_id == "dispatch-1"
     assert record.retry_topic == "ingest"
-    assert record.source_subscription.endswith("unity-ingest-sub-staging")
+    assert record.source_subscription.endswith("droid-ingest-sub-staging")
     assert record.delivery_attempt == 5
     assert record.previous_job_status == "running"
 
@@ -67,14 +67,14 @@ def test_app_dead_letter_record_uses_wrapped_payload_and_error() -> None:
         },
         receipt_id="ack-2",
         pubsub_message_id="dlq-msg-2",
-        source_subscription="projects/proj/subscriptions/unity-dead-letter-sub",
+        source_subscription="projects/proj/subscriptions/droid-dead-letter-sub",
     )
 
     record = dlq_record_from_received_item(
         item,
         environment="production",
         project_id="proj",
-        dlq_subscription="projects/proj/subscriptions/unity-dead-letter-sub",
+        dlq_subscription="projects/proj/subscriptions/droid-dead-letter-sub",
     )
 
     assert record.job_id == "job-2"
@@ -97,7 +97,7 @@ def test_legacy_app_dead_letter_extracts_job_from_error_string() -> None:
         },
         receipt_id="ack-legacy",
         pubsub_message_id="dlq-msg-legacy",
-        source_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+        source_subscription="projects/proj/subscriptions/droid-dead-letter-sub-staging",
     )
 
     identity = extract_queue_identity(item.payload)
@@ -105,7 +105,7 @@ def test_legacy_app_dead_letter_extracts_job_from_error_string() -> None:
         item,
         environment="staging",
         project_id="proj",
-        dlq_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+        dlq_subscription="projects/proj/subscriptions/droid-dead-letter-sub-staging",
     )
 
     assert identity.job_id == "3dfd0781edfb4a0f8686ee03b8c2754e"

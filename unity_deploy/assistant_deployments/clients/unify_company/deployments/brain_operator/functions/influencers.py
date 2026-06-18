@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -68,11 +68,11 @@ async def run_x_reply_bot_session(
 
     Discovers fresh on-topic posts, ranks for early-reply value, and posts
     up to ``max_per_session`` short personalised replies (CodeActActor-
-    drafted, grounded in the unity code) about how unity handles the
+    drafted, grounded in the droid code) about how droid handles the
     poster's problem. Fully automated; idempotent + daily-capped. The body
     is sync (it drives its own actor event loop), so we run it off-thread.
 
-    Dedup + audit state lives in the Unity DataManager
+    Dedup + audit state lives in the Droid DataManager
     (``store_backend="datamanager"``) because the deployed pod's brain
     ``data/`` tree is read-only + ephemeral; that makes the daily cap +
     already-replied dedup durable across restarts.
@@ -112,7 +112,7 @@ async def run_x_dm_campaign_session(
     next accounts on the real-influencer shortlist. A CodeActActor
     researches each target and writes a genuine DM (or skips). Warm-up
     ramp + daily cap throttle volume; the target list + send-log/dedup live
-    in the Unity DataManager (``store_backend="datamanager"``), so dedup
+    in the Droid DataManager (``store_backend="datamanager"``), so dedup
     survives container restarts and the list is live-toppable without a
     redeploy. Built to run for months unattended. Sync body -> off-thread.
     """

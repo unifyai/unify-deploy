@@ -38,15 +38,15 @@ _INTEGRATION_LOG_STARTED_AT_MONOTONIC = time.monotonic()
 
 # Load env vars from (in priority order):
 # 1. tests/infra/integration/.env (local test config, gitignored)
-# 2. The unity repo's .env (fallback for shared keys)
+# 2. The droid repo's .env (fallback for shared keys)
 # 3. Shell environment (highest priority, overrides everything)
 _test_env = Path(__file__).parent / ".env"
-_unity_env = Path.home() / "Unify" / "unity" / ".env"
+_droid_env = Path.home() / "Unify" / "droid" / ".env"
 
 if _test_env.is_file():
     load_dotenv(_test_env)
-elif _unity_env.is_file():
-    load_dotenv(_unity_env)
+elif _droid_env.is_file():
+    load_dotenv(_droid_env)
 load_dotenv()  # shell env overrides
 
 
@@ -100,8 +100,8 @@ print = integration_print
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT_ID = os.getenv("TEST_GCP_PROJECT_ID", "gcp-project-runtime")
-VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "gcp-project-vms")
-GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "unity")
+VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "droid-assistant-vms")
+GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "droid")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
 NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
 VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
@@ -147,7 +147,7 @@ SELF_HOST_BOOTSTRAP_PATH = Path("/tmp/self-host-bootstrap.json")
 SELF_HOST_CREDENTIALS_PATH = Path(
     os.getenv(
         "SELF_HOST_CREDENTIALS_FILE",
-        str(Path.home() / ".unity" / "self-host-credentials.json"),
+        str(Path.home() / ".droid" / "self-host-credentials.json"),
     ),
 )
 
@@ -228,7 +228,7 @@ def _resolve_stack_script() -> tuple[Path, Path]:
     """Return (cwd, stack.sh path).
 
     The self-host stack orchestration lives in this repo under
-    ``selfhost/stack.sh`` and drives the sibling unity/console/orchestra
+    ``selfhost/stack.sh`` and drives the sibling droid/console/orchestra
     checkouts.
     """
 
@@ -319,7 +319,7 @@ def _stack_subprocess_env() -> dict[str, str]:
         "COMMUNICATION_REPO_PATH",
         str(_resolve_sibling_repo("communication")),
     )
-    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unity")))
+    env.setdefault("DROID_REPO_PATH", str(_resolve_sibling_repo("droid")))
     env.setdefault("CONSOLE_REPO_PATH", str(_resolve_sibling_repo("console")))
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     # Keep Orchestra alive for the full pytest session; local.sh defaults to 600s.
@@ -420,11 +420,11 @@ def _bootstrap_self_host(urls: LocalStackUrls) -> None:
 def _reset_and_start_local_stack(urls: LocalStackUrls) -> None:
     """Tear down, purge Orchestra, and bring up a fresh local self-host stack."""
 
-    unity_repo, stack_script = _resolve_stack_script()
+    droid_repo, stack_script = _resolve_stack_script()
     print(f"Stopping local stack via {stack_script} down...")
     subprocess.run(
         ["bash", str(stack_script), "down"],
-        cwd=unity_repo,
+        cwd=droid_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=120,
@@ -436,7 +436,7 @@ def _reset_and_start_local_stack(urls: LocalStackUrls) -> None:
     )
     completed = subprocess.run(
         ["bash", str(stack_script), "up"],
-        cwd=unity_repo,
+        cwd=droid_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=LOCAL_STACK_START_TIMEOUT_SECONDS,
@@ -444,7 +444,7 @@ def _reset_and_start_local_stack(urls: LocalStackUrls) -> None:
     if completed.returncode != 0:
         print(
             f"stack.sh up exited {completed.returncode}. "
-            "Unity/Console startup may have failed; continuing if Orchestra, "
+            "Droid/Console startup may have failed; continuing if Orchestra, "
             "Adapters, and Comms are reachable.",
         )
     _seed_local_orchestra_rbac()
@@ -452,11 +452,11 @@ def _reset_and_start_local_stack(urls: LocalStackUrls) -> None:
 
 
 def _stop_local_stack() -> None:
-    unity_repo, stack_script = _resolve_stack_script()
+    droid_repo, stack_script = _resolve_stack_script()
     print("Stopping local self-host stack...")
     subprocess.run(
         ["bash", str(stack_script), "down"],
-        cwd=unity_repo,
+        cwd=droid_repo,
         env=_stack_subprocess_env(),
         check=False,
         timeout=120,
@@ -612,7 +612,7 @@ def gce_client():
     """GCE client using gcloud CLI credentials.
 
     The default ADC credentials may not have compute.instances.list permission
-    on gcp-project-vms. We use the gcloud CLI's own access token instead,
+    on droid-assistant-vms. We use the gcloud CLI's own access token instead,
     which has the full scope set from `gcloud auth login`.
 
     Returns None if GCE access fails (VM tests will skip).
@@ -658,7 +658,7 @@ def gce_client():
 def require_gce(gce_client):
     """Skip test if GCE is not accessible."""
     if gce_client is None:
-        pytest.skip("No GCE compute.instances.list permission on gcp-project-vms")
+        pytest.skip("No GCE compute.instances.list permission on droid-assistant-vms")
 
 
 # ---------------------------------------------------------------------------
@@ -838,7 +838,7 @@ def _job_summaries(batch_api, assistant_id: str) -> list[dict[str, Any]]:
     sanitized = str(assistant_id).lower().replace("_", "-")
     jobs = batch_api.list_namespaced_job(
         namespace=NAMESPACE,
-        label_selector=f"app=unity,assistant-id={sanitized}",
+        label_selector=f"app=droid,assistant-id={sanitized}",
     )
     results = []
     for job in jobs.items:
@@ -1081,7 +1081,7 @@ def _recent_controller_logs(
     return lines[-80:]
 
 
-def _recent_unity_container_logs(
+def _recent_droid_container_logs(
     pod_names: list[str],
     job_names: list[str] | None = None,
 ) -> list[str]:
@@ -1107,7 +1107,7 @@ def _recent_unity_container_logs(
             timeout=30,
         )
     except Exception as exc:
-        return [f"unity log collection failed: {exc}"]
+        return [f"droid log collection failed: {exc}"]
 
     terms = [str(name) for name in pod_names if name]
     if job_names:
@@ -1169,7 +1169,7 @@ class RuntimeIdentityTracker:
 
     The live runtime may be torn down by a test's finally block before the
     artifact is assembled. Persisting the observed session/job/pod names lets
-    us fetch Unity logs and Pod events by historical job prefix even after the
+    us fetch Droid logs and Pod events by historical job prefix even after the
     current runtime snapshot is empty.
     """
 
@@ -1318,7 +1318,7 @@ def _build_failure_artifact(
                 assistant_ids,
                 session_names,
             ),
-            "unity": _recent_unity_container_logs(
+            "droid": _recent_droid_container_logs(
                 pod_names,
                 tracked_job_names,
             ),
@@ -1331,11 +1331,11 @@ def _build_failure_artifact(
             {
                 "job_name": job.metadata.name,
                 "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
-                "unity_status": (job.metadata.labels or {}).get("unity-status"),
+                "droid_status": (job.metadata.labels or {}).get("droid-status"),
             }
             for job in batch_api.list_namespaced_job(
                 namespace=NAMESPACE,
-                label_selector="app=unity",
+                label_selector="app=droid",
             ).items
             if job.status.active and job.status.active > 0
         ],
@@ -1422,11 +1422,11 @@ def local_stack_urls() -> LocalStackUrls:
     )
     adapters_url = os.getenv(
         "TEST_ADAPTERS_URL",
-        config_values.get("UNITY_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
+        config_values.get("DROID_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
     ).rstrip("/")
     comms_url = os.getenv(
         "TEST_COMMS_APP_URL",
-        config_values.get("UNITY_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
+        config_values.get("DROID_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
     ).rstrip("/")
     pubsub_emulator_host = os.getenv(
         "PUBSUB_EMULATOR_HOST",
@@ -1907,11 +1907,11 @@ def wait_for_idle_pool(batch_api, min_idle: int = 1, timeout: float = 90):
                 {
                     "job_name": job.metadata.name,
                     "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
-                    "unity_status": (job.metadata.labels or {}).get("unity-status"),
+                    "droid_status": (job.metadata.labels or {}).get("droid-status"),
                 }
                 for job in batch_api.list_namespaced_job(
                     namespace=NAMESPACE,
-                    label_selector="app=unity",
+                    label_selector="app=droid",
                 ).items
                 if job.status.active and job.status.active > 0
             ],
@@ -2050,7 +2050,7 @@ def list_jobs_with_assistant_id(
     sanitized = assistant_id.lower().replace("_", "-")
     jobs = batch_api.list_namespaced_job(
         namespace=namespace,
-        label_selector=f"app=unity,assistant-id={sanitized}",
+        label_selector=f"app=droid,assistant-id={sanitized}",
     )
     return [j for j in jobs.items if j.status.active and j.status.active > 0]
 
@@ -2065,7 +2065,7 @@ def list_jobs_with_binding_id(
     sanitized = binding_id.lower().replace("_", "-")
     jobs = batch_api.list_namespaced_job(
         namespace=namespace,
-        label_selector=f"app=unity,{ASSISTANT_SESSION_BINDING_LABEL}={sanitized}",
+        label_selector=f"app=droid,{ASSISTANT_SESSION_BINDING_LABEL}={sanitized}",
     )
     return [j for j in jobs.items if j.status.active and j.status.active > 0]
 
@@ -2083,10 +2083,10 @@ def list_jobs_with_session_ref(
 
 
 def count_idle_jobs(batch_api, namespace: str = NAMESPACE) -> int:
-    """Count Jobs with unity-status=idle and active pods."""
+    """Count Jobs with droid-status=idle and active pods."""
     jobs = batch_api.list_namespaced_job(
         namespace=namespace,
-        label_selector="app=unity,unity-status=idle",
+        label_selector="app=droid,droid-status=idle",
     )
     return sum(1 for j in jobs.items if j.status.active and j.status.active > 0)
 
@@ -2298,7 +2298,7 @@ TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
 
 
 def _factory_assistant_surname(index: int) -> str:
-    """Return an alphabetic surname accepted by Unity contact validation."""
+    """Return an alphabetic surname accepted by Droid contact validation."""
 
     value = abs(int(index))
     letters: list[str] = []
@@ -2672,7 +2672,7 @@ def send_test_meet(assistant_data: dict, room_name: str | None = None):
         json={
             "assistant_id": aid,
             "room_name": room,
-            "livekit_agent_name": f"unity_{aid}",
+            "livekit_agent_name": f"droid_{aid}",
         },
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=30,
@@ -2685,9 +2685,9 @@ def send_test_system_event(
     event_type: str,
     message: str = "",
 ):
-    """Send a system event via the adapter's /unity/system-event endpoint."""
+    """Send a system event via the adapter's /droid/system-event endpoint."""
     resp = requests.post(
-        f"{ADAPTERS_URL}/unity/system-event",
+        f"{ADAPTERS_URL}/droid/system-event",
         json={
             "assistant_id": str(assistant_data["assistant_id"]),
             "event_type": event_type,
@@ -2826,7 +2826,7 @@ def generate_vm_identity_token() -> str | None:
     """Generate a GCP identity token impersonating pool-vm-sa.
 
     Uses the comm-sa service account key to impersonate the pool VM SA
-    with audience 'unity-comms-vm'. Returns None if impersonation fails
+    with audience 'droid-comms-vm'. Returns None if impersonation fails
     (missing IAM permissions).
     """
     try:
@@ -2850,7 +2850,7 @@ def generate_vm_identity_token() -> str | None:
                 target_principal="service-account@example.iam.gserviceaccount.com",
                 target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
             ),
-            target_audience="unity-comms-vm",
+            target_audience="droid-comms-vm",
         )
         request = google.auth.transport.requests.Request()
         target_creds.refresh(request)
@@ -2889,7 +2889,7 @@ def publish_to_assistant_topic(
     Bypasses the adapter entirely — used to simulate SMS, email, Teams
     inbound without external service credentials.
     """
-    topic_name = f"unity-{assistant_id}{_PUBSUB_SUFFIX}"
+    topic_name = f"droid-{assistant_id}{_PUBSUB_SUFFIX}"
     topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
     data = json.dumps(
         {
@@ -2915,7 +2915,7 @@ def pull_outbound_messages(
     """
     from google.api_core.exceptions import DeadlineExceeded, PermissionDenied
 
-    sub_name = f"unity-{assistant_id}{_PUBSUB_SUFFIX}-outbound-sub"
+    sub_name = f"droid-{assistant_id}{_PUBSUB_SUFFIX}-outbound-sub"
     sub_path = subscriber.subscription_path(GCP_PROJECT_ID, sub_name)
     try:
         response = subscriber.pull(
@@ -3047,7 +3047,7 @@ def _assistant_readiness_snapshot(
                 [str(assistant_id)],
                 [session_name] if session_name else [],
             ),
-            "unity": _recent_unity_container_logs(
+            "droid": _recent_droid_container_logs(
                 pod_names,
                 tracked_job_names,
             ),
@@ -3071,7 +3071,7 @@ def wait_for_assistant_container_ready(
     """Wait until AssistantSession reports ContainerReady=True.
 
     This is a stronger readiness gate than ``job.status.active``. It proves
-    Unity successfully discovered the AssistantSession binding, read the
+    Droid successfully discovered the AssistantSession binding, read the
     bootstrap Secret, published the StartupEvent, and patched the Job's
     container-ready annotation.
     """
@@ -3372,7 +3372,7 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
 
     jobs = batch_api.list_namespaced_job(
         namespace=NAMESPACE,
-        label_selector="app=unity",
+        label_selector="app=droid",
     ).items
 
     assistant_jobs_map = {}
@@ -3381,7 +3381,7 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
 
     for job in jobs:
         labels = job.metadata.labels or {}
-        status = labels.get("unity-status", "")
+        status = labels.get("droid-status", "")
         aid = labels.get("assistant-id", "")
         session_name = labels.get(ASSISTANT_SESSION_REF_LABEL, "")
         binding_id = labels.get(ASSISTANT_SESSION_BINDING_LABEL, "")
@@ -3392,7 +3392,7 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
                 InvariantViolation(
                     "INV-8",
                     f"Deleting Job {job.metadata.name} still looks live "
-                    f"(assistant-id={aid or 'empty'}, unity-status={status or 'empty'})",
+                    f"(assistant-id={aid or 'empty'}, droid-status={status or 'empty'})",
                 ),
             )
 
@@ -3429,7 +3429,7 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
                 violations.append(
                     InvariantViolation(
                         "INV-2",
-                        f"Job {job.metadata.name} has assistant-id={aid} but unity-status={status}",
+                        f"Job {job.metadata.name} has assistant-id={aid} but droid-status={status}",
                     ),
                 )
 

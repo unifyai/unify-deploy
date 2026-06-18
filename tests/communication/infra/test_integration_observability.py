@@ -23,9 +23,9 @@ def test_poll_until_includes_failure_snapshot():
 
 def test_cloud_run_service_name_parses_staging_url():
     service_name = integration_conftest._cloud_run_service_name(
-        "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+        "https://service.a.run.app",
     )
-    assert service_name == "unity-comms-app-staging"
+    assert service_name == "droid-comms-app-staging"
 
 
 def test_write_failure_artifact_writes_expected_bundle(tmp_path, monkeypatch):

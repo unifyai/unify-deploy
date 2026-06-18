@@ -12,8 +12,8 @@ import time
 from kubernetes import client as k8s_client, config as k8s_config, watch
 from kubernetes.client.rest import ApiException
 
-from unity.deploy_runtime import BootstrapSecretRecord, JobAssignmentRecord
-from unity.settings import SETTINGS
+from droid.deploy_runtime import BootstrapSecretRecord, JobAssignmentRecord
+from droid.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +220,7 @@ def mark_job_container_ready(job_name: str, max_retries: int = 3) -> None:
 def collect_shutdown_diagnostics(job_name: str) -> dict[str, Any]:
     """Collect job/session/pod/event state at shutdown time.
 
-    Called from Unity's graceful-shutdown path after SIGTERM is received but
+    Called from Droid's graceful-shutdown path after SIGTERM is received but
     before the process exits. This captures the K8s state needed to attribute
     *why* the pod is being terminated (job suspend, pod deletion, kubelet kill,
     etc.).

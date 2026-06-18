@@ -27,7 +27,7 @@ def _generate_keypair() -> tuple[str, str]:
         )
         .decode("utf-8")
     )
-    return private_pem, f"{public_openssh} unity-file-sync"
+    return private_pem, f"{public_openssh} droid-file-sync"
 
 
 def _fetch_existing(
@@ -71,7 +71,7 @@ def _public_from_private(private_pem: str) -> str:
         )
         .decode("utf-8")
     )
-    return f"{public_openssh} unity-file-sync"
+    return f"{public_openssh} droid-file-sync"
 
 
 def _store_private_key(

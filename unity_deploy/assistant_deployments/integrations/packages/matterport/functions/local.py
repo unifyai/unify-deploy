@@ -8,7 +8,7 @@ assistant knows whether to trust the local copy.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -44,7 +44,7 @@ async def query_local_matterport_models(
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -127,7 +127,7 @@ async def query_local_matterport_view_stats(
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._local_helpers import (
         freshness,
         safe_filter,

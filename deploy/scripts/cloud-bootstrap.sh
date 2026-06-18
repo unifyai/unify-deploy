@@ -15,18 +15,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Determine current unity branch
-UNITY_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
+# Determine current droid branch
+DROID_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
 
 # Select branch for sibling repos (main→main, otherwise→staging)
-if [[ "$UNITY_BRANCH" == "main" ]]; then
+if [[ "$DROID_BRANCH" == "main" ]]; then
     SIBLING_BRANCH="main"
 else
     SIBLING_BRANCH="staging"
 fi
 
 echo "=== Cloud Bootstrap ==="
-echo "Unity branch: $UNITY_BRANCH"
+echo "Droid branch: $DROID_BRANCH"
 echo "Sibling repos branch: $SIBLING_BRANCH"
 echo ""
 
@@ -92,8 +92,8 @@ clone_repo "unillm"
 if [[ "${CLONE_MAGNITUDE:-false}" == "true" ]]; then
     clone_repo "magnitude"
     if [[ -d "$REPO_ROOT/magnitude" ]]; then
-        echo "Checking out unity-modifications branch for magnitude..."
-        (cd "$REPO_ROOT/magnitude" && git checkout unity-modifications 2>/dev/null) || true
+        echo "Checking out droid-modifications branch for magnitude..."
+        (cd "$REPO_ROOT/magnitude" && git checkout droid-modifications 2>/dev/null) || true
     fi
 fi
 

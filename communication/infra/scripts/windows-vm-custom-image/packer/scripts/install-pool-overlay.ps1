@@ -5,7 +5,7 @@
 # - unityuser (auto-logon, standard user)
 # - OpenSSH Server (port 2222 for file sync)
 # - TightVNC Server (dummy password, updated at assignment)
-# - Unity Pool Watcher (NSSM Windows service)
+# - Droid Pool Watcher (NSSM Windows service)
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +23,7 @@ Write-Host "=== Creating pool user: unityuser ===" -ForegroundColor Cyan
 
 $poolPassword = ConvertTo-SecureString "UnityPoolDefault1!" -AsPlainText -Force
 if (-not (Get-LocalUser -Name "unityuser" -ErrorAction SilentlyContinue)) {
-    New-LocalUser -Name "unityuser" -Password $poolPassword -PasswordNeverExpires -Description "Unity pool VM user"
+    New-LocalUser -Name "unityuser" -Password $poolPassword -PasswordNeverExpires -Description "Droid pool VM user"
     Write-Host "  Created user unityuser (standard user)"
 } else {
     Write-Host "  User unityuser already exists"
@@ -36,11 +36,11 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlo
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -Value "UnityPoolDefault1!"
 Write-Host "  Auto-logon configured for unityuser"
 
-# Create Unity directories
-New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
-New-Item -ItemType Directory -Force -Path "C:\Unity\Local" | Out-Null
-icacls "C:\Unity" /grant "unityuser:(OI)(CI)F" /T /Q 2>$null
-Write-Host "  Created C:\Unity and C:\Unity\Local"
+# Create Droid directories
+New-Item -ItemType Directory -Force -Path "C:\Droid" | Out-Null
+New-Item -ItemType Directory -Force -Path "C:\Droid\Local" | Out-Null
+icacls "C:\Droid" /grant "unityuser:(OI)(CI)F" /T /Q 2>$null
+Write-Host "  Created C:\Droid and C:\Droid\Local"
 
 # Grant unityuser access to service directories
 foreach ($dir in @("C:\agent-service", "C:\magnitude", "C:\ms-playwright", "C:\novnc")) {
@@ -66,7 +66,7 @@ if ($sshCapability.State -ne "Installed") {
 $sshdConfigPath = "C:\ProgramData\ssh\sshd_config"
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\ssh" | Out-Null
 $sshdConfig = @"
-# Unity File Sync - OpenSSH Server Configuration
+# Droid File Sync - OpenSSH Server Configuration
 
 Port 2222
 PasswordAuthentication no
@@ -86,7 +86,7 @@ Start-Service sshd -ErrorAction SilentlyContinue
 Write-Host "  SSHD started and set to auto-start"
 
 # Firewall rule for SSH port 2222
-New-NetFirewallRule -DisplayName "Unity SSH 2222" -Direction Inbound -LocalPort 2222 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName "Droid SSH 2222" -Direction Inbound -LocalPort 2222 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
 Write-Host "  Firewall rule added for port 2222"
 
 # =============================================================================
@@ -334,7 +334,7 @@ $startBat = @"
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
-npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
+npx --yes ts-node src/index.ts >> C:\Droid\agent-service.log 2>&1
 "@
 New-Item -ItemType Directory -Force -Path $agentServiceDir | Out-Null
 $startBat | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
@@ -378,7 +378,7 @@ if (Test-Path $npxCmd) {
 # Pool Watcher (NSSM Windows service)
 # =============================================================================
 Write-Host ""
-Write-Host "=== Installing Unity Pool Watcher ===" -ForegroundColor Cyan
+Write-Host "=== Installing Droid Pool Watcher ===" -ForegroundColor Cyan
 
 if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
     choco install nssm -y --no-progress 2>$null
@@ -388,17 +388,17 @@ if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
     Write-Host "  NSSM installed"
 }
 
-if (Test-Path "C:\temp\unity-pool-watcher.ps1") {
-    Copy-Item "C:\temp\unity-pool-watcher.ps1" "C:\unity-pool-watcher.ps1" -Force
-    Write-Host "  Watcher script installed at C:\unity-pool-watcher.ps1"
+if (Test-Path "C:\temp\droid-pool-watcher.ps1") {
+    Copy-Item "C:\temp\droid-pool-watcher.ps1" "C:\droid-pool-watcher.ps1" -Force
+    Write-Host "  Watcher script installed at C:\droid-pool-watcher.ps1"
 }
 
 $nssmPath = (Get-Command nssm -ErrorAction SilentlyContinue).Source
 if ($nssmPath) {
-    & $nssmPath install UnityPoolWatcher powershell.exe "-ExecutionPolicy Bypass -File C:\unity-pool-watcher.ps1"
+    & $nssmPath install UnityPoolWatcher powershell.exe "-ExecutionPolicy Bypass -File C:\droid-pool-watcher.ps1"
     & $nssmPath set UnityPoolWatcher Start SERVICE_AUTO_START
-    & $nssmPath set UnityPoolWatcher AppStdout "C:\Unity\pool-watcher.log"
-    & $nssmPath set UnityPoolWatcher AppStderr "C:\Unity\pool-watcher.log"
+    & $nssmPath set UnityPoolWatcher AppStdout "C:\Droid\pool-watcher.log"
+    & $nssmPath set UnityPoolWatcher AppStderr "C:\Droid\pool-watcher.log"
     & $nssmPath set UnityPoolWatcher AppRotateFiles 1
     & $nssmPath set UnityPoolWatcher AppRotateBytes 10485760
     Write-Host "  UnityPoolWatcher service registered (auto-start)"

@@ -10,7 +10,7 @@ Mirrors hubspot/local_query.py.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -43,7 +43,7 @@ async def query_local_employmenthero_employees(
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -92,7 +92,7 @@ async def query_local_employmenthero_teams(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -124,7 +124,7 @@ async def query_local_employmenthero_locations(mock: bool = True) -> dict:
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -163,7 +163,7 @@ async def query_local_employmenthero_leave_requests(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -207,7 +207,7 @@ async def query_local_employmenthero_leave_balances(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -251,7 +251,7 @@ async def query_local_employmenthero_timesheets(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -304,7 +304,7 @@ async def query_local_employmenthero_expenses(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -351,7 +351,7 @@ async def query_local_employmenthero_qualifications(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -416,7 +416,7 @@ async def query_local_employmenthero_expiring_qualifications(
             "freshness": {"is_fresh": True},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
     )
@@ -501,7 +501,7 @@ async def query_local_employmenthero_onboarding_status(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -545,7 +545,7 @@ async def query_local_employmenthero_documents(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -591,7 +591,7 @@ async def query_local_employmenthero_goals(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -636,7 +636,7 @@ async def query_local_employmenthero_reviews(
             "count": 1,
             "freshness": {"is_fresh": True},
         }
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
         safe_filter,

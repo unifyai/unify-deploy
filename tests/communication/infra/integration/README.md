@@ -17,7 +17,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
 1. **GCP authentication**:
    ```bash
    gcloud auth login
-   gcloud container clusters get-credentials unity --region us-central1 --project gcp-project-runtime
+   gcloud container clusters get-credentials droid --region us-central1 --project gcp-project-runtime
    ```
 
 2. **Python environment**:
@@ -36,7 +36,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
    ```
 
    Required keys:
-   - `UNIFY_KEY` -- your personal API key (from console.unify.ai or your unity `.env`)
+   - `UNIFY_KEY` -- your personal API key (from console.unify.ai or your droid `.env`)
    - `ORCHESTRA_ADMIN_KEY` -- admin key for the Comms App (shared team key)
    - `SHARED_UNIFY_KEY` -- shared key for AssistantJobs project (shared team key)
 
@@ -115,9 +115,9 @@ source .env
 curl -X POST "$TEST_ADAPTERS_URL/scheduled/jobs/create" -H "Authorization: Bearer $ORCHESTRA_ADMIN_KEY"
 ```
 
-**GCE tests skip**: Your `gcloud` auth needs access to the `gcp-project-vms` project. Verify with:
+**GCE tests skip**: Your `gcloud` auth needs access to the `droid-assistant-vms` project. Verify with:
 ```bash
-gcloud compute instances list --project=gcp-project-vms --zones=us-central1-a --limit=1
+gcloud compute instances list --project=droid-assistant-vms --zones=us-central1-a --limit=1
 ```
 
 **Pub/Sub checks fail with `pubsub.subscriptions.consume`**: Your current ADC principal cannot pull from the staging outbound subscription. Set `TEST_GOOGLE_APPLICATION_CREDENTIALS` (or `TEST_GCP_SA_KEY`) to a credential that has `roles/pubsub.subscriber` on `gcp-project-runtime`.

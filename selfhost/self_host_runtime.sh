@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared self-host runtime ownership, locking, and health helpers.
 #
-# Expects self_host_env.sh to be sourced first (or UNITY_HOME / SELF_HOST_STATE_DIR set).
+# Expects self_host_env.sh to be sourced first (or DROID_HOME / SELF_HOST_STATE_DIR set).
 
 set -euo pipefail
 
@@ -9,23 +9,23 @@ SELF_HOST_RUNTIME_OWNER_SERVICE="service"
 SELF_HOST_RUNTIME_OWNER_STACK="stack"
 
 self_host_runtime_state_file() {
-  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_runtime_lock_file() {
-  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_service_marker_file() {
-  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_service_supervisor_pidfile() {
-  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_service_log_file() {
-  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_service_is_enabled() {
@@ -42,7 +42,7 @@ self_host_disable_runtime() {
 }
 
 self_host_ensure_state_dir() {
-  mkdir -p "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  mkdir -p "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
 
 self_host_read_runtime_state() {
@@ -78,12 +78,12 @@ self_host_runtime_gateway_pid() {
 
 self_host_gateway_base_url() {
   printf 'http://%s:%s' \
-    "${UNITY_GATEWAY_HOST:-127.0.0.1}" \
-    "${UNITY_GATEWAY_PORT:-8001}"
+    "${DROID_GATEWAY_HOST:-127.0.0.1}" \
+    "${DROID_GATEWAY_PORT:-8001}"
 }
 
 self_host_gateway_pidfile() {
-  printf '/tmp/unity-gateway.pid'
+  printf '/tmp/droid-gateway.pid'
 }
 
 self_host_gateway_process_pid() {
@@ -166,15 +166,15 @@ self_host_clear_runtime_state() {
   rm -f "$(self_host_runtime_state_file)"
 }
 
-unity_cm_pidfile() {
-  printf '/tmp/unity-local.pid'
+droid_cm_pidfile() {
+  printf '/tmp/droid-local.pid'
 }
 
-unity_cm_process_pids() {
+droid_cm_process_pids() {
   local main_pids="" pidfile_pid="" merged=""
   main_pids="$(pgrep -f "[u]nity\.conversation_manager\.main" 2>/dev/null || true)"
-  if [[ -f "$(unity_cm_pidfile)" ]]; then
-    pidfile_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
+  if [[ -f "$(droid_cm_pidfile)" ]]; then
+    pidfile_pid="$(cat "$(droid_cm_pidfile)" 2>/dev/null || true)"
     if [[ -n "$pidfile_pid" ]] && ! kill -0 "$pidfile_pid" 2>/dev/null; then
       pidfile_pid=""
     fi
@@ -185,9 +185,9 @@ unity_cm_process_pids() {
   fi
 }
 
-unity_cm_instance_count() {
+droid_cm_instance_count() {
   local pids count
-  pids="$(unity_cm_process_pids)"
+  pids="$(droid_cm_process_pids)"
   if [[ -z "$pids" ]]; then
     echo 0
     return 0
@@ -196,7 +196,7 @@ unity_cm_instance_count() {
   echo "$count"
 }
 
-unity_cm_assistant_id_for_pid() {
+droid_cm_assistant_id_for_pid() {
   local pid="$1"
   ps eww -p "$pid" 2>/dev/null \
     | tr ' ' '\n' \
@@ -204,7 +204,7 @@ unity_cm_assistant_id_for_pid() {
     | head -1
 }
 
-unity_cm_is_alive() {
+droid_cm_is_alive() {
   local pid="${1:-}"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
@@ -300,7 +300,7 @@ self_host_service_runtime_is_healthy() {
   self_host_service_is_enabled || return 1
   self_host_service_supervisor_is_running || return 1
   local count
-  count="$(unity_cm_instance_count)"
+  count="$(droid_cm_instance_count)"
   [[ "$count" -eq 1 ]]
 }
 
@@ -312,7 +312,7 @@ self_host_should_preserve_background_on_interactive_stop() {
 self_host_should_preserve_runtime_on_interactive_stop() {
   self_host_should_preserve_background_on_interactive_stop || return 1
   local count
-  count="$(unity_cm_instance_count)"
+  count="$(droid_cm_instance_count)"
   [[ "$count" -eq 1 ]]
 }
 
@@ -342,12 +342,12 @@ self_host_adopt_coordinator_for_service() {
   local coordinator_agent_id="${1:-}"
   local cm_pid=""
 
-  cm_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
+  cm_pid="$(cat "$(droid_cm_pidfile)" 2>/dev/null || true)"
   [[ -n "$cm_pid" ]] || return 1
-  unity_cm_is_alive "$cm_pid" || return 1
+  droid_cm_is_alive "$cm_pid" || return 1
 
   if [[ -z "$coordinator_agent_id" ]]; then
-    coordinator_agent_id="$(unity_cm_assistant_id_for_pid "$cm_pid")"
+    coordinator_agent_id="$(droid_cm_assistant_id_for_pid "$cm_pid")"
   fi
   [[ -n "$coordinator_agent_id" ]] || return 1
 
@@ -364,11 +364,11 @@ self_host_apply_service_coordinator_context() {
   if ! self_host_service_supervisor_is_running; then
     return 0
   fi
-  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
-  export UNITY_SERVICE_RUNTIME=1
+  export DROID_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export DROID_SERVICE_RUNTIME=1
 }
 
-with_unity_runtime_start_lock() {
+with_droid_runtime_start_lock() {
   local timeout="${1:-30}"
   shift
   self_host_ensure_state_dir
@@ -410,7 +410,7 @@ self_host_runtime_doctor_line() {
   fi
 
   local cm_count
-  cm_count="$(unity_cm_instance_count)"
+  cm_count="$(droid_cm_instance_count)"
   local cm_label
   if [[ "$cm_count" -eq 0 ]]; then
     cm_label="0 instances (stopped)"
@@ -435,7 +435,7 @@ self_host_load_coordinator_credentials() {
     if declare -F self_host_coordinator_runtime_file &>/dev/null; then
       runtime_file="$(self_host_coordinator_runtime_file)"
     else
-      runtime_file="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/coordinator-runtime.json"
+      runtime_file="${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/coordinator-runtime.json"
     fi
   fi
   if [[ ! -f "$runtime_file" ]]; then

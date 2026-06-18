@@ -27,7 +27,7 @@ are in the underscore-prefixed sibling modules (``_os_client``,
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()

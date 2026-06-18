@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to set up Kubernetes PriorityClasses for Unity jobs.
+Script to set up Kubernetes PriorityClasses for Droid jobs.
 
 This is a one-time setup that creates priority classes for different job priorities.
 PriorityClasses are cluster-wide resources that determine scheduling order.
@@ -28,34 +28,34 @@ def setup_kubernetes_client():
 
 
 def create_priority_classes(api_client):
-    """Create priority classes for Unity jobs"""
+    """Create priority classes for Droid jobs"""
 
     priority_classes = [
         {
-            "name": "unity-critical",
+            "name": "droid-critical",
             "value": 1000000,
-            "description": "Critical priority for urgent Unity assistant jobs",
+            "description": "Critical priority for urgent Droid assistant jobs",
         },
         {
-            "name": "unity-high",
+            "name": "droid-high",
             "value": 500000,
-            "description": "High priority for important Unity assistant jobs",
+            "description": "High priority for important Droid assistant jobs",
         },
         {
-            "name": "unity-idle",
+            "name": "droid-idle",
             "value": 500000,
             "preemptionPolicy": "Never",
-            "description": "Idle pool containers — same scheduling weight as unity-high but will never preempt other pods",
+            "description": "Idle pool containers — same scheduling weight as droid-high but will never preempt other pods",
         },
         {
-            "name": "unity-normal",
+            "name": "droid-normal",
             "value": 100000,
-            "description": "Normal priority for standard Unity assistant jobs",
+            "description": "Normal priority for standard Droid assistant jobs",
         },
         {
-            "name": "unity-low",
+            "name": "droid-low",
             "value": 50000,
-            "description": "Low priority for background Unity jobs",
+            "description": "Low priority for background Droid jobs",
         },
     ]
 
@@ -68,7 +68,7 @@ def create_priority_classes(api_client):
                 "kind": "PriorityClass",
                 "metadata": {
                     "name": pc["name"],
-                    "labels": {"app": "unity", "priority": pc["name"].split("-")[-1]},
+                    "labels": {"app": "droid", "priority": pc["name"].split("-")[-1]},
                 },
                 "value": pc["value"],
                 "globalDefault": False,
@@ -124,17 +124,17 @@ def list_priority_classes(api_client):
 
 
 def delete_priority_classes(api_client):
-    """Delete Unity priority classes"""
-    unity_priority_classes = [
-        "unity-critical",
-        "unity-high",
-        "unity-idle",
-        "unity-normal",
-        "unity-low",
+    """Delete Droid priority classes"""
+    droid_priority_classes = [
+        "droid-critical",
+        "droid-high",
+        "droid-idle",
+        "droid-normal",
+        "droid-low",
     ]
     deleted_count = 0
 
-    for pc_name in unity_priority_classes:
+    for pc_name in droid_priority_classes:
         try:
             api_client.delete_priority_class(name=pc_name)
             print(f"✅ Deleted PriorityClass '{pc_name}'")
@@ -150,30 +150,30 @@ def delete_priority_classes(api_client):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Set up Kubernetes PriorityClasses for Unity jobs",
+        description="Set up Kubernetes PriorityClasses for Droid jobs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python setup_priority_classes.py --create          # Create all priority classes
   python setup_priority_classes.py --list            # List all priority classes
-  python setup_priority_classes.py --delete          # Delete Unity priority classes
+  python setup_priority_classes.py --delete          # Delete Droid priority classes
 
 Priority Levels:
-  unity-critical (1000000) - For urgent jobs that need immediate scheduling
-  unity-high     (500000)  - For important jobs with high priority
-  unity-normal   (100000)  - For standard jobs (default)
-  unity-low      (50000)   - For background jobs that can wait
+  droid-critical (1000000) - For urgent jobs that need immediate scheduling
+  droid-high     (500000)  - For important jobs with high priority
+  droid-normal   (100000)  - For standard jobs (default)
+  droid-low      (50000)   - For background jobs that can wait
 
 Usage in Jobs:
   spec:
-    priorityClassName: unity-high  # Reference by name
+    priorityClassName: droid-high  # Reference by name
         """,
     )
 
     parser.add_argument(
         "--create",
         action="store_true",
-        help="Create Unity priority classes",
+        help="Create Droid priority classes",
     )
 
     parser.add_argument("--list", action="store_true", help="List all priority classes")
@@ -181,12 +181,12 @@ Usage in Jobs:
     parser.add_argument(
         "--delete",
         action="store_true",
-        help="Delete Unity priority classes",
+        help="Delete Droid priority classes",
     )
 
     args = parser.parse_args()
 
-    print(f"🔧 Unity PriorityClass Management")
+    print(f"🔧 Droid PriorityClass Management")
     print()
 
     # Initialize Kubernetes client
@@ -197,11 +197,11 @@ Usage in Jobs:
 
     # Handle different operations
     if args.create:
-        print("🚀 Creating Unity PriorityClasses...")
+        print("🚀 Creating Droid PriorityClasses...")
         created_count = create_priority_classes(api_client)
         print(f"\n✅ Created {created_count} new PriorityClasses")
         print("\n💡 Next steps:")
-        print("   1. Use in jobs: priorityClassName: unity-high")
+        print("   1. Use in jobs: priorityClassName: droid-high")
         print("   2. Check status: python setup_priority_classes.py --list")
         return
 
@@ -210,7 +210,7 @@ Usage in Jobs:
         return
 
     if args.delete:
-        print("🗑️  Deleting Unity PriorityClasses...")
+        print("🗑️  Deleting Droid PriorityClasses...")
         deleted_count = delete_priority_classes(api_client)
         print(f"\n✅ Deleted {deleted_count} PriorityClasses")
         return

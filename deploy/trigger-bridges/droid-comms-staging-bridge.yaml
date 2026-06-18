@@ -1,16 +1,15 @@
 steps:
 - name: 'gcr.io/cloud-builders/gcloud'
-  id: 'trigger-private-base-build'
+  id: 'trigger-comms-app-build'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
     set -euo pipefail
-    gcloud builds triggers run unity-base-production-private \
+    gcloud builds triggers run droid-comms-app-staging-unity-deploy \
       --project=${PROJECT_ID} \
       --region=${_REGION} \
-      --branch=main \
-      --substitutions=_UNITY_REF=main,_UNITY_SHA=${COMMIT_SHA}
+      --branch=staging
 
 options:
   substitutionOption: ALLOW_LOOSE

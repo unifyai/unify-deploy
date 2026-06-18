@@ -53,7 +53,7 @@ class ControllerConfig:
             desktop_liveness_failure_threshold=int(
                 os.environ.get("DESKTOP_LIVENESS_FAILURE_THRESHOLD", "3"),
             ),
-            image_hash_bucket="unity-image-hash",
+            image_hash_bucket="droid-image-hash",
             image_hash_cache_ttl=float(os.environ.get("IMAGE_HASH_CACHE_TTL", "60")),
             job_claim_lease_duration_seconds=int(
                 os.environ.get(

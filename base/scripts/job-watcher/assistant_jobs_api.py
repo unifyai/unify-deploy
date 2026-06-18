@@ -1,8 +1,8 @@
 """Low-level AssistantJobs operations: records, labels, and VMs.
 
 Every function accepts explicit parameters (auth keys, URLs) so it can
-be called from any context — the Unity container or the job-watcher
-operator — without importing Unity-specific packages.
+be called from any context — the Droid container or the job-watcher
+operator — without importing Droid-specific packages.
 
 Orchestra log operations use the ``unify`` SDK (which reads
 ``ORCHESTRA_URL`` from the environment automatically).  Comms-service
@@ -89,12 +89,12 @@ def patch_job_label(
     timeout: float = 30,
     retries: int = 0,
 ) -> bool:
-    """Patch the K8s Job ``unity-status`` label.  Returns True on success."""
-    labels: dict[str, str] = {"unity-status": status}
+    """Patch the K8s Job ``droid-status`` label.  Returns True on success."""
+    labels: dict[str, str] = {"droid-status": status}
     if assistant_id is not None:
         labels["assistant-id"] = str(assistant_id).lower().replace("_", "-")
     if ack_ts is not None:
-        labels["unity-startup-ack"] = ack_ts
+        labels["droid-startup-ack"] = ack_ts
     for attempt in range(1 + retries):
         try:
             resp = requests.patch(
@@ -138,7 +138,7 @@ def release_pool_vm(
     """Request pool VM release for the current job or VM target.
 
     The caller should pass the most specific runtime identity it has
-    (typically ``job_name`` for Unity containers and the job-watcher) so
+    (typically ``job_name`` for Droid containers and the job-watcher) so
     Comms can reject stale cleanup from older runtimes.
     """
     headers = {"Authorization": f"Bearer {admin_key}"}
@@ -209,7 +209,7 @@ def stop_assistant_session(
 ) -> bool:
     """Ask Comms to transition the assistant session intent offline.
 
-    Unity uses this before a normal inactivity shutdown so the controller can
+    Droid uses this before a normal inactivity shutdown so the controller can
     distinguish an intentional "go offline" transition from a crash that
     should be restarted.
     """

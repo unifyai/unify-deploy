@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.common.pipeline.types import FileParseResult, IngestPlan, TableMeta
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from droid.common.pipeline.types import FileParseResult, IngestPlan, TableMeta
+from droid.common.pipeline.work_queue import ReceivedWorkItem
 from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
 from unity_deploy.infra.workers import parse_worker
 from unity_deploy.infra.workers.parse_worker import _merge_table_config

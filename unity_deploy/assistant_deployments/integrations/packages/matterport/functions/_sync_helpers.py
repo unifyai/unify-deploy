@@ -10,7 +10,7 @@ async def load_sync_state() -> dict:
     """Read the per-object watermark map from DataManager.  Returns an
     empty dict on the first run before any state row has been written.
     """
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -21,7 +21,7 @@ async def load_sync_state() -> dict:
 
 
 async def load_sync_state_rows() -> list:
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -31,7 +31,7 @@ async def load_sync_state_rows() -> list:
 
 
 async def load_latest_run() -> dict | None:
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:

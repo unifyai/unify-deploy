@@ -8,13 +8,13 @@ regardless of whether a DispatchManifest exists.
 Usage
 -----
     # List every job and its status (dry-run, no mutations)
-    python -m unity_deploy.scripts.cancel_all_jobs --bucket unity-pipeline-artifacts-staging list
+    python -m unity_deploy.scripts.cancel_all_jobs --bucket droid-pipeline-artifacts-staging list
 
     # Cancel every non-terminal job (sets status="cancelled" on job.json)
-    python -m unity_deploy.scripts.cancel_all_jobs --bucket unity-pipeline-artifacts-staging cancel
+    python -m unity_deploy.scripts.cancel_all_jobs --bucket droid-pipeline-artifacts-staging cancel
 
     # Delete ALL job artifacts from the bucket (irreversible!)
-    python -m unity_deploy.scripts.cancel_all_jobs --bucket unity-pipeline-artifacts-staging delete --confirm
+    python -m unity_deploy.scripts.cancel_all_jobs --bucket droid-pipeline-artifacts-staging delete --confirm
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from unity.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline._utils import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ TERMINAL_STATES = frozenset({"success", "error", "cancelled"})
 
 def _init(*, bucket_override: str | None = None):
     if bucket_override:
-        os.environ["UNITY_GCS_ARTIFACT_BUCKET"] = bucket_override
+        os.environ["DROID_GCS_ARTIFACT_BUCKET"] = bucket_override
 
     from unity_deploy.infra.workers.worker_utils import (
         build_worker_infra,
@@ -193,8 +193,8 @@ def main() -> None:
         default=None,
         help=(
             "Override the GCS artifact bucket "
-            "(e.g. unity-pipeline-artifacts-staging). "
-            "Defaults to UNITY_GCS_ARTIFACT_BUCKET env var."
+            "(e.g. droid-pipeline-artifacts-staging). "
+            "Defaults to DROID_GCS_ARTIFACT_BUCKET env var."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)

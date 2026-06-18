@@ -27,8 +27,8 @@ import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from unity.common.pipeline.types import DmBinding, FmBinding, IngestBinding
-from unity.settings import SETTINGS
+from droid.common.pipeline.types import DmBinding, FmBinding, IngestBinding
+from droid.settings import SETTINGS
 from unity_deploy.infra.workers.assistant_key_resolver import (
     AssistantKeyLookupError,
     clear_cache,

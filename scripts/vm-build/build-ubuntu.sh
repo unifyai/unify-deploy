@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build-ubuntu.sh - Build Unity Pool Ubuntu VM image via Packer
+# build-ubuntu.sh - Build Droid Pool Ubuntu VM image via Packer
 # =============================================================================
 #
 # Builds the pool Ubuntu image (base + pool overlay) into the
-# "unity-pool-ubuntu-vm" image family.
+# "droid-pool-ubuntu-vm" image family.
 #
 # Usage:
 #   ./build-ubuntu.sh --project PROJECT_ID [--credentials-file PATH]
@@ -90,5 +90,5 @@ echo "=========================================="
 echo "  Pool Ubuntu image build complete!"
 echo "=========================================="
 echo ""
-echo "The image is now the latest in family: unity-pool-ubuntu-vm"
+echo "The image is now the latest in family: droid-pool-ubuntu-vm"
 echo "New pool VMs will automatically use this image."

@@ -28,16 +28,16 @@ def _install_materialize_fakes(
     venv_collector,
     function_manager: _FakeFunctionManager,
 ) -> None:
-    custom_functions = ModuleType("unity.function_manager.custom_functions")
+    custom_functions = ModuleType("droid.function_manager.custom_functions")
     custom_functions.collect_functions_from_directories = function_collector
     custom_functions.collect_venvs_from_directories = venv_collector
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity.function_manager.custom_functions",
+        "droid.function_manager.custom_functions",
         custom_functions,
     )
 
-    manager_registry = ModuleType("unity.manager_registry")
+    manager_registry = ModuleType("droid.manager_registry")
 
     class ManagerRegistry:
         @staticmethod
@@ -47,7 +47,7 @@ def _install_materialize_fakes(
     manager_registry.ManagerRegistry = ManagerRegistry
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity.manager_registry",
+        "droid.manager_registry",
         manager_registry,
     )
 

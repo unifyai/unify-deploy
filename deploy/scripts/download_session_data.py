@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Download all session data for a Unity organization or assistant.
+Download all session data for a Droid organization or assistant.
 
 Discovers assistants via the admin API, then fetches guidance, functions,
 file records, sessions, cloud logs, and pod log archives.
 
 Usage:
-    cd unity/
+    cd droid/
     uv run python scripts/download_session_data.py --org-id 2
     uv run python scripts/download_session_data.py --org-id 6
     uv run python scripts/download_session_data.py --assistant-id 84
@@ -40,7 +40,7 @@ import requests
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT = "gcp-project-runtime"
-GKE_CLUSTER = "unity"
+GKE_CLUSTER = "droid"
 GCS_BUCKET = "gs://bucket/unknown"
 ORCHESTRA_URL = "https://api.unify.ai/v0"
 GCLOUD = shutil.which("gcloud") or "gcloud"
@@ -662,7 +662,7 @@ def generate_index(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download Unity session data")
+    parser = argparse.ArgumentParser(description="Download Droid session data")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--org-id",

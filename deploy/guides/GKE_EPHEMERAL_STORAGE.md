@@ -2,9 +2,9 @@
 
 ## The Problem
 
-Unity jobs run on **GKE Autopilot**, which enforces a hard **10Gi cap on ephemeral storage** per pod. This limit is imposed by Google's `autogke-pod-limit-constraints` admission webhook and cannot be raised — it's a platform constraint, not a cluster configuration.
+Droid jobs run on **GKE Autopilot**, which enforces a hard **10Gi cap on ephemeral storage** per pod. This limit is imposed by Google's `autogke-pod-limit-constraints` admission webhook and cannot be raised — it's a platform constraint, not a cluster configuration.
 
-Ephemeral storage covers the container's writable filesystem layer: anything written to paths not backed by an explicit volume mount (e.g. `/root/.cache/`, `/usr/local/lib/`, `/var/log/`). Some Unity components lazily download large artifacts at runtime, notably:
+Ephemeral storage covers the container's writable filesystem layer: anything written to paths not backed by an explicit volume mount (e.g. `/root/.cache/`, `/usr/local/lib/`, `/var/log/`). Some Droid components lazily download large artifacts at runtime, notably:
 
 - **Docling's SmolVLM-500M-Instruct model** (~5GB via HuggingFace Hub) — downloaded on the first PDF parse with picture description enabled
 - **PackageOverlay pip installs** — dynamic package installs during actor execution
@@ -50,7 +50,7 @@ Both point to paths under `/tmp`, which is backed by the `emptyDir` volume (not 
 |-----------|------|-------------|-----------|
 | Turn detector models | `/tmp/huggingface/` | `emptyDir` volume (copied from image at startup) | `HF_HOME` env var + entrypoint copy |
 | Docling / SmolVLM (~5GB) | `/tmp/huggingface/` | `emptyDir` volume (runtime download) | `HF_HOME` env var |
-| PackageOverlay (actor pip installs) | `/tmp/unity_act_pkgs/` | `emptyDir` volume | Already uses `/tmp` |
+| PackageOverlay (actor pip installs) | `/tmp/droid_act_pkgs/` | `emptyDir` volume | Already uses `/tmp` |
 | `tempfile.mkdtemp()` calls | `/tmp/` | `emptyDir` volume | Already uses `/tmp` |
 | XDG-compliant caches | `/tmp/.cache/` | `emptyDir` volume | `XDG_CACHE_HOME` env var |
 | Playwright browsers | Image layer | Image layer (baked in) | Installed at Docker build time |
@@ -102,7 +102,7 @@ When a new tool or library needs to download or cache large files at runtime, fo
 
 3. **If the tool has no env var and hardcodes a path** (rare), either symlink that path to `/tmp` in the Dockerfile, or patch the tool's config at startup in `entrypoint.sh`.
 
-The one case this strategy doesn't cover is runtime `pip install` to the system Python (`/usr/local/lib/...`), which always hits ephemeral storage since it modifies the root filesystem. `PackageOverlay` already installs to `/tmp/unity_act_pkgs/`, so the main actor flow is fine. Only `EnvironmentManager._ensure_dependencies()` installs to the system path, and those are typically small.
+The one case this strategy doesn't cover is runtime `pip install` to the system Python (`/usr/local/lib/...`), which always hits ephemeral storage since it modifies the root filesystem. `PackageOverlay` already installs to `/tmp/droid_act_pkgs/`, so the main actor flow is fine. Only `EnvironmentManager._ensure_dependencies()` installs to the system path, and those are typically small.
 
 **The general rule: if something downloads large files at runtime, find the env var, point it at `/tmp`, done. No infrastructure changes needed.**
 
@@ -115,7 +115,7 @@ The job spec retains a **10Gi** `ephemeral-storage` request. With the heavy-hitt
 - `FunctionManager` venv creation if it writes outside `/tmp`
 - Log files written to paths like `/var/log/`
 
-10Gi is generous for these, but the cost is negligible — Autopilot charges ~$0.0003/GiB-hour, so 10Gi works out to roughly ~$2/month for a pod running 24/7. Since Unity pods are short-lived, the actual cost is far less. Keeping 10Gi provides a comfortable buffer against unexpected writes without meaningful cost impact.
+10Gi is generous for these, but the cost is negligible — Autopilot charges ~$0.0003/GiB-hour, so 10Gi works out to roughly ~$2/month for a pod running 24/7. Since Droid pods are short-lived, the actual cost is far less. Keeping 10Gi provides a comfortable buffer against unexpected writes without meaningful cost impact.
 
 The real value of the `emptyDir` + env var setup isn't cost savings — it's breaking through the 10Gi Autopilot ceiling for downloads that genuinely need more (like the ~5GB HuggingFace model).
 

@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from unity.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline._utils import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -363,9 +363,9 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> None:
     env = getattr(args, "env", "") or ""
     project = getattr(args, "project", "") or ""
     if env:
-        os.environ["UNITY_GCP_PIPELINE_ENVIRONMENT"] = env
+        os.environ["DROID_GCP_PIPELINE_ENVIRONMENT"] = env
     if project:
-        os.environ["UNITY_PUBSUB_PROJECT_ID"] = project
+        os.environ["DROID_PUBSUB_PROJECT_ID"] = project
 
 
 def _init_infra(debug: bool = False):
@@ -566,7 +566,7 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
 
 
 def _mark_job_dlq(infra, record, dlq_keys: list[str]) -> None:
-    from unity.common.pipeline._utils import utc_now_iso
+    from droid.common.pipeline._utils import utc_now_iso
 
     job_store = _get_job_store(infra)
     try:
@@ -630,7 +630,7 @@ def _table_checkpoint_plan(
     if not manifest_key:
         return [], False
     try:
-        from unity.common.pipeline import IngestPlan
+        from droid.common.pipeline import IngestPlan
 
         manifest_payload = artifact_store.get_json(manifest_key)
         plan = IngestPlan.model_validate(manifest_payload)
@@ -938,13 +938,13 @@ async def _execute_stale_recovery(
 
 async def cmd_submit(args: argparse.Namespace) -> None:
     """Upload source files and publish one ParseRequested per file."""
-    from unity.common.pipeline import DispatchTarget, publish_parse_request
-    from unity.common.pipeline.deployment.types import (
+    from droid.common.pipeline import DispatchTarget, publish_parse_request
+    from droid.common.pipeline.deployment.types import (
         DeploymentBundleRef,
         DeploymentIngestionJob,
         DispatchManifest,
     )
-    from unity.common.pipeline.types import DmBinding, FmBinding
+    from droid.common.pipeline.types import DmBinding, FmBinding
 
     from unity_deploy.assistant_deployments.scripts.ingest_utils import (
         load_pipeline_config,

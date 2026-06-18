@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Refresh idle Unity jobs by creating new ones and cleaning up stale ones.
+Refresh idle Droid jobs by creating new ones and cleaning up stale ones.
 
-Intended to run after a Unity Cloud Build completes, replacing the
+Intended to run after a Droid Cloud Build completes, replacing the
 hourly Cloud Scheduler cron with an event-driven trigger.
 
 Usage:
@@ -23,12 +23,12 @@ import requests
 load_dotenv()
 
 ADAPTERS_URLS = {
-    "production": "https://unity-adapters-000000000000.us-central1.run.app",
+    "production": "https://service.a.run.app",
     "staging": "https://service.a.run.app",
 }
 COMMS_URLS = {
-    "production": "https://unity-comms-app-000000000000.us-central1.run.app",
-    "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+    "production": "https://service.a.run.app",
+    "staging": "https://service.a.run.app",
 }
 
 
@@ -38,7 +38,7 @@ def list_jobs(comms_url: str, admin_key: str, label: str):
     try:
         resp = requests.get(
             f"{comms_url}/infra/jobs",
-            params={"label_selector": "app=unity"},
+            params={"label_selector": "app=droid"},
             headers=headers,
             timeout=30,
         )

@@ -133,11 +133,11 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "python3 -m pip" not in script
     assert "secrets add-iam-policy-binding" not in script
     assert "--async" in script
-    assert "--unity-image" in script
-    assert "unity-seed-builtins-staging" in script
-    assert "unity-seed-builtins" in script
+    assert "--droid-image" in script
+    assert "droid-seed-builtins-staging" in script
+    assert "droid-seed-builtins" in script
     assert "--integration-bootstrap-manifest" in script
-    assert "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api" in script
+    assert "DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=api" in script
     assert "storage cp" not in script
     assert "--request-gcs-uri" not in script
     assert "orchestra.workers.builtins_artifacts_seed_job" not in script
@@ -162,7 +162,7 @@ def test_cloudbuild_staging_starts_builtins_artifacts_seed() -> None:
     assert "id: 'start-builtins-artifacts-seed'" in config
     assert "run_seed_builtins_artifacts_job.sh" in config
     assert "--environment staging" in config
-    assert "--unity-image" in config
+    assert "--droid-image" in config
     assert "seed-builtins-catalog" not in config
     assert "seed-builtins-integrations" not in config
     assert "ensure_builtins_sync_infra.sh" not in config
@@ -176,9 +176,9 @@ def test_cloudbuild_staging_starts_builtins_artifacts_seed() -> None:
     assert "--source-service" not in config
     assert '--image "${_ORCHESTRA_IMAGE}"' not in config
     assert "--async" in config
-    assert "waitFor: ['fetch-unity-integration-manifests', 'push-sha-tag']" in config
+    assert "waitFor: ['fetch-droid-integration-manifests', 'push-sha-tag']" in config
     assert (
-        "waitFor: ['seed-builtins-catalog', 'fetch-unity-integration-manifests']"
+        "waitFor: ['seed-builtins-catalog', 'fetch-droid-integration-manifests']"
         not in config
     )
     assert "waitFor: ['seed-builtins-integrations']" not in config
@@ -199,7 +199,7 @@ def test_cloudbuild_production_starts_builtins_artifacts_seed() -> None:
     assert "id: 'start-builtins-artifacts-seed'" in config
     assert "run_seed_builtins_artifacts_job.sh" in config
     assert "--environment production" in config
-    assert "--unity-image" in config
+    assert "--droid-image" in config
     assert "seed-builtins-catalog" not in config
     assert "seed-builtins-integrations" not in config
     assert "ensure_builtins_sync_infra.sh" not in config
@@ -213,9 +213,9 @@ def test_cloudbuild_production_starts_builtins_artifacts_seed() -> None:
     assert "--source-service" not in config
     assert '--image "${_ORCHESTRA_IMAGE}"' not in config
     assert "--async" in config
-    assert "waitFor: ['fetch-unity-integration-manifests', 'push-sha-tag']" in config
+    assert "waitFor: ['fetch-droid-integration-manifests', 'push-sha-tag']" in config
     assert (
-        "waitFor: ['seed-builtins-catalog', 'fetch-unity-integration-manifests']"
+        "waitFor: ['seed-builtins-catalog', 'fetch-droid-integration-manifests']"
         not in config
     )
     assert "waitFor: ['seed-builtins-integrations']" not in config

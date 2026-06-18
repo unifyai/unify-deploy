@@ -7,7 +7,7 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unity.session_details import SessionDetails
+    from droid.session_details import SessionDetails
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ def runtime_identity_from_session(
     client_name: str | None = None,
     deployment: str | None = None,
 ) -> RuntimeIdentity:
-    """Build runtime identity from the already-populated Unity session."""
+    """Build runtime identity from the already-populated Droid session."""
 
     assistant_id = getattr(getattr(session_details, "assistant", None), "agent_id", "")
     user_id = getattr(getattr(session_details, "user", None), "id", "")
@@ -50,7 +50,7 @@ def runtime_identity_from_session(
 
 
 def activate_runtime_context(identity: RuntimeIdentity) -> None:
-    """Activate the current assistant's Unity/Unify runtime context."""
+    """Activate the current assistant's Droid/Unify runtime context."""
 
     if not identity.user_id:
         raise ValueError("Runtime reconciliation requires a concrete user_id")
@@ -63,7 +63,7 @@ def activate_runtime_context(identity: RuntimeIdentity) -> None:
 
     os.environ["UNIFY_KEY"] = identity.api_key
 
-    from unity.session_details import SESSION_DETAILS
+    from droid.session_details import SESSION_DETAILS
     from unity_deploy.infra.workers.worker_utils import activate_unify_context
 
     current_assistant_id = str(SESSION_DETAILS.assistant.agent_id or "")

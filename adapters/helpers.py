@@ -21,8 +21,8 @@ from common.metrics import (
     BUILD_WEBHOOK_CONTEXT_DURATION,
     JOB_DEMAND_TOTAL,
     STALE_JOBS_LAST_SWEEP,
-    UNITY_JOBS_RUNNING,
-    UNITY_JOBS_IDLE,
+    DROID_JOBS_RUNNING,
+    DROID_JOBS_IDLE,
 )
 from common.assistant_lookup import get_assistant
 
@@ -186,10 +186,10 @@ def resolve_phone_route(pool_number: str, sender: str) -> dict | None:
     return _resolve_shared_pool_route("phone", pool_number, sender)
 
 
-def is_unity_coordinator_email_address(email_address: str | None) -> bool:
+def is_droid_coordinator_email_address(email_address: str | None) -> bool:
     if not email_address:
         return False
-    return email_address.strip().lower() == SETTINGS.unity_coordinator_email_address
+    return email_address.strip().lower() == SETTINGS.droid_coordinator_email_address
 
 
 def resolve_email_route(mailbox: str, sender: str) -> dict | None:
@@ -386,7 +386,7 @@ def slack_message_already_seen(message_key: str) -> bool:
     double-dispatching to Orchestra and double-publishing to Pub/Sub.
 
     Best-effort only: Cloud Run runs multiple instances and the pair can land
-    on different ones, so the authoritative dedup is Unity-side (a single
+    on different ones, so the authoritative dedup is Droid-side (a single
     subscription consumer per assistant). This just trims the common case.
     """
     if not message_key:
@@ -682,7 +682,7 @@ def check_valid_contact(
         # if the context or project isn't created yet (first time user)
         # len(resp_contacts) < 2 is to deal with race conditions right on
         # hiring a new assistant, whenever the wakeup message is sent, the contact
-        # manager gets initialized in unity so there's a stage where the context is
+        # manager gets initialized in droid so there's a stage where the context is
         # created but the contacts haven't been added yet
         if (
             status_code != 200
@@ -797,7 +797,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
-                "label_selector": "app=unity,unity-status in (running,done)",
+                "label_selector": "app=droid,droid-status in (running,done)",
                 "hours": max(max_age_hours + 12, 36),
             },
             headers=headers,
@@ -842,15 +842,15 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     for job in stale:
         job_name = job.get("job_name")
         assistant_id = job.get("assistant_id", "unknown")
-        unity_status = job.get("labels", {}).get("unity-status", "")
+        droid_status = job.get("labels", {}).get("droid-status", "")
         logger.info(
             "[expire_all_stale_jobs] Stale job: %s assistant_id=%s status=%s created=%s",
             job_name,
             assistant_id,
-            unity_status,
+            droid_status,
             job.get("creation_timestamp"),
         )
-        if unity_status == "done":
+        if droid_status == "done":
             stale_done.append(job)
         else:
             stale_running.append(job)
@@ -860,7 +860,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     def _delete_stale_job(job_name: str):
         """Delete a stale Job object.
 
-        Logs are preserved in Cloud Logging (GKE) and GCS (Unity upload).
+        Logs are preserved in Cloud Logging (GKE) and GCS (Droid upload).
         The Job object itself is only K8s metadata — deleting it frees
         API-server resources and ensures the job doesn't reappear in the
         next sweep.
@@ -1106,7 +1106,7 @@ def _build_start_job_request_data(
         "voice_id": assistant["voice_id"],
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
-        # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
+        # Pass demo_id directly; Droid derives demo_mode from demo_id presence.
         "demo_id": str(demo_id) if demo_id else "",
         "is_coordinator": ("true" if is_coordinator else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
@@ -1128,7 +1128,7 @@ def _build_start_job_request_data(
     return data
 
 
-def dispatch_unity_start_intent(
+def dispatch_droid_start_intent(
     assistant: dict,
     medium: str,
     *,
@@ -1156,7 +1156,7 @@ def dispatch_unity_start_intent(
     )
 
 
-def start_unity_job(assistant: dict, medium: str) -> None:
+def start_droid_job(assistant: dict, medium: str) -> None:
     """Best-effort low-latency dispatch of activation intent to comms.
 
     Adapters intentionally stop waiting after a tiny edge timeout so webhook
@@ -1170,7 +1170,7 @@ def start_unity_job(assistant: dict, medium: str) -> None:
     # This is intentionally a fast edge handoff. Adapters does not wait for the
     # full /infra/job/start convergence path to complete on the webhook thread.
     try:
-        response = dispatch_unity_start_intent(
+        response = dispatch_droid_start_intent(
             assistant,
             medium,
             timeout_seconds=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
@@ -1207,8 +1207,8 @@ def start_unity_job(assistant: dict, medium: str) -> None:
         )
 
 
-def uses_local_unity_runtime(assistant_data: dict) -> bool:
-    """Return whether inbound traffic should use a caller-local Unity runtime."""
+def uses_local_droid_runtime(assistant_data: dict) -> bool:
+    """Return whether inbound traffic should use a caller-local Droid runtime."""
 
     return bool(assistant_data.get("is_local", False))
 
@@ -1231,12 +1231,12 @@ def get_target_idle_count(running_count: int) -> IdlePoolTarget:
 
     Returns an IdlePoolTarget with:
     - target: max(min_floor, demand_buffer)
-    - min_floor: the UNITY_MIN_IDLE_JOBS value
-    - demand_buffer: ceil(running_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    - min_floor: the DROID_MIN_IDLE_JOBS value
+    - demand_buffer: ceil(running_count / DROID_IDLE_JOB_DEMAND_FACTOR)
     - demand_exceeds_floor: whether demand-based scaling has kicked in
     """
-    min_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
-    demand_factor = int(os.getenv("UNITY_IDLE_JOB_DEMAND_FACTOR", "5"))
+    min_floor = int(os.getenv("DROID_MIN_IDLE_JOBS", "3"))
+    demand_factor = int(os.getenv("DROID_IDLE_JOB_DEMAND_FACTOR", "5"))
 
     if demand_factor <= 0:
         return IdlePoolTarget(min_floor, min_floor, 0)
@@ -1295,16 +1295,16 @@ def _job_inventory_params(label_selector: str) -> dict[str, str | int]:
     }
 
 
-def get_unity_jobs_inventory() -> dict[str, list[dict]]:
-    """Get a categorized inventory of Unity jobs from GKE in a single request.
+def get_droid_jobs_inventory() -> dict[str, list[dict]]:
+    """Get a categorized inventory of Droid jobs from GKE in a single request.
 
     Returns:
         A dict with 'running' and 'idle' keys, each containing a list of job dicts
         filtered by the current environment (staging vs production).
     """
     resp = _fetch_infra_jobs(
-        _job_inventory_params("app=unity,unity-status!=done"),
-        caller="get_unity_jobs_inventory",
+        _job_inventory_params("app=droid,droid-status!=done"),
+        caller="get_droid_jobs_inventory",
     )
     if resp is None:
         return {"running": [], "idle": []}
@@ -1314,11 +1314,11 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
 
     for job in all_jobs:
         labels = job.get("labels", {})
-        unity_status = labels.get("unity-status")
+        droid_status = labels.get("droid-status")
 
-        if unity_status in ("running", "starting"):
+        if droid_status in ("running", "starting"):
             inventory["running"].append(job)
-        elif unity_status == "idle":
+        elif droid_status == "idle":
             inventory["idle"].append(job)
 
     return inventory
@@ -1341,11 +1341,11 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
       sessions can be satisfied immediately while still maintaining the steady
       warm-pool floor.
     """
-    inventory = get_unity_jobs_inventory()
+    inventory = get_droid_jobs_inventory()
     running_count = len(inventory["running"])
     current_idle_count = len(inventory["idle"])
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(current_idle_count)
+    DROID_JOBS_RUNNING.set(running_count)
+    DROID_JOBS_IDLE.set(current_idle_count)
 
     extra_demand = max(0, int(extra_demand))
     pool_target = get_target_idle_count(running_count)
@@ -1361,8 +1361,8 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
         num_to_create = max(0, effective_target - current_idle_count)
 
     if num_to_create == 0:
-        UNITY_JOBS_RUNNING.set(running_count)
-        UNITY_JOBS_IDLE.set(current_idle_count)
+        DROID_JOBS_RUNNING.set(running_count)
+        DROID_JOBS_IDLE.set(current_idle_count)
         logger.info(
             "Idle pool is healthy "
             f"(current: {current_idle_count}, target: {effective_target}, "
@@ -1394,7 +1394,7 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
-    image = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{commit_hash}"
+    image = f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:{commit_hash}"
 
     def _create_single_job():
         try:
@@ -1412,8 +1412,8 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
         futures = [pool.submit(_create_single_job) for _ in range(num_to_create)]
         created_jobs = [f.result() for f in as_completed(futures)]
 
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
+    DROID_JOBS_RUNNING.set(running_count)
+    DROID_JOBS_IDLE.set(current_idle_count + len(created_jobs))
 
     return {
         "mode": mode,
@@ -1431,17 +1431,17 @@ def cleanup_idle_pool() -> dict:
     """
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 
-    inventory = get_unity_jobs_inventory()
+    inventory = get_droid_jobs_inventory()
     running_count = len(inventory["running"])
     idle_count = len(inventory["idle"])
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(idle_count)
+    DROID_JOBS_RUNNING.set(running_count)
+    DROID_JOBS_IDLE.set(idle_count)
     target_retain = get_target_idle_count(running_count).target
 
     # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{SETTINGS.comms_url}/infra/jobs",
-        params=_job_inventory_params("app=unity,unity-status=idle"),
+        params=_job_inventory_params("app=droid,droid-status=idle"),
         headers=headers,
     )
     jobs = resp.json()
@@ -1461,7 +1461,7 @@ def cleanup_idle_pool() -> dict:
     old_idle_jobs = []  # >= 11 min: used to fill quota if new ones aren't enough
     now = datetime.now(timezone.utc)
     for job_name in idle_jobs:
-        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
+        # job_name format: droid-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
@@ -1527,8 +1527,8 @@ def cleanup_idle_pool() -> dict:
             for f in as_completed(futures):
                 f.result()
 
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(len(retain))
+    DROID_JOBS_RUNNING.set(running_count)
+    DROID_JOBS_IDLE.set(len(retain))
 
     return {
         "retained": len(retain),
@@ -1573,7 +1573,7 @@ def _resolve_contacts(
         api_key,
     )
     # len(resp_contacts) < 2 handles the race condition on hiring:
-    # the contact manager gets initialized in unity so there's a stage
+    # the contact manager gets initialized in droid so there's a stage
     # where the context is created but contacts haven't been added yet
     logger.info(f"response status_code: {status_code}, contacts: {response}")
     resp_contacts = response["logs"] if status_code == 200 else []
@@ -1662,7 +1662,7 @@ def build_webhook_context(
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
-    is_local_assistant = uses_local_unity_runtime(assistant_data)
+    is_local_assistant = uses_local_droid_runtime(assistant_data)
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
@@ -1678,7 +1678,7 @@ def build_webhook_context(
     )
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
+        _WEBHOOK_BG_POOL.submit(start_droid_job, assistant_data, channel)
         activation_intent_scheduled = True
         legacy_is_job_running = True
 

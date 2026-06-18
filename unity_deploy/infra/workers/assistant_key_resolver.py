@@ -16,10 +16,10 @@ Unify SDK. Resolution is deterministic:
 Both endpoints authenticate with a bearer token read from
 ``SETTINGS.ORCHESTRA_ADMIN_KEY``. Both values are sourced from the
 same pydantic-settings singleton the rest of the codebase already
-uses (see ``unity.settings.SETTINGS`` and e.g.
+uses (see ``droid.settings.SETTINGS`` and e.g.
 ``unity_deploy.runtime.assistant_jobs_backend`` for the pattern).
 The worker pods surface these via ``ORCHESTRA_URL`` and
-``ORCHESTRA_ADMIN_KEY`` env vars populated from the ``unity-secrets``
+``ORCHESTRA_ADMIN_KEY`` env vars populated from the ``droid-secrets``
 k8s Secret; pydantic-settings picks them up at import time.
 
 Caching
@@ -53,8 +53,8 @@ from typing import Any, Optional
 
 import httpx
 
-from unity.common.pipeline.types import IngestBinding
-from unity.settings import SETTINGS
+from droid.common.pipeline.types import IngestBinding
+from droid.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +142,7 @@ async def resolve_api_key(
     """Return the Unify ``api_key`` to use for this binding.
 
     Pod-level config (Orchestra base URL and admin bearer token) is
-    sourced from :data:`unity.settings.SETTINGS`, not from function
+    sourced from :data:`droid.settings.SETTINGS`, not from function
     arguments.  This keeps the resolver's call sites trivial
     (``await resolve_api_key(binding)``) and follows the project-wide
     convention of reading env-derived config through pydantic-settings
@@ -185,7 +185,7 @@ async def resolve_api_key(
     if not admin_key:
         raise AssistantKeyLookupError(
             "SETTINGS.ORCHESTRA_ADMIN_KEY is empty; cannot resolve "
-            "api_key. Mount ORCHESTRA_ADMIN_KEY from unity-secrets.",
+            "api_key. Mount ORCHESTRA_ADMIN_KEY from droid-secrets.",
             user_id=user_id,
             assistant_id=assistant_id,
         )

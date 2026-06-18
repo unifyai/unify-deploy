@@ -70,7 +70,7 @@ def mock_pubsub():
     mock_future.result.return_value = "test-message-id"
 
     mock_publisher = MagicMock()
-    mock_publisher.topic_path.return_value = "projects/test/topics/unity-test-assistant"
+    mock_publisher.topic_path.return_value = "projects/test/topics/droid-test-assistant"
     mock_publisher.publish.return_value = mock_future
 
     return mock_publisher

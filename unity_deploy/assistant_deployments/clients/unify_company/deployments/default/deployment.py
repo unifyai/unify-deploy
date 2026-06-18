@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unity.guidance_manager.types.guidance import Guidance
-from unity.secret_manager.types import Secret
+from droid.guidance_manager.types.guidance import Guidance
+from droid.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 
@@ -76,7 +76,7 @@ def get_deployment() -> DeploymentSpec:
                 "rows": [
                     {
                         "rule": "source_of_truth",
-                        "details": "Live mutable CRM state belongs in Unity DataManager tables under Data/CRM.",
+                        "details": "Live mutable CRM state belongs in Droid DataManager tables under Data/CRM.",
                     },
                     {
                         "rule": "bronze_cache",

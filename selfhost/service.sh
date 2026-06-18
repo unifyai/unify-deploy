@@ -3,10 +3,10 @@
 # service.sh — Self-host background runtime (Orchestra + Coordinator CM)
 # =============================================================================
 #
-# The runtime service keeps Orchestra, unity.gateway, and one Coordinator CM
+# The runtime service keeps Orchestra, droid.gateway, and one Coordinator CM
 # alive for scheduled tasks and outbound comms primitives. Self-host enables
-# this automatically on setup and stack up. The interactive stack (unity stack
-# up/down) starts Console, Pub/Sub, and unity.gateway without replacing
+# this automatically on setup and stack up. The interactive stack (droid stack
+# up/down) starts Console, Pub/Sub, and droid.gateway without replacing
 # the service-managed gateway or CM.
 #
 # Usage:
@@ -22,19 +22,19 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/ and drives the sibling unity,
+# This script lives in unity-deploy/selfhost/ and drives the sibling droid,
 # console, and orchestra checkouts under UNIFY_STACK_ROOT.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
+DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
-SERVICE_LABEL="${UNITY_SERVICE_LABEL:-ai.unify.unity.runtime}"
+SERVICE_LABEL="${DROID_SERVICE_LABEL:-ai.unify.droid.runtime}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -68,16 +68,16 @@ default_orchestra_db_port() {
 
 load_self_host_context() {
   export SELF_HOST=1
-  export UNITY_REPO_PATH
+  export DROID_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_env_file "$DROID_REPO_PATH/.env"
   fi
 }
 
@@ -122,10 +122,10 @@ service_install_launchd() {
   <dict>
     <key>SELF_HOST</key>
     <string>1</string>
-    <key>UNITY_HOME</key>
-    <string>${UNITY_HOME:-$HOME/.unity}</string>
-    <key>UNITY_REPO_PATH</key>
-    <string>${UNITY_REPO_PATH}</string>
+    <key>DROID_HOME</key>
+    <string>${DROID_HOME:-$HOME/.droid}</string>
+    <key>DROID_REPO_PATH</key>
+    <string>${DROID_REPO_PATH}</string>
     <key>CONSOLE_REPO_PATH</key>
     <string>${CONSOLE_REPO_PATH}</string>
     <key>ORCHESTRA_REPO_PATH</key>
@@ -164,8 +164,8 @@ ExecStart=/bin/bash ${SCRIPT_DIR}/service.sh run
 Restart=always
 RestartSec=5
 Environment=SELF_HOST=1
-Environment=UNITY_HOME=${UNITY_HOME:-$HOME/.unity}
-Environment=UNITY_REPO_PATH=${UNITY_REPO_PATH}
+Environment=DROID_HOME=${DROID_HOME:-$HOME/.droid}
+Environment=DROID_REPO_PATH=${DROID_REPO_PATH}
 Environment=CONSOLE_REPO_PATH=${CONSOLE_REPO_PATH}
 Environment=ORCHESTRA_REPO_PATH=${ORCHESTRA_REPO_PATH}
 Environment=ORCHESTRA_DB_PORT=${ORCHESTRA_DB_PORT:-55432}
@@ -228,7 +228,7 @@ cmd_install_boot_hook() {
   if [[ "$boot_at_load" == "true" ]]; then
     log_info "Background runtime starts automatically at login"
   else
-    log_info "Supervisor starts on unity stack up; re-run with --boot to start at login"
+    log_info "Supervisor starts on droid stack up; re-run with --boot to start at login"
   fi
 }
 
@@ -241,7 +241,7 @@ cmd_disable() {
   cmd_stop || true
   self_host_disable_runtime
   log_success "Background runtime disabled"
-  log_info "stack down stops everything until the next unity stack up"
+  log_info "stack down stops everything until the next droid stack up"
 }
 
 cmd_uninstall() {
@@ -260,8 +260,8 @@ ensure_runtime_backend() {
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
     return 1
   fi
-  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
-  export UNITY_SERVICE_RUNTIME=1
+  export DROID_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export DROID_SERVICE_RUNTIME=1
   bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend
 }
 
@@ -279,7 +279,7 @@ cmd_run() {
     fi
     sleep 30
     local count
-    count="$(unity_cm_instance_count)"
+    count="$(droid_cm_instance_count)"
     if [[ "$count" -eq 0 ]]; then
       log_warn "Coordinator CM exited — restarting runtime backend"
       continue
@@ -287,7 +287,7 @@ cmd_run() {
     if [[ "$count" -gt 1 ]]; then
       log_error "Multiple Coordinator CM processes detected ($count) — resetting runtime"
       if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
-        export UNITY_ALLOW_RUNTIME_STOP=1
+        export DROID_ALLOW_RUNTIME_STOP=1
         bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend || true
       fi
       sleep 2
@@ -356,12 +356,12 @@ cmd_stop() {
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
-    export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+    export DROID_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
     bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend || true
   fi
 
   log_success "Self-host runtime service stopped"
-  log_info "Scheduled tasks resume on the next unity stack up"
+  log_info "Scheduled tasks resume on the next droid stack up"
 }
 
 cmd_status() {
@@ -394,11 +394,11 @@ cmd_doctor() {
   if self_host_service_is_enabled; then
     log_success "Background runtime enabled"
   else
-    log_info "Background runtime disabled — run unity stack up to re-enable"
+    log_info "Background runtime disabled — run droid stack up to re-enable"
   fi
 
   local cm_count
-  cm_count="$(unity_cm_instance_count)"
+  cm_count="$(droid_cm_instance_count)"
   if [[ "$cm_count" -eq 0 ]]; then
     log_warn "Coordinator CM not running"
     ok=false
@@ -413,7 +413,7 @@ cmd_doctor() {
     if self_host_service_supervisor_is_running; then
       log_success "Runtime supervisor running"
     else
-      log_warn "Runtime supervisor stopped — run: unity stack up"
+      log_warn "Runtime supervisor stopped — run: droid stack up"
       ok=false
     fi
   fi
@@ -427,9 +427,9 @@ cmd_doctor() {
 
   if declare -F self_host_gateway_is_healthy &>/dev/null; then
     if self_host_gateway_is_healthy; then
-      log_success "Unity gateway: $(self_host_gateway_base_url)"
+      log_success "Droid gateway: $(self_host_gateway_base_url)"
     else
-      log_warn "Unity gateway not healthy — outbound comms will fail until it restarts"
+      log_warn "Droid gateway not healthy — outbound comms will fail until it restarts"
       ok=false
     fi
   fi

@@ -2,7 +2,7 @@
 
 Importing ``unity_deploy.assistant_deployments.clients.client_alpha`` (even to reach
 ``ingest_utils``) executes ``client_alpha/__init__.py``, which pulls in
-``pipeline_config`` and thus ``unity`` → ``unify``.  ``unify`` binds
+``pipeline_config`` and thus ``droid`` → ``unify``.  ``unify`` binds
 ``BASE_URL`` from ``os.environ`` at import time, so ``.env`` must be loaded
 **before** that chain runs.
 

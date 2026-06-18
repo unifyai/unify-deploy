@@ -1,8 +1,8 @@
 # Deployment Reconciliation Job
 
-Unity deploys reconcile deploy-time control-plane state with a one-off
+Droid deploys reconcile deploy-time control-plane state with a one-off
 Kubernetes Job. Control-plane work keeps metadata such as assistant
-`console_config` available before Console is opened and before a Unity assistant
+`console_config` available before Console is opened and before a Droid assistant
 wakes. Runtime seed/function sync runs later inside the woken assistant, using
 that assistant's `UNIFY_KEY`.
 
@@ -10,20 +10,20 @@ that assistant's `UNIFY_KEY`.
 
 The permanent deploy path is:
 
-1. Cloud Build builds and pushes the SHA-tagged Unity image.
+1. Cloud Build builds and pushes the SHA-tagged Droid image.
 2. Cloud Build creates a `unity-deployment-reconcile-*` Job in the target
    namespace.
 3. The Job runs the just-built image with `ORCHESTRA_ADMIN_KEY` from the
-   namespace-local `unity-secrets`.
+   namespace-local `droid-secrets`.
 4. Cloud Build waits for the Job, prints its logs, and deletes it.
-5. Idle Unity jobs are refreshed only after reconciliation succeeds.
+5. Idle Droid jobs are refreshed only after reconciliation succeeds.
 
 Pipeline workers may still refresh in parallel because they do not wake
 assistants through Console.
 
 ## Required Secret
 
-Each target namespace must contain `unity-secrets` with:
+Each target namespace must contain `droid-secrets` with:
 
 - `ORCHESTRA_ADMIN_KEY`
 
@@ -38,9 +38,9 @@ Staging is wired in `deploy/cloudbuild-staging.yaml` and runs:
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment staging \
   --namespace staging \
-  --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA}" \
+  --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-staging:${_DROID_SHA}" \
   --orchestra-url "https://internal.example.com/v0" \
-  --unity-comms-url "https://unity-comms-app-staging-000000000000.us-central1.run.app" \
+  --droid-comms-url "https://service.a.run.app" \
   --planes control-plane \
   --timeout 600s
 ```
@@ -51,9 +51,9 @@ Production is wired in `deploy/cloudbuild.yaml` and runs:
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment production \
   --namespace production \
-  --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+  --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA}" \
   --orchestra-url "https://api.unify.ai/v0" \
-  --unity-comms-url "https://unity-comms-app-000000000000.us-central1.run.app" \
+  --droid-comms-url "https://service.a.run.app" \
   --planes control-plane \
   --timeout 600s
 ```
@@ -91,25 +91,25 @@ environment reconciliation; only pass `--client` or `--assistant-id` when
 recovering a specific target.
 
 ```bash
-gcloud container clusters get-credentials unity --region us-central1
+gcloud container clusters get-credentials droid --region us-central1
 
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment staging \
   --namespace staging \
-  --image us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:<sha> \
+  --image us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-staging:<sha> \
   --orchestra-url https://internal.example.com/v0 \
-  --unity-comms-url https://unity-comms-app-staging-000000000000.us-central1.run.app \
+  --droid-comms-url https://service.a.run.app \
   --planes control-plane
 ```
 
 ```bash
-gcloud container clusters get-credentials unity --region us-central1
+gcloud container clusters get-credentials droid --region us-central1
 
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment production \
   --namespace production \
-  --image us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:<sha> \
+  --image us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid:<sha> \
   --orchestra-url https://api.unify.ai/v0 \
-  --unity-comms-url https://unity-comms-app-000000000000.us-central1.run.app \
+  --droid-comms-url https://service.a.run.app \
   --planes control-plane
 ```

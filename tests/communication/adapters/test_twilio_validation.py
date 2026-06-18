@@ -40,7 +40,7 @@ class TestTwilioSignatureValidation:
 
     def test_accepts_correctly_signed_request(self):
         """A request signed with the correct URL and params passes."""
-        public_url = "https://unity-adapters-staging.example.com/test-webhook"
+        public_url = "https://droid-adapters-staging.example.com/test-webhook"
         params = {"From": "+1234567890", "To": "+0987654321"}
         sig = _sign(public_url, params)
 
@@ -50,7 +50,7 @@ class TestTwilioSignatureValidation:
             headers={
                 "X-Twilio-Signature": sig,
                 "X-Forwarded-Proto": "https",
-                "X-Forwarded-Host": "unity-adapters-staging.example.com",
+                "X-Forwarded-Host": "droid-adapters-staging.example.com",
             },
         )
         assert resp.status_code == 200, resp.text

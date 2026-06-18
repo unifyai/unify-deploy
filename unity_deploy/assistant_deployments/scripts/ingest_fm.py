@@ -41,7 +41,7 @@ def _dispatch_fm(
     """Publish one ParseRequested per source file with FM-mode binding.
 
     Uploads each source file to GCS via
-    :func:`unity.common.pipeline.publish_parse_request`, which also
+    :func:`droid.common.pipeline.publish_parse_request`, which also
     enforces the ``one file per ParseRequested`` invariant that Tier-2
     parallelism depends on. All files are routed with
     ``ingestion_mode="fm"`` and an :class:`FmBinding` whose identity is
@@ -50,8 +50,8 @@ def _dispatch_fm(
     into the shared parse worker, while document-only files remain valid
     FM dispatches with no table config.
     """
-    from unity.common.pipeline import DispatchTarget, publish_parse_request
-    from unity.common.pipeline.types import FmBinding
+    from droid.common.pipeline import DispatchTarget, publish_parse_request
+    from droid.common.pipeline.types import FmBinding
     from unity_deploy.assistant_deployments.types.pipeline_config import (
         build_table_config_for_source_file,
     )
@@ -62,13 +62,13 @@ def _dispatch_fm(
     bucket_name = settings.artifact_store.bucket
     if not project_id:
         logger.error(
-            "UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
+            "DROID_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
             "GCP project via env or unset --dispatch to run in-process.",
         )
         return 2
     if not bucket_name:
         logger.error(
-            "UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
+            "DROID_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
         )
         return 2
 
@@ -360,7 +360,7 @@ def main() -> int:
         cfg.diagnostics.enable_progress,
     )
 
-    from unity.file_manager.managers.local import LocalFileManager
+    from droid.file_manager.managers.local import LocalFileManager
 
     fm = LocalFileManager(str(project_root))
     logger.info("Running FM ingest pipeline for %d file(s)...", len(file_paths))
@@ -368,7 +368,7 @@ def main() -> int:
     job = None
     job_store = None
     if args.job_tracking:
-        from unity.common.pipeline import (
+        from droid.common.pipeline import (
             DeploymentBundle,
             DeploymentBundleArtifact,
             DeploymentIdentity,
@@ -377,7 +377,7 @@ def main() -> int:
             DeploymentIngestionJob,
             DeploymentObservabilityRefs,
         )
-        from unity.common.pipeline._utils import utc_now_iso
+        from droid.common.pipeline._utils import utc_now_iso
 
         deploy_root = run_dir / ".deployments"
         bundle_store = LocalDeploymentBundleStore(deploy_root)
@@ -422,7 +422,7 @@ def main() -> int:
     )
 
     if job is not None and job_store is not None:
-        from unity.common.pipeline._utils import utc_now_iso
+        from droid.common.pipeline._utils import utc_now_iso
 
         job.status = "error" if errors > 0 else "success"
         job.finished_at = utc_now_iso()

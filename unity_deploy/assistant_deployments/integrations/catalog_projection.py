@@ -1,6 +1,6 @@
-"""Project native Unity-deploy integrations into the Builtins app catalog.
+"""Project native Droid-deploy integrations into the Builtins app catalog.
 
-Unity-deploy native packages and provider-backed integrations have different
+Droid-deploy native packages and provider-backed integrations have different
 runtime owners:
 
 * Native packages are enabled per assistant deployment and execute through
@@ -8,7 +8,7 @@ runtime owners:
   repository.
 * Provider-backed apps are globally supported by Orchestra backends such as
   Composio or Pipedream, and become executable only after the user connects the
-  app and Unity materializes provider tool rows.
+  app and Droid materializes provider tool rows.
 
 The actor should not need to know those storage details when answering
 "do we support Salesforce?" This module projects native package manifests into
@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-NATIVE_INTEGRATION_BACKEND_ID = "unity_native"
+NATIVE_INTEGRATION_BACKEND_ID = "droid_native"
 NATIVE_INTEGRATION_CACHE_VERSION = "unity-deploy-native-v1"
 
 
@@ -44,7 +44,7 @@ def native_catalog_app_from_registry_row(row: dict[str, Any]) -> dict[str, Any]:
     The projection uses the same normalized app payload shape that provider
     backends use, with ``source_type='native'`` and native-only details in
     metadata. This gives Builtins enough text to semantically search native apps
-    while leaving deployment activation and execution to Unity.
+    while leaving deployment activation and execution to Droid.
     """
 
     slug = str(row.get("slug") or "").strip()
@@ -135,7 +135,7 @@ def sync_integrations(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not apps:
         return None
 
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from droid.integrations.builtins_catalog import seed_builtin_integrations
 
     changed = seed_builtin_integrations(
         apps=apps,

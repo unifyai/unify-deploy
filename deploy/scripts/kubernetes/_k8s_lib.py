@@ -1,9 +1,9 @@
 """Shared kubeconfig helper for the one-time setup scripts in this directory.
 
-These scripts run interactively against the GKE ``unity`` cluster
+These scripts run interactively against the GKE ``droid`` cluster
 (project ``gcp-project-runtime``, region ``us-central1``) and
 each one previously open-coded the same gcloud + ``load_kube_config``
-incantation. They are dev-only; the production path for Unity Job
+incantation. They are dev-only; the production path for Droid Job
 creation goes through Communication's HTTP API (see the README in
 this directory).
 
@@ -32,11 +32,11 @@ import subprocess
 # ever moves regions or projects, update them here once.
 PROJECT_ID = "gcp-project-runtime"
 REGION = "us-central1"
-CLUSTER_NAME = "unity"
+CLUSTER_NAME = "droid"
 
 
 def ensure_kube_config() -> bool:
-    """Authenticate to the unity GKE cluster and load kube config.
+    """Authenticate to the droid GKE cluster and load kube config.
 
     Runs ``gcloud container clusters get-credentials`` (which writes
     the cluster into ``~/.kube/config``) and then
@@ -79,7 +79,7 @@ def ensure_kube_config() -> bool:
         print(f"\N{CROSS MARK} Failed to get cluster credentials: {result.stderr}")
         print("\N{ELECTRIC LIGHT BULB} Make sure you have:")
         print("   1. gcloud CLI installed and on PATH")
-        print("   2. Access to the GKE 'unity' cluster")
+        print("   2. Access to the GKE 'droid' cluster")
         print(
             "   3. A valid Application Default Credentials setup "
             "(`gcloud auth application-default login`)",

@@ -17,8 +17,8 @@ import logging
 import os
 import socket
 
-from unity.logger import LOGGER
-from unity.common.hierarchical_logger import ICONS
+from droid.logger import LOGGER
+from droid.common.hierarchical_logger import ICONS
 
 from opentelemetry import metrics
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
@@ -82,7 +82,7 @@ def init_metrics() -> None:
                 {
                     "k8s.namespace.name": namespace,
                     "k8s.pod.name": socket.gethostname(),
-                    "k8s.container.name": "unity-assistant",
+                    "k8s.container.name": "droid-assistant",
                 },
             ),
         )

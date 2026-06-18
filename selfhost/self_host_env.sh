@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# self_host_env.sh — Load self-host runtime env from unity/.env
+# self_host_env.sh — Load self-host runtime env from droid/.env
 # =============================================================================
 #
-# Sources BYOK keys from unity/.env into the runtime environment for Orchestra,
+# Sources BYOK keys from droid/.env into the runtime environment for Orchestra,
 # the gateway, and the Coordinator CM.
 #
 set -euo pipefail
 
-# Matches get_local_root() in unity/file_manager/settings.py (~/Unity/Local).
-SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
+# Matches get_local_root() in droid/file_manager/settings.py (~/Droid/Local).
+SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in unity-deploy/deploy/selfhost/.
@@ -17,7 +17,7 @@ _SELF_HOST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF_HOST_DEPLOY_SELFHOST_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_ENV_DIR/../deploy/selfhost}"
 
 # Persistent self-host state (survives reboot; unlike /tmp).
-SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 
 self_host_coordinator_runtime_file() {
   printf '%s/coordinator-runtime.json' "$SELF_HOST_STATE_DIR"
@@ -29,7 +29,7 @@ export_self_host_coordinator_runtime_file() {
 }
 
 default_self_host_workspace() {
-  printf '%s' "${UNITY_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
+  printf '%s' "${DROID_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
 }
 
 ensure_self_host_workspace_dir() {
@@ -58,8 +58,8 @@ skip = {
     "SHARED_UNIFY_KEY",
     "unify_key",
     "ORCHESTRA_URL",
-    "UNITY_COMMS_URL",
-    "UNITY_ADAPTERS_URL",
+    "DROID_COMMS_URL",
+    "DROID_ADAPTERS_URL",
 }
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 seen: set[str] = set()
@@ -115,21 +115,21 @@ self_host_apply_user_desktops_export() {
   fi
 }
 
-append_self_host_unity_runtime_env() {
+append_self_host_droid_runtime_env() {
   local -n _target_array="$1"
-  local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNITY_ENV_FILE:-${UNITY_REPO:-}/.env}}}"
+  local env_file="${2:-${SELF_HOST_ENV_FILE:-${DROID_ENV_FILE:-${DROID_REPO:-}/.env}}}"
   load_self_host_env_file "$env_file"
 
   local workspace
   workspace="$(default_self_host_workspace)"
   ensure_self_host_workspace_dir
-  _target_array+=("UNITY_LOCAL_ROOT=$workspace")
+  _target_array+=("DROID_LOCAL_ROOT=$workspace")
 
   local key val
   for key in \
-    UNITY_WEB_TAVILY_API_KEY \
-    UNITY_WEB_ENABLED \
-    UNITY_ACTOR_ANTICAPTCHA_KEY \
+    DROID_WEB_TAVILY_API_KEY \
+    DROID_WEB_ENABLED \
+    DROID_ACTOR_ANTICAPTCHA_KEY \
     ANTICAPTCHA_KEY \
     UNIFY_MODEL \
     OPENAI_API_KEY \

@@ -15,7 +15,7 @@
 #   7. Mark pool VM as idle
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   hostname, github-token, orchestra-url, comms-url, droid-environment,
 #   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
@@ -65,7 +65,7 @@ function Get-RemoteCommitHash {
 }
 
 function Get-DeployEnv {
-    $envName = Get-GCPMetadata -Key "unity-environment"
+    $envName = Get-GCPMetadata -Key "droid-environment"
     if ($envName) { return $envName }
     if (Get-GCPMetadata -Key "staging") { return "staging" }
     return "production"
@@ -149,7 +149,7 @@ $unityUserSshDir = "C:\Users\unityuser\.ssh"
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\ssh" | Out-Null
 New-Item -ItemType Directory -Force -Path $unityUserSshDir | Out-Null
 $sshdConfig = @"
-# Unity File Sync - OpenSSH Server Configuration
+# Droid File Sync - OpenSSH Server Configuration
 
 Port 2222
 PasswordAuthentication no
@@ -227,7 +227,7 @@ if (-not (Test-Path $systemBunExe)) {
 # =============================================================================
 $poolWatcherScript = Get-GCPMetadata -Key "pool-watcher-script"
 if ($poolWatcherScript) {
-    Set-Content -Path "C:\unity-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
+    Set-Content -Path "C:\droid-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
     & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>&1 | Out-Null
     Write-Host "Pool watcher updated from metadata" -ForegroundColor Green
 } else {
@@ -243,9 +243,9 @@ $magnitudeUrl = if ($gcpGithubToken) {
     "https://github.com/unifyai/magnitude.git"
 }
 $unityUrl = if ($gcpGithubToken) {
-    "https://$gcpGithubToken@github.com/unifyai/unity.git"
+    "https://$gcpGithubToken@github.com/unifyai/droid.git"
 } else {
-    "https://github.com/unifyai/unity.git"
+    "https://github.com/unifyai/droid.git"
 }
 $unityBranch = switch ($gcpDeployEnv) {
     "staging" { "staging" }
@@ -261,13 +261,13 @@ Write-Host "=== Updating Magnitude ===" -ForegroundColor Cyan
 $magnitudeDir = 'C:\magnitude'
 
 if (Test-Path "$magnitudeDir\.git") {
-    Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $gcpGithubToken -RepoName "magnitude"
+    Update-GitRepo -RepoPath $magnitudeDir -Branch "droid-modifications" -GithubToken $gcpGithubToken -RepoName "magnitude"
 } elseif (-not (Test-Path "$magnitudeDir\package.json")) {
     Write-Host "  Cloning Magnitude..."
     if (Test-Path $magnitudeDir) {
         & $script:CmdExe /c "rmdir /s /q `"$magnitudeDir`" 2>nul"
     }
-    Invoke-Git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir
+    Invoke-Git clone --depth 1 --branch droid-modifications $magnitudeUrl $magnitudeDir
     if (Test-Path "$magnitudeDir\package.json") {
         Push-Location $magnitudeDir
         $commit = Invoke-Git rev-parse --short=12 HEAD
@@ -316,7 +316,7 @@ if (Test-Path $envFile) {
 }
 
 if (Test-Path "$agentServiceDir\.git") {
-    Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $gcpGithubToken -RepoName "unity"
+    Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $gcpGithubToken -RepoName "droid"
 } else {
     $savedHash = Get-SavedCommitHash -Dir $agentServiceDir
     $remoteHash = Get-RemoteCommitHash -RepoUrl $unityUrl -Branch $unityBranch
@@ -330,14 +330,14 @@ if (Test-Path "$agentServiceDir\.git") {
     }
 
     if ($needsUpdate) {
-        Write-Host "  Cloning Agent Service from Unity repo..."
+        Write-Host "  Cloning Agent Service from Droid repo..."
 
         # Stop running agent-service to release file locks
         Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
         Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
 
-        $unityRepoDir = 'C:\temp\unity-repo'
+        $unityRepoDir = 'C:\temp\droid-repo'
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
         if (Test-Path $unityRepoDir) {
             & $script:CmdExe /c "rmdir /s /q `"$unityRepoDir`" 2>nul"
@@ -513,19 +513,19 @@ cd /d C:\novnc
 Write-Host ""
 Write-Host "=== Enforcing firewall rules ===" -ForegroundColor Cyan
 
-# Remove all Unity-* rules to ensure clean slate
-Get-NetFirewallRule -DisplayName "Unity-*" -ErrorAction SilentlyContinue |
+# Remove all Droid-* rules to ensure clean slate
+Get-NetFirewallRule -DisplayName "Droid-*" -ErrorAction SilentlyContinue |
     Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
 # Inbound: HTTPS only (6080/3000 behind Caddy, RDP handled by Windows/GCP defaults)
-New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any | Out-Null
+New-NetFirewallRule -DisplayName "Droid-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any | Out-Null
 Write-Host "  Inbound: port 443 allowed" -ForegroundColor Green
 
 # Outbound: block metadata server (169.254.169.254) for unityuser
 try {
     $sid = (New-Object System.Security.Principal.NTAccount("unityuser")).Translate(
         [System.Security.Principal.SecurityIdentifier]).Value
-    New-NetFirewallRule -DisplayName "Unity-BlockMetadata" -Direction Outbound `
+    New-NetFirewallRule -DisplayName "Droid-BlockMetadata" -Direction Outbound `
         -RemoteAddress 169.254.169.254 -Action Block `
         -LocalUser "D:(A;;CC;;;$sid)" -Profile Any | Out-Null
     Write-Host "  Outbound: metadata server blocked for unityuser" -ForegroundColor Green
@@ -609,7 +609,7 @@ if ($caddyConfigured) {
 $commsUrl = Get-GCPMetadata -Key "comms-url"
 try {
     $metaHeaders = @{ "Metadata-Flavor" = "Google" }
-    $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
+    $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=droid-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
 } catch {
     $idToken = $null
 }

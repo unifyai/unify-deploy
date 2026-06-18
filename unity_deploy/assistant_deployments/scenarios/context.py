@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Awaitable
 
-from unity.common.pipeline.types import IngestBinding
+from droid.common.pipeline.types import IngestBinding
 
 from unity_deploy.infra.workers.assistant_key_resolver import resolve_api_key
 from unity_deploy.infra.workers.worker_utils import activate_unify_context
@@ -46,7 +46,7 @@ async def activate_scenario_context(
     resolver: Callable[[IngestBinding], Awaitable[str]] = resolve_api_key,
     activator: Callable[..., None] = activate_unify_context,
 ) -> AsyncIterator[None]:
-    """Activate `<user_id>/<assistant_id>` before mutating Unity managers."""
+    """Activate `<user_id>/<assistant_id>` before mutating Droid managers."""
 
     resolved_api_key = api_key or await resolve_scenario_api_key(
         identity,

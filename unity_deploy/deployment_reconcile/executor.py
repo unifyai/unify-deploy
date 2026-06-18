@@ -72,7 +72,7 @@ def _fetch_assistant_info(assistant_id: str) -> dict[str, Any]:
     """Fetch assistant metadata from Orchestra admin API."""
 
     import httpx
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     orchestra_url = os.environ.get("ORCHESTRA_URL") or SETTINGS.ORCHESTRA_URL
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY") or (

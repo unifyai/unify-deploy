@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING
 
 from google.cloud import storage
 
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.artifact_store import ArtifactStore
-from unity.common.pipeline.run_ledger import PipelineStageManifest
-from unity.common.pipeline.types import IngestRequested, ParseRequested
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from droid.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline.artifact_store import ArtifactStore
+from droid.common.pipeline.run_ledger import PipelineStageManifest
+from droid.common.pipeline.types import IngestRequested, ParseRequested
+from droid.common.pipeline.work_queue import ReceivedWorkItem
 from unity_deploy.infra.gcp.artifact_store import (
     LeaseNotAcquired,
     LeaseRecord,
@@ -25,7 +25,7 @@ from unity_deploy.infra.gcp.artifact_store import (
 from .worker_utils import DuplicateLiveAttempt
 
 if TYPE_CHECKING:
-    from unity.file_manager.file_parsers.types.contracts import FileParseResult
+    from droid.file_manager.file_parsers.types.contracts import FileParseResult
 
     from .worker_utils import WorkerInfra
 
@@ -44,7 +44,7 @@ async def handle_parse_message(
       2. Parse via FileParser.parse_batch()
       3. Cancellation checkpoint
       4. Lower each parse result into a pointer-only ``IngestPlan`` via
-         :func:`unity.file_manager.parse_adapter.adapter.lower_to_ingest_plan`.
+         :func:`droid.file_manager.parse_adapter.adapter.lower_to_ingest_plan`.
          Heavy outputs (content rows lowered from the ``DocumentGraph``,
          inline table rows) are materialised to GCS as JSONL artifacts and
          referenced by handles so the manifest published to the queue
@@ -143,8 +143,8 @@ async def handle_parse_message(
                 )
                 local_entries.append((local_path, _logical_name_from_uri(file_uri)))
 
-            from unity.file_manager.file_parsers.file_parser import FileParser
-            from unity.file_manager.file_parsers.types.contracts import FileParseRequest
+            from droid.file_manager.file_parsers.file_parser import FileParser
+            from droid.file_manager.file_parsers.types.contracts import FileParseRequest
 
             parser = FileParser()
             requests = [
@@ -190,10 +190,10 @@ async def handle_parse_message(
                 )
                 return
 
-            from unity.file_manager.parse_adapter.adapter import (
+            from droid.file_manager.parse_adapter.adapter import (
                 lower_to_ingest_plan,
             )
-            from unity.file_manager.types.config import FilePipelineConfig
+            from droid.file_manager.types.config import FilePipelineConfig
 
             # Default worker config is sufficient here -- the plan only
             # needs ``ingest.business_contexts`` for lowering enrichment
@@ -394,7 +394,7 @@ def _merge_table_config(plan, table_config: dict):
     a new plan with updated tables_meta carrying the config fields that
     the ingest worker needs (description, embed_columns, etc.).
     """
-    from unity.common.pipeline.types import TableMeta
+    from droid.common.pipeline.types import TableMeta
 
     unmatched = set(table_config)
     updated: list[TableMeta] = []

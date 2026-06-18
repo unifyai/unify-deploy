@@ -12,7 +12,7 @@ BRANCH="${BRANCH:-staging}"
 REPO_RAW="https://raw.githubusercontent.com/unifyai/unity-deploy/${BRANCH}"
 SELFHOST_SRC="${INSTALL_SELFHOST_SRC:-${SCRIPT_DIR:+$SCRIPT_DIR/../deploy/selfhost}}"
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+DROID_HOME="${DROID_HOME:-$HOME/.droid}"
 CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
 CREATE_CLI=true
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
@@ -31,18 +31,18 @@ log_err() { echo -e "${RED}✗${NC} $1" >&2; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dir) UNITY_HOME="$2"; shift 2 ;;
+    --dir) DROID_HOME="$2"; shift 2 ;;
     --no-cli) CREATE_CLI=false; shift ;;
     --non-interactive) NON_INTERACTIVE=true; shift ;;
     -h|--help)
       cat <<EOF
-Unity compose installer — requires Docker only.
+Droid compose installer — requires Docker only.
 
   curl -fsSL .../install.sh | bash
 
 Options:
-  --dir PATH            Install directory (default: ~/.unity)
-  --no-cli              Skip unity CLI shim
+  --dir PATH            Install directory (default: ~/.droid)
+  --no-cli              Skip droid CLI shim
   --non-interactive     Import keys from environment; skip prompts
 EOF
       exit 0
@@ -53,7 +53,7 @@ done
 
 print_banner() {
   echo ""
-  echo -e "${BOLD}Unity Self-Host (Docker Compose)${NC}"
+  echo -e "${BOLD}Droid Self-Host (Docker Compose)${NC}"
   echo "Pull prebuilt images, configure BYOK keys, and open Console."
   echo ""
 }
@@ -81,24 +81,24 @@ fetch_remote() {
 }
 
 install_compose_bundle() {
-  mkdir -p "$UNITY_HOME"
-  mkdir -p "${UNITY_HOME}/workspace"
+  mkdir -p "$DROID_HOME"
+  mkdir -p "${DROID_HOME}/workspace"
   local file
   for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh cm-entrypoint.sh desktop-entrypoint.sh publish-desktop-ready.sh livekit.yaml integration-bootstrap.selfhost.toml README.md; do
     if [[ -n "$SELFHOST_SRC" && -f "$SELFHOST_SRC/$file" ]]; then
-      cp "$SELFHOST_SRC/$file" "$UNITY_HOME/$file"
+      cp "$SELFHOST_SRC/$file" "$DROID_HOME/$file"
     else
-      fetch_remote "deploy/selfhost/$file" "$UNITY_HOME/$file"
+      fetch_remote "deploy/selfhost/$file" "$DROID_HOME/$file"
     fi
   done
-  if [[ ! -f "$UNITY_HOME/.env" ]]; then
-    cp "$UNITY_HOME/.env.example" "$UNITY_HOME/.env"
+  if [[ ! -f "$DROID_HOME/.env" ]]; then
+    cp "$DROID_HOME/.env.example" "$DROID_HOME/.env"
     # Expand ${HOME} for workspace path
-    sed -i.bak "s|\${HOME}|$HOME|g" "$UNITY_HOME/.env" 2>/dev/null || \
-      sed -i '' "s|\${HOME}|$HOME|g" "$UNITY_HOME/.env"
-    rm -f "$UNITY_HOME/.env.bak"
+    sed -i.bak "s|\${HOME}|$HOME|g" "$DROID_HOME/.env" 2>/dev/null || \
+      sed -i '' "s|\${HOME}|$HOME|g" "$DROID_HOME/.env"
+    rm -f "$DROID_HOME/.env.bak"
   fi
-  log_ok "Compose bundle installed to $UNITY_HOME"
+  log_ok "Compose bundle installed to $DROID_HOME"
 }
 
 upsert_env_value() {
@@ -167,7 +167,7 @@ PY
 }
 
 generate_secrets() {
-  local env_file="$UNITY_HOME/.env"
+  local env_file="$DROID_HOME/.env"
   normalize_env_file "$env_file"
   if ! grep -qE '^ORCHESTRA_ADMIN_KEY=.+$' "$env_file" 2>/dev/null; then
     upsert_env_value "$env_file" "ORCHESTRA_ADMIN_KEY" \
@@ -190,17 +190,17 @@ generate_secrets() {
 run_byok_wizard() {
   local wizard="${SCRIPT_DIR:+$SCRIPT_DIR/prompt_byok_keys.sh}"
   if [[ -z "$wizard" || ! -f "$wizard" ]]; then
-    local tmp_wizard="$UNITY_HOME/.prompt_byok_keys.sh"
+    local tmp_wizard="$DROID_HOME/.prompt_byok_keys.sh"
     fetch_remote "selfhost/prompt_byok_keys.sh" "$tmp_wizard"
     wizard="$tmp_wizard"
   fi
   if [[ ! -f "$wizard" ]]; then
-    log_warn "BYOK wizard not found — add API keys to $UNITY_HOME/.env manually"
+    log_warn "BYOK wizard not found — add API keys to $DROID_HOME/.env manually"
     return 0
   fi
-  log_info "BYOK wizard (keys written to $UNITY_HOME/.env)..."
-  UNITY_ENV_FILE="$UNITY_HOME/.env" \
-    UNITY_COMPOSE_INSTALL=1 \
+  log_info "BYOK wizard (keys written to $DROID_HOME/.env)..."
+  DROID_ENV_FILE="$DROID_HOME/.env" \
+    DROID_COMPOSE_INSTALL=1 \
     NON_INTERACTIVE="$NON_INTERACTIVE" \
     bash "$wizard"
 }
@@ -209,19 +209,19 @@ create_compose_cli() {
   [[ "$CREATE_CLI" == "true" ]] || return 0
   local compose_cli="${SCRIPT_DIR:+$SCRIPT_DIR/compose-cli.sh}"
   if [[ -z "$compose_cli" || ! -f "$compose_cli" ]]; then
-    compose_cli="$UNITY_HOME/compose-cli.sh"
+    compose_cli="$DROID_HOME/compose-cli.sh"
     fetch_remote "selfhost/compose-cli.sh" "$compose_cli"
   fi
   mkdir -p "$CLI_DIR"
-  local shim="$CLI_DIR/unity"
+  local shim="$CLI_DIR/droid"
   cat > "$shim" <<EOF
 #!/usr/bin/env bash
 set -e
-UNITY_HOME="${UNITY_HOME}"
-export UNITY_HOME
+DROID_HOME="${DROID_HOME}"
+export DROID_HOME
 COMPOSE_CLI="${compose_cli}"
 
-if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
+if [[ -f "\$DROID_HOME/docker-compose.yml" ]]; then
   cmd="\${1:-up}"
   case "\$cmd" in
     stack)
@@ -239,30 +239,30 @@ if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
     integrations-sync) shift || true; exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
     builtins-sync) shift || true; exec bash "\$COMPOSE_CLI" builtins-sync "\$@" ;;
     setup)
-      echo "Compose install is already configured at \$UNITY_HOME" >&2
-      echo "Edit \$UNITY_HOME/.env for keys, then run: unity restart" >&2
+      echo "Compose install is already configured at \$DROID_HOME" >&2
+      echo "Edit \$DROID_HOME/.env for keys, then run: droid restart" >&2
       exit 0 ;;
     help|-h|--help)
       cat <<'USAGE'
-unity — Docker Compose self-host control
+droid — Docker Compose self-host control
 
-  unity                    Start the stack (alias: unity up, unity stack up)
-  unity down               Stop the Console UI; runtime keeps running
-  unity down --full        Stop every service
-  unity restart            Recreate containers after editing ~/.unity/.env
-  unity status             Show container status
-  unity logs [service...]  Follow logs (optionally for specific services)
-  unity pull               Pull the latest images
-  unity doctor             Check Docker, keys, and service health
-  unity integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
-  unity builtins-sync      Retry the Builtins catalogue seed (background)
+  droid                    Start the stack (alias: droid up, droid stack up)
+  droid down               Stop the Console UI; runtime keeps running
+  droid down --full        Stop every service
+  droid restart            Recreate containers after editing ~/.droid/.env
+  droid status             Show container status
+  droid logs [service...]  Follow logs (optionally for specific services)
+  droid pull               Pull the latest images
+  droid doctor             Check Docker, keys, and service health
+  droid integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
+  droid builtins-sync      Retry the Builtins catalogue seed (background)
 
-Edit keys in ~/.unity/.env, then run: unity restart
+Edit keys in ~/.droid/.env, then run: droid restart
 USAGE
       exit 0 ;;
     *)
-      echo "unity: unknown command '\$cmd'" >&2
-      echo "Run 'unity help' to see available commands." >&2
+      echo "droid: unknown command '\$cmd'" >&2
+      echo "Run 'droid help' to see available commands." >&2
       exit 1 ;;
   esac
 fi
@@ -271,13 +271,13 @@ echo "Compose stack not found. Re-run the installer." >&2
 exit 1
 EOF
   chmod +x "$shim"
-  log_ok "Installed unity CLI at $shim"
+  log_ok "Installed droid CLI at $shim"
 }
 
 # Compose gives the caller's shell environment precedence over --env-file
 # values during ${VAR} interpolation, so stray exports (direnv, dotfiles, CI)
 # would silently override the stack's secrets. Run compose under a minimal
-# environment so $UNITY_HOME/.env is the single source of truth.
+# environment so $DROID_HOME/.env is the single source of truth.
 compose_cmd() {
   env -i \
     PATH="$PATH" \
@@ -288,7 +288,7 @@ compose_cmd() {
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
     ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
-    docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" "$@"
+    docker compose -f "$DROID_HOME/docker-compose.yml" --env-file "$DROID_HOME/.env" "$@"
 }
 
 verify_orchestra_seed() {
@@ -304,19 +304,19 @@ verify_orchestra_seed() {
     fi
     if [[ "$seed_status" == exited* ]] && [[ "$seed_status" != "exited	0" ]]; then
       log_err "orchestra-seed failed — billing tables were not seeded"
-      log_info "Retry: docker compose -f $UNITY_HOME/docker-compose.yml --env-file $UNITY_HOME/.env run --rm orchestra-seed"
+      log_info "Retry: docker compose -f $DROID_HOME/docker-compose.yml --env-file $DROID_HOME/.env run --rm orchestra-seed"
       exit 1
     fi
     sleep 2
   done
-  log_warn "orchestra-seed status unclear — run: unity stack doctor"
+  log_warn "orchestra-seed status unclear — run: droid stack doctor"
 }
 
 start_composio_catalog_sync() {
-  if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
+  if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$DROID_HOME/.env" 2>/dev/null; then
     return 0
   fi
-  log_info "Composio integration catalogue sync runs via unity-builtins-seed (watch: unity stack logs unity-builtins-seed)"
+  log_info "Composio integration catalogue sync runs via droid-builtins-seed (watch: droid stack logs droid-builtins-seed)"
 }
 
 pull_and_start() {
@@ -331,7 +331,7 @@ pull_and_start() {
 
 open_browser() {
   local url
-  url="$(grep -E '^NEXTAUTH_URL=' "$UNITY_HOME/.env" 2>/dev/null | cut -d= -f2- || echo 'http://127.0.0.1:3000')"
+  url="$(grep -E '^NEXTAUTH_URL=' "$DROID_HOME/.env" 2>/dev/null | cut -d= -f2- || echo 'http://127.0.0.1:3000')"
   log_info "Open $url to register and chat with your Coordinator"
   case "$(uname -s)" in
     Darwin) open "$url" 2>/dev/null || true ;;
@@ -346,8 +346,8 @@ main() {
   generate_secrets
   run_byok_wizard
   create_compose_cli
-  if [[ "${UNITY_COMPOSE_SKIP_START:-0}" == "1" ]]; then
-    log_ok "Skipping image pull/start (UNITY_COMPOSE_SKIP_START=1)"
+  if [[ "${DROID_COMPOSE_SKIP_START:-0}" == "1" ]]; then
+    log_ok "Skipping image pull/start (DROID_COMPOSE_SKIP_START=1)"
   else
     pull_and_start
     open_browser
@@ -355,12 +355,12 @@ main() {
   echo ""
   log_ok "Installation complete"
   echo ""
-  echo "  Daily driver:  unity / unity stack up"
-  echo "  UI off:        unity stack down"
-  echo "  Stop all:      unity stack down --full"
-  echo "  Edit keys:     \$UNITY_HOME/.env  then  unity restart"
-  if grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
-    echo "  Integrations:  catalog sync runs in background (~30 min); unity stack doctor"
+  echo "  Daily driver:  droid / droid stack up"
+  echo "  UI off:        droid stack down"
+  echo "  Stop all:      droid stack down --full"
+  echo "  Edit keys:     \$DROID_HOME/.env  then  droid restart"
+  if grep -qE '^COMPOSIO_API_KEY=.+$' "$DROID_HOME/.env" 2>/dev/null; then
+    echo "  Integrations:  catalog sync runs in background (~30 min); droid stack doctor"
   fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
     echo ""
@@ -369,8 +369,8 @@ main() {
     echo "       https://github.com/unifyai/unify-desktop-assistant/releases"
     echo "    2. Menu bar app → Settings → paste your API key (from Console → Connect your desktop)"
     echo "    3. Approve Screen Sharing when prompted; wait for green status"
-    echo "    4. Console → Connect your desktop → link your Mac → unity restart"
-    echo "    Full guide: \$UNITY_HOME/README.md"
+    echo "    4. Console → Connect your desktop → link your Mac → droid restart"
+    echo "    Full guide: \$DROID_HOME/README.md"
   fi
   echo ""
 }

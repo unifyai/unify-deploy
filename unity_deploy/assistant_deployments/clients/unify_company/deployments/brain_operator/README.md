@@ -79,7 +79,7 @@ runtime's `SecretManager`:
 |---|---|
 | `UNIFY_KEY` | Used by brain entrypoints to read/write Orchestra. |
 | `UNIFY_PROJECT` | Defaults to `Brain`. |
-| `UNITY_COMMS_URL` | Used by `brain.outbound.whatsapp.send`. |
+| `DROID_COMMS_URL` | Used by `brain.outbound.whatsapp.send`. |
 | `FIREFLIES_API_KEY` | Used by `brain.sync.fireflies`. |
 | `LEMLIST_API_KEY` | Used by the evergreen outbound wrappers. |
 | `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` | Used by `brain.sync.gmail`. |
@@ -89,7 +89,7 @@ runtime's `SecretManager`:
 
 ```python
 # brain_operator/functions/<area>.py
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 @custom_function()
 async def run_my_brain_thing(*, foo: str = "bar") -> dict:

@@ -19,7 +19,7 @@ are also surfaced in the tool's docstring so they're always in context.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()

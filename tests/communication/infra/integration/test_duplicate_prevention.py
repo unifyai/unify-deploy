@@ -116,7 +116,7 @@ def test_container_labels_set_after_startup(
     poll,
 ):
     """After /infra/job/start assigns a container, its K8s Job labels
-    are set correctly (assistant-id + unity-status=running) and the
+    are set correctly (assistant-id + droid-status=running) and the
     startup config is written as an annotation.
 
     The labels and annotation are written atomically by the comms app
@@ -161,8 +161,8 @@ def test_container_labels_set_after_startup(
         annotations = dict(job.metadata.annotations or {})
 
         assert (
-            labels.get("unity-status") == "running"
-        ), f"Expected unity-status=running, got {labels.get('unity-status')}"
+            labels.get("droid-status") == "running"
+        ), f"Expected droid-status=running, got {labels.get('droid-status')}"
         sanitized = str(assistant_id).lower().replace("_", "-")
         assert (
             labels.get("assistant-id") == sanitized

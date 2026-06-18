@@ -140,8 +140,8 @@ class TestE2EFlows:
             sanitized = assistant_id.lower().replace("_", "-")
 
             assert (
-                labels.get("unity-status") == "running"
-            ), f"Expected unity-status=running, got {labels.get('unity-status')}"
+                labels.get("droid-status") == "running"
+            ), f"Expected droid-status=running, got {labels.get('droid-status')}"
             assert labels.get("assistant-id") == sanitized, (
                 f"Expected assistant-id={sanitized}, "
                 f"got {labels.get('assistant-id')}"
@@ -240,9 +240,9 @@ class TestE2EFlows:
 
             labels = dict(jobs2[0].metadata.labels or {})
             sanitized = assistant_id.lower().replace("_", "-")
-            assert labels.get("unity-status") == "running", (
-                f"Expected unity-status=running on second container, "
-                f"got {labels.get('unity-status')}"
+            assert labels.get("droid-status") == "running", (
+                f"Expected droid-status=running on second container, "
+                f"got {labels.get('droid-status')}"
             )
             assert labels.get("assistant-id") == sanitized, (
                 f"Expected assistant-id={sanitized} on second container, "
@@ -270,7 +270,7 @@ class TestE2EFlows:
         """After wakeup, a message sent via /unify/message must produce a reply.
 
         Exercises the full round-trip: adapter publishes message to Pub/Sub ->
-        Unity container receives it -> LLM processes -> reply published to
+        Droid container receives it -> LLM processes -> reply published to
         outbound subscription.
 
         Uses a clean slate (expire + cleanup) to avoid interference from

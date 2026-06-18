@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any
 
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from droid.common.pipeline.work_queue import ReceivedWorkItem
 
 from unity_deploy.infra.gcp.pipeline_observability import (
     PipelineJobEvent,

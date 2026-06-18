@@ -1,6 +1,6 @@
 """Local-query helpers for the Employment Hero package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`droid.function_manager.custom_functions.collect_custom_functions`
 skips this file (it's library code, not a registered tool).  Imported
 from inside ``query_local_employmenthero_*`` function bodies so
 FunctionManager's isolation rule is preserved.
@@ -38,7 +38,7 @@ async def freshness(object_type: str) -> dict:
     object.  Threshold is the configured per-object cadence × 2 unless
     ``EMPLOYMENTHERO_LOCAL_FRESHNESS_THRESHOLD_SECONDS`` is set.
     """
-    from unity.manager_registry import ManagerRegistry
+    from droid.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )

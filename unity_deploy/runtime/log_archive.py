@@ -4,7 +4,7 @@ Upload pod log directories to GCS on shutdown.
 
 Called from main.py's shutdown sequence (via subprocess) so it runs on all exit
 paths — both SIGTERM from Kubernetes and self-initiated inactivity shutdown.
-Compresses /var/log/{unity,unify,unillm,magnitude} into a tar.gz and uploads
+Compresses /var/log/{droid,unify,unillm,magnitude} into a tar.gz and uploads
 to gs://bucket/{namespace}/{job_name}/.
 
 The bucket has a 7-day lifecycle policy — logs are auto-deleted after a week.
@@ -14,8 +14,8 @@ Usage:
     python3 scripts/upload_pod_logs.py --dry-run
 
 Environment:
-    UNITY_CONVERSATION_JOB_NAME  Required. The K8s job name (e.g., unity-2026-02-28-12-00-09-staging).
-    GCS_LOG_BUCKET               Optional. Override bucket name (default: unity-pod-logs).
+    DROID_CONVERSATION_JOB_NAME  Required. The K8s job name (e.g., droid-2026-02-28-12-00-09-staging).
+    GCS_LOG_BUCKET               Optional. Override bucket name (default: droid-pod-logs).
 """
 
 import os
@@ -25,9 +25,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-BUCKET_NAME = os.environ.get("GCS_LOG_BUCKET", "unity-pod-logs")
-LOG_DIRS = ["/var/log/unity", "/var/log/unify", "/var/log/unillm", "/var/log/magnitude"]
-JOB_NAME = os.environ.get("UNITY_CONVERSATION_JOB_NAME", "")
+BUCKET_NAME = os.environ.get("GCS_LOG_BUCKET", "droid-pod-logs")
+LOG_DIRS = ["/var/log/droid", "/var/log/unify", "/var/log/unillm", "/var/log/magnitude"]
+JOB_NAME = os.environ.get("DROID_CONVERSATION_JOB_NAME", "")
 
 
 def _derive_namespace(job_name: str) -> str:
@@ -89,7 +89,7 @@ def upload_to_gcs(local_path: Path, gcs_prefix: str) -> str:
 
 def upload_shutdown_logs(dry_run: bool = False) -> bool:
     if not JOB_NAME:
-        print("[upload_pod_logs] UNITY_CONVERSATION_JOB_NAME not set, skipping upload")
+        print("[upload_pod_logs] DROID_CONVERSATION_JOB_NAME not set, skipping upload")
         return False
 
     prefix = get_gcs_prefix()

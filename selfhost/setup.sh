@@ -1,49 +1,49 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Unity setup — local backend bootstrap
+# Droid setup — local backend bootstrap
 # ============================================================================
 # Spins up a local orchestra instance (Postgres+pgvector in Docker +
-# FastAPI server) and wires Unity's .env to use it. Idempotent: safe to
+# FastAPI server) and wires Droid's .env to use it. Idempotent: safe to
 # re-run. Sibling repos (including orchestra) are cloned by install.sh;
 # setup syncs orchestra and installs runtime dependencies.
 #
 # Usually called automatically by scripts/install.sh; re-run directly via
-# `unity setup` if you need to re-bootstrap (e.g., Docker wasn't running the
-# first time, or you wiped ~/.unity).
+# `droid setup` if you need to re-bootstrap (e.g., Docker wasn't running the
+# first time, or you wiped ~/.droid).
 #
 # Options:
 #   --boot-runtime   Install a login boot hook so background scheduling survives reboot
 #
 # Environment (all optional):
-#   UNITY_HOME              Install root (default: ~/.unity)
+#   DROID_HOME              Install root (default: ~/.droid)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
 #   ORCHESTRA_DB_PORT       Postgres port (default: 55432)
-#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
+#   DROID_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
 # ============================================================================
 
 set -e
 
 # --- Config ---------------------------------------------------------------
-# Resolve repo locations from this script's own location so `unity setup`
+# Resolve repo locations from this script's own location so `droid setup`
 # operates on the checkout it ships with (and the sibling repos beside it) —
-# whether that's the installer's ~/.unity tree or a developer's own clones
-# (e.g. ~/dev/{unity,console,orchestra,...}). This mirrors stack.sh's
+# whether that's the installer's ~/.droid tree or a developer's own clones
+# (e.g. ~/dev/{droid,console,orchestra,...}). This mirrors stack.sh's
 # UNIFY_STACK_ROOT resolution so setup and stack always target the same repos.
-# Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
-# This script lives in unity-deploy/selfhost/ and bootstraps the sibling unity,
+# Explicit DROID_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
+# This script lives in unity-deploy/selfhost/ and bootstraps the sibling droid,
 # console, and orchestra checkouts located under UNIFY_STACK_ROOT (defaults to
-# the parent of unity-deploy). Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO
+# the parent of unity-deploy). Explicit DROID_HOME / UNIFY_STACK_ROOT / *_REPO
 # env vars still win.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO/.." && pwd -P)}"
-UNITY_HOME="${UNITY_HOME:-$UNIFY_STACK_ROOT}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}}"
-ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNITY_HOME}/orchestra}"
-CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
+DROID_HOME="${DROID_HOME:-$UNIFY_STACK_ROOT}"
+DROID_REPO="${DROID_REPO:-${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}}"
+ORCHESTRA_REPO="${ORCHESTRA_REPO:-${DROID_HOME}/orchestra}"
+CONSOLE_REPO="${CONSOLE_REPO:-${DROID_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
-UNITY_BRANCH="${UNITY_BRANCH:-staging}"
+DROID_BRANCH="${DROID_BRANCH:-staging}"
 
 # Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
 # (e.g. poetry) land here, and in a fresh shell they may not be picked up.
@@ -59,7 +59,7 @@ log_error()   { echo -e "${RED}✗${NC} $1"; }
 
 has_env_value() {
     local key="$1"
-    [[ -f "$UNITY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNITY_REPO/.env"
+    [[ -f "$DROID_REPO/.env" ]] && grep -qE "^${key}=.+$" "$DROID_REPO/.env"
 }
 
 default_orchestra_db_port() {
@@ -107,16 +107,16 @@ SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
 
 _sync_orchestra_repo() {
     if git -C "$ORCHESTRA_REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
-        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$UNITY_BRANCH" || return 1
+        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$DROID_BRANCH" || return 1
     else
-        git -C "$ORCHESTRA_REPO" fetch origin "$UNITY_BRANCH" || return 1
+        git -C "$ORCHESTRA_REPO" fetch origin "$DROID_BRANCH" || return 1
     fi
-    git -C "$ORCHESTRA_REPO" checkout "$UNITY_BRANCH" 2>/dev/null || {
-        log_warn "[orchestra] Couldn't checkout $UNITY_BRANCH (uncommitted changes?). Leaving as-is."
+    git -C "$ORCHESTRA_REPO" checkout "$DROID_BRANCH" 2>/dev/null || {
+        log_warn "[orchestra] Couldn't checkout $DROID_BRANCH (uncommitted changes?). Leaving as-is."
         return 0
     }
-    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$UNITY_BRANCH" 2>/dev/null; then
-        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$UNITY_BRANCH" 2>/dev/null || {
+    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$DROID_BRANCH" 2>/dev/null; then
+        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$DROID_BRANCH" 2>/dev/null || {
             log_warn "[orchestra] Fast-forward pull skipped; leaving as-is."
             return 0
         }
@@ -145,7 +145,7 @@ install_docker_interactive() {
                 read -r -p "  Install via Homebrew now? [y/N] " ans
                 if [[ "$ans" =~ ^[Yy]$ ]]; then
                     brew install --cask docker
-                    log_info "After Docker Desktop opens and finishes initial setup, re-run: unity setup"
+                    log_info "After Docker Desktop opens and finishes initial setup, re-run: droid setup"
                 fi
             fi
             ;;
@@ -157,7 +157,7 @@ install_docker_interactive() {
                 read -r -p "  Run the official Docker install script now? [y/N] " ans
                 if [[ "$ans" =~ ^[Yy]$ ]]; then
                     curl -fsSL https://get.docker.com | sh
-                    log_info "After Docker is configured (sudo usermod -aG docker \$USER), re-run: unity setup"
+                    log_info "After Docker is configured (sudo usermod -aG docker \$USER), re-run: droid setup"
                 fi
             fi
             ;;
@@ -184,11 +184,11 @@ ensure_docker() {
                 sleep 1
             done
             if ! docker info >/dev/null 2>&1; then
-                log_error "Docker didn't become ready within 60s. Please start it and re-run: unity setup"
+                log_error "Docker didn't become ready within 60s. Please start it and re-run: droid setup"
                 return 1
             fi
         else
-            log_error "Start your Docker daemon and re-run: unity setup"
+            log_error "Start your Docker daemon and re-run: droid setup"
             return 1
         fi
     fi
@@ -223,9 +223,9 @@ ensure_orchestra_repo() {
         _sync_orchestra_repo || return 1
     else
         log_warn "[orchestra] Missing at $ORCHESTRA_REPO — install.sh should have cloned it."
-        mkdir -p "$UNITY_HOME"
+        mkdir -p "$DROID_HOME"
         if ! git clone --quiet --depth "$SHALLOW_CLONE_DEPTH" --single-branch \
-            --branch "$UNITY_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
+            --branch "$DROID_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
             return 1
         fi
     fi
@@ -310,12 +310,12 @@ start_local_orchestra() {
         if [ "$db_container" != "orchestra-local-db" ]; then
             log_error "Postgres port ${ORCHESTRA_DB_PORT} is already in use."
             log_info "Stop the process using it, or re-run with a different port:"
-            log_info "  ORCHESTRA_DB_PORT=55433 unity setup"
+            log_info "  ORCHESTRA_DB_PORT=55433 droid setup"
             return 1
         fi
     fi
 
-    # Disable auto-shutdown: local installs should stay up until `unity stop`
+    # Disable auto-shutdown: local installs should stay up until `droid stop`
     export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS=0
     export ORCHESTRA_PORT
     export ORCHESTRA_DB_PORT
@@ -334,7 +334,7 @@ start_local_orchestra() {
         rm -f "$tmp_log"
         log_error "orchestra failed to start (local.sh exit=$start_exit). See output above."
         log_info "Common causes: port $ORCHESTRA_PORT / $ORCHESTRA_DB_PORT in use, Docker daemon not running."
-        log_info "Re-run with:  unity setup"
+        log_info "Re-run with:  droid setup"
         return 1
     fi
 
@@ -366,12 +366,12 @@ start_local_orchestra() {
     log_success "Local UNIFY_KEY:    ${UNIFY_KEY}"
 }
 
-# --- Wire into Unity's .env -----------------------------------------------
-wire_unity_env() {
-    local env_file="$UNITY_REPO/.env"
+# --- Wire into Droid's .env -----------------------------------------------
+wire_droid_env() {
+    local env_file="$DROID_REPO/.env"
     if [ ! -f "$env_file" ]; then
-        if [ -f "$UNITY_REPO/.env.example" ]; then
-            cp "$UNITY_REPO/.env.example" "$env_file"
+        if [ -f "$DROID_REPO/.env.example" ]; then
+            cp "$DROID_REPO/.env.example" "$env_file"
             log_info "Created $env_file from .env.example"
         else
             touch "$env_file"
@@ -443,7 +443,7 @@ upsert_env_var() {
 # through the local Orchestra. The only required config is therefore auth
 # signing secrets and the local Orchestra wiring. Everything feature-related
 # (billing, voice, workspace OAuth, ...) is derived at runtime from the
-# credentials in unity/.env, which stack.sh propagates into the Console
+# credentials in droid/.env, which stack.sh propagates into the Console
 # process — so this file deliberately contains no provider keys.
 bootstrap_console_env() {
     if [ ! -d "$CONSOLE_REPO" ]; then
@@ -475,12 +475,12 @@ bootstrap_console_env() {
     admin_key="$(gen_secret)"
 
     cat > "$env_file" <<EOF
-# Auto-generated by \`unity setup\` on $(date +%Y-%m-%d).
+# Auto-generated by \`droid setup\` on $(date +%Y-%m-%d).
 # Self-host Console config. Secrets are minted per-install; safe to edit.
 #
 # This file contains ONLY auth signing secrets + local Orchestra wiring.
 # Feature availability (billing, voice, transcription, workspace OAuth, ...)
-# is derived from the credentials you add to $UNITY_REPO/.env — the stack
+# is derived from the credentials you add to $DROID_REPO/.env — the stack
 # scripts propagate those into the Console process automatically.
 
 # NextAuth / session signing. Console uses JWT sessions + OrchestraAdapter and
@@ -489,7 +489,7 @@ NEXTAUTH_SECRET=${nextauth_secret}
 JWT_SECRET=${jwt_secret}
 NEXTAUTH_URL=http://localhost:${CONSOLE_PORT}
 
-# Local Orchestra backend (started by \`unity setup\`). The stack scripts
+# Local Orchestra backend (started by \`droid setup\`). The stack scripts
 # override these at runtime too, but they keep standalone Console runs working.
 ORCHESTRA_URL=http://127.0.0.1:${ORCHESTRA_PORT}
 ORCHESTRA_ADMIN_KEY=${admin_key}
@@ -509,9 +509,9 @@ EOF
 setup_voice_defaults() {
     log_info "Setting up local voice (LiveKit + BYOK keys)..."
 
-    if [ -x "$UNITY_REPO/scripts/voice.sh" ]; then
-        if ! bash "$UNITY_REPO/scripts/voice.sh" setup; then
-            log_warn "LiveKit setup failed — browser calls may not work until you run: unity voice setup"
+    if [ -x "$DROID_REPO/scripts/voice.sh" ]; then
+        if ! bash "$DROID_REPO/scripts/voice.sh" setup; then
+            log_warn "LiveKit setup failed — browser calls may not work until you run: droid voice setup"
         fi
     else
         log_warn "voice.sh not found — skipping LiveKit setup"
@@ -547,34 +547,34 @@ main() {
         case "$1" in
             --boot-runtime) boot_runtime="true"; shift ;;
             -h|--help)
-                echo "Usage: unity setup [--boot-runtime]"
+                echo "Usage: droid setup [--boot-runtime]"
                 echo ""
-                echo "  Bootstraps local Orchestra, wires unity/.env, and enables background scheduling."
+                echo "  Bootstraps local Orchestra, wires droid/.env, and enables background scheduling."
                 echo "  --boot-runtime  Also install a login hook so the runtime survives reboot."
                 exit 0
                 ;;
             *)
                 log_error "Unknown option: $1"
-                echo "Run: unity setup --help"
+                echo "Run: droid setup --help"
                 exit 1
                 ;;
         esac
     done
 
     echo ""
-    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + voice"
+    echo -e "${BOLD}Droid setup${NC} — bootstrapping local orchestra + voice"
     echo ""
 
-    if [ ! -d "$UNITY_REPO" ]; then
-        log_error "Unity is not installed at $UNITY_REPO. Run scripts/install.sh first."
+    if [ ! -d "$DROID_REPO" ]; then
+        log_error "Droid is not installed at $DROID_REPO. Run scripts/install.sh first."
         exit 1
     fi
 
     _load_install_progress
 
-    if [ "${UNITY_SKIP_ORCHESTRA:-0}" = "1" ]; then
-        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
-        log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNITY_REPO/.env to point at a remote backend."
+    if [ "${DROID_SKIP_ORCHESTRA:-0}" = "1" ]; then
+        log_warn "DROID_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
+        log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $DROID_REPO/.env to point at a remote backend."
         exit 0
     fi
 
@@ -586,7 +586,7 @@ main() {
         ensure_self_host_stack_prereqs || exit 1
     fi
 
-    progress_step_begin 3 "Syncing orchestra repo (branch $UNITY_BRANCH)"
+    progress_step_begin 3 "Syncing orchestra repo (branch $DROID_BRANCH)"
     progress_step_update 40
     if ! ensure_orchestra_repo; then
         progress_step_end_fail
@@ -607,7 +607,7 @@ main() {
     fi
     progress_step_end_success
 
-    wire_unity_env
+    wire_droid_env
     bootstrap_console_env
 
     if ! progress_step_run 6 "Installing Console npm dependencies" \
@@ -621,12 +621,12 @@ main() {
     fi
 
     if [[ -x "$SCRIPT_DIR/prompt_byok_keys.sh" ]]; then
-        if has_env_value UNITY_BYOK_CONFIGURED; then
+        if has_env_value DROID_BYOK_CONFIGURED; then
             log_success "BYOK already configured — skipping wizard"
         else
             echo ""
             log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
-            UNITY_REPO="$UNITY_REPO" bash "$SCRIPT_DIR/prompt_byok_keys.sh" || true
+            DROID_REPO="$DROID_REPO" bash "$SCRIPT_DIR/prompt_byok_keys.sh" || true
         fi
     fi
 
@@ -645,16 +645,16 @@ main() {
     echo -e "${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
     echo "  orchestra is running at $UNIFY_BASE_URL"
-    echo "  Stop it any time with:  unity stop"
+    echo "  Stop it any time with:  droid stop"
     echo ""
-    echo "  Next:  ${CYAN}unity stack doctor${NC}  Check self-host prerequisites (optional)"
-    echo "         ${CYAN}unity stack up${NC}     Console + Coordinator (scheduled tasks enabled)"
-    echo "         ${CYAN}unity stack smoke${NC}  Verify the running local product"
-    echo "         ${CYAN}unity stack down${NC}   UI off; tasks keep running"
-    echo "  Dev REPL:  ${CYAN}unity sandbox${NC}"
+    echo "  Next:  ${CYAN}droid stack doctor${NC}  Check self-host prerequisites (optional)"
+    echo "         ${CYAN}droid stack up${NC}     Console + Coordinator (scheduled tasks enabled)"
+    echo "         ${CYAN}droid stack smoke${NC}  Verify the running local product"
+    echo "         ${CYAN}droid stack down${NC}   UI off; tasks keep running"
+    echo "  Dev REPL:  ${CYAN}droid sandbox${NC}"
     if [[ "$boot_runtime" != "true" ]]; then
         echo ""
-        echo "  Optional: ${CYAN}unity setup --boot-runtime${NC}  Keep scheduled tasks across reboot"
+        echo "  Optional: ${CYAN}droid setup --boot-runtime${NC}  Keep scheduled tasks across reboot"
     fi
     echo ""
 }

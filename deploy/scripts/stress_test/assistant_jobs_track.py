@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 
 from job_utils import fetch_running_jobs
 
-namespace = os.getenv("UNITY_NAMESPACE", "staging")
+namespace = os.getenv("DROID_NAMESPACE", "staging")
 jobs = fetch_running_jobs(namespace)
 
 print(f"Found {len(jobs)} running job(s)\n")

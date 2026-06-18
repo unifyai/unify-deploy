@@ -20,8 +20,8 @@ Environment (required):
     ORCHESTRA_URL, ORCHESTRA_ADMIN_KEY
 
 Environment (GCP):
-    GCP_SA_KEY, UNITY_GCP_PIPELINE_ENVIRONMENT, UNITY_PUBSUB_PROJECT_ID,
-    UNITY_GCS_ARTIFACT_BUCKET
+    GCP_SA_KEY, DROID_GCP_PIPELINE_ENVIRONMENT, DROID_PUBSUB_PROJECT_ID,
+    DROID_GCS_ARTIFACT_BUCKET
 
 Environment (optional):
     UNIFY_PROJECT_NAME
@@ -57,9 +57,9 @@ def _parse_expiry_seconds(expires_at: str) -> float | None:
 
 
 def _duplicate_defer_seconds(expires_at: str) -> int:
-    default_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_SECONDS", "300"))
-    max_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_MAX_SECONDS", "600"))
-    jitter_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
+    default_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_SECONDS", "300"))
+    max_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_MAX_SECONDS", "600"))
+    jitter_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
     until_expiry = _parse_expiry_seconds(expires_at)
     if until_expiry is None:
         base = default_seconds
@@ -74,7 +74,7 @@ def _duplicate_defer_seconds(expires_at: str) -> int:
 async def main() -> None:
     import argparse
 
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from droid.common.pipeline.work_queue import RetryWorkItem
 
     from .ingest_worker import handle_ingest_message
     from .pipeline_events import record_worker_event
@@ -88,7 +88,7 @@ async def main() -> None:
         shutdown_aware_sleep,
     )
 
-    parser = argparse.ArgumentParser(description="Unity ingest worker")
+    parser = argparse.ArgumentParser(description="Droid ingest worker")
     parser.add_argument(
         "--project",
         default="Assistants",
@@ -209,7 +209,7 @@ async def main() -> None:
                     except DuplicateLiveAttempt as exc:
                         lease = exc.lease
                         max_deferrals = int(
-                            os.environ.get("UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS", "12"),
+                            os.environ.get("DROID_DUPLICATE_DEFER_MAX_ATTEMPTS", "12"),
                         )
                         delivery_attempt = int(item.delivery_attempt or 0)
                         defer_seconds = _duplicate_defer_seconds(

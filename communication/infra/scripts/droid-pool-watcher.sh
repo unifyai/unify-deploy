@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# Unity Pool Watcher
+# Droid Pool Watcher
 #
 # Systemd service that watches GCE instance metadata for assignment/release
 # signals. When unify-key changes from empty to non-empty, the VM is being
 # assigned to an assistant; when it changes back to empty, the VM is released.
 #
-# Install as: /usr/local/bin/unity-pool-watcher.sh
-# Systemd unit: /etc/systemd/system/unity-pool-watcher.service
+# Install as: /usr/local/bin/droid-pool-watcher.sh
+# Systemd unit: /etc/systemd/system/droid-pool-watcher.service
 # =============================================================================
 
 set -u
@@ -18,11 +18,11 @@ ETAG=""
 PREV_UNIFY_KEY=""
 PREV_TLS_HASH=""
 
-source /etc/profile.d/unity-vm.sh 2>/dev/null || true
+source /etc/profile.d/droid-vm.sh 2>/dev/null || true
 source /etc/profile.d/bun.sh 2>/dev/null || true
 export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
-RELEASE_STATE_DIR="/var/lib/unity-pool-watcher"
+RELEASE_STATE_DIR="/var/lib/droid-pool-watcher"
 LAST_RELEASE_TOKEN_FILE="$RELEASE_STATE_DIR/last-release-token"
 
 get_metadata() {
@@ -32,7 +32,7 @@ get_metadata() {
 
 get_deploy_env() {
     local env_name
-    env_name=$(get_metadata "unity-environment")
+    env_name=$(get_metadata "droid-environment")
     if [[ -n "$env_name" ]]; then
         echo "$env_name"
     elif [[ -n "$(get_metadata "staging")" ]]; then
@@ -135,21 +135,21 @@ scrub_filesystem() {
         ! -name '.npm' ! -name '.bun' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
 
-    # /Unity/ — preserve structural dirs and desktop session dirs (wipe contents of session dirs)
-    find /Unity -mindepth 1 -maxdepth 1 \
+    # /Droid/ — preserve structural dirs and desktop session dirs (wipe contents of session dirs)
+    find /Droid -mindepth 1 -maxdepth 1 \
         ! -name '.ssh' ! -name 'Local' \
         ! -name '.bashrc' ! -name '.config' ! -name '.local' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
     for dir in .config .local; do
-        if [[ -d "/Unity/$dir" ]]; then
-            find "/Unity/$dir" -mindepth 1 \
-                ! -path "/Unity/.config/xfce4" ! -path "/Unity/.config/xfce4/*" \
+        if [[ -d "/Droid/$dir" ]]; then
+            find "/Droid/$dir" -mindepth 1 \
+                ! -path "/Droid/.config/xfce4" ! -path "/Droid/.config/xfce4/*" \
                 -exec rm -rf {} + 2>/dev/null || true
         fi
     done
     # Wipe .cache contents but preserve the ms-playwright symlink
-    if [[ -d /Unity/.cache ]]; then
-        find /Unity/.cache -mindepth 1 ! -name 'ms-playwright' -exec rm -rf {} + 2>/dev/null || true
+    if [[ -d /Droid/.cache ]]; then
+        find /Droid/.cache -mindepth 1 ! -name 'ms-playwright' -exec rm -rf {} + 2>/dev/null || true
     fi
 
     # Application logs
@@ -168,7 +168,7 @@ wipe_metadata_key() {
     local comms_url id_token
     comms_url=$(get_metadata "comms-url")
     id_token=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=droid-comms-vm&format=full" \
         2>/dev/null || true)
     [[ -z "$comms_url" || -z "$id_token" ]] && return
     curl -sf -X POST "$comms_url/infra/vm/wipe-metadata-key" \
@@ -185,7 +185,7 @@ notify_release_complete() {
     release_generation=$(get_metadata "release-generation")
     comms_url=$(get_metadata "comms-url")
     id_token=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=droid-comms-vm&format=full" \
         2>/dev/null || true)
     if [[ -z "$binding_id" || -z "$comms_url" || -z "$id_token" ]]; then
         log "WARNING: missing release completion metadata (binding-id/comms-url/id-token)"
@@ -251,23 +251,23 @@ do_update() {
     github_token=$(get_metadata "github-token")
     deploy_env=$(get_deploy_env)
 
-    local magnitude_url unity_url unity_branch
+    local magnitude_url droid_url droid_branch
     if [[ -n "$github_token" ]]; then
         magnitude_url="https://${github_token}@github.com/unifyai/magnitude.git"
-        unity_url="https://${github_token}@github.com/unifyai/unity.git"
+        droid_url="https://${github_token}@github.com/unifyai/droid.git"
     else
         magnitude_url="https://github.com/unifyai/magnitude.git"
-        unity_url="https://github.com/unifyai/unity.git"
+        droid_url="https://github.com/unifyai/droid.git"
     fi
     case "$deploy_env" in
-        staging) unity_branch="staging" ;;
-        *) unity_branch="main" ;;
+        staging) droid_branch="staging" ;;
+        *) droid_branch="main" ;;
     esac
 
     # ── Magnitude ──
     local mag_saved mag_remote
     mag_saved=$(get_saved_commit_hash /magnitude)
-    mag_remote=$(get_remote_commit_hash "$magnitude_url" "unity-modifications")
+    mag_remote=$(get_remote_commit_hash "$magnitude_url" "droid-modifications")
 
     if [[ -n "$mag_saved" && -n "$mag_remote" && "$mag_saved" == "$mag_remote" ]]; then
         log "Magnitude up-to-date ($mag_saved)"
@@ -286,8 +286,8 @@ do_update() {
         if [[ -d "/magnitude/.git" ]]; then
             cd /magnitude
             [[ -n "$github_token" ]] && git remote set-url origin "$magnitude_url" 2>/dev/null || true
-            git fetch --depth 1 origin unity-modifications 2>&1 || true
-            git reset --hard origin/unity-modifications 2>&1 || true
+            git fetch --depth 1 origin droid-modifications 2>&1 || true
+            git reset --hard origin/droid-modifications 2>&1 || true
             local commit
             commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
             save_commit_hash /magnitude "$commit"
@@ -312,10 +312,10 @@ do_update() {
         log "Magnitude updated"
     fi
 
-    # ── Agent Service (sparse checkout from unity monorepo) ──
+    # ── Agent Service (sparse checkout from droid monorepo) ──
     local as_saved as_remote
     as_saved=$(get_saved_commit_hash /agent-service)
-    as_remote=$(get_remote_commit_hash "$unity_url" "$unity_branch")
+    as_remote=$(get_remote_commit_hash "$droid_url" "$droid_branch")
 
     if [[ -n "$as_saved" && -n "$as_remote" && "$as_saved" == "$as_remote" ]]; then
         log "Agent Service up-to-date ($as_saved)"
@@ -323,7 +323,7 @@ do_update() {
         log "Agent Service updating ($as_saved -> $as_remote)"
         local tmp_dir
         tmp_dir=$(mktemp -d)
-        git clone --depth 1 --branch "$unity_branch" --filter=blob:none --sparse "$unity_url" "$tmp_dir" 2>&1
+        git clone --depth 1 --branch "$droid_branch" --filter=blob:none --sparse "$droid_url" "$tmp_dir" 2>&1
         cd "$tmp_dir"
         git sparse-checkout set agent-service 2>&1
         local commit
@@ -356,11 +356,11 @@ do_assign() {
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
     kill_agent_service
-    if mountpoint -q /Unity/Local 2>/dev/null; then
-        fuser -km /Unity/Local 2>/dev/null || true
+    if mountpoint -q /Droid/Local 2>/dev/null; then
+        fuser -km /Droid/Local 2>/dev/null || true
         sleep 1
-        umount /Unity/Local 2>/dev/null || umount -l /Unity/Local 2>/dev/null || true
-        log "Unmounted previous disk from /Unity/Local"
+        umount /Droid/Local 2>/dev/null || umount -l /Droid/Local 2>/dev/null || true
+        log "Unmounted previous disk from /Droid/Local"
     fi
 
     # Update code before configuring (skips quickly if already up-to-date)
@@ -368,10 +368,10 @@ do_assign() {
 
     # Ensure desktop session dirs exist (may have been wiped by scrub_filesystem)
     for dir in .config .local .cache; do
-        mkdir -p "/Unity/$dir"
-        chown unityuser:unityuser "/Unity/$dir"
+        mkdir -p "/Droid/$dir"
+        chown unityuser:unityuser "/Droid/$dir"
     done
-    ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
+    ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
 
     local vnc_password
     local ssh_public_key
@@ -404,20 +404,20 @@ do_assign() {
                 log "Formatting new disk: $dev_path"
                 mkfs.ext4 -q "$dev_path"
             fi
-            mkdir -p /Unity/Local
-            mount "$dev_path" /Unity/Local
-            chown unityuser:unityuser /Unity/Local
-            chmod 755 /Unity/Local
-            log "Mounted $dev_path at /Unity/Local"
+            mkdir -p /Droid/Local
+            mount "$dev_path" /Droid/Local
+            chown unityuser:unityuser /Droid/Local
+            chmod 755 /Droid/Local
+            log "Mounted $dev_path at /Droid/Local"
         else
             log "WARNING: disk device $dev_path not found after 30s"
         fi
     fi
 
     # Restore from GCS archive if disk is empty (freshly formatted)
-    if [[ -n "$disk_device" ]] && mountpoint -q /Unity/Local 2>/dev/null; then
+    if [[ -n "$disk_device" ]] && mountpoint -q /Droid/Local 2>/dev/null; then
         local file_count
-        file_count=$(find /Unity/Local -mindepth 1 -maxdepth 1 ! -name 'lost+found' 2>/dev/null | wc -l)
+        file_count=$(find /Droid/Local -mindepth 1 -maxdepth 1 ! -name 'lost+found' 2>/dev/null | wc -l)
         if [[ "$file_count" -eq 0 ]]; then
             local archive_bucket
             archive_bucket=$(get_metadata "archive-bucket")
@@ -425,8 +425,8 @@ do_assign() {
                 local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
                 log "Empty disk detected, checking for GCS archive at $archive_path"
                 if gsutil -q stat "$archive_path" 2>/dev/null; then
-                    if gsutil -q cp "$archive_path" - 2>/dev/null | tar xzf - -C /Unity/Local 2>/dev/null; then
-                        chown -R unityuser:unityuser /Unity/Local
+                    if gsutil -q cp "$archive_path" - 2>/dev/null | tar xzf - -C /Droid/Local 2>/dev/null; then
+                        chown -R unityuser:unityuser /Droid/Local
                         log "Restored filesystem from GCS archive"
                     else
                         log "WARNING: archive restore failed, starting with empty filesystem"
@@ -440,11 +440,11 @@ do_assign() {
 
     # SSH authorized_keys
     if [[ -n "$ssh_public_key" ]]; then
-        mkdir -p /Unity/.ssh
-        echo "$ssh_public_key" > /Unity/.ssh/authorized_keys
-        chown -R unityuser:unityuser /Unity/.ssh
-        chmod 700 /Unity/.ssh
-        chmod 600 /Unity/.ssh/authorized_keys
+        mkdir -p /Droid/.ssh
+        echo "$ssh_public_key" > /Droid/.ssh/authorized_keys
+        chown -R unityuser:unityuser /Droid/.ssh
+        chmod 700 /Droid/.ssh
+        chmod 600 /Droid/.ssh/authorized_keys
         log "SSH authorized_keys configured"
     fi
 
@@ -481,7 +481,7 @@ PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unify_key
 ORCHESTRA_URL=$orchestra_url
-UNITY_COMMS_URL=$comms_url
+DROID_COMMS_URL=$comms_url
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 DISPLAY=:1
 EOF
@@ -571,7 +571,7 @@ do_release() {
     log "Agent Service .env cleared"
 
     # Clear SSH keys
-    rm -f /Unity/.ssh/authorized_keys
+    rm -f /Droid/.ssh/authorized_keys
     log "SSH authorized_keys cleared"
 
     # Reset VNC password to dead value
@@ -592,15 +592,15 @@ PYSCRIPT
     log "VNC password reset"
 
     # Archive filesystem to GCS before unmount
-    if mountpoint -q /Unity/Local 2>/dev/null; then
+    if mountpoint -q /Droid/Local 2>/dev/null; then
         local assistant_id
         assistant_id=$(get_metadata "assistant-id")
         local archive_bucket
         archive_bucket=$(get_metadata "archive-bucket")
         if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
             local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
-            log "Archiving /Unity/Local to $archive_path"
-            if tar czf - -C /Unity/Local . | gsutil -q cp - "$archive_path" 2>/dev/null; then
+            log "Archiving /Droid/Local to $archive_path"
+            if tar czf - -C /Droid/Local . | gsutil -q cp - "$archive_path" 2>/dev/null; then
                 log "Archive uploaded successfully"
             else
                 log "WARNING: archive upload failed, PD data will be preserved as fallback"
@@ -609,14 +609,14 @@ PYSCRIPT
     fi
 
     # Unmount persistent disk (kill busy processes first, then lazy fallback)
-    if mountpoint -q /Unity/Local 2>/dev/null; then
-        fuser -km /Unity/Local 2>/dev/null || true
+    if mountpoint -q /Droid/Local 2>/dev/null; then
+        fuser -km /Droid/Local 2>/dev/null || true
         sleep 1
-        if ! umount /Unity/Local 2>/dev/null; then
-            umount -l /Unity/Local 2>/dev/null || true
-            log "Lazy-unmounted /Unity/Local (was busy)"
+        if ! umount /Droid/Local 2>/dev/null; then
+            umount -l /Droid/Local 2>/dev/null || true
+            log "Lazy-unmounted /Droid/Local (was busy)"
         else
-            log "Unmounted /Unity/Local"
+            log "Unmounted /Droid/Local"
         fi
     fi
 
@@ -669,7 +669,7 @@ refresh_tls() {
 }
 
 main() {
-    log "Unity Pool Watcher starting"
+    log "Droid Pool Watcher starting"
 
     # Seed TLS hash to avoid unnecessary reload on first loop iteration
     _init_tls=$(get_metadata "tls-fullchain")

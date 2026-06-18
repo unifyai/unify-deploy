@@ -23,10 +23,10 @@ def publish_desktop_ready(
 
     os.environ["PUBSUB_EMULATOR_HOST"] = emulator_host
     publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(project_id, f"unity-{assistant_id}-staging")
+    topic_path = publisher.topic_path(project_id, f"droid-{assistant_id}-staging")
 
     payload = {
-        "thread": "unity_system_event",
+        "thread": "droid_system_event",
         "publish_timestamp": time.time(),
         "event": {
             "assistant_id": str(assistant_id),

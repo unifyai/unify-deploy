@@ -17,8 +17,8 @@ Both modes support ``--mode fm`` and ``--mode dm``.
 
 All GCP settings come from environment variables via
 :class:`unity_deploy.infra.gcp.settings.GcpPipelineSettings`
-(``UNITY_PUBSUB_PROJECT_ID``, ``UNITY_GCS_ARTIFACT_BUCKET``,
-``UNITY_GCP_PIPELINE_ENVIRONMENT``).
+(``DROID_PUBSUB_PROJECT_ID``, ``DROID_GCS_ARTIFACT_BUCKET``,
+``DROID_GCP_PIPELINE_ENVIRONMENT``).
 
 Examples
 --------
@@ -313,13 +313,13 @@ def _dispatch(
 
     from google.cloud import storage
 
-    from unity.common.pipeline import DispatchTarget, publish_parse_request
-    from unity.common.pipeline.deployment.types import (
+    from droid.common.pipeline import DispatchTarget, publish_parse_request
+    from droid.common.pipeline.deployment.types import (
         DeploymentBundleRef,
         DeploymentIngestionJob,
         DispatchManifest,
     )
-    from unity.common.pipeline.types import DmBinding, FmBinding
+    from droid.common.pipeline.types import DmBinding, FmBinding
     from unity_deploy.infra.gcp.artifact_store import GcsArtifactStore
     from unity_deploy.infra.gcp.deployment_stores import GcsDeploymentJobStore
     from unity_deploy.infra.gcp.settings import GcpPipelineSettings
@@ -328,10 +328,10 @@ def _dispatch(
     project_id = settings.pubsub.project_id
     bucket_name = settings.artifact_store.bucket
     if not project_id:
-        logger.error("UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch.")
+        logger.error("DROID_PUBSUB_PROJECT_ID is not set; cannot dispatch.")
         return 2
     if not bucket_name:
-        logger.error("UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.")
+        logger.error("DROID_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.")
         return 2
 
     target = DispatchTarget(

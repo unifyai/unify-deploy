@@ -2,7 +2,7 @@
 
 `unity-deploy` still owns full integration packages under `integrations/packages/*` and `integrations/client_packages/*`. These packages are the right choice when Unify needs Python code, DataManager sync, custom guidance, client-specific logic, browser fallback, or deterministic tests.
 
-Dynamic provider-backed apps are different. Composio, Pipedream, first-party OAuth backends, and custom provider SDKs are registered in Orchestra and surfaced to Unity as `primitives.integrations.<app>.<tool>` virtual FunctionManager records. They do not require a folder in this repository for every supported app.
+Dynamic provider-backed apps are different. Composio, Pipedream, first-party OAuth backends, and custom provider SDKs are registered in Orchestra and surfaced to Droid as `primitives.integrations.<app>.<tool>` virtual FunctionManager records. They do not require a folder in this repository for every supported app.
 
 Use the three-level rule:
 
@@ -16,7 +16,7 @@ Prefer Level 1/2 whenever a provider-backed app already satisfies the product ne
 
 `Integrations/Manifests` is deploy-time telemetry and native deployment state.
 Runtime connection state for provider-backed apps lives in Orchestra's
-integration connection registry. Static package enablement in Unity is based on
+integration connection registry. Static package enablement in Droid is based on
 disk package discovery plus local SecretManager key presence.
 
 `DeploymentSpec.integrations` and seed-layer `integrations=[...]` are disk
@@ -36,13 +36,13 @@ Console and Orchestra own the dynamic provider lifecycle:
   compatibility projections only; connection, auth, policy, approval, and audit
   rows remain active Orchestra operational state.
 - Hosted Cloud bootstrap executes one generic Builtins seed Cloud Run Job per
-  environment. The Unity job seeds Builtins functions/guidance and provider
+  environment. The Droid job seeds Builtins functions/guidance and provider
   integration catalog artifacts directly into Builtins logging contexts.
   Integration artifacts write keyed app/tool log rows and store per-batch
   checkpoints in `Integrations/Meta`.
 - Console presents the gallery, permission review, one-click connect, API key
   entry, reconnect, and disconnect flows.
-- Unity reads Builtins catalog artifacts and exposes searchable virtual tools
+- Droid reads Builtins catalog artifacts and exposes searchable virtual tools
   under `primitives.integrations.<app>.<tool>`.
 - `unity-deploy` contributes a package only when Unify needs local code,
   deploy-time guidance/secrets, a custom scenario, or deterministic tests that
@@ -52,7 +52,7 @@ Console and Orchestra own the dynamic provider lifecycle:
 
 The Builtins app catalog contains two source types:
 
-- `source_type="native"` / `Native`: Unity-deploy package manifests projected
+- `source_type="native"` / `Native`: Droid-deploy package manifests projected
   as app-only catalog records. These rows make native packages searchable beside
   provider apps, but they do not create provider tool catalog rows.
 - `source_type="third_party"` / `Third-party`: Composio, Pipedream, or custom
@@ -92,15 +92,15 @@ PIPEDREAM_ACCESS_TOKEN=...
 
 Hosted staging and production use the Builtins artifacts job path owned by Cloud Build:
 
-- Staging job: `unity-seed-builtins-staging`
-- Production job: `unity-seed-builtins`
+- Staging job: `droid-seed-builtins-staging`
+- Production job: `droid-seed-builtins`
 - `deploy/scripts/run_seed_builtins_artifacts_job.sh` creates/updates the job
   and starts it with `--async`.
 - The Cloud Run Job service account must already have Secret Manager accessor
   permission for `ORCHESTRA_ADMIN_KEY` and `GLOBAL_UNIFY_KEY`. Cloud Build does
   not grant or mutate secret IAM during deploy.
 - The job runs `scripts/seed_builtins_catalog.py` with the hosted integration
-  manifest and `UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
+  manifest and `DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
 - Integration artifact materialization writes `IntegrationBootstrapState` as `running`,
   `success`, or `failed`.
 - The main Cloud Build starts artifact seeding and does not wait for artifact

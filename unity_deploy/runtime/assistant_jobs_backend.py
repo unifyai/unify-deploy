@@ -1,4 +1,4 @@
-"""AssistantJobs lifecycle helpers for the Unity container.
+"""AssistantJobs lifecycle helpers for the Droid container.
 
 Thin wrapper around ``assistant_jobs_api`` that reads session-specific
 values (``SESSION_DETAILS``, ``SETTINGS``) and records Prometheus
@@ -19,8 +19,8 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from unity.logger import LOGGER
-from unity.common.hierarchical_logger import ICONS
+from droid.logger import LOGGER
+from droid.common.hierarchical_logger import ICONS
 from unity_deploy.runtime.assistant_jobs_api import (
     create_assistant_log,
     ensure_project_exists,
@@ -29,11 +29,11 @@ from unity_deploy.runtime.assistant_jobs_api import (
     release_pool_vm,
     stop_assistant_session,
 )
-from unity.conversation_manager.metrics import (
+from droid.conversation_manager.metrics import (
     session_duration as _m_session_dur,
 )
-from unity.session_details import SESSION_DETAILS
-from unity.settings import SETTINGS
+from droid.session_details import SESSION_DETAILS
+from droid.settings import SETTINGS
 
 # Track whether AssistantJobs project has been verified/created
 _project_verified = False
@@ -68,7 +68,7 @@ def mark_job_label(
     timeout: float = 30,
     retries: int = 0,
 ) -> bool:
-    """Patch the K8s Job unity-status label via the communication service.
+    """Patch the K8s Job droid-status label via the communication service.
 
     Returns True on success, False on failure or if config is missing.
     """
@@ -205,7 +205,7 @@ def mark_job_done(
 ):
     """Mark a job as done, release VM, and record session duration.
 
-    When ``shutdown_reason`` is ``"idle_timeout"``, Unity also asks Comms to
+    When ``shutdown_reason`` is ``"idle_timeout"``, Droid also asks Comms to
     stop the current AssistantSession before the Job becomes terminal. This
     preserves the user's intent to go offline while leaving crash paths on the
     existing restart behavior.

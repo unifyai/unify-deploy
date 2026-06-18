@@ -2,7 +2,7 @@
 
 This package is the deploy-side source of truth for third-party integrations.
 Deployments opt into integrations by slug, and `unity-deploy` expands those
-slugs into the existing Unity manager sync surfaces: guidance, secrets,
+slugs into the existing Droid manager sync surfaces: guidance, secrets,
 FunctionManager function directories, optional virtual environments, URL
 mappings, and MCP configuration metadata.
 
@@ -10,7 +10,7 @@ Provider-backed apps from Composio, Pipedream, or another hosted integration
 backend do not need a package here for every supported SaaS app. See
 [`PROVIDER_BACKED_INTEGRATIONS.md`](PROVIDER_BACKED_INTEGRATIONS.md) for the
 boundary: Builtins owns provider app/tool catalog artifacts, Orchestra owns
-connection state and tool execution; Unity surfaces those tools as
+connection state and tool execution; Droid surfaces those tools as
 `primitives.integrations.<app>.<tool>` virtual FunctionManager records;
 `unity-deploy` remains the Level 3 full-package path for custom runtime code.
 
@@ -43,9 +43,9 @@ expand_integrations()
     +-- native catalog projection -> Builtins Integrations/Apps (`Native`)
 ```
 
-The direction is intentionally simple: `unity-deploy` imports stable Unity
+The direction is intentionally simple: `unity-deploy` imports stable Droid
 manager types and APIs, then prepares deployment-specific seed data around
-them. The core Unity managers remain the runtime authority for execution and
+them. The core Droid managers remain the runtime authority for execution and
 storage.
 
 ## Directory Layout
@@ -223,7 +223,7 @@ Follow these rules:
 Correct pattern:
 
 ```python
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -260,7 +260,7 @@ tests/parallel_run.sh tests/assistant_deployments/integrations
 The deploy runner is the default because it prepares the right project mode,
 environment, tmux isolation, logs, and per-session settings for this repo.
 Sync tests use deploy's lightweight conftest plus explicit per-test contexts;
-they do not rely on Unity's heavier global test lifecycle.
+they do not rely on Droid's heavier global test lifecycle.
 
 Coverage is split intentionally so that mock packages get the same
 FunctionManager guarantees as production connectors:

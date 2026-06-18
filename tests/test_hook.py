@@ -53,8 +53,23 @@ def _session_details():
     )
 
 
+def _resolved_startup_spec():
+    return SimpleNamespace(
+        contacts=[],
+        guidance=[],
+        knowledge=[],
+        secrets=[],
+        blacklist=[],
+        function_dirs=[],
+        venv_dirs=[],
+        integrations=[],
+        mcp_configs=[],
+        console_config=None,
+    )
+
+
 def test_startup_hook_starts_runtime_reconcile_async_by_default(monkeypatch):
-    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    resolved = _resolved_startup_spec()
     calls: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
@@ -98,10 +113,10 @@ def test_startup_hook_starts_runtime_reconcile_async_by_default(monkeypatch):
 def test_startup_hook_runs_blocking_runtime_reconcile_when_explicitly_enabled(
     monkeypatch,
 ):
-    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    resolved = _resolved_startup_spec()
     calls: list[str] = []
 
-    monkeypatch.setenv("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "blocking")
+    monkeypatch.setenv("DROID_DEPLOY_RUNTIME_RECONCILE_MODE", "blocking")
     monkeypatch.setattr(
         startup_config,
         "resolve_startup_spec",
@@ -140,7 +155,7 @@ def test_startup_hook_surfaces_runtime_reconcile_scheduling_failure(
     monkeypatch,
     caplog,
 ):
-    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    resolved = _resolved_startup_spec()
     cm = SimpleNamespace()
 
     monkeypatch.setattr(

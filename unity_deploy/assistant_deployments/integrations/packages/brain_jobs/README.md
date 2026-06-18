@@ -1,6 +1,6 @@
 # `brain_jobs` integration package
 
-Internal Unity integration that hosts the scheduled-job template
+Internal Droid integration that hosts the scheduled-job template
 generated from the brain repo's [`brain.scheduled`](https://github.com/unifyai/brain/tree/main/brain/scheduled)
 registry.  This package exists so the existing `ScenarioActivation`
 flow can materialise brain's recurring + trigger-based jobs at deploy

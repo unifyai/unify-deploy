@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "unity-deploy"
 version = "0.0.0"
-description = "Hosted deployment and communication infrastructure for Unity"
+description = "Hosted deployment and communication infrastructure for Droid"
 requires-python = ">=3.12,<4.0"
 dependencies = [
     "acme>=5.0.0",
@@ -66,12 +66,12 @@ adapters = [
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
 
-[project.entry-points."unity.deploy_runtime"]
+[project.entry-points."droid.deploy_runtime"]
 enterprise = "unity_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
 dev = [
-    "unity",
+    "droid",
     "unify",
     "unillm",
     "pre-commit>=4.0.1",
@@ -83,18 +83,18 @@ dev = [
 ]
 
 [tool.uv.sources]
-unity = { git = "https://github.com/unifyai/unity.git", branch = "staging" }
+droid = { git = "https://github.com/unifyai/droid.git", branch = "staging" }
 unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }
 unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }
 
 [tool.pyright]
-extraPaths = ["../unity", "../unify", "../unillm", "."]
+extraPaths = ["../droid", "../unify", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.basedpyright]
-extraPaths = ["../unity", "../unify", "../unillm", "."]
+extraPaths = ["../droid", "../unify", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"

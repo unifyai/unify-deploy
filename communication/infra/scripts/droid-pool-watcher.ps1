@@ -1,12 +1,12 @@
 # =============================================================================
-# Unity Pool Watcher (Windows)
+# Droid Pool Watcher (Windows)
 #
 # Runs as a Windows service (via NSSM). Watches GCE instance metadata for
 # assignment/release signals. When unify-key changes from empty to non-empty,
 # the VM is assigned; when it clears, the VM is released.
 #
 # Install via NSSM:
-#   nssm install UnityPoolWatcher powershell.exe -ExecutionPolicy Bypass -File C:\unity-pool-watcher.ps1
+#   nssm install UnityPoolWatcher powershell.exe -ExecutionPolicy Bypass -File C:\droid-pool-watcher.ps1
 #   nssm set UnityPoolWatcher Start SERVICE_AUTO_START
 # =============================================================================
 
@@ -35,7 +35,7 @@ function Get-Metadata($key) {
 }
 
 function Get-DeployEnv {
-    $envName = Get-Metadata "unity-environment"
+    $envName = Get-Metadata "droid-environment"
     if ($envName) { return $envName }
     if (Get-Metadata "staging") { return "staging" }
     return "production"
@@ -95,7 +95,7 @@ function Ensure-UnityUserSshConfig {
 
     $sshdConfigPath = Join-Path $sshProgramDataDir "sshd_config"
     $sshdConfig = @"
-# Unity File Sync - OpenSSH Server Configuration
+# Droid File Sync - OpenSSH Server Configuration
 
 Port 2222
 PasswordAuthentication no
@@ -159,9 +159,9 @@ function Grant-ServiceDirectoryAccess {
 function Scrub-Filesystem {
     Write-Log "SCRUB: cleaning session artifacts from filesystem"
 
-    # C:\Unity\ — remove everything except structural dirs
-    if (Test-Path "C:\Unity") {
-        Get-ChildItem "C:\Unity" -Force -ErrorAction SilentlyContinue |
+    # C:\Droid\ — remove everything except structural dirs
+    if (Test-Path "C:\Droid") {
+        Get-ChildItem "C:\Droid" -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -notin @('.ssh', 'Local') } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -232,7 +232,7 @@ function Wipe-MetadataKey($key) {
 
 function Get-VMIdentityToken {
     try {
-        return Invoke-RestMethod -Uri "$MetadataUrl/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" `
+        return Invoke-RestMethod -Uri "$MetadataUrl/instance/service-accounts/default/identity?audience=droid-comms-vm&format=full" `
             -Headers $MetadataHeaders -TimeoutSec 5 -ErrorAction Stop
     } catch {
         return ""
@@ -393,10 +393,10 @@ function Invoke-Update {
 
     if ($githubToken) {
         $magnitudeUrl = "https://${githubToken}@github.com/unifyai/magnitude.git"
-        $unityUrl = "https://${githubToken}@github.com/unifyai/unity.git"
+        $unityUrl = "https://${githubToken}@github.com/unifyai/droid.git"
     } else {
         $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
-        $unityUrl = "https://github.com/unifyai/unity.git"
+        $unityUrl = "https://github.com/unifyai/droid.git"
     }
     $unityBranch = switch ($deployEnv) {
         "staging" { "staging" }
@@ -406,7 +406,7 @@ function Invoke-Update {
     # ── Magnitude ──
     $magnitudeDir = "C:\magnitude"
     $magSaved = Get-SavedCommitHash $magnitudeDir
-    $magRemote = Get-RemoteCommitHash $magnitudeUrl "unity-modifications"
+    $magRemote = Get-RemoteCommitHash $magnitudeUrl "droid-modifications"
 
     if ($magSaved -and $magRemote -and ($magSaved -eq $magRemote)) {
         Write-Log "Magnitude up-to-date ($magSaved)"
@@ -430,8 +430,8 @@ function Invoke-Update {
         if (Test-Path "$magnitudeDir\.git") {
             Push-Location $magnitudeDir
             if ($githubToken) { git remote set-url origin $magnitudeUrl 2>$null }
-            git fetch --depth 1 origin unity-modifications 2>&1
-            git reset --hard origin/unity-modifications 2>&1
+            git fetch --depth 1 origin droid-modifications 2>&1
+            git reset --hard origin/droid-modifications 2>&1
             $commit = (git rev-parse --short=12 HEAD 2>&1)
             Save-CommitHash $magnitudeDir $commit
             Pop-Location
@@ -440,7 +440,7 @@ function Invoke-Update {
             if (Test-Path $magnitudeDir) {
                 cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null
             }
-            git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
+            git clone --depth 1 --branch droid-modifications $magnitudeUrl $magnitudeDir 2>&1
             if (Test-Path "$magnitudeDir\package.json") {
                 Push-Location $magnitudeDir
                 $commit = (git rev-parse --short=12 HEAD 2>&1)
@@ -478,7 +478,7 @@ function Invoke-Update {
         Write-Log "Magnitude updated"
     }
 
-    # ── Agent Service (sparse checkout from unity monorepo) ──
+    # ── Agent Service (sparse checkout from droid monorepo) ──
     $agentServiceDir = "C:\agent-service"
     $asSaved = Get-SavedCommitHash $agentServiceDir
     $asRemote = Get-RemoteCommitHash $unityUrl $unityBranch
@@ -503,8 +503,8 @@ function Invoke-Update {
             $envBackup = Get-Content "$agentServiceDir\.env" -Raw
         }
 
-        $tmpDir = Join-Path $env:TEMP "unity-repo-$(Get-Random)"
-        Write-Log "Cloning unity repo (sparse) to $tmpDir..."
+        $tmpDir = Join-Path $env:TEMP "droid-repo-$(Get-Random)"
+        Write-Log "Cloning droid repo (sparse) to $tmpDir..."
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $tmpDir 2>&1
         if (Test-Path $tmpDir) {
             Push-Location $tmpDir
@@ -558,8 +558,8 @@ function Invoke-Assign($unifyKey) {
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
     Stop-AgentService
-    if (Test-Path "C:\Unity\Local") {
-        cmd /c rmdir "C:\Unity\Local" 2>$null
+    if (Test-Path "C:\Droid\Local") {
+        cmd /c rmdir "C:\Droid\Local" 2>$null
         Get-Disk | Where-Object { $_.Number -gt 0 } |
             Set-Disk -IsOffline $true -ErrorAction SilentlyContinue
         Write-Log "Unmounted previous disk"
@@ -612,26 +612,26 @@ function Invoke-Assign($unifyKey) {
                 $driveLetter = $partition.DriveLetter
             }
 
-            # Create junction from C:\Unity\Local to the data drive
-            if (Test-Path "C:\Unity\Local") {
-                cmd /c rmdir "C:\Unity\Local" 2>$null
-                Remove-Item "C:\Unity\Local" -Force -Recurse -ErrorAction SilentlyContinue
+            # Create junction from C:\Droid\Local to the data drive
+            if (Test-Path "C:\Droid\Local") {
+                cmd /c rmdir "C:\Droid\Local" 2>$null
+                Remove-Item "C:\Droid\Local" -Force -Recurse -ErrorAction SilentlyContinue
             }
-            New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
-            cmd /c mklink /J "C:\Unity\Local" "${driveLetter}:\"
+            New-Item -ItemType Directory -Force -Path "C:\Droid" | Out-Null
+            cmd /c mklink /J "C:\Droid\Local" "${driveLetter}:\"
             # Grant unityuser full control on both the junction and the mounted volume directly
             # (icacls through a junction modifies the reparse point, not the target)
-            icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q
+            icacls "C:\Droid\Local" /grant "unityuser:(OI)(CI)F" /T /Q
             icacls "${driveLetter}:\" /grant "unityuser:(OI)(CI)F" /T /Q
-            Write-Log "Mounted disk at C:\Unity\Local (drive $driveLetter)"
+            Write-Log "Mounted disk at C:\Droid\Local (drive $driveLetter)"
         } else {
             Write-Log "WARNING: disk device $diskDevice not found after ${maxWait}s"
         }
     }
 
     # Restore from GCS archive if disk is empty
-    if ($diskDevice -and (Test-Path "C:\Unity\Local")) {
-        $items = Get-ChildItem "C:\Unity\Local" -Force -ErrorAction SilentlyContinue |
+    if ($diskDevice -and (Test-Path "C:\Droid\Local")) {
+        $items = Get-ChildItem "C:\Droid\Local" -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -ne 'System Volume Information' -and $_.Name -ne '$RECYCLE.BIN' }
         if (-not $items) {
             $archiveBucket = Get-Metadata "archive-bucket"
@@ -641,11 +641,11 @@ function Invoke-Assign($unifyKey) {
                 try {
                     $statResult = gsutil -q stat $archivePath 2>&1
                     if ($LASTEXITCODE -eq 0) {
-                        $tempArchive = Join-Path $env:TEMP "unity-restore-$(Get-Random).tar.gz"
+                        $tempArchive = Join-Path $env:TEMP "droid-restore-$(Get-Random).tar.gz"
                         gsutil -q cp $archivePath $tempArchive 2>$null
-                        tar xzf $tempArchive -C "C:\Unity\Local"
+                        tar xzf $tempArchive -C "C:\Droid\Local"
                         Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
-                        icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q
+                        icacls "C:\Droid\Local" /grant "unityuser:(OI)(CI)F" /T /Q
                         Write-Log "Restored filesystem from GCS archive"
                     } else {
                         Write-Log "No GCS archive found, starting with empty filesystem"
@@ -701,7 +701,7 @@ PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
-UNITY_COMMS_URL=$commsUrl
+DROID_COMMS_URL=$commsUrl
 PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 DISPLAY=:1
 "@
@@ -713,7 +713,7 @@ DISPLAY=:1
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
-npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
+npx --yes ts-node src/index.ts >> C:\Droid\agent-service.log 2>&1
 "@
         Set-Content -Path "$agentServiceDir\start-agent.bat" -Value $startBat -Encoding ASCII
 
@@ -875,15 +875,15 @@ function Invoke-Release {
     }
 
     # Archive filesystem to GCS before unmount
-    if (Test-Path "C:\Unity\Local") {
+    if (Test-Path "C:\Droid\Local") {
         $assistantId = Get-Metadata "assistant-id"
         $archiveBucket = Get-Metadata "archive-bucket"
         if ($assistantId -and $archiveBucket) {
             $archivePath = "gs://${archiveBucket}/${assistantId}.tar.gz"
-            Write-Log "Archiving C:\Unity\Local to $archivePath"
+            Write-Log "Archiving C:\Droid\Local to $archivePath"
             try {
-                $tempArchive = Join-Path $env:TEMP "unity-archive-$(Get-Random).tar.gz"
-                tar czf $tempArchive -C "C:\Unity\Local" .
+                $tempArchive = Join-Path $env:TEMP "droid-archive-$(Get-Random).tar.gz"
+                tar czf $tempArchive -C "C:\Droid\Local" .
                 gsutil -q cp $tempArchive $archivePath 2>$null
                 Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
                 Write-Log "Archive uploaded successfully"
@@ -894,8 +894,8 @@ function Invoke-Release {
     }
 
     # Unmount persistent disk
-    if (Test-Path "C:\Unity\Local") {
-        cmd /c rmdir "C:\Unity\Local" 2>$null
+    if (Test-Path "C:\Droid\Local") {
+        cmd /c rmdir "C:\Droid\Local" 2>$null
         # Set disk offline
         Get-Disk | Where-Object { $_.FriendlyName -notmatch "Google" -or $_.Number -gt 0 } |
             Where-Object { $_.Number -gt 0 } |
@@ -959,7 +959,7 @@ function Invoke-RefreshTls {
 }
 
 function Start-Watcher {
-    Write-Log "Unity Pool Watcher starting"
+    Write-Log "Droid Pool Watcher starting"
 
     # Seed TLS hash to avoid unnecessary reload on first loop iteration
     $initTls = Get-Metadata "tls-fullchain"

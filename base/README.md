@@ -1,6 +1,6 @@
 # Deployment
 
-Docker image and CI/CD configuration for the Unity container.
+Docker image and CI/CD configuration for the Droid container.
 
 ## Contents
 
@@ -17,7 +17,7 @@ Build the image locally:
 docker build -f deploy/Dockerfile \
   --build-arg GITHUB_TOKEN=your-token \
   --build-arg UNIFY_KEY=your-key \
-  -t unity .
+  -t droid .
 ```
 
 The Dockerfile clones `unify` and `unillm` from GitHub at build time (they're not bundled in the image context). A `GITHUB_TOKEN` with repo read access is required.

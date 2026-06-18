@@ -1,8 +1,8 @@
 name: Publish self-host images
 
-# Owned by unity-deploy (self-host image publishing). The unity-selfhost image
-# is built from the unity application source; when run from unity-deploy the
-# build context must first clone unity (mirror the clone+overlay pattern in
+# Owned by unity-deploy (self-host image publishing). The droid-selfhost image
+# is built from the droid application source; when run from unity-deploy the
+# build context must first clone droid (mirror the clone+overlay pattern in
 # base/cloudbuild.yaml) before `docker build`. Until that wiring lands this
 # workflow is manual-dispatch only.
 on:
@@ -18,7 +18,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: unifyai/unity-selfhost
+  IMAGE_NAME: unifyai/droid-selfhost
 
 jobs:
   build:
@@ -72,9 +72,9 @@ jobs:
     - name: Create multi-arch manifest
       run: |
         TAG="${{ github.ref_name == 'main' && 'main' || 'staging' }}"
-        docker buildx imagetools create -t ghcr.io/unifyai/unity-selfhost:${TAG} \
-          ghcr.io/unifyai/unity-selfhost:${{ github.sha }}-amd64 \
-          ghcr.io/unifyai/unity-selfhost:${{ github.sha }}-arm64
+        docker buildx imagetools create -t ghcr.io/unifyai/droid-selfhost:${TAG} \
+          ghcr.io/unifyai/droid-selfhost:${{ github.sha }}-amd64 \
+          ghcr.io/unifyai/droid-selfhost:${{ github.sha }}-arm64
 
   desktop:
     strategy:
@@ -101,7 +101,7 @@ jobs:
         file: deploy/selfhost/Dockerfile.desktop
         platforms: ${{ matrix.platform }}
         push: true
-        tags: ghcr.io/unifyai/unity-desktop-selfhost:${{ github.sha }}-${{ matrix.arch_tag }}
+        tags: ghcr.io/unifyai/droid-desktop-selfhost:${{ github.sha }}-${{ matrix.arch_tag }}
 
   desktop-merge:
     needs: desktop
@@ -114,6 +114,6 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     - run: |
         TAG="${{ github.ref_name == 'main' && 'main' || 'staging' }}"
-        docker buildx imagetools create -t ghcr.io/unifyai/unity-desktop-selfhost:${TAG} \
-          ghcr.io/unifyai/unity-desktop-selfhost:${{ github.sha }}-amd64 \
-          ghcr.io/unifyai/unity-desktop-selfhost:${{ github.sha }}-arm64
+        docker buildx imagetools create -t ghcr.io/unifyai/droid-desktop-selfhost:${TAG} \
+          ghcr.io/unifyai/droid-desktop-selfhost:${{ github.sha }}-amd64 \
+          ghcr.io/unifyai/droid-desktop-selfhost:${{ github.sha }}-arm64

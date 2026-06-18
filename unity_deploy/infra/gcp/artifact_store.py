@@ -16,10 +16,10 @@ from urllib.parse import urlparse
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
-from unity.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity.common.pipeline.row_streaming import iter_table_input_rows
-from unity.common.pipeline.types import (
+from droid.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
+from droid.common.pipeline.retry_policy import ResilientRequestPolicy
+from droid.common.pipeline.row_streaming import iter_table_input_rows
+from droid.common.pipeline.types import (
     IngestCheckpoint,
     InlineRowsHandle,
     ObjectStoreArtifactHandle,
@@ -59,7 +59,7 @@ class StaleLeaseError(RuntimeError):
 
 
 class GcsArtifactStore:
-    """GCS-backed artifact store implementing the unity ArtifactStore protocol."""
+    """GCS-backed artifact store implementing the droid ArtifactStore protocol."""
 
     def __init__(
         self,
@@ -350,8 +350,8 @@ class GcsArtifactStore:
                 writer.write("\n")
                 row_count += 1
         tmp_blob.metadata = {
-            "unity-row-count": str(row_count),
-            "unity-sha256": checksum.hexdigest(),
+            "droid-row-count": str(row_count),
+            "droid-sha256": checksum.hexdigest(),
         }
         self._with_retry(
             lambda: tmp_blob.patch(),
@@ -369,8 +369,8 @@ class GcsArtifactStore:
         final_blob.reload()
         final_metadata = final_blob.metadata or {}
         if (
-            final_metadata.get("unity-row-count") != str(row_count)
-            or final_metadata.get("unity-sha256") != checksum.hexdigest()
+            final_metadata.get("droid-row-count") != str(row_count)
+            or final_metadata.get("droid-sha256") != checksum.hexdigest()
         ):
             raise RuntimeError(
                 f"Promoted artifact metadata mismatch for gs://{self._bucket_name}/"

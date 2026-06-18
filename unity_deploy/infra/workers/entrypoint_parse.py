@@ -14,8 +14,8 @@ Usage (local-with-GCP testing):
     python -m unity_deploy.infra.workers.entrypoint_parse
 
 Environment (GCP):
-    GCP_SA_KEY, UNITY_GCP_PIPELINE_ENVIRONMENT, UNITY_PUBSUB_PROJECT_ID,
-    UNITY_GCS_ARTIFACT_BUCKET
+    GCP_SA_KEY, DROID_GCP_PIPELINE_ENVIRONMENT, DROID_PUBSUB_PROJECT_ID,
+    DROID_GCS_ARTIFACT_BUCKET
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     import argparse
 
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from droid.common.pipeline.work_queue import RetryWorkItem
 
     from .pipeline_events import record_worker_event
     from .parse_worker import handle_parse_message
@@ -43,7 +43,7 @@ async def main() -> None:
         shutdown_aware_sleep,
     )
 
-    parser = argparse.ArgumentParser(description="Unity parse worker")
+    parser = argparse.ArgumentParser(description="Droid parse worker")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 

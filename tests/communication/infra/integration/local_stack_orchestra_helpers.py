@@ -95,7 +95,7 @@ def org_coordinator(urls: LocalStackUrls, org: dict) -> dict:
 
 
 def mark_assistant_local_runtime(assistant_id: str) -> None:
-    """Mark an Orchestra assistant as using a caller-local Unity runtime."""
+    """Mark an Orchestra assistant as using a caller-local Droid runtime."""
 
     db_container = os.getenv("ORCHESTRA_DB_CONTAINER", "orchestra-local-db")
     completed = subprocess.run(
@@ -127,7 +127,7 @@ def ensure_pubsub_topic_exists(
     comms,
     assistant_id: str,
 ) -> None:
-    topic_name = f"unity-{assistant_id}{urls.pubsub_suffix}"
+    topic_name = f"droid-{assistant_id}{urls.pubsub_suffix}"
     response = comms.post(
         "/infra/pubsub/topic",
         data={"topic_name": topic_name},
@@ -145,7 +145,7 @@ def temporary_inbound_subscription(
     *,
     label: str,
 ):
-    topic_name = f"unity-{assistant_id}{urls.pubsub_suffix}"
+    topic_name = f"droid-{assistant_id}{urls.pubsub_suffix}"
     topic_path = pubsub_subscriber.topic_path(urls.gcp_project_id, topic_name)
     subscription_name = f"{topic_name}-{label}-{uuid.uuid4().hex[:12]}"
     subscription_path = pubsub_subscriber.subscription_path(

@@ -7,7 +7,7 @@ WhatsApp.  The canonical example is the HackerNews top-stories digest,
 which uses :class:`ComputerPrimitives` to scrape ``news.ycombinator.com``
 (no API), summarises the top stories via the LLM-backed
 ``observe()`` call, and sends the resulting bullet list to the
-operator's WhatsApp number through the deployed Unity gateway.
+operator's WhatsApp number through the deployed Droid gateway.
 
 The pattern is the canonical recipe for browser-driven scheduled
 intel:
@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from unity.function_manager.custom import custom_function
+from droid.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -94,11 +94,11 @@ async def run_hackernews_digest_to_whatsapp(
     }
 
 
-# ── Unity outreach daily ticks (HN + Reddit + Discord summary) ─────
+# ── Droid outreach daily ticks (HN + Reddit + Discord summary) ─────
 
 
 @custom_function()
-async def run_unity_outreach_hackernews_daily(
+async def run_droid_outreach_hackernews_daily(
     *,
     max_age_days: float = 84.0,
     daily_post_limit: int = 1,
@@ -106,26 +106,26 @@ async def run_unity_outreach_hackernews_daily(
     emit_review_cards: bool = True,
     review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
 ) -> dict[str, Any]:
-    """Run the Unity-outreach HackerNews half-tick at 08:00 Europe/London.
+    """Run the Droid-outreach HackerNews half-tick at 08:00 Europe/London.
 
-    Discovers Unity-relevant HN threads via Algolia over the past
-    ``max_age_days``, scores against the cached Unity relevance
+    Discovers Droid-relevant HN threads via Algolia over the past
+    ``max_age_days``, scores against the cached Droid relevance
     brief, drafts a minimal reply for the top ``daily_post_limit``
     candidates, persists JSONs under
-    ``data/intel/unity_outreach/candidates/<date>/hackernews/review/``,
+    ``data/intel/droid_outreach/candidates/<date>/hackernews/review/``,
     and optionally posts Discord review cards.
 
     NO HN comments are posted by this wrapper.  Posting happens in
     the operator-approval loop (Phase 6) or via the manual
-    ``scripts/unity_outreach_post_approved.py`` CLI.
+    ``scripts/droid_outreach_post_approved.py`` CLI.
     """
 
-    from brain.intel.unity_outreach import (
+    from brain.intel.droid_outreach import (
         OutreachRepository,
         emit_review_cards as do_emit_cards,
         find_and_draft_hackernews,
     )
-    from brain.intel.unity_pitch import build_relevance_brief
+    from brain.intel.droid_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = OutreachRepository()
@@ -165,7 +165,7 @@ async def run_unity_outreach_hackernews_daily(
 
 
 @custom_function()
-async def run_unity_outreach_reddit_daily(
+async def run_droid_outreach_reddit_daily(
     *,
     max_age_days: float = 84.0,
     daily_post_limit: int = 5,
@@ -174,18 +174,18 @@ async def run_unity_outreach_reddit_daily(
     review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
     reddit_username: str = "daniellenton",
 ) -> dict[str, Any]:
-    """Run the Unity-outreach Reddit half-tick at 09:00 Europe/London.
+    """Run the Droid-outreach Reddit half-tick at 09:00 Europe/London.
 
-    Same shape as :func:`run_unity_outreach_hackernews_daily` but
+    Same shape as :func:`run_droid_outreach_hackernews_daily` but
     over the configured Reddit subs + sitewide keyword queries.
     """
 
-    from brain.intel.unity_outreach import (
+    from brain.intel.droid_outreach import (
         OutreachRepository,
         emit_review_cards as do_emit_cards,
         find_and_draft_reddit,
     )
-    from brain.intel.unity_pitch import build_relevance_brief
+    from brain.intel.droid_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = OutreachRepository()
@@ -223,19 +223,19 @@ async def run_unity_outreach_reddit_daily(
 
 
 @custom_function()
-async def run_unity_outreach_discord_daily_summary(
+async def run_droid_outreach_discord_daily_summary(
     *,
     digest_webhook_env: str = "UNIFY_DISCORD_DIGEST_WEBHOOK",
 ) -> dict[str, Any]:
-    """Run the Unity-outreach evening Discord digest at 18:00 Europe/London.
+    """Run the Droid-outreach evening Discord digest at 18:00 Europe/London.
 
-    Reads ``data/intel/unity_outreach/candidates/<today>/{hackernews,reddit}/posted/``
+    Reads ``data/intel/droid_outreach/candidates/<today>/{hackernews,reddit}/posted/``
     and posts one digest embed-list to the channel behind
     ``UNIFY_DISCORD_DIGEST_WEBHOOK``.  Idempotent — no state is
     written beyond the OutboundAction audit row.
     """
 
-    from brain.intel.unity_outreach import summarise_to_discord
+    from brain.intel.droid_outreach import summarise_to_discord
 
     # Run the (synchronous) summariser in a thread so the event loop
     # isn't blocked by the httpx POST.
@@ -274,9 +274,9 @@ async def run_social_post_discover_draft(
 
     Discovers TRACTION-GATED agentic-AI items (HN front page + Show HN
     front page via Firebase; X recent-search above an engagement floor),
-    keeps only the agentic ones with an honest Unity design parallel,
+    keeps only the agentic ones with an honest Droid design parallel,
     deep-researches the top ``daily_post_limit`` by traction (subject
-    repo/README + a grep of the Unity codebase), drafts a short informal
+    repo/README + a grep of the Droid codebase), drafts a short informal
     X post with a high-reasoning model, persists JSONs under
     ``data/intel/social_post/candidates/<date>/x/review/``, and
     optionally posts Discord review cards.
@@ -290,7 +290,7 @@ async def run_social_post_discover_draft(
         discover_and_draft,
         emit_review_cards as do_emit_cards,
     )
-    from brain.intel.unity_pitch import build_relevance_brief
+    from brain.intel.droid_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = SocialPostRepository()

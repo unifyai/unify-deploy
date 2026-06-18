@@ -1,12 +1,12 @@
-# windows-pool-vm.pkr.hcl - Packer template for Unity Pool Windows VM image
+# windows-pool-vm.pkr.hcl - Packer template for Droid Pool Windows VM image
 #
 # Extends the base Windows VM image with pool-specific components:
 # - unityuser (auto-logon, standard user)
 # - OpenSSH Server (port 2222)
 # - TightVNC Server (dummy password, updated at assignment)
-# - Unity Pool Watcher (NSSM Windows service)
+# - Droid Pool Watcher (NSSM Windows service)
 #
-# Outputs to image family "unity-pool-windows-vm" (separate from legacy "unity-windows-vm")
+# Outputs to image family "droid-pool-windows-vm" (separate from legacy "droid-windows-vm")
 #
 # Usage:
 #   packer init .
@@ -56,7 +56,7 @@ variable "disk_size" {
 
 variable "image_family" {
   type        = string
-  default     = "unity-pool-windows-vm"
+  default     = "droid-pool-windows-vm"
   description = "Image family name for the output image"
 }
 
@@ -87,10 +87,10 @@ source "googlecompute" "windows-pool-vm" {
 
   image_name        = "${var.image_family}-{{timestamp}}"
   image_family      = var.image_family
-  image_description = "Unity Pool Windows VM with Office, Git, Python, Node.js, noVNC, Caddy, TightVNC, pool watcher."
+  image_description = "Droid Pool Windows VM with Office, Git, Python, Node.js, noVNC, Caddy, TightVNC, pool watcher."
   image_labels = {
     "managed-by" = "packer"
-    "purpose"    = "unity-pool-windows-vm"
+    "purpose"    = "droid-pool-windows-vm"
   }
 
   disk_size = var.disk_size
@@ -145,8 +145,8 @@ build {
 
   # Upload pool watcher script
   provisioner "file" {
-    source      = "../../unity-pool-watcher.ps1"
-    destination = "C:\\temp\\unity-pool-watcher.ps1"
+    source      = "../../droid-pool-watcher.ps1"
+    destination = "C:\\temp\\droid-pool-watcher.ps1"
   }
 
   # Run the base installation script

@@ -10,14 +10,14 @@ Two ingestion flavours are supported, driven by
 
 - **FM mode** (``ingestion_mode="fm"``): activates a Unify context
   derived from ``msg.fm_binding``, instantiates a
-  :class:`unity.file_manager.managers.file_manager.FileManager`, and
+  :class:`droid.file_manager.managers.file_manager.FileManager`, and
   delegates the work to
-  :func:`unity.file_manager.managers.utils.executor.fm_process_plan`.
+  :func:`droid.file_manager.managers.utils.executor.fm_process_plan`.
   The resulting rows land under ``Files/{alias}/{storage_id}/...`` with
   a proper ``FileRecords`` entry.
 
 - **DM mode** (``ingestion_mode="dm"``): drives
-  :func:`unity.common.pipeline.ingest_artifacts` directly over the
+  :func:`droid.common.pipeline.ingest_artifacts` directly over the
   plan's ``table_inputs``, issuing
   ``DataManager.ingest(ctx, None, table_input_handle=handle, ...)`` per
   table.  No ``FileRecords`` entry is created.
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
-from unity.common.pipeline import (
+from droid.common.pipeline import (
     ArtifactWorkItem,
     CancellationCheck,
     IngestPlan,
@@ -45,9 +45,9 @@ from unity.common.pipeline import (
     PipelineInstrumentation,
     ingest_artifacts,
 )
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.run_ledger import PipelineStageManifest
-from unity.common.pipeline.types import (
+from droid.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline.run_ledger import PipelineStageManifest
+from droid.common.pipeline.types import (
     AttachmentCallback,
     CsvFileHandle,
     IngestBinding,
@@ -57,7 +57,7 @@ from unity.common.pipeline.types import (
     TableInputHandle,
     XlsxSheetHandle,
 )
-from unity.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
+from droid.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
 
 from .assistant_key_resolver import resolve_api_key
 from unity_deploy.infra.gcp.artifact_store import (
@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TERMINAL_JOB_STATUSES = {"success", "error", "cancelled"}
-_PRIVATE_INGEST_KEY = "_unity_ingest_key"
+_PRIVATE_INGEST_KEY = "_droid_ingest_key"
 
 
 @dataclass
@@ -258,13 +258,13 @@ def _scratch_guard_threshold_bytes() -> int:
     Default is 3.5 GiB, matching a 4 GiB ephemeral-storage limit with a
     little headroom. Operators can tune it without rebuilding the image.
     """
-    raw = os.environ.get("UNITY_INGEST_TMP_MAX_BYTES")
+    raw = os.environ.get("DROID_INGEST_TMP_MAX_BYTES")
     if raw:
         try:
             return max(int(raw), 1)
         except ValueError:
             logger.warning(
-                "[ingest] Ignoring invalid UNITY_INGEST_TMP_MAX_BYTES=%r",
+                "[ingest] Ignoring invalid DROID_INGEST_TMP_MAX_BYTES=%r",
                 raw,
             )
     return int(3.5 * 1024 * 1024 * 1024)
@@ -616,7 +616,7 @@ async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[str]:
        Unify SDK call -- including any deep inside
        :class:`DataManager` / :class:`FileManager` -- picks it up.
        The SDK contract is env-based (see
-       ``unity.session_details.SessionDetails.unify_key`` which falls
+       ``droid.session_details.SessionDetails.unify_key`` which falls
        back to ``os.environ.get("UNIFY_KEY", "")`` on every read), so
        this ``os.environ`` write is load-bearing and cannot be
        replaced by a pydantic-settings update.
@@ -788,7 +788,7 @@ def _acquire_ingest_lease(
             owner_id=owner_id,
             attempt_id=attempt_id,
             stage="ingest",
-            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "900")),
+            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "900")),
         )
     except LeaseNotAcquired as exc:
         lease = exc.lease
@@ -829,7 +829,7 @@ def _refresh_ingest_lease(artifact_store: Any, lease: _ActiveIngestLease) -> Non
             owner_id=lease.owner_id,
             attempt_id=lease.attempt_id,
             generation=lease.generation,
-            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "900")),
+            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "900")),
         )
     except StaleLeaseError:
         raise
@@ -1221,12 +1221,12 @@ async def _run_fm_mode_inner(
     is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
-    from unity.data_manager import DataManager
-    from unity.file_manager.filesystem_adapters.local_adapter import (
+    from droid.data_manager import DataManager
+    from droid.file_manager.filesystem_adapters.local_adapter import (
         LocalFileSystemAdapter,
     )
-    from unity.file_manager.managers.file_manager import FileManager
-    from unity.file_manager.managers.utils.executor import fm_process_plan
+    from droid.file_manager.managers.file_manager import FileManager
+    from droid.file_manager.managers.utils.executor import fm_process_plan
 
     activate_unify_context(
         user_id=fm_binding.user_id,
@@ -1327,7 +1327,7 @@ def _build_fm_config_from_plan(plan: IngestPlan):
     columns and descriptions via config lookups) picks them up without
     any changes to the FM internals.
     """
-    from unity.file_manager.types.config import (
+    from droid.file_manager.types.config import (
         BusinessContextsConfig,
         EmbeddingsConfig,
         FileBusinessContextSpec,
@@ -1412,7 +1412,7 @@ async def _run_dm_mode(
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
     Constructs one ``ArtifactWorkItem`` per table in the plan, then
-    drives :func:`unity.common.pipeline.ingest_artifacts` with a DM
+    drives :func:`droid.common.pipeline.ingest_artifacts` with a DM
     ``ingest_fn`` that calls ``dm.ingest(ctx, None,
     table_input_handle=handle, ...)``.  Streaming is preserved --
     ``dm.ingest`` pulls batches from the handle itself rather than
@@ -1453,8 +1453,8 @@ async def _run_dm_mode_inner(
     is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
-    from unity.data_manager import DataManager
-    from unity.file_manager.types.config import FilePipelineConfig
+    from droid.data_manager import DataManager
+    from droid.file_manager.types.config import FilePipelineConfig
 
     # DM dispatches are assistant-scoped too: they still ingest into an
     # explicit DataManager context, but Orchestra key resolution and
@@ -1516,7 +1516,7 @@ async def _run_dm_mode_inner(
 
         post_ingest_config = None
         if meta.post_ingest:
-            from unity.data_manager.types.ingest import PostIngestConfig
+            from droid.data_manager.types.ingest import PostIngestConfig
 
             post_ingest_config = PostIngestConfig.model_validate(meta.post_ingest)
 
@@ -1733,7 +1733,7 @@ async def _publish_attachment_completion(
 ) -> None:
     """Publish ``thread="attachment_ingestion_complete"`` to the assistant topic.
 
-    The CM's ``CommsManager`` subscribes to ``unity-{assistant_id}{env_suffix}``
+    The CM's ``CommsManager`` subscribes to ``droid-{assistant_id}{env_suffix}``
     and routes this envelope to
     ``attachment_ingestion.apply_attachment_completion`` which updates
     ``FileRecords`` for the originating attachment.
@@ -1743,7 +1743,7 @@ async def _publish_attachment_completion(
     from google.cloud import pubsub_v1
 
     project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get(
-        "UNITY_PUBSUB_PROJECT_ID",
+        "DROID_PUBSUB_PROJECT_ID",
     )
     if not project_id:
         logger.warning(
@@ -1751,7 +1751,7 @@ async def _publish_attachment_completion(
         )
         return
 
-    topic_name = f"unity-{callback.assistant_id}{callback.env_suffix}"
+    topic_name = f"droid-{callback.assistant_id}{callback.env_suffix}"
     envelope = {
         "thread": "attachment_ingestion_complete",
         "publish_timestamp": time.time(),

@@ -3,11 +3,11 @@
 # ensure_prereqs.sh — Shared self-host prerequisites with auto-install
 # =============================================================================
 #
-# Used by unity stack doctor, setup, and console local.sh (self-host).
+# Used by droid stack doctor, setup, and console local.sh (self-host).
 # Attempts to install missing Java and Pub/Sub emulator components before failing.
 #
 # Usage:
-#   source /path/to/unity/scripts/ensure_prereqs.sh
+#   source /path/to/droid/scripts/ensure_prereqs.sh
 #   ensure_java || return 1
 #   ensure_pubsub_emulator || return 1
 #

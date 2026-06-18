@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.deployment.types import (
+from droid.common.pipeline._utils import utc_now_iso
+from droid.common.pipeline.deployment.types import (
     DeploymentBundle,
     DeploymentBundleRef,
     DeploymentIngestionJob,

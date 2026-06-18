@@ -10,14 +10,14 @@ The compose file publishes:
 
 Console returns `ws://127.0.0.1:7880` to the browser. Server-side room cleanup uses `LIVEKIT_API_URL=http://livekit:7880`.
 
-`unity-cm` uses `network_mode: service:livekit` so the voice agent and LiveKit share `127.0.0.1` for WebRTC ICE. Without this split-container layout, Docker Desktop cannot satisfy both the host browser and the in-container agent with one advertised ICE address. Gateway reaches CM ingress at `http://livekit:8787` (port published from the shared network stack).
+`droid-cm` uses `network_mode: service:livekit` so the voice agent and LiveKit share `127.0.0.1` for WebRTC ICE. Without this split-container layout, Docker Desktop cannot satisfy both the host browser and the in-container agent with one advertised ICE address. Gateway reaches CM ingress at `http://livekit:8787` (port published from the shared network stack).
 
 `livekit.yaml` sets `rtc.node_ip: 127.0.0.1` so published host ports `7880/7881/7882` match the ICE candidates sent to browsers.
 
 ## Validation checklist
 
-1. Start stack: `unity stack up`
-2. Confirm LiveKit is up: `docker compose -f ~/.unity/docker-compose.yml ps livekit`
+1. Start stack: `droid stack up`
+2. Confirm LiveKit is up: `docker compose -f ~/.droid/docker-compose.yml ps livekit`
 3. Open Console, start a voice call with Deepgram + Cartesia keys in `.env`
 4. If media fails on macOS Docker Desktop:
    - Ensure UDP 7882 is not blocked

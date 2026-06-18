@@ -345,17 +345,17 @@ def _post_communication_json(path: str, payload: dict[str, Any]) -> dict[str, An
     """POST an admin-authenticated JSON payload to Communication."""
 
     import httpx
-    from unity.settings import SETTINGS
+    from droid.settings import SETTINGS
 
     comms_url = (
-        os.environ.get("UNITY_COMMS_URL")
+        os.environ.get("DROID_COMMS_URL")
         or os.environ.get("COMMUNICATION_URL")
         or os.environ.get("COMMS_URL")
         or getattr(SETTINGS.conversation, "COMMS_URL", "")
     ).rstrip("/")
     if not comms_url:
         raise RuntimeError(
-            "UNITY_COMMS_URL, COMMUNICATION_URL, or COMMS_URL is required "
+            "DROID_COMMS_URL, COMMUNICATION_URL, or COMMS_URL is required "
             "for communication control-plane operations",
         )
     admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()

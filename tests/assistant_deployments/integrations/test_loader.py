@@ -15,14 +15,14 @@ from unity_deploy.assistant_deployments.integrations.loader import (
     load_integrations,
     _load_guidance,
 )
-from unity.guidance_manager.types.guidance import Guidance
+from droid.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.integrations.types import (
     Capability,
     IntegrationManifest,
     MCPServerConfig,
     SecretSchema,
 )
-from unity.secret_manager.types import Secret
+from droid.secret_manager.types import Secret
 
 
 @pytest.fixture

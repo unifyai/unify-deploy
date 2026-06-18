@@ -15,7 +15,7 @@ Endpoints covered:
 - POST /twilio/whatsapp (Twilio signature required)
 - POST /twilio/call-status (Twilio signature required)
 - POST /assistant/update (admin key)
-- POST /unity/pre-hire (admin key)
+- POST /droid/pre-hire (admin key)
 - POST /api/message (admin key)
 """
 
@@ -179,7 +179,7 @@ class TestAssistantUpdate:
 
 
 class TestPreHireChat:
-    """Contract: POST /unity/pre-hire publishes a log_pre_hire_chats event
+    """Contract: POST /droid/pre-hire publishes a log_pre_hire_chats event
     to Pub/Sub and returns 200."""
 
     def test_pre_hire_publishes_event(self, real_assistant_data):
@@ -191,14 +191,14 @@ class TestPreHireChat:
             ],
         )
         resp = requests.post(
-            f"{ADAPTERS_URL}/unity/pre-hire",
+            f"{ADAPTERS_URL}/droid/pre-hire",
             data={"assistant_id": assistant_id, "body": chat_body},
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             timeout=30,
         )
         assert (
             resp.status_code == 200
-        ), f"unity/pre-hire failed: {resp.status_code} {resp.text}"
+        ), f"droid/pre-hire failed: {resp.status_code} {resp.text}"
 
 
 class TestApiMessage:
@@ -287,7 +287,7 @@ class TestAssistantWakeup:
             jobs_resp = comms.get(
                 "/infra/jobs",
                 params={
-                    "label_selector": f"app=unity,assistant-id={assistant_id}",
+                    "label_selector": f"app=droid,assistant-id={assistant_id}",
                     "hours": 1,
                 },
             )

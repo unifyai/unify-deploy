@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Reconcile Unity deployment control-plane state before assistant wake.",
+        description="Reconcile Droid deployment control-plane state before assistant wake.",
     )
     parser.add_argument(
         "--environment",

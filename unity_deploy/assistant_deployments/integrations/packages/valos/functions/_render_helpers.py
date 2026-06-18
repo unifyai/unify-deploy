@@ -1,6 +1,6 @@
 """Internal helpers for the OS map renderers in ``render.py``.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`droid.function_manager.custom_functions.collect_custom_functions`
 skips this file.  Holds the tile-matrix constants, geometry math, WMTS
 stitching, polygon and pin overlays, and the shared async render
 implementation that all three public renderers in ``render.py`` wrap.

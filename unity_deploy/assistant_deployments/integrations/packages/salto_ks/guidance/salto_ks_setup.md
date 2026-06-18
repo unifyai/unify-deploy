@@ -41,7 +41,7 @@ and a Client Secret.
 
 In their Salto KS dashboard:
 
-1. Create a dedicated user (e.g. email ``svc-unity@customer.com``).
+1. Create a dedicated user (e.g. email ``svc-droid@customer.com``).
 2. Set a strong password.  This password is held long-term in
    SecretManager — communicate that to the customer before they pick
    one.

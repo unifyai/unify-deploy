@@ -10,7 +10,7 @@ import time
 import pytest
 from pydantic import BaseModel
 
-from unity.common.pipeline import PipelineHeartbeatManifest
+from droid.common.pipeline import PipelineHeartbeatManifest
 from unity_deploy.infra.workers import worker_utils
 from unity_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
 

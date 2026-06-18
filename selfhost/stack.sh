@@ -3,8 +3,8 @@
 # stack.sh — Self-host stack
 # =============================================================================
 #
-# Brings up Orchestra, unity.gateway, Pub/Sub emulator, Console, and
-# the Unity CM for the signed-in user's Coordinator when credentials exist.
+# Brings up Orchestra, droid.gateway, Pub/Sub emulator, Console, and
+# the Droid CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
 #   ./scripts/stack.sh up           Start full stack (+ Coordinator if registered)
@@ -15,14 +15,14 @@
 #   ./scripts/stack.sh smoke        Verify the running local product
 #
 # Environment:
-#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
+#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
-#   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
+#   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by droid setup)
 #
 set -euo pipefail
 
 # This script lives in unity-deploy/selfhost/. The self-host stack orchestrates
-# the sibling unity, console, and orchestra checkouts located under
+# the sibling droid, console, and orchestra checkouts located under
 # UNIFY_STACK_ROOT (defaults to the parent of unity-deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -30,7 +30,7 @@ ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
+DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
@@ -59,7 +59,7 @@ require_repo() {
 
 _has_env_key() {
   local key="$1"
-  local env_file="$UNITY_REPO_PATH/.env"
+  local env_file="$DROID_REPO_PATH/.env"
   [[ -n "${!key:-}" ]] && return 0
   [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
 }
@@ -102,7 +102,7 @@ cmd_doctor() {
   echo "Self-host doctor"
   echo "================"
   echo ""
-  echo "Stranger path: curl install → unity setup → unity → register → chat"
+  echo "Stranger path: curl install → droid setup → droid → register → chat"
   echo ""
 
   echo "Infrastructure"
@@ -161,16 +161,16 @@ cmd_doctor() {
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
 
-  if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
-    local unity_py="$UNITY_REPO_PATH/.venv/bin/python"
-    if "$unity_py" -c "import unity.gateway" &>/dev/null; then
-      log_success "Unity venv + unity.gateway OK"
+  if [[ -f "$DROID_REPO_PATH/.venv/bin/python" ]]; then
+    local droid_py="$DROID_REPO_PATH/.venv/bin/python"
+    if "$droid_py" -c "import droid.gateway" &>/dev/null; then
+      log_success "Droid venv + droid.gateway OK"
     else
-      log_error "unity.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
+      log_error "droid.gateway not importable — run: cd $DROID_REPO_PATH && uv sync"
       ok=false
     fi
   else
-    log_warn "Unity .venv missing — run: cd $UNITY_REPO_PATH && uv sync"
+    log_warn "Droid .venv missing — run: cd $DROID_REPO_PATH && uv sync"
     ok=false
   fi
 
@@ -182,7 +182,7 @@ cmd_doctor() {
   fi
 
   echo ""
-  echo "BYOK keys (unity/.env)"
+  echo "BYOK keys (droid/.env)"
   echo "----------------------"
   echo "  Required: LLM (OpenAI or Anthropic)"
   echo "  Voice:    Deepgram + Cartesia (browser calls; LiveKit auto-configured on stack up)"
@@ -192,7 +192,7 @@ cmd_doctor() {
   if _has_env_key OPENAI_API_KEY || _has_env_key ANTHROPIC_API_KEY; then
     log_success "LLM provider key configured"
   else
-    log_error "No LLM API key — run: unity setup (or scripts/prompt_byok_keys.sh)"
+    log_error "No LLM API key — run: droid setup (or scripts/prompt_byok_keys.sh)"
     ok=false
   fi
 
@@ -208,13 +208,13 @@ cmd_doctor() {
     log_warn "No TTS key — browser calls need CARTESIA_API_KEY or ELEVEN_API_KEY"
   fi
 
-  if _has_env_key UNITY_WEB_TAVILY_API_KEY; then
-    log_success "UNITY_WEB_TAVILY_API_KEY set (web search)"
+  if _has_env_key DROID_WEB_TAVILY_API_KEY; then
+    log_success "DROID_WEB_TAVILY_API_KEY set (web search)"
   else
     log_info "Web search not configured (optional — Tavily via prompt_byok_keys.sh)"
   fi
 
-  if _has_env_key ANTICAPTCHA_KEY || _has_env_key UNITY_ACTOR_ANTICAPTCHA_KEY; then
+  if _has_env_key ANTICAPTCHA_KEY || _has_env_key DROID_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha key set (computer automation)"
   else
     log_info "AntiCaptcha not configured (optional — computer use / CAPTCHA solving)"
@@ -223,16 +223,16 @@ cmd_doctor() {
   echo ""
   echo "Runtime"
   echo "-------"
-  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/Unity/Local}"
+  log_info "FileManager workspace: ${DROID_LOCAL_ROOT:-$HOME/Droid/Local}"
   log_info "Scheduled tasks: LocalActivationScheduler in Coordinator CM"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     self_host_runtime_doctor_line | sed 's/^/  /'
     echo ""
-    log_info "Daily driver: unity stack up / unity stack down"
-    log_info "Stop everything: unity stack down --full  (or: unity service disable)"
-    log_info "Survive reboot without Console: unity setup --boot-runtime"
+    log_info "Daily driver: droid stack up / droid stack down"
+    log_info "Stop everything: droid stack down --full  (or: droid service disable)"
+    log_info "Survive reboot without Console: droid setup --boot-runtime"
   else
     log_info "Stack must stay up for scheduled tasks until self-host runtime is wired"
   fi
@@ -240,10 +240,10 @@ cmd_doctor() {
 
   echo ""
   if [[ "$ok" == "true" ]]; then
-    log_success "Doctor passed — run: unity stack up"
+    log_success "Doctor passed — run: droid stack up"
     return 0
   fi
-  log_error "Doctor found blockers — fix above, then re-run: unity stack doctor"
+  log_error "Doctor found blockers — fix above, then re-run: droid stack doctor"
   return 1
 }
 
@@ -261,11 +261,11 @@ cmd_up() {
     return 1
   fi
 
-  if [[ -x "$UNITY_REPO_PATH/scripts/voice.sh" ]]; then
+  if [[ -x "$DROID_REPO_PATH/scripts/voice.sh" ]]; then
     log_info "Ensuring local LiveKit + voice BYOK keys..."
-    UNITY_HOME="${UNITY_HOME:-$HOME/.unity}" \
-      UNITY_REPO="${UNITY_REPO:-$UNITY_REPO_PATH}" \
-      bash "$UNITY_REPO_PATH/scripts/voice.sh" setup || log_warn "LiveKit setup failed — meet may not work"
+    DROID_HOME="${DROID_HOME:-$HOME/.droid}" \
+      DROID_REPO="${DROID_REPO:-$DROID_REPO_PATH}" \
+      bash "$DROID_REPO_PATH/scripts/voice.sh" setup || log_warn "LiveKit setup failed — meet may not work"
   fi
 
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
@@ -275,23 +275,23 @@ cmd_up() {
 
   export SELF_HOST=1
   export ORCHESTRA_REPO_PATH
-  export UNITY_REPO_PATH
+  export DROID_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_env_file "$DROID_REPO_PATH/.env"
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi
   fi
 
-  # voice.sh runs a local LiveKit server with dev credentials. unity/.env
+  # voice.sh runs a local LiveKit server with dev credentials. droid/.env
   # often also contains cloud LiveKit keys that override the dev pair when
   # sourced, which breaks browser meet token minting in Console.
   export LIVEKIT_URL="ws://localhost:7880"
@@ -315,8 +315,8 @@ cmd_up() {
 
   if [[ -f "$runtime_file" ]]; then
     local cm_count="0"
-    if declare -F unity_cm_instance_count &>/dev/null; then
-      cm_count="$(unity_cm_instance_count)"
+    if declare -F droid_cm_instance_count &>/dev/null; then
+      cm_count="$(droid_cm_instance_count)"
     fi
     if [[ "$cm_count" -eq 1 ]]; then
       if declare -F self_host_adopt_coordinator_for_service &>/dev/null; then
@@ -327,7 +327,7 @@ cmd_up() {
       fi
       log_success "Reusing Coordinator runtime"
     elif [[ "$cm_count" -gt 1 ]]; then
-      log_error "Multiple Coordinator runtimes detected — run: unity stack down --full"
+      log_error "Multiple Coordinator runtimes detected — run: droid stack down --full"
     else
       log_info "Starting Coordinator runtime (saved login)..."
       if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
@@ -356,7 +356,7 @@ cmd_up() {
     elif declare -F self_host_service_is_enabled &>/dev/null \
       && self_host_service_is_enabled; then
       echo "  Background runtime is not healthy — stack down stops scheduled tasks."
-      echo "  Re-run: unity stack up"
+      echo "  Re-run: droid stack up"
     fi
   else
     echo "  First visit: create an account on /login — Coordinator starts automatically."
@@ -370,17 +370,17 @@ cmd_down() {
     case "$1" in
       --full) full_stop="true"; shift ;;
       -h|--help)
-        echo "Usage: unity stack down [--full]"
+        echo "Usage: droid stack down [--full]"
         echo ""
         echo "  Default: stop Console and stack ingress; keep Coordinator + Orchestra for scheduled tasks."
         echo "  --full:  stop everything, including background runtime."
         echo ""
-        echo "  Also: unity service disable  (same as --full for background runtime)"
+        echo "  Also: droid service disable  (same as --full for background runtime)"
         return 0
         ;;
       *)
         log_error "Unknown option: $1"
-        echo "Run: unity stack down --help"
+        echo "Run: droid stack down --help"
         return 1
         ;;
     esac
@@ -391,8 +391,8 @@ cmd_down() {
     return 1
   fi
 
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -447,11 +447,11 @@ cmd_status() {
 cmd_smoke() {
   export SELF_HOST=1
   export ORCHESTRA_REPO_PATH
-  export UNITY_REPO_PATH
+  export DROID_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -459,15 +459,15 @@ cmd_smoke() {
     export_self_host_coordinator_runtime_file
   fi
 
-  local py="$UNITY_REPO_PATH/.venv/bin/python"
+  local py="$DROID_REPO_PATH/.venv/bin/python"
   if [[ ! -x "$py" ]]; then
     py="python3"
   fi
 
   CONSOLE_PORT="${CONSOLE_PORT:-3000}" \
     ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}" \
-    UNITY_GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}" \
-    UNITY_GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}" \
+    DROID_GATEWAY_HOST="${DROID_GATEWAY_HOST:-127.0.0.1}" \
+    DROID_GATEWAY_PORT="${DROID_GATEWAY_PORT:-8001}" \
     SELF_HOST_COORDINATOR_RUNTIME_FILE="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" \
     "$py" <<'PY'
 import json
@@ -512,18 +512,18 @@ def check(name: str, method: str, url: str, expected: set[int], *, headers=None,
 
 console = f"http://127.0.0.1:{os.environ['CONSOLE_PORT']}"
 orchestra = f"http://127.0.0.1:{os.environ['ORCHESTRA_PORT']}"
-gateway = f"http://{os.environ['UNITY_GATEWAY_HOST']}:{os.environ['UNITY_GATEWAY_PORT']}"
+gateway = f"http://{os.environ['DROID_GATEWAY_HOST']}:{os.environ['DROID_GATEWAY_PORT']}"
 
 check("Console", "GET", console, {200})
 check("Orchestra features", "GET", f"{orchestra}/v0/features", {200})
-check("Unity gateway", "GET", f"{gateway}/health", {200})
+check("Droid gateway", "GET", f"{gateway}/health", {200})
 check(
     "Registration path",
     "POST",
     f"{console}/api/auth/email/register",
     {422},
     body={
-        "email": "unity-smoke@example.local",
+        "email": "droid-smoke@example.local",
         "name": "Smoke",
         "lastName": "Check",
         "password": "Aa1!TemporaryLocalSmokePassword12345",  # pragma: allowlist secret

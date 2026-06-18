@@ -1,6 +1,6 @@
 """Internal HTTP client + auth + retry helpers for the Salto KS package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`droid.function_manager.custom_functions.collect_custom_functions`
 skips this file (it's library code, not a registered tool).  All sibling
 files import from here inside their function bodies to satisfy
 FunctionManager's isolation rule.

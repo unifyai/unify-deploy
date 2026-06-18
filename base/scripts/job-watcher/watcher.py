@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Watch Unity job terminations and run crash-safe VM cleanup.
+"""Watch Droid job terminations and run crash-safe VM cleanup.
 
 Uses kopf (Kubernetes Operator Pythonic Framework) to watch Jobs labelled
-``app=unity``.  When a Job reaches a terminal condition (*Complete* or
+``app=droid``.  When a Job reaches a terminal condition (*Complete* or
 *Failed*), the handler releases any pool VM still assigned to the
 assistant (prevents leaked VMs lingering in "assigned" state after a
 crash).
@@ -10,12 +10,12 @@ crash).
 The ``assistant-id`` label is set on the Job (not the Pod) by
 ``mark_job_label`` during startup, so we must watch Jobs to read it.
 
-On graceful exit, ``mark_job_done`` in the Unity container performs the
+On graceful exit, ``mark_job_done`` in the Droid container performs the
 same idempotent VM release.  The job-watcher covers crash scenarios
 where in-container cleanup never runs.
 
 Cleanup logic lives in ``assistant_jobs_api.py`` (shared with the
-Unity codebase) and is copied into this container at build time.
+Droid codebase) and is copied into this container at build time.
 
 kopf manages the watch stream lifecycle, reconnection, error isolation,
 retries, deduplication, and liveness probes.
@@ -31,7 +31,7 @@ import kopf
 
 from assistant_jobs_api import release_pool_vm
 
-COMMS_URL = os.environ["UNITY_COMMS_URL"]
+COMMS_URL = os.environ["DROID_COMMS_URL"]
 ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 MAX_EVENT_AGE = datetime.timedelta(minutes=5)
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
@@ -58,7 +58,7 @@ def _parse_k8s_timestamp(ts: str) -> datetime.datetime | None:
         return None
 
 
-@kopf.on.event("batch", "v1", "jobs", labels={"app": "unity"})
+@kopf.on.event("batch", "v1", "jobs", labels={"app": "droid"})
 def on_job_event(event, **_):
     """React to every Job event; filter for terminal conditions."""
     global _events_processed

@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-TMUX_SOCKET="$UNITY_TMUX_SOCKET"
+TMUX_SOCKET="$DROID_TMUX_SOCKET"
 
 # Wrapper for tmux commands
 tmux_cmd() {
@@ -59,7 +59,7 @@ while (( "$#" )); do
       echo ""
       echo "Examples:"
       echo "  kill_failed.sh                              # Current terminal"
-      echo "  kill_failed.sh --socket unity_dev_ttys042   # Specific socket"
+      echo "  kill_failed.sh --socket droid_dev_ttys042   # Specific socket"
       exit 0
       ;;
     *)
@@ -76,13 +76,13 @@ fi
 
 # Collect all sockets to check
 if (( KILL_ALL )); then
-  # Find all unity* sockets
+  # Find all droid* sockets
   SOCKETS=()
   while IFS= read -r sock; do
     [[ -n "$sock" ]] && SOCKETS+=( "$sock" )
-  done < <(_get_unity_sockets)
+  done < <(_get_droid_sockets)
   if (( ${#SOCKETS[@]} == 0 )); then
-    echo "No unity test sockets found."
+    echo "No droid test sockets found."
     exit 0
   fi
 else

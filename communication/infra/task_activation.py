@@ -33,15 +33,15 @@ from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
 # Single source of truth for the offline-runner subprocess contract.
-# Imported from Unity so the hosted K8s job and the local in-process
+# Imported from Droid so the hosted K8s job and the local in-process
 # subprocess produce identical env-var dicts and run-keys for the same
-# attempt. See unity.task_scheduler.offline_runner_contract for details.
-from unity.task_scheduler.offline_runner_contract import (
+# attempt. See droid.task_scheduler.offline_runner_contract for details.
+from droid.task_scheduler.offline_runner_contract import (
     build_offline_run_key as _build_offline_run_key_shared,
     build_offline_runner_env as _build_offline_runner_env_shared,
 )
 
-from .helpers import create_unity_job
+from .helpers import create_droid_job
 from .models import (
     OfflineTaskDispatchRequest,
     ScheduledTaskActivationDeleteRequest,
@@ -60,8 +60,8 @@ TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
 TASK_ACTIVATION_REPAIR_PATH = "/infra/task-activation/repair"
 OFFLINE_TASK_DISPATCH_PATH = "/infra/task-activation/offline-dispatch"
 TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
-OFFLINE_UNITY_APP_LABEL = "unity-offline"
-OFFLINE_UNITY_JOB_STATUS = "offline"
+OFFLINE_DROID_APP_LABEL = "droid-offline"
+OFFLINE_DROID_JOB_STATUS = "offline"
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH = "/admin/task-activation/current"
 ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH = "/admin/task-activation/reproject"
@@ -122,7 +122,7 @@ def _offline_dispatch_event_fields(
 
 
 def _required_contact_id(assistant_data: dict[str, Any], field_name: str) -> int:
-    """Return a resolved contact id required by offline Unity launches."""
+    """Return a resolved contact id required by offline Droid launches."""
     value = assistant_data.get(field_name)
     if value is None:
         assistant_id = assistant_data.get("assistant_id") or assistant_data.get(
@@ -375,9 +375,9 @@ def _upsert_scheduled_activation_task(
     if not SETTINGS.orchestra_admin_key:
         raise RuntimeError("ORCHESTRA_ADMIN_KEY must be configured")
     if request.execution_mode == "live" and not SETTINGS.adapters_url:
-        raise RuntimeError("UNITY_ADAPTERS_URL must be configured")
+        raise RuntimeError("DROID_ADAPTERS_URL must be configured")
     if request.execution_mode == "offline" and not SETTINGS.comms_url:
-        raise RuntimeError("UNITY_COMMS_URL must be configured")
+        raise RuntimeError("DROID_COMMS_URL must be configured")
 
     from google.cloud import tasks_v2
 
@@ -819,7 +819,7 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     """Build a stable idempotency key for one offline execution attempt.
 
     Thin adapter over the shared
-    :func:`unity.task_scheduler.offline_runner_contract.build_offline_run_key`
+    :func:`droid.task_scheduler.offline_runner_contract.build_offline_run_key`
     so the hosted K8s path and the local in-process path produce
     identical keys for the same attempt. If those keys ever diverged
     Orchestra's create-or-adopt path would fail to deduplicate
@@ -853,7 +853,7 @@ def _build_offline_job_name(run_key: str) -> str:
     """Return the deterministic Kubernetes Job name for one offline run."""
 
     digest = hashlib.sha256(run_key.encode("utf-8")).hexdigest()[:12]
-    base_name = f"unity-offline-{digest}"
+    base_name = f"droid-offline-{digest}"
     suffix = SETTINGS.env_suffix.lstrip("-")
     return f"{base_name}-{suffix}" if suffix else base_name
 
@@ -866,13 +866,13 @@ def _build_offline_runner_env(
     run_key: str,
     job_name: str,
 ) -> dict[str, str]:
-    """Build environment variables for the headless Unity offline runner.
+    """Build environment variables for the headless Droid offline runner.
 
     Composes two layers:
 
-    1. The task-specific UNITY_OFFLINE_TASK_* + ASSISTANT_ID vars from
-       Unity's shared
-       :func:`unity.task_scheduler.offline_runner_contract.build_offline_runner_env`
+    1. The task-specific DROID_OFFLINE_TASK_* + ASSISTANT_ID vars from
+       Droid's shared
+       :func:`droid.task_scheduler.offline_runner_contract.build_offline_runner_env`
        — same source of truth the local in-process dispatcher uses. If
        this drifts, the hosted K8s job and the local subprocess would
        see different field shapes for the same task; the shared module
@@ -881,7 +881,7 @@ def _build_offline_runner_env(
     2. Hosted-only assistant-identity vars (UNIFY_KEY, ASSISTANT_*, USER_*,
        VOICE_*, TEAM_IDS, ORG_ID). Local subprocesses inherit these from
        the parent conversation-manager's os.environ, so they live in
-       Unity already; K8s jobs start in a fresh container and must
+       Droid already; K8s jobs start in a fresh container and must
        receive them here.
     """
 
@@ -890,7 +890,7 @@ def _build_offline_runner_env(
     team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
-    # Layer 1 — shared task-specific env (single source of truth in Unity).
+    # Layer 1 — shared task-specific env (single source of truth in Droid).
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
         task_id=request.task_id,
@@ -981,21 +981,21 @@ def _launch_offline_task_job(
     run_key: str,
     job_name_seed: str | None = None,
 ) -> tuple[str, bool]:
-    """Create the Kubernetes Job that runs the headless Unity executor."""
+    """Create the Kubernetes Job that runs the headless Droid executor."""
 
     job_name = _build_offline_job_name(job_name_seed or run_key)
-    job = create_unity_job(
+    job = create_droid_job(
         batch_api,
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
         ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
         active_deadline_seconds=SETTINGS.offline_task_job_active_deadline_seconds,
-        unity_status=OFFLINE_UNITY_JOB_STATUS,
-        priority_class_name="unity-idle",
-        app_label=OFFLINE_UNITY_APP_LABEL,
+        droid_status=OFFLINE_DROID_JOB_STATUS,
+        priority_class_name="droid-idle",
+        app_label=OFFLINE_DROID_APP_LABEL,
         extra_labels={
             "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
-            "unity-status": OFFLINE_UNITY_JOB_STATUS,
+            "droid-status": OFFLINE_DROID_JOB_STATUS,
         },
         extra_annotations={
             "unify.ai/task-run-key": run_key,
