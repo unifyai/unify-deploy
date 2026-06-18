@@ -1,0 +1,23 @@
+schema_version = 1
+environment = "selfhost"
+
+[providers.composio]
+status = "enabled"
+display_name = "Composio"
+default_priority = 10
+
+[providers.composio.config_json]
+timeout_seconds = 60
+max_pages = 250
+max_items = 50000
+
+[providers.composio.sync]
+mode = "full"
+tool_limit_per_app = 0
+include_all_managed_apps = true
+create_auth_configs = true
+
+[providers.pipedream]
+status = "disabled"
+display_name = "Pipedream"
+default_priority = 20

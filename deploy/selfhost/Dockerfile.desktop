@@ -1,0 +1,108 @@
+# Self-host desktop image — same pool-VM layout as deploy/desktop/Dockerfile.
+# Published to ghcr.io/unifyai/unity-desktop-selfhost; compose can also build locally.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:99
+
+WORKDIR /app
+
+# Node.js 22 via NodeSource (matches prod VM)
+RUN apt-get update && apt-get install -y curl gnupg2 ca-certificates && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest && \
+    rm -rf /var/lib/apt/lists/*
+
+# System dependencies for virtual desktop/devices, web runtime, and native modules
+RUN apt-get update && apt-get install -y \
+    curl wget git \
+    tigervnc-standalone-server tigervnc-common \
+    xfce4 xfce4-goodies xfce4-terminal \
+    xdotool wmctrl xterm dbus dbus-x11 \
+    x11-xserver-utils \
+    xdg-desktop-portal xdg-desktop-portal-gtk \
+    libnss3 libatk-bridge2.0-0 libgtk-3-0 libxss1 \
+    libasound2 libxshmfence1 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libx11-xcb1 fonts-liberation xdg-utils \
+    ffmpeg \
+    pipewire pipewire-pulse wireplumber pulseaudio-utils alsa-utils \
+    fuse3 libfuse2 squashfs-tools \
+    build-essential python3 python3-pip pkg-config libvips-dev \
+    supervisor openssh-server \
+    && pip3 install --no-cache-dir websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+# noVNC static files
+RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc && \
+    rm -rf /opt/novnc/.git
+COPY deploy/desktop/novnc/custom.html /opt/novnc/custom.html
+
+# Desktop scripts + supervisord config
+COPY deploy/desktop/ /app/desktop/
+RUN chmod +x /app/desktop/desktop.sh /app/desktop/device.sh /app/desktop/startup.sh \
+    /app/desktop/install-sftp-overlay.sh /app/desktop/inject-ssh-public-key.sh \
+    && bash /app/desktop/install-sftp-overlay.sh
+
+# Magnitude packages (agent-service file: deps). Clone in-image so CI does not rely
+# on a local magnitude checkout in the Docker build context.
+RUN git clone --depth 1 --branch unity-modifications https://github.com/unifyai/magnitude.git /app/magnitude
+WORKDIR /app/magnitude
+# Root install wires workspace packages; lockfile is macOS-generated so resolve for Linux.
+RUN rm -f package-lock.json && npm install --ignore-scripts
+RUN cd packages/magnitude-extract && npx tsup
+RUN cd packages/magnitude-core && npx baml-cli generate && npx pkgroll
+
+# Agent service install (includes demo-sites/ subdirectory)
+WORKDIR /app/agent-service
+COPY agent-service/ ./
+RUN npm ci && npx tsc --skipLibCheck
+
+# Install browser runtimes using magnitude-core's patchright (Playwright fork)
+RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
+
+# XFCE helper definition so exo-open recognizes Chromium as a browser option
+RUN mkdir -p /usr/share/xfce4/helpers && \
+    printf '[Desktop Entry]\nVersion=1.0\nType=X-XFCE-Helper\nName=Chromium Web Browser\nIcon=web-browser\nX-XFCE-Binaries=chromium-browser;/usr/local/bin/chromium-browser;\nX-XFCE-Category=WebBrowser\nX-XFCE-Commands=%%B;\nX-XFCE-CommandsWithParameter=%%B %%s;\n' \
+        > /usr/share/xfce4/helpers/chromium-browser.desktop
+
+# XFCE configuration: suppress first-run dialogs, disable screensaver/power mgmt.
+RUN rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscreensaver.desktop && \
+    mkdir -p /Unity/.config/xfce4/xfconf/xfce-perchannel-xml && \
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-power-manager" version="1.0">\n  <property name="xfce4-power-manager" type="empty">\n    <property name="dpms-enabled" type="bool" value="false"/>\n    <property name="blank-on-ac" type="int" value="0"/>\n    <property name="dpms-on-ac-sleep" type="uint" value="0"/>\n    <property name="dpms-on-ac-off" type="uint" value="0"/>\n  </property>\n</channel>\n' \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml && \
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-screensaver" version="1.0">\n  <property name="saver" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n  <property name="lock" type="empty">\n    <property name="enabled" type="bool" value="false"/>\n  </property>\n</channel>\n' \
+        > /Unity/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml && \
+    printf 'WebBrowser=chromium-browser\nTerminalEmulator=xfce4-terminal\n' \
+        > /Unity/.config/xfce4/helpers.rc && \
+    chown -R unityuser:unityuser /Unity/.config
+
+WORKDIR /app
+
+RUN mkdir -p /var/log/supervisor /var/log/magnitude /Unity/.cache && \
+    cp -a /root/.cache/ms-playwright /Unity/.cache/ms-playwright && \
+    chown -R unityuser:unityuser /Unity/.cache/ms-playwright
+
+# XFCE and GUI apps run as unityuser; the wrapper must target the user-owned cache,
+# not /root/.cache/ms-playwright left over from patchright install during the build.
+RUN CHROME_PATH=$(find /Unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+    test -n "$CHROME_PATH" && \
+    printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
+    chmod +x /usr/local/bin/chromium-browser && \
+    printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
+        > /usr/share/applications/chromium-browser.desktop && \
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/chromium-browser 100 && \
+    update-alternatives --set x-www-browser /usr/local/bin/chromium-browser && \
+    update-desktop-database /usr/share/applications/ 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop x-scheme-handler/http 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop x-scheme-handler/https 2>/dev/null || true && \
+    xdg-mime default chromium-browser.desktop text/html 2>/dev/null || true
+
+COPY scripts/sandbox-dpkg .
+RUN install -m 0755 sandbox-dpkg /usr/local/bin/sandbox-dpkg
+
+COPY deploy/selfhost/desktop-entrypoint.sh /app/deploy/selfhost/desktop-entrypoint.sh
+RUN chmod +x /app/deploy/selfhost/desktop-entrypoint.sh
+
+EXPOSE 3000 6080 5900 2222
+CMD ["/bin/bash", "/app/deploy/selfhost/desktop-entrypoint.sh"]
