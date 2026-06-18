@@ -165,7 +165,8 @@ steps:
       "$${TRAFFIC_ARGS[@]}" \
       --quiet
     }
-    run_cloud_run_with_retry repair_traffic_state
+    run_cloud_run_with_retry repair_traffic_state \
+      || echo "Traffic repair skipped; deploy will create a fresh revision"
   waitFor: ['push-sha-tag', 'push-latest-tag', 'deploy-assistant-session-controller']
 
   # Deploy to Cloud Run
@@ -203,8 +204,7 @@ steps:
     }
     run_cloud_run_with_retry gcloud \
       run \
-      services \
-      update \
+      deploy \
       ${_SERVICE_NAME} \
       --platform=managed \
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
