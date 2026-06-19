@@ -100,7 +100,7 @@ print = integration_print
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT_ID = os.getenv("TEST_GCP_PROJECT_ID", "gcp-project-runtime")
-VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "droid-assistant-vms")
+VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "gcp-project-vms")
 GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "droid")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
 NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
@@ -612,7 +612,7 @@ def gce_client():
     """GCE client using gcloud CLI credentials.
 
     The default ADC credentials may not have compute.instances.list permission
-    on droid-assistant-vms. We use the gcloud CLI's own access token instead,
+    on gcp-project-vms. We use the gcloud CLI's own access token instead,
     which has the full scope set from `gcloud auth login`.
 
     Returns None if GCE access fails (VM tests will skip).
@@ -658,7 +658,7 @@ def gce_client():
 def require_gce(gce_client):
     """Skip test if GCE is not accessible."""
     if gce_client is None:
-        pytest.skip("No GCE compute.instances.list permission on droid-assistant-vms")
+        pytest.skip("No GCE compute.instances.list permission on gcp-project-vms")
 
 
 # ---------------------------------------------------------------------------

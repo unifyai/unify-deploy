@@ -46,9 +46,11 @@ failure would silently lose the message.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
@@ -57,6 +59,23 @@ from droid.common.pipeline.types import IngestBinding
 from droid.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ResolvedAssistant:
+    """The assistant facts the worker needs to act on one message.
+
+    Resolved in a single ``GET /admin/assistant`` round-trip: the Unify
+    ``api_key`` to authenticate SDK calls, plus the live team
+    memberships (``team_ids`` / ``team_summaries``) the worker uses to
+    validate team-scoped writes and hydrate ``SESSION_DETAILS`` for
+    correct context routing and authorship stamping.
+    """
+
+    api_key: str
+    team_ids: list[int] = field(default_factory=list)
+    team_summaries: list[dict] = field(default_factory=list)
+
 
 _CACHE_MAX_ENTRIES = 512
 _CACHE_TTL_SECONDS = 300.0
@@ -95,11 +114,11 @@ class _TtlLruCache:
     def __init__(self, *, max_entries: int, ttl_seconds: float) -> None:
         self._max = max_entries
         self._ttl = ttl_seconds
-        self._data: "OrderedDict[tuple[str, Optional[str]], tuple[str, float]]" = (
-            OrderedDict()
-        )
+        self._data: (
+            "OrderedDict[tuple[str, Optional[str]], tuple[ResolvedAssistant, float]]"
+        ) = OrderedDict()
 
-    def get(self, key: tuple[str, Optional[str]]) -> Optional[str]:
+    def get(self, key: tuple[str, Optional[str]]) -> Optional[ResolvedAssistant]:
         entry = self._data.get(key)
         if entry is None:
             return None
@@ -111,7 +130,7 @@ class _TtlLruCache:
         self._data.move_to_end(key)
         return value
 
-    def set(self, key: tuple[str, Optional[str]], value: str) -> None:
+    def set(self, key: tuple[str, Optional[str]], value: ResolvedAssistant) -> None:
         expires_at = time.monotonic() + self._ttl
         if key in self._data:
             self._data.move_to_end(key)
@@ -134,17 +153,21 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-async def resolve_api_key(
+async def resolve_assistant(
     binding: IngestBinding,
     *,
     http_client: Optional[httpx.AsyncClient] = None,
-) -> str:
-    """Return the Unify ``api_key`` to use for this binding.
+) -> ResolvedAssistant:
+    """Return the :class:`ResolvedAssistant` facts for this binding.
+
+    A single ``GET /admin/assistant`` round-trip yields the Unify
+    ``api_key`` plus the assistant's live ``team_ids`` /
+    ``team_summaries``, so team-scoped ingestion needs no extra call.
 
     Pod-level config (Orchestra base URL and admin bearer token) is
     sourced from :data:`droid.settings.SETTINGS`, not from function
     arguments.  This keeps the resolver's call sites trivial
-    (``await resolve_api_key(binding)``) and follows the project-wide
+    (``await resolve_assistant(binding)``) and follows the project-wide
     convention of reading env-derived config through pydantic-settings
     rather than bare ``os.environ`` reads.
 
@@ -194,7 +217,7 @@ async def resolve_api_key(
     cached = _cache.get(cache_key)
     if cached is not None:
         logger.debug(
-            "api_key cache hit user_id=%s assistant_id=%s",
+            "assistant cache hit user_id=%s assistant_id=%s",
             user_id,
             assistant_id,
         )
@@ -206,7 +229,7 @@ async def resolve_api_key(
     close_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
     try:
-        api_key = await _resolve_via_assistant(
+        resolved = await _resolve_via_assistant(
             client=client,
             base_url=base,
             headers=headers,
@@ -217,14 +240,15 @@ async def resolve_api_key(
         if close_client:
             await client.aclose()
 
-    _cache.set(cache_key, api_key)
+    _cache.set(cache_key, resolved)
     logger.info(
-        "Resolved Unify api_key user_id=%s assistant_id=%s (cached %ds)",
+        "Resolved assistant user_id=%s assistant_id=%s teams=%s (cached %ds)",
         user_id,
         assistant_id,
+        resolved.team_ids,
         int(_CACHE_TTL_SECONDS),
     )
-    return api_key
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +271,8 @@ async def _resolve_via_assistant(
     headers: dict,
     user_id: str,
     assistant_id: str,
-) -> str:
-    """FM path: look up the assistant's api_key by agent_id."""
+) -> ResolvedAssistant:
+    """Look up the assistant's api_key and team memberships by agent_id."""
     url = f"{base_url}/admin/assistant"
     try:
         resp = await client.get(
@@ -296,7 +320,46 @@ async def _resolve_via_assistant(
             user_id=user_id,
             assistant_id=assistant_id,
         )
-    return api_key
+    return ResolvedAssistant(
+        api_key=api_key,
+        team_ids=_coerce_team_ids(first.get("team_ids")),
+        team_summaries=_coerce_team_summaries(first.get("team_summaries")),
+    )
+
+
+def _coerce_team_ids(raw: Any) -> list[int]:
+    """Normalize the admin payload's ``team_ids`` to a list of ints.
+
+    The admin endpoint returns a JSON list, but some upstream paths
+    serialize it as a JSON string; tolerate both and drop anything that
+    is not int-coercible.
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    for value in raw:
+        try:
+            out.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _coerce_team_summaries(raw: Any) -> list[dict]:
+    """Normalize the admin payload's ``team_summaries`` to a list of dicts."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    return [summary for summary in raw if isinstance(summary, dict)]
 
 
 def _parse_json(

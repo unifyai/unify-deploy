@@ -58,8 +58,10 @@ from droid.common.pipeline.types import (
     XlsxSheetHandle,
 )
 from droid.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
+from droid.common.context_registry import ContextRegistry
+from droid.session_details import SESSION_DETAILS
 
-from .assistant_key_resolver import resolve_api_key
+from .assistant_key_resolver import ResolvedAssistant, resolve_assistant
 from droid_deploy.infra.gcp.artifact_store import (
     LeaseNotAcquired,
     LeaseRecord,
@@ -600,44 +602,59 @@ def _make_checkpoint_callback(
 
 
 @contextlib.asynccontextmanager
-async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[str]:
-    """Resolve + install ``UNIFY_KEY`` for the duration of one message.
+async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[ResolvedAssistant]:
+    """Resolve + install per-message identity for the duration of one message.
 
     The shared worker pods do not carry a per-assistant ``UNIFY_KEY``
     in their environment. Instead, every message-processing code path
     enters this context manager, which:
 
-    1. Looks up the caller's api_key from Orchestra via
-       :func:`resolve_api_key` (cached per ``(user_id, assistant_id)``).
-       The resolver reads ``SETTINGS.ORCHESTRA_URL`` and
-       ``SETTINGS.ORCHESTRA_ADMIN_KEY`` itself; we do not re-plumb
-       those here.
-    2. Installs it as ``os.environ["UNIFY_KEY"]`` so every subsequent
-       Unify SDK call -- including any deep inside
+    1. Looks up the caller via :func:`resolve_assistant` (cached per
+       ``(user_id, assistant_id)``), yielding the Unify api_key plus the
+       assistant's live ``team_ids`` / ``team_summaries``. The resolver
+       reads ``SETTINGS.ORCHESTRA_URL`` and ``SETTINGS.ORCHESTRA_ADMIN_KEY``
+       itself; we do not re-plumb those here.
+    2. Installs the api_key as ``os.environ["UNIFY_KEY"]`` so every
+       subsequent Unify SDK call -- including any deep inside
        :class:`DataManager` / :class:`FileManager` -- picks it up.
        The SDK contract is env-based (see
        ``droid.session_details.SessionDetails.unify_key`` which falls
        back to ``os.environ.get("UNIFY_KEY", "")`` on every read), so
        this ``os.environ`` write is load-bearing and cannot be
        replaced by a pydantic-settings update.
-    3. On exit, restores the previous value (or deletes the variable
-       if unset) so a leaked key never bleeds into heartbeat or
-       shutdown code paths after the message completes.
+    3. Hydrates ``SESSION_DETAILS`` with the dispatching assistant's
+       agent_id and team memberships so shared-scoped writes route to
+       the right ``Data`` root and stamp authorship against the real
+       author rather than ``None``.
+    4. On exit, restores the previous api_key and session identity (or
+       clears them if unset) so a message's identity never bleeds into
+       the next message or into heartbeat / shutdown code paths.
 
     The worker is one-pod-one-message, so there is no risk of
-    overlapping context managers mutating ``os.environ`` concurrently.
+    overlapping context managers mutating ``os.environ`` or
+    ``SESSION_DETAILS`` concurrently.
     """
-    api_key = await resolve_api_key(binding)
+    resolved = await resolve_assistant(binding)
 
-    previous = os.environ.get("UNIFY_KEY")
-    os.environ["UNIFY_KEY"] = api_key
+    previous_key = os.environ.get("UNIFY_KEY")
+    os.environ["UNIFY_KEY"] = resolved.api_key
+
+    previous_agent_id = SESSION_DETAILS.assistant.agent_id
+    previous_team_ids = SESSION_DETAILS.team_ids
+    previous_team_summaries = SESSION_DETAILS.team_summaries
+    SESSION_DETAILS.assistant.agent_id = int(binding.assistant_id)
+    SESSION_DETAILS.team_ids = list(resolved.team_ids)
+    SESSION_DETAILS.team_summaries = list(resolved.team_summaries)
     try:
-        yield api_key
+        yield resolved
     finally:
-        if previous is None:
+        if previous_key is None:
             os.environ.pop("UNIFY_KEY", None)
         else:
-            os.environ["UNIFY_KEY"] = previous
+            os.environ["UNIFY_KEY"] = previous_key
+        SESSION_DETAILS.assistant.agent_id = previous_agent_id
+        SESSION_DETAILS.team_ids = previous_team_ids
+        SESSION_DETAILS.team_summaries = previous_team_summaries
 
 
 def _park_inflight_message(
@@ -1401,6 +1418,28 @@ def _build_fm_config_from_plan(plan: IngestPlan):
 # ---------------------------------------------------------------------------
 
 
+def _validate_team_destination(dm_binding) -> None:
+    """Fail fast when a team destination targets a non-member team.
+
+    ``ContextRegistry.write_root`` also enforces membership when the
+    write actually runs; this surfaces a clearer, earlier error (so the
+    job lands in the DLQ with an actionable message) before any tables
+    are provisioned. Reads ``SESSION_DETAILS.team_ids``, which the
+    enclosing :func:`_with_unify_key` scope has already hydrated from the
+    resolved assistant's live memberships.
+    """
+    canonical = ContextRegistry.canonical_destination(dm_binding.destination)
+    if canonical is None:
+        return
+    team_id = int(canonical.split(":", 1)[1])
+    if team_id not in SESSION_DETAILS.team_ids:
+        raise RuntimeError(
+            f"DM dispatch targets destination={dm_binding.destination!r} but "
+            f"assistant_id={dm_binding.assistant_id} is not a live member of "
+            f"team {team_id} (memberships={sorted(SESSION_DETAILS.team_ids)}).",
+        )
+
+
 async def _run_dm_mode(
     *,
     plan: IngestPlan,
@@ -1429,6 +1468,9 @@ async def _run_dm_mode(
     from .worker_utils import activate_unify_context
 
     async with _with_unify_key(dm_binding):
+        # Membership is hydrated onto SESSION_DETAILS by _with_unify_key; reject
+        # a team destination the assistant cannot reach before provisioning.
+        _validate_team_destination(dm_binding)
         return await _run_dm_mode_inner(
             plan=plan,
             msg=msg,
@@ -1539,6 +1581,7 @@ async def _run_dm_mode_inner(
                 payload={
                     "dm": dm,
                     "context": target_context,
+                    "destination": dm_binding.destination,
                     "handle": handle,
                     "batch_size": meta.chunk_size or msg.batch_size,
                     "description": meta.description,
@@ -1622,6 +1665,7 @@ async def _run_dm_mode_inner(
         result = pl["dm"].ingest(
             pl["context"],
             None,
+            destination=pl.get("destination"),
             table_input_handle=pl["handle"],
             chunk_size=pl["batch_size"],
             description=pl.get("description"),

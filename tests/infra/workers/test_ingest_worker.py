@@ -32,6 +32,7 @@ from droid.common.pipeline.types import (
 from droid_deploy.infra.workers import ingest_worker
 from droid_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
 from droid_deploy.infra.workers import worker_utils
+from droid_deploy.infra.workers.assistant_key_resolver import ResolvedAssistant
 from droid_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
@@ -49,7 +50,7 @@ async def test_with_unify_key_swaps_env_per_message_and_cleans_up(
     resolved_keys = iter(["fm-key", "dm-key"])
     seen_before_install: list[tuple[str, str, str | None]] = []
 
-    async def fake_resolve_api_key(binding):
+    async def fake_resolve_assistant(binding):
         seen_before_install.append(
             (
                 binding.user_id,
@@ -57,17 +58,17 @@ async def test_with_unify_key_swaps_env_per_message_and_cleans_up(
                 os.environ.get("UNIFY_KEY"),
             ),
         )
-        return next(resolved_keys)
+        return ResolvedAssistant(api_key=next(resolved_keys))
 
-    monkeypatch.setattr(ingest_worker, "resolve_api_key", fake_resolve_api_key)
+    monkeypatch.setattr(ingest_worker, "resolve_assistant", fake_resolve_assistant)
 
-    async with ingest_worker._with_unify_key(bindings[0]) as key:
-        assert key == "fm-key"
+    async with ingest_worker._with_unify_key(bindings[0]) as resolved:
+        assert resolved.api_key == "fm-key"
         assert os.environ["UNIFY_KEY"] == "fm-key"
     assert "UNIFY_KEY" not in os.environ
 
-    async with ingest_worker._with_unify_key(bindings[1]) as key:
-        assert key == "dm-key"
+    async with ingest_worker._with_unify_key(bindings[1]) as resolved:
+        assert resolved.api_key == "dm-key"
         assert os.environ["UNIFY_KEY"] == "dm-key"
     assert "UNIFY_KEY" not in os.environ
 
@@ -84,10 +85,10 @@ async def test_with_unify_key_restores_previous_value_after_body_error(
     """A message-specific key must not leak when the ingest body raises."""
     monkeypatch.setenv("UNIFY_KEY", "previous-key")
 
-    async def fake_resolve_api_key(binding):
-        return "message-key"
+    async def fake_resolve_assistant(binding):
+        return ResolvedAssistant(api_key="message-key")
 
-    monkeypatch.setattr(ingest_worker, "resolve_api_key", fake_resolve_api_key)
+    monkeypatch.setattr(ingest_worker, "resolve_assistant", fake_resolve_assistant)
     binding = DmBinding(
         user_id="alice",
         assistant_id="42",
@@ -95,8 +96,8 @@ async def test_with_unify_key_restores_previous_value_after_body_error(
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        async with ingest_worker._with_unify_key(binding) as key:
-            assert key == "message-key"
+        async with ingest_worker._with_unify_key(binding) as resolved:
+            assert resolved.api_key == "message-key"
             assert os.environ["UNIFY_KEY"] == "message-key"
             raise RuntimeError("boom")
 
@@ -110,10 +111,10 @@ async def test_with_unify_key_does_not_mutate_env_when_resolution_fails(
     """Resolver failures happen before install, so the old env survives."""
     monkeypatch.setenv("UNIFY_KEY", "previous-key")
 
-    async def fake_resolve_api_key(binding):
+    async def fake_resolve_assistant(binding):
         raise RuntimeError("lookup failed")
 
-    monkeypatch.setattr(ingest_worker, "resolve_api_key", fake_resolve_api_key)
+    monkeypatch.setattr(ingest_worker, "resolve_assistant", fake_resolve_assistant)
     binding = FmBinding(user_id="alice", assistant_id="42", logical_path="x.csv")
 
     with pytest.raises(RuntimeError, match="lookup failed"):
