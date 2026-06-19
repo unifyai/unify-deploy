@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`unity_deploy.infra.workers.assistant_key_resolver`.
+"""Unit tests for :mod:`droid_deploy.infra.workers.assistant_key_resolver`.
 
 Covers:
 
@@ -27,9 +27,9 @@ import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from unity.common.pipeline.types import DmBinding, FmBinding, IngestBinding
-from unity.settings import SETTINGS
-from unity_deploy.infra.workers.assistant_key_resolver import (
+from droid.common.pipeline.types import DmBinding, FmBinding, IngestBinding
+from droid.settings import SETTINGS
+from droid_deploy.infra.workers.assistant_key_resolver import (
     AssistantKeyLookupError,
     clear_cache,
     resolve_api_key,
@@ -223,7 +223,7 @@ class TestCache:
         We monkey-patch ``time.monotonic`` inside the resolver module
         to simulate the 5-minute TTL elapsing without sleeping.
         """
-        from unity_deploy.infra.workers import assistant_key_resolver
+        from droid_deploy.infra.workers import assistant_key_resolver
 
         fake_now = {"t": 1000.0}
         monkeypatch.setattr(

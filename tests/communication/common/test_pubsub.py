@@ -11,7 +11,7 @@ from common.pubsub import publish_assistant_event
 class TestPublishAssistantEvent:
     def test_publishes_expected_envelope(self):
         publisher = MagicMock()
-        publisher.topic_path.return_value = "projects/p/topics/unity-42"
+        publisher.topic_path.return_value = "projects/p/topics/droid-42"
         future = MagicMock()
         future.result.return_value = "msg-id-xyz"
         publisher.publish.return_value = future
@@ -29,7 +29,7 @@ class TestPublishAssistantEvent:
         assert msg_id == "msg-id-xyz"
         publisher.publish.assert_called_once()
         args, kwargs = publisher.publish.call_args
-        assert args[0] == "projects/p/topics/unity-42"
+        assert args[0] == "projects/p/topics/droid-42"
         assert kwargs["thread"] == "teams_meet"
         body = json.loads(kwargs["data"].decode("utf-8"))
         assert body["thread"] == "teams_meet"

@@ -10,11 +10,11 @@ from textwrap import dedent
 
 import pytest
 
-from unity_deploy.assistant_deployments.scenarios.loader import (
+from droid_deploy.assistant_deployments.scenarios.loader import (
     find_scenario_template,
     materialise_scenario_activations,
 )
-from unity_deploy.assistant_deployments.scenarios.types import (
+from droid_deploy.assistant_deployments.scenarios.types import (
     ScenarioActivation,
     ScenarioSpec,
 )
@@ -542,15 +542,15 @@ class TestEndToEndResolution:
     ):
         """A SeedLayer.scenarios block goes from registration to resolved
         ResolvedAssistantDeployment.scenarios via the real resolution path."""
-        from unity_deploy.assistant_deployments.clients import (
+        from droid_deploy.assistant_deployments.clients import (
             _CLIENT_DEPLOYMENTS,
             ClientDeploymentEntry,
             resolve,
         )
-        from unity_deploy.assistant_deployments.configs.types.actor_config import (
+        from droid_deploy.assistant_deployments.configs.types.actor_config import (
             ActorConfig,
         )
-        from unity_deploy.assistant_deployments.deployment_types import (
+        from droid_deploy.assistant_deployments.deployment_types import (
             DeploymentMapping,
             DeploymentSpec,
             DeploymentTarget,
@@ -565,7 +565,7 @@ class TestEndToEndResolution:
         # search_paths via a wrapper.  But _spec_to_resolved calls
         # materialise_scenario_activations without a search_paths arg, so
         # we monkeypatch the loader's _BUILTIN_DIR temporarily.
-        from unity_deploy.assistant_deployments.scenarios import (
+        from droid_deploy.assistant_deployments.scenarios import (
             loader as scenarios_loader,
         )
 
@@ -635,22 +635,22 @@ class TestEndToEndResolution:
     ):
         """Activations declared on DeploymentSpec.scenarios (not via
         register_layer) materialise just the same."""
-        from unity_deploy.assistant_deployments.clients import (
+        from droid_deploy.assistant_deployments.clients import (
             _CLIENT_DEPLOYMENTS,
             ClientDeploymentEntry,
             resolve,
         )
-        from unity_deploy.assistant_deployments.configs.types.actor_config import (
+        from droid_deploy.assistant_deployments.configs.types.actor_config import (
             ActorConfig,
         )
-        from unity_deploy.assistant_deployments.deployment_types import (
+        from droid_deploy.assistant_deployments.deployment_types import (
             DeploymentMapping,
             DeploymentSpec,
             DeploymentTarget,
         )
 
         _write_template(tmp_path, "fake_pkg", "sync_v0", _MINIMAL_TEMPLATE)
-        from unity_deploy.assistant_deployments.scenarios import (
+        from droid_deploy.assistant_deployments.scenarios import (
             loader as scenarios_loader,
         )
 

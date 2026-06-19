@@ -7,7 +7,7 @@ CONTROLLER_MANIFESTS = [
 ]
 
 
-def test_assistant_session_controllers_do_not_import_broad_unity_secrets() -> None:
+def test_assistant_session_controllers_do_not_import_broad_droid_secrets() -> None:
     for manifest in CONTROLLER_MANIFESTS:
         text = manifest.read_text()
         assert "envFrom:" not in text
@@ -19,5 +19,5 @@ def test_assistant_session_controllers_allowlist_required_secret() -> None:
         text = manifest.read_text()
         assert "name: ORCHESTRA_ADMIN_KEY" in text
         assert "secretKeyRef:" in text
-        assert "name: unity-secrets" in text
+        assert "name: droid-secrets" in text
         assert "key: ORCHESTRA_ADMIN_KEY" in text

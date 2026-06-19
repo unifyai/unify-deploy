@@ -1,0 +1,21 @@
+schema_version = 1
+
+[providers.composio]
+status = "enabled"
+kind = "composio"
+display_name = "Composio"
+default_priority = 100
+allowed_orgs_or_tenants = []
+config_json = { timeout_seconds = 30, max_pages = 2 }
+
+[providers.composio.sync]
+mode = "partial"
+app_slugs = [
+  "GMAIL",
+  "SLACK",
+  "HUBSPOT",
+]
+tool_limit_per_app = 50
+include_all_managed_apps = false
+create_auth_configs = true
+prune_unlisted_apps = true

@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-TMUX_SOCKET="$UNITY_TMUX_SOCKET"
+TMUX_SOCKET="$DROID_TMUX_SOCKET"
 
 show_help() {
   echo "Usage: attach.sh [--socket <name>] <session-name>"
@@ -32,8 +32,8 @@ show_help() {
   echo ""
   echo "Examples:"
   echo "  attach.sh 'p ✅ contact_manager-test_ask'"
-  echo "  attach.sh --socket unity_dev_ttys042 'f ❌ actor-test_code_act'"
-  echo "  attach.sh 'unity_dev_ttys042:f ❌ actor-test_code_act'"
+  echo "  attach.sh --socket droid_dev_ttys042 'f ❌ actor-test_code_act'"
+  echo "  attach.sh 'droid_dev_ttys042:f ❌ actor-test_code_act'"
 }
 
 LIST_ALL=0
@@ -84,7 +84,7 @@ if (( LIST_ALL )); then
     echo "=== $name ==="
     _tmux_ls "$name" || echo "(no sessions)"
     echo
-  done < <(_get_unity_sockets)
+  done < <(_get_droid_sockets)
   exit 0
 fi
 
@@ -96,8 +96,8 @@ if [[ -z "$SESSION_NAME" ]]; then
 fi
 
 # Support socket:session shorthand (only if no explicit --socket was provided)
-# Socket names start with "unity" so we can safely detect this pattern
-if [[ -z "$EXPLICIT_SOCKET" && "$SESSION_NAME" =~ ^(unity[^:]+):(.+)$ ]]; then
+# Socket names start with "droid" so we can safely detect this pattern
+if [[ -z "$EXPLICIT_SOCKET" && "$SESSION_NAME" =~ ^(droid[^:]+):(.+)$ ]]; then
   TMUX_SOCKET="${BASH_REMATCH[1]}"
   SESSION_NAME="${BASH_REMATCH[2]}"
 fi

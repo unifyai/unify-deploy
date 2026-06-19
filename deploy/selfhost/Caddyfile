@@ -1,0 +1,15 @@
+# Desktop reverse proxy for the compose stack.
+:8090 {
+	log {
+		output stdout
+		format console
+	}
+	redir /vnc.html /desktop{uri}
+	handle_path /desktop/* {
+		header /custom.html Cache-Control no-store
+		reverse_proxy desktop:6080
+	}
+	handle_path /api/* {
+		reverse_proxy desktop:3000
+	}
+}

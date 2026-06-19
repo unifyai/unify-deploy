@@ -12,7 +12,7 @@
 #   - Bun
 #   - noVNC + websockify (pip package)
 #   - Caddy (binary only, no Caddyfile)
-#   - Firewall rules for Unity services
+#   - Firewall rules for Droid services
 #
 # NOT INSTALLED (handled by startup script at instance boot):
 #   - TightVNC (needs password at install time)
@@ -534,14 +534,14 @@ function Configure-Firewall-Base {
     # they are only reachable via Caddy's reverse proxy on port 443.
     # ==========================================================================
 
-    # Remove old Unity rules if they exist (to update them)
-    Remove-NetFirewallRule -DisplayName "Unity-noVNC" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-HTTPS" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-HTTP" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-VNC-Local" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-AgentService" -ErrorAction SilentlyContinue
+    # Remove old Droid rules if they exist (to update them)
+    Remove-NetFirewallRule -DisplayName "Droid-noVNC" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Droid-HTTPS" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Droid-HTTP" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Droid-VNC-Local" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Droid-AgentService" -ErrorAction SilentlyContinue
 
-    New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any
+    New-NetFirewallRule -DisplayName "Droid-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any
     Write-Host "Firewall rule created: Allow HTTPS (443)" -ForegroundColor Green
 
     Write-Host ""
@@ -565,7 +565,7 @@ Install-NodeJS
 Install-NoVNC-Base      # noVNC repo + websockify pip (no scheduled task - that's done at startup)
 Install-Caddy-Base      # Caddy binary only (no Caddyfile - that's created at startup with hostname)
 Install-Office-Base     # Office without activation (activation done at startup with MAK key)
-Configure-Firewall-Base # Unity firewall rules (RDP untouched)
+Configure-Firewall-Base # Droid firewall rules (RDP untouched)
 Disable-ServerManager-AutoStart  # Prevent Server Manager GUI from opening at logon
 
 # Note: Cleanup is done by Packer after this script completes

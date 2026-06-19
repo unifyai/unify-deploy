@@ -569,7 +569,7 @@ def _assistant_duplicate_job_snapshot(
     sanitized = assistant_id.lower().replace("_", "-")
     job_items = batch_api.list_namespaced_job(
         namespace=NAMESPACE,
-        label_selector=f"app=unity,assistant-id={sanitized}",
+        label_selector=f"app=droid,assistant-id={sanitized}",
     ).items
     active_jobs = []
     for job in job_items:

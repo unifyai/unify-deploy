@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# install-base.sh - Packer provisioner script for Unity Ubuntu VM
+# install-base.sh - Packer provisioner script for Droid Ubuntu VM
 #
 # This script pre-installs all software into the base image:
 # - XFCE4 Desktop (full)
@@ -25,7 +25,7 @@ PLAYWRIGHT_VERSION="1.52.0"
 CADDY_VERSION="2.7.6"
 
 echo "=========================================="
-echo "  Unity Ubuntu VM Base Image Build"
+echo "  Droid Ubuntu VM Base Image Build"
 echo "=========================================="
 echo ""
 
@@ -236,7 +236,7 @@ mkdir -p /var/log/caddy
 mkdir -p /var/log/supervisor
 mkdir -p /magnitude
 mkdir -p /agent-service
-mkdir -p /Unity
+mkdir -p /Droid
 
 # Make /root traversable so non-root users can reach Playwright browsers at /root/.cache/ms-playwright
 chmod 711 /root
@@ -248,7 +248,7 @@ echo ""
 echo "=== Configuring supervisord ==="
 
 if [[ -f /tmp/supervisord.conf ]]; then
-    cp /tmp/supervisord.conf /etc/supervisor/conf.d/unity-vm.conf
+    cp /tmp/supervisord.conf /etc/supervisor/conf.d/droid-vm.conf
     echo "supervisord config installed"
 else
     echo "WARNING: supervisord.conf not found"
@@ -302,14 +302,14 @@ echo ""
 echo "=== Setting up environment ==="
 
 # Create system-wide environment file
-cat > /etc/profile.d/unity-vm.sh << 'EOF'
+cat > /etc/profile.d/droid-vm.sh << 'EOF'
 export DISPLAY=:1
 export VNC_GEOMETRY=1920x1080
 export VNC_DEPTH=24
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 EOF
-chmod +x /etc/profile.d/unity-vm.sh
+chmod +x /etc/profile.d/droid-vm.sh
 
 echo "Environment configured"
 
@@ -319,18 +319,18 @@ echo "Environment configured"
 echo ""
 echo "=== Configuring shell ==="
 
-# Configure bash to start in /Unity for interactive graphical terminal sessions
-# This ensures terminal always opens in /Unity regardless of how it's launched
+# Configure bash to start in /Droid for interactive graphical terminal sessions
+# This ensures terminal always opens in /Droid regardless of how it's launched
 cat >> /root/.bashrc << 'BASHRC'
 
-# Unity VM: Start interactive graphical terminal sessions in /Unity
-if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
-    export UNITY_SHELL_INIT=1
-    cd /Unity
+# Droid VM: Start interactive graphical terminal sessions in /Droid
+if [[ -d /Droid ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$DROID_SHELL_INIT" ]]; then
+    export DROID_SHELL_INIT=1
+    cd /Droid
 fi
 BASHRC
 
-echo "  Configured shell to start in /Unity (graphical sessions only)"
+echo "  Configured shell to start in /Droid (graphical sessions only)"
 
 # =============================================================================
 # Summary
@@ -354,5 +354,5 @@ echo "  - supervisord: $(supervisord --version)"
 echo ""
 echo "Configuration:"
 echo "  - Default browser: Chromium (Playwright)"
-echo "  - Terminal starts in: /Unity"
+echo "  - Terminal starts in: /Droid"
 echo ""

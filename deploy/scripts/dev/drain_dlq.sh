@@ -8,7 +8,7 @@ ACK=0
 LIMIT=100
 PIPELINE_ENV_ARG=""
 SUB_OVERRIDE=""
-PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
+PROJECT="${DROID_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PIPELINE_ENV="${PIPELINE_ENV_ARG:-${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}}"
+PIPELINE_ENV="${PIPELINE_ENV_ARG:-${DROID_GCP_PIPELINE_ENVIRONMENT:-staging}}"
 case "$PIPELINE_ENV" in
   staging) ENV_SUFFIX="-staging" ;;
   production) ENV_SUFFIX="" ;;
@@ -48,7 +48,7 @@ case "$PIPELINE_ENV" in
     exit 2
     ;;
 esac
-SUB="${SUB_OVERRIDE:-${UNITY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}}"
+SUB="${SUB_OVERRIDE:-${DROID_DLQ_SUB:-droid-dead-letter-sub${ENV_SUFFIX}}}"
 
 echo "DLQ drain target:"
 echo "  environment:  $PIPELINE_ENV"

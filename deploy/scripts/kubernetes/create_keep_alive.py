@@ -33,19 +33,19 @@ def create_keep_alive_deployment(api_client, namespace="default"):
             "apiVersion": "apps/v1",
             "kind": "Deployment",
             "metadata": {
-                "name": "unity-keep-alive",
+                "name": "droid-keep-alive",
                 "namespace": namespace,
-                "labels": {"app": "unity", "component": "keep-alive"},
+                "labels": {"app": "droid", "component": "keep-alive"},
             },
             "spec": {
                 "replicas": 1,
                 "selector": {
-                    "matchLabels": {"app": "unity", "component": "keep-alive"},
+                    "matchLabels": {"app": "droid", "component": "keep-alive"},
                 },
                 "template": {
-                    "metadata": {"labels": {"app": "unity", "component": "keep-alive"}},
+                    "metadata": {"labels": {"app": "droid", "component": "keep-alive"}},
                     "spec": {
-                        "priorityClassName": "unity-low",  # Use low priority for keep-alive
+                        "priorityClassName": "droid-low",  # Use low priority for keep-alive
                         "containers": [
                             {
                                 "name": "keep-alive",
@@ -66,7 +66,7 @@ def create_keep_alive_deployment(api_client, namespace="default"):
         # Check if deployment exists
         try:
             api_client.read_namespaced_deployment(
-                name="unity-keep-alive",
+                name="droid-keep-alive",
                 namespace=namespace,
             )
             print("✅ Keep-alive deployment already exists")
@@ -92,7 +92,7 @@ def delete_keep_alive_deployment(api_client, namespace="default"):
     """Delete the keep-alive deployment"""
     try:
         api_client.delete_namespaced_deployment(
-            name="unity-keep-alive",
+            name="droid-keep-alive",
             namespace=namespace,
         )
         print("✅ Deleted keep-alive deployment")
@@ -111,7 +111,7 @@ def check_keep_alive_status(api_client, namespace="default"):
     """Check the status of the keep-alive deployment"""
     try:
         deployment = api_client.read_namespaced_deployment(
-            name="unity-keep-alive",
+            name="droid-keep-alive",
             namespace=namespace,
         )
 
@@ -171,7 +171,7 @@ Purpose:
 
     args = parser.parse_args()
 
-    print(f"🔧 Unity Keep-Alive Deployment Management")
+    print(f"🔧 Droid Keep-Alive Deployment Management")
     print(f"   Namespace: {args.namespace}")
     print()
 
@@ -189,7 +189,7 @@ Purpose:
                 "\n💡 This deployment will maintain at least one node to reduce scheduling delays.",
             )
             print(
-                "   Monitor with: kubectl get pods -n default -l app=unity,component=keep-alive",
+                "   Monitor with: kubectl get pods -n default -l app=droid,component=keep-alive",
             )
         else:
             sys.exit(1)

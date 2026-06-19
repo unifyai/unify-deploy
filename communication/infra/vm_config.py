@@ -27,8 +27,8 @@ DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for VMs
 # =============================================================================
 WINDOWS_VM_MACHINE_TYPE = "e2-standard-4"  # 4 vCPU, 16GB RAM
 WINDOWS_VM_DISK_SIZE_GB = 100
-WINDOWS_VM_IMAGE_PROJECT = "gcp-project-vms"
-WINDOWS_VM_TAGS = ["unity-windows-vm", "https-server", "allow-2222"]
+WINDOWS_VM_IMAGE_PROJECT = "droid-assistant-vms"
+WINDOWS_VM_TAGS = ["droid-windows-vm", "https-server", "allow-2222"]
 
 # Path to the Windows init script
 WINDOWS_INIT_SCRIPT_PATH = os.path.join(
@@ -39,7 +39,7 @@ WINDOWS_INIT_SCRIPT_PATH = os.path.join(
 WINDOWS_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "unity-pool-watcher.ps1",
+    "droid-pool-watcher.ps1",
 )
 
 # =============================================================================
@@ -47,8 +47,8 @@ WINDOWS_POOL_WATCHER_PATH = os.path.join(
 # =============================================================================
 UBUNTU_VM_MACHINE_TYPE = "e2-standard-2"  # 2 vCPU, 8GB RAM
 UBUNTU_VM_DISK_SIZE_GB = 50
-UBUNTU_VM_IMAGE_PROJECT = "gcp-project-vms"
-UBUNTU_VM_TAGS = ["unity-ubuntu-vm", "https-server", "allow-2222"]
+UBUNTU_VM_IMAGE_PROJECT = "droid-assistant-vms"
+UBUNTU_VM_TAGS = ["droid-ubuntu-vm", "https-server", "allow-2222"]
 
 # =============================================================================
 # SSH File Sync Configuration
@@ -64,7 +64,7 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 UBUNTU_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "unity-pool-watcher.sh",
+    "droid-pool-watcher.sh",
 )
 UBUNTU_SUPERVISORD_CONF_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -100,12 +100,12 @@ POOL_VM_CONTRACT_GENERATION = os.getenv(
 )
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
-POOL_VM_NAME_PREFIX = "unity-pool"
+POOL_VM_NAME_PREFIX = "droid-pool"
 
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 # GCS bucket for archiving assistant filesystems between sessions
-POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"
+POOL_ASSISTANT_ARCHIVE_BUCKET = "droid-assistant-archives"
 
 # Idle-disk garbage collection. An unattached per-assistant PD whose
 # assistant still exists in Orchestra is eligible for deletion once
@@ -125,5 +125,18 @@ POOL_ASSISTANT_DISK_HARD_CAP_HOURS = 0
 POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS = 300
 
 # Pool image families (separate from legacy to avoid affecting existing VMs)
-POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
-POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
+POOL_UBUNTU_VM_IMAGE_FAMILY = "droid-pool-ubuntu-vm"
+POOL_WINDOWS_VM_IMAGE_FAMILY = "droid-pool-windows-vm"
+
+# Governance labels required by the Vanta "GCE instances have required labels"
+# test. Applied to every pool VM at creation so new VMs are born compliant.
+# dataclassification is confidential because pool VMs run live customer
+# assistant sessions — a system takes the highest classification of data it
+# can process. The environment label is resolved at runtime from the deploy
+# env and is therefore not part of this static set.
+POOL_GOVERNANCE_LABELS = {
+    "owner": "platform",
+    "project": "droid",
+    "dataclassification": "confidential",
+    "application": "assistant-desktop",
+}

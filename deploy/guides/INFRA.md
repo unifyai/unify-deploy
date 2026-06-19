@@ -1,8 +1,8 @@
-# Unity System Infrastructure Documentation
+# Droid System Infrastructure Documentation
 
 ## 🏗️ Overview
 
-The Unity system is a comprehensive multi-channel communication platform that dynamically provisions infrastructure for AI assistants. Each assistant gets its own dedicated communication channels, cloud resources, and notification systems.
+The Droid system is a comprehensive multi-channel communication platform that dynamically provisions infrastructure for AI assistants. Each assistant gets its own dedicated communication channels, cloud resources, and notification systems.
 
 ## 📋 Table of Contents
 
@@ -26,8 +26,8 @@ The Unity system is a comprehensive multi-channel communication platform that dy
 The hosted system is split across three main code areas:
 
 1. **Orchestra** (`@https://github.com/unifyai/orchestra`) - Main orchestration service with database containing assistants
-2. **Hosted infrastructure** (`@https://github.com/unifyai/unity-deploy`) - Contains deploy overlays plus the hosted comms app and adapters
-3. **Unity** (`@https://github.com/unifyai/unity`) - The container deployed on GKE (each job on GKE is a separate container)
+2. **Hosted infrastructure** (`@https://github.com/unifyai/droid-deploy`) - Contains deploy overlays plus the hosted comms app and adapters
+3. **Droid** (`@https://github.com/unifyai/droid`) - The container deployed on GKE (each job on GKE is a separate container)
 
 ### External Services
 
@@ -38,18 +38,18 @@ The hosted system is split across three main code areas:
 | **Microsoft Graph** | Outlook email and Teams integration |
 | **LiveKit** | Real-time audio/video calls (Unify Meet) |
 | **Google Cloud Pub/Sub** | Message routing between adapters and containers |
-| **Google Kubernetes Engine (GKE)** | Container orchestration for Unity jobs |
+| **Google Kubernetes Engine (GKE)** | Container orchestration for Droid jobs |
 
 ### Authentication
 
 | Key | Used By | Purpose |
 |-----|---------|---------|
 | `ORCHESTRA_ADMIN_KEY` | Adapters, Communications | Admin access to Orchestra APIs |
-| `api_key` (per user) | Unity containers | User-specific API key for logging |
+| `api_key` (per user) | Droid containers | User-specific API key for logging |
 | `SHARED_UNIFY_KEY` | Debug logger | Shared key for AssistantJobs project access |
 | `GCP_SA_KEY` | All services | Google Cloud service account credentials |
 
-Unity GKE jobs mount API keys from the `unity-secrets` Kubernetes Secret, synced from GCP Secret Manager. See **[UNITY_CLUSTER_SECRETS.md](./UNITY_CLUSTER_SECRETS.md)** for rotation and External Secrets Operator setup.
+Droid GKE jobs mount API keys from the `droid-secrets` Kubernetes Secret, synced from GCP Secret Manager. See **[DROID_CLUSTER_SECRETS.md](./DROID_CLUSTER_SECRETS.md)** for rotation and External Secrets Operator setup.
 
 ## 📦 Deployment Components
 
@@ -66,12 +66,12 @@ Contains two main parts:
 | **`communication/` web app** | Low-level communications service with endpoints for Gmail, Twilio, etc. to make outbound calls, SMS, emails |
 | **`adapters/`** | Webhook handlers that capture inbound from Twilio, Gmail, Microsoft, etc. and route to the appropriate container |
 
-### 3. Unity
+### 3. Droid
 - Each job on GKE is a separate container
 - Containers can be in **Idle** or **Live** state
 - Handles the actual assistant logic, computer use, and conversation management
 
-#### Key Components Inside a Unity Container
+#### Key Components Inside a Droid Container
 
 | Component | File | Purpose |
 |-----------|------|---------|
@@ -91,21 +91,21 @@ Every assistant has a dedicated Pub/Sub topic for receiving inbound messages:
 
 | Environment | Topic Name Format | Example |
 |-------------|-------------------|---------|
-| Production | `unity-{assistant_id}` | `unity-6` |
-| Staging | `unity-{assistant_id}-staging` | `unity-25-staging` |
+| Production | `droid-{assistant_id}` | `droid-6` |
+| Staging | `droid-{assistant_id}-staging` | `droid-25-staging` |
 
 ### Startup Topics
 Used to engage idle containers when an assistant needs to go live:
 
 | Environment | Topic Name |
 |-------------|------------|
-| Production | `unity-startup` |
-| Staging | `unity-startup-staging` |
+| Production | `droid-startup` |
+| Staging | `droid-startup-staging` |
 
 ### Subscriptions
 Each Pub/Sub topic has a corresponding subscription (suffix `-sub`):
-- Topic `unity-6` → Subscription `unity-6-sub`
-- Topic `unity-startup-staging` → Subscription `unity-startup-staging-sub`
+- Topic `droid-6` → Subscription `droid-6-sub`
+- Topic `droid-startup-staging` → Subscription `droid-startup-staging-sub`
 
 Subscriptions are created automatically when the topic is provisioned during hiring.
 
@@ -165,7 +165,7 @@ All Pub/Sub messages follow this structure:
 This is the default state of any newly created container on GKE:
 
 - **No assistant identity**: `agent_id` is `None` to indicate it's not yet assigned
-- **Subscribes to startup topics**: Listens to `unity-startup` or `unity-startup-staging`
+- **Subscribes to startup topics**: Listens to `droid-startup` or `droid-startup-staging`
 - **Keep-alive pings**: Sends pings to itself every 30 seconds to avoid the inactivity timeout (7 minutes) of the conversation manager
 - **Ready for engagement**: Waiting for a startup message to become live
 
@@ -189,8 +189,8 @@ When an inbound event occurs, the flow is:
 ### Message Ordering: Startup vs Inbound
 
 The adapter sends **both** messages in sequence:
-1. First: Startup message to `unity-startup` (if not already live)
-2. Second: Inbound details to `unity-{assistant_id}`
+1. First: Startup message to `droid-startup` (if not already live)
+2. Second: Inbound details to `droid-{assistant_id}`
 
 The container handles this correctly because:
 - The startup message triggers subscription to the assistant's topic
@@ -251,7 +251,7 @@ When a user hires an assistant:
    - Email address via `/email/create`
    - Pub/Sub topic via `/infra/pubsub/topic`
 3. **Wakeup call**: At the end of the hiring endpoint, Orchestra makes a call to `/assistant/wakeup` on the adapters
-4. **Startup notification**: The wakeup endpoint sends a ping to `unity-startup` (or `unity-startup-staging`) so an assistant container goes live
+4. **Startup notification**: The wakeup endpoint sends a ping to `droid-startup` (or `droid-startup-staging`) so an assistant container goes live
 5. **New idle container**: A new idle container is created to maintain availability
 
 ## 📥 Inbound Communication Flow
@@ -272,9 +272,9 @@ Detailed flow:
 3. **Contact validation**: The adapter verifies the sender is a known contact for this assistant (boss user or saved contact). Unknown senders receive an error response.
 4. **Check running status**: Queries `AssistantJobs` project to check if a job is already running for this assistant
 5. **Start container if needed**: If not running:
-   - Publishes startup message to `unity-startup[-staging]` topic with full assistant details
+   - Publishes startup message to `droid-startup[-staging]` topic with full assistant details
    - Triggers creation of a new idle job (to replace the one being engaged)
-6. **Publish to assistant topic**: Sends inbound details to `unity-{assistant_id}[-staging]`
+6. **Publish to assistant topic**: Sends inbound details to `droid-{assistant_id}[-staging]`
 7. **Container processes**: The `comms_manager.py` in the live container receives and processes the message
 
 ### What Happens If No Idle Container Is Available?
@@ -284,7 +284,7 @@ If there's no idle container when a startup message is published:
 2. The adapter's reactive replenishment has already triggered `/scheduled/jobs/create`, which will spin up new containers to meet the target
 3. As soon as a new idle container starts (~25-30s), it subscribes to the startup topic and picks up the queued message
 
-In the worst case (e.g., GKE node provisioning required), this delay can be 30-60 seconds. The `UNITY_MIN_IDLE_JOBS` floor is the primary defense against this: set it to cover your expected maximum concurrent burst within that window.
+In the worst case (e.g., GKE node provisioning required), this delay can be 30-60 seconds. The `DROID_MIN_IDLE_JOBS` floor is the primary defense against this: set it to cover your expected maximum concurrent burst within that window.
 
 ### Supported Inbound Channels
 
@@ -302,7 +302,7 @@ In the worst case (e.g., GKE node provisioning required), this delay can be 30-6
 ## 📤 Outbound Communication Flow
 
 ### Unify Message Outbound
-- Directly handled in `comms_utils.py` in the unity container
+- Directly handled in `comms_utils.py` in the droid container
 - Publishes to the Pub/Sub topic with thread `unify_message_outbound`
 - Frontend listens to this topic for real-time updates
 
@@ -338,16 +338,16 @@ When a container hits the inactivity timeout:
 
 ### Job Watcher (Pod Termination Cleanup)
 
-The **job-watcher** is a lightweight [kopf](https://kopf.dev/)-based Kubernetes operator that runs as a single-replica Deployment on the same GKE cluster as Unity containers. It is the **sole owner** of two critical cleanup tasks:
+The **job-watcher** is a lightweight [kopf](https://kopf.dev/)-based Kubernetes operator that runs as a single-replica Deployment on the same GKE cluster as Droid containers. It is the **sole owner** of two critical cleanup tasks:
 
 1. Setting `running=False` on `AssistantJobs` records in Orchestra
 2. Releasing any pool VM assigned to the assistant back to the pool
 
-These responsibilities were moved out of the Unity container because in-container cleanup (`mark_job_done`) cannot run if the container crashes (OOMKill, segfault, node failure, etc.). The job-watcher runs **externally** and reacts to pod termination events via a Kubernetes watch stream, guaranteeing cleanup regardless of how the container exits.
+These responsibilities were moved out of the Droid container because in-container cleanup (`mark_job_done`) cannot run if the container crashes (OOMKill, segfault, node failure, etc.). The job-watcher runs **externally** and reacts to pod termination events via a Kubernetes watch stream, guaranteeing cleanup regardless of how the container exits.
 
 #### How it works
 
-The watcher registers a kopf event handler on pods with `labels={"app": "unity"}`. kopf manages the underlying K8s watch stream (persistent push connection, automatic reconnection, `resourceVersion` tracking). When a pod reaches `Succeeded` or `Failed`:
+The watcher registers a kopf event handler on pods with `labels={"app": "droid"}`. kopf manages the underlying K8s watch stream (persistent push connection, automatic reconnection, `resourceVersion` tracking). When a pod reaches `Succeeded` or `Failed`:
 
 1. Fetches `AssistantJobs` records matching the pod's `assistant-id` label and sets `running=False`
 2. Calls the comms service to release any pool VM assigned to that assistant (with retries and disk-detach fallback)
@@ -358,7 +358,7 @@ Each handler invocation is isolated — if one cleanup fails, it doesn't affect 
 
 | Component | When it runs | What it does |
 |---|---|---|
-| `mark_job_done()` (in Unity container) | Graceful exit | K8s label patch + `running=False` + VM release + session duration metric |
+| `mark_job_done()` (in Droid container) | Graceful exit | K8s label patch + `running=False` + VM release + session duration metric |
 | **job-watcher** | Any exit (crash-safe) | `running=False` in AssistantJobs + VM release |
 | `expire_all_stale_jobs()` (adapters) | Periodic sweep | Safety net for anything the watcher missed |
 
@@ -366,11 +366,13 @@ All three layers call the same idempotent operations — running any combination
 
 #### Deployment
 
-The watcher is built and deployed automatically by Cloud Build alongside the main Unity image. Every push to `staging` or `main` rebuilds the watcher image in parallel with the Unity image and applies the deployment manifest via `kubectl apply` (creates on first run, updates on subsequent runs). The brief restart (~5 seconds) is safe: kopf replays recent events on startup, and all cleanup operations are idempotent.
+The watcher is built and deployed automatically by Cloud Build alongside the main Droid image. Every push to `staging` or `main` rebuilds the watcher image in parallel with the Droid image and applies the deployment manifest via `kubectl apply` (creates on first run, updates on subsequent runs). The brief restart (~5 seconds) is safe: kopf replays recent events on startup, and all cleanup operations are idempotent.
 
-It uses the `comm-sa` service account (same as other cluster services) and pulls environment variables from the existing `unity-config` ConfigMap and `unity-secrets` Secret. Resource footprint is minimal (50m CPU / 64Mi memory request).
+It uses the `comm-sa` service account (same as other cluster services) and pulls environment variables from the existing `droid-config` ConfigMap and `droid-secrets` Secret. Resource footprint is minimal (50m CPU / 64Mi memory request).
 
 > **Service-account roles — telemetry:** `comm-sa` (which all assistant pods run as) must hold **`roles/monitoring.metricWriter`** in `gcp-project-runtime`. The pods run the OpenTelemetry Cloud Monitoring exporter (`opentelemetry.exporter.cloud_monitoring`), which calls `create_metric_descriptor`; that permission lives in `monitoring.metricWriter`. Without it every metric flush logs `403 Permission monitoring.metricDescriptors.create denied` (non-fatal but noisy). `comm-sa` already has `roles/logging.logWriter` for logs; the metric-writer role was missing and was granted 2026-06-01. `comm-sa`'s project IAM is currently hand-managed (no single IaC file), so add new roles with `gcloud projects add-iam-policy-binding` and record them here.
+
+> **Service-account roles — Pub/Sub topic lifecycle:** `comm-sa` must hold **`roles/pubsub.editor`** in `gcp-project-runtime`. The infra API manages the full assistant topic lifecycle: `POST /infra/pubsub/topic` creates a topic + its four subscriptions, and `DELETE /infra/pubsub/topic` (called by orchestra's assistant-teardown worker) deletes the subscriptions and then the topic. `comm-sa` previously held only `roles/pubsub.publisher` + `roles/pubsub.subscriber`, which cover create/publish and subscription teardown but **not `pubsub.topics.delete`**. As a result every `delete_pubsub_topic` call failed with `403 IAM_PERMISSION_DENIED (pubsub.topics.delete)`, surfacing as a `500` from the endpoint; because orchestra's cleanup worker treats that step as fatal, it blocked the entire downstream assistant-deletion cleanup (GCS + context/log purge). `roles/pubsub.editor` (which supersedes publisher + subscriber and adds `topics.delete`) was granted 2026-06-16.
 
 #### Resilience
 
@@ -388,19 +390,19 @@ The system maintains a demand-aware pool of "warm" containers using three coordi
 All three mechanisms share a single function (`get_target_idle_count` in `adapters/helpers.py`) to determine how many idle jobs should exist:
 
 ```
-target = max(UNITY_MIN_IDLE_JOBS, live_count // UNITY_IDLE_JOB_DEMAND_FACTOR)
+target = max(DROID_MIN_IDLE_JOBS, live_count // DROID_IDLE_JOB_DEMAND_FACTOR)
 ```
 
 | Env Var | Default | Purpose |
 |---------|---------|---------|
-| `UNITY_MIN_IDLE_JOBS` | `3` | Absolute floor — guarantees this many warm containers regardless of traffic |
-| `UNITY_IDLE_JOB_DEMAND_FACTOR` | `5` | Proportional scaling — 1 idle job per N live assistants (e.g., 5 = 20% buffer) |
+| `DROID_MIN_IDLE_JOBS` | `3` | Absolute floor — guarantees this many warm containers regardless of traffic |
+| `DROID_IDLE_JOB_DEMAND_FACTOR` | `5` | Proportional scaling — 1 idle job per N live assistants (e.g., 5 = 20% buffer) |
 
 At small scale the floor dominates (e.g., 10 live assistants → target is 3). At larger scale the proportional buffer takes over (e.g., 100 live assistants with factor 5 → target is 20).
 
 #### Inventory Discovery
 
-Both the creator and cleaner use `get_unity_jobs_inventory()` (in `adapters/helpers.py`) which fetches all active Unity jobs in a **single GKE API call** using the label selector `app=unity,unity-status!=done`. The response includes the `labels` dict for each job, allowing categorization into `live` and `idle` buckets without additional requests.
+Both the creator and cleaner use `get_droid_jobs_inventory()` (in `adapters/helpers.py`) which fetches all active Droid jobs in a **single GKE API call** using the label selector `app=droid,droid-status!=done`. The response includes the `labels` dict for each job, allowing categorization into `live` and `idle` buckets without additional requests.
 
 #### 1. Reactive Replenishment (On Every Inbound) — Fill Mode
 - **Trigger**: Any inbound event (SMS, call, email, Unify message, hiring wakeup) that engages an idle container.
@@ -431,7 +433,7 @@ The `/scheduled/jobs/create` endpoint supports a `?refresh=true` query parameter
 - **Adapter**: `/scheduled/jobs/create`
 - **Schedule**: Runs hourly (refresh), during deployments (refresh), and reactively on every inbound engagement (fill)
 - **Logic**:
-  1. Fetches current inventory via `get_unity_jobs_inventory()` (single GKE request)
+  1. Fetches current inventory via `get_droid_jobs_inventory()` (single GKE request)
   2. Calculates the target via `get_target_idle_count(live_count)`
   3. **Fill mode**: If `current_idle >= target`, returns early ("pool is healthy"). Otherwise creates `target - current_idle` new jobs.
   4. **Refresh mode**: Always creates `target` new jobs using the latest image, regardless of current pool size.
@@ -440,11 +442,11 @@ The `/scheduled/jobs/create` endpoint supports a `?refresh=true` query parameter
 - **Adapter**: `/scheduled/jobs/cleanup`
 - **Schedule**: Runs 10 minutes after idle job creation
 - **Logic**:
-  1. Fetches current inventory via `get_unity_jobs_inventory()` (single GKE request)
+  1. Fetches current inventory via `get_droid_jobs_inventory()` (single GKE request)
   2. Calculates the retention target via `get_target_idle_count(live_count)`
   3. Separates recently-created idle jobs (< 11 min old) from older ones
   4. Retains the N most recent idle jobs (where N = target), deletes the rest
-  5. Uses `required_labels: {"unity-status": "idle"}` to guard against race conditions where a job transitions to live between the fetch and the delete
+  5. Uses `required_labels: {"droid-status": "idle"}` to guard against race conditions where a job transitions to live between the fetch and the delete
 - **Important**: Does NOT delete jobs that were live at some point, even if they hit inactivity. This preserves logs for debugging.
 
 ### Why Retain Inactive Live Jobs?
@@ -467,7 +469,7 @@ When investigating an issue at a particular time:
 
 1. **Open AssistantJobs project** on the Unify console (`https://console.unify.ai`)
 2. **Filter logs** by `assistant_id` and/or timestamp to find relevant entries
-3. **Get the job name** from the `job_name` field (e.g., `unity-2025-01-15-10-30-00-staging`)
+3. **Get the job name** from the `job_name` field (e.g., `droid-2025-01-15-10-30-00-staging`)
 
 ### Accessing GKE Logs
 
@@ -482,7 +484,7 @@ Stored via `debug_logger.py`:
 
 ```python
 {
-    "job_name": "unity-2025-01-15-10-30-00-staging",
+    "job_name": "droid-2025-01-15-10-30-00-staging",
     "timestamp": "2025-01-15T10:30:00Z",
     "medium": "sms",  # or "call", "email", "wakeup", etc.
     "user_id": "123",
@@ -501,7 +503,7 @@ Stored via `debug_logger.py`:
 ### What is liveview_url?
 
 Each assistant's VM runs a virtual desktop (VNC via noVNC) accessible over HTTPS through the Caddy reverse proxy. The `liveview_url` is the external URL to view this desktop in real-time:
-- Format: `https://unity-assistant-{id}{-staging}.vm.unify.ai/desktop/custom.html`
+- Format: `https://droid-assistant-{id}{-staging}.vm.unify.ai/desktop/custom.html`
 - Set in `AssistantJobs` by the `AssistantDesktopReady` event handler once the VM's HTTPS endpoint is confirmed reachable (via `_probe_vm_https`)
 - The Console polls `AssistantJobs` for this URL to enable the "Share assistant screen" button
 - TLS is provided by the wildcard `*.vm.unify.ai` certificate (see "VM TLS Certificates" below)
@@ -521,13 +523,13 @@ Each assistant gets the following dedicated infrastructure:
 
 | Component | Endpoint | Naming Convention | Purpose |
 |-----------|----------|-------------------|---------|
-| **Pub/Sub Topic** | `/infra/pubsub/topic` | `unity-{assistant_id}[-staging]` | Notification routing |
-| **Pub/Sub Startup Topic** | `/infra/pubsub/startup` | `unity-startup[-staging]` | Container activation |
-| **GKE Job** | `/infra/gke/job` | `unity-{timestamp}[-staging]` | Assistant runtime |
+| **Pub/Sub Topic** | `/infra/pubsub/topic` | `droid-{assistant_id}[-staging]` | Notification routing |
+| **Pub/Sub Startup Topic** | `/infra/pubsub/startup` | `droid-startup[-staging]` | Container activation |
+| **GKE Job** | `/infra/gke/job` | `droid-{timestamp}[-staging]` | Assistant runtime |
 
 ### VM TLS Certificates (Wildcard)
 
-Each VM runs [Caddy](https://caddyserver.com/) as an HTTPS reverse proxy, terminating TLS for the agent-service API (`/api/*`) and noVNC desktop (`/desktop/*`). All VM hostnames follow the pattern `unity-assistant-{id}{-staging}.vm.unify.ai`.
+Each VM runs [Caddy](https://caddyserver.com/) as an HTTPS reverse proxy, terminating TLS for the agent-service API (`/api/*`) and noVNC desktop (`/desktop/*`). All VM hostnames follow the pattern `droid-assistant-{id}{-staging}.vm.unify.ai`.
 
 Rather than each VM requesting its own Let's Encrypt certificate via ACME (which counts against LE's **50 certificates per registered domain per week** limit for `unify.ai`), a single **wildcard certificate** for `*.vm.unify.ai` is pre-provisioned and distributed to every VM:
 
@@ -591,7 +593,7 @@ External Service → Adapter Webhook → Check/Start Job → Pub/Sub Topic → G
 
 ## 🚀 Deployment & CI/CD
 
-### Unity Repository
+### Droid Repository
 
 | File | Purpose |
 |------|---------|
@@ -631,7 +633,7 @@ Without these renewals, the assistant would stop receiving inbound emails/messag
 ## 📁 Repository Structure
 
 ```
-unity/
+droid/
 ├── cloudbuild.yaml               # Production deployment
 ├── cloudbuild-staging.yaml       # Staging deployment
 ├── scripts/
@@ -641,7 +643,7 @@ unity/
 │       ├── requirements.txt
 │       ├── deployment.yaml       # Production K8s manifest
 │       └── deployment_staging.yaml # Staging K8s manifest
-├── unity/
+├── droid/
 │   └── conversation_manager/
 │       ├── main.py               # Container entry point
 │       ├── comms_manager.py      # Pub/Sub subscription handler
@@ -716,16 +718,16 @@ Separating assistant VMs into `<gcp-project-vms>` gives each workload its own in
 #### What lives where
 
 **`<gcp-project-comms>`** (Comms & GKE):
-- GKE Autopilot cluster (`unity`) — container orchestration for Unity jobs
+- GKE Autopilot cluster (`droid`) — container orchestration for Droid jobs
 - Pub/Sub topics — message routing between adapters and containers
 - Artifact Registry — Docker images (`<artifact-registry-path>`)
-- Cloud Run — adapters (`unity-adapters`, `unity-adapters-staging`) and comms app (`unity-comms-app`, `unity-comms-app-staging`)
+- Cloud Run — adapters (`droid-adapters`, `droid-adapters-staging`) and comms app (`droid-comms-app`, `droid-comms-app-staging`)
 - Remaining Secret Manager secrets (API keys, Twilio, LiveKit, etc.)
 
 **`<gcp-project-vms>`** (Assistant VMs):
 - Compute Engine VMs — assistant desktops (Ubuntu and Windows)
 - Static IPs — one per assistant VM
-- VM images — custom golden images (`unity-ubuntu-vm`, `unity-windows-vm`, pool variants)
+- VM images — custom golden images (`droid-ubuntu-vm`, `droid-windows-vm`, pool variants)
 - Secret Manager — `VM_WILDCARD_FULLCHAIN`, `VM_WILDCARD_PRIVKEY`, `DEVBOT_GITHUB_TOKEN`
 - Firewall rules — VM-specific port access (2222, 3000, 6080, 7000, WinRM, HTTPS)
 - Tunnel server VM — shared relay for local machine tunnelling

@@ -28,7 +28,7 @@ These endpoints provide programmatic access to SharePoint sites and OneDrive thr
 - Create folders and organize documents
 - Search across drives
 
-**Base URL:** `{UNITY_COMMS_URL}/sharepoint`
+**Base URL:** `{DROID_COMMS_URL}/sharepoint`
 
 ---
 

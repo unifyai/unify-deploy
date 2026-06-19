@@ -21,8 +21,8 @@ TUNNEL_VM_IMAGE_PROJECT = "ubuntu-os-cloud"
 TUNNEL_VM_DISK_SIZE_GB = 20
 TUNNEL_VM_DISK_TYPE = "pd-ssd"
 TUNNEL_VM_NETWORK = "default"
-TUNNEL_VM_TAGS = ["unity-tunnel-server", "https-server", "http-server", "allow-tunnel"]
-TUNNEL_STATIC_IP_NAME = "unity-tunnel-server-ip"
+TUNNEL_VM_TAGS = ["droid-tunnel-server", "https-server", "http-server", "allow-tunnel"]
+TUNNEL_STATIC_IP_NAME = "droid-tunnel-server-ip"
 
 # =============================================================================
 # DNS Configuration

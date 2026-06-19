@@ -1,4 +1,4 @@
-"""Unit tests for ``unity_deploy.infra.workers.ingest_worker``.
+"""Unit tests for ``droid_deploy.infra.workers.ingest_worker``.
 
 These focus narrowly on the per-message ``UNIFY_KEY`` lifecycle managed
 by :func:`_with_unify_key`:
@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.common.pipeline import IngestRequested
-from unity.common.pipeline.types import (
+from droid.common.pipeline import IngestRequested
+from droid.common.pipeline.types import (
     DmBinding,
     FileParseResult,
     FmBinding,
@@ -29,10 +29,10 @@ from unity.common.pipeline.types import (
     ObjectStoreArtifactHandle,
     TableMeta,
 )
-from unity_deploy.infra.workers import ingest_worker
-from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
-from unity_deploy.infra.workers import worker_utils
-from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+from droid_deploy.infra.workers import ingest_worker
+from droid_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from droid_deploy.infra.workers import worker_utils
+from droid_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ def test_guard_scratch_usage_ignores_filesystem_wide_tmp_stats(
         "gettempdir",
         fail_if_old_overlay_guard_is_used,
     )
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "10")
+    monkeypatch.setenv("DROID_INGEST_TMP_MAX_BYTES", "10")
 
     ingest_worker._guard_scratch_usage(
         scratch_dir=scratch_dir,
@@ -187,7 +187,7 @@ def test_guard_scratch_usage_raises_when_scratch_exceeds_threshold(
     scratch_dir = tmp_path / "ingest_run_large"
     scratch_dir.mkdir()
     (scratch_dir / "large.csv").write_bytes(b"abcdef")
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "5")
+    monkeypatch.setenv("DROID_INGEST_TMP_MAX_BYTES", "5")
 
     with pytest.raises(
         RuntimeError,
@@ -208,7 +208,7 @@ def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
     monkeypatch,
 ) -> None:
     """Cleanup may remove the scratch dir before the post-ingest guard runs."""
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "1")
+    monkeypatch.setenv("DROID_INGEST_TMP_MAX_BYTES", "1")
 
     ingest_worker._guard_scratch_usage(
         scratch_dir=tmp_path / "missing",
@@ -385,7 +385,7 @@ async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> 
         def ingest(self, *args, **kwargs):
             return None
 
-    import unity.data_manager as data_manager_module
+    import droid.data_manager as data_manager_module
 
     monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
 
@@ -662,7 +662,7 @@ def test_table_meta_falls_back_to_default_when_context_absent():
 
 def test_merge_table_config_threads_context():
     """_merge_table_config picks up 'context' from table_config entries."""
-    from unity_deploy.infra.workers.parse_worker import _merge_table_config
+    from droid_deploy.infra.workers.parse_worker import _merge_table_config
 
     plan = IngestPlan(
         run_id="run-merge",
@@ -711,7 +711,7 @@ def test_merge_table_config_threads_context():
 # ---------------------------------------------------------------------------
 
 
-from unity.common.pipeline.types import CsvFileHandle, XlsxSheetHandle
+from droid.common.pipeline.types import CsvFileHandle, XlsxSheetHandle
 
 
 def test_stage_csv_handle_with_gs_uri(tmp_path) -> None:
@@ -897,7 +897,7 @@ async def _asyncio_sleep(seconds: float) -> None:
 # _make_checkpoint_callback with cancellation
 # ---------------------------------------------------------------------------
 
-from unity.common.pipeline import PipelineCancelled
+from droid.common.pipeline import PipelineCancelled
 
 
 def test_checkpoint_callback_raises_on_cancellation(tmp_path) -> None:

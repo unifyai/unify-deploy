@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`unity_deploy.infra.gcp.artifact_store`.
+"""Unit tests for :mod:`droid_deploy.infra.gcp.artifact_store`.
 
 Focused on the retry wrapper semantics. In particular, HTTP 404 responses
 must be treated as definitive ``not found`` answers and bubble up without
@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity_deploy.infra.gcp.artifact_store import (
+from droid.common.pipeline.retry_policy import ResilientRequestPolicy
+from droid_deploy.infra.gcp.artifact_store import (
     GcsArtifactStore,
     _is_not_found_error,
 )
@@ -132,7 +132,7 @@ class TestJobScopedArtifactKeys:
     """
 
     def test_materialize_table_input_requires_job_id(self):
-        from unity.common.pipeline.types import InlineRowsHandle
+        from droid.common.pipeline.types import InlineRowsHandle
 
         store = _make_store()
         handle = InlineRowsHandle(rows=[], columns=[])
@@ -156,7 +156,7 @@ class TestCheckpointSafety:
             store.read_checkpoint("job-1", "table-1")
 
     def test_write_checkpoint_rejects_non_monotonic_rows(self):
-        from unity.common.pipeline.types import IngestCheckpoint
+        from droid.common.pipeline.types import IngestCheckpoint
 
         store = _make_store()
         blob = MagicMock()

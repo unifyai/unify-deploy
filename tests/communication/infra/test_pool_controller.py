@@ -104,7 +104,7 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     assert job_replenish_calls == [(1, "controller.pool_reconcile")]
     assert replenish_calls == [("ubuntu", 2), ("windows", 0)]
     assert trim_calls == ["windows"]
-    assert result["unity_jobs"] == {
+    assert result["droid_jobs"] == {
         "pending_sessions": 1,
         "replenish_scheduled": True,
     }

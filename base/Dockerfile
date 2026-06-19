@@ -63,7 +63,7 @@ RUN cd packages/magnitude-extract && npx tsup
 RUN cd packages/magnitude-core && npx baml-cli generate && npx pkgroll
 WORKDIR /app
 
-# Copy source and install unity with all dependencies.  The git credential
+# Copy source and install droid with all dependencies.  The git credential
 # rewrite (set above) must stay active through this install: `uv pip install .`
 # builds the unillm git dependency, which carries a private submodule
 # (.cursor/rules/global-rules -> github.com/unifyai/global-cursor-rules).
@@ -96,7 +96,7 @@ RUN install -m 0755 /app/scripts/sandbox-dpkg /usr/local/bin/sandbox-dpkg
 # so the entrypoint can seed the emptyDir /tmp volume regardless of which user runs.
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
-RUN HF_HOME=/opt/hf-cache python unity/conversation_manager/medium_scripts/call.py download-files
+RUN HF_HOME=/opt/hf-cache python droid/conversation_manager/medium_scripts/call.py download-files
 RUN playwright install
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
@@ -139,11 +139,11 @@ ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
 
-# Logging: Unity emoji logs to terminal, unify/unillm quiet (file traces only)
-ENV UNITY_TERMINAL_LOG=true
+# Logging: Droid emoji logs to terminal, unify/unillm quiet (file traces only)
+ENV DROID_TERMINAL_LOG=true
 ENV UNIFY_TERMINAL_LOG=false
 ENV UNILLM_TERMINAL_LOG=false
-ENV UNITY_LOG_DIR=/var/log/unity
+ENV DROID_LOG_DIR=/var/log/droid
 ENV UNIFY_LOG_DIR=/var/log/unify
 ENV UNILLM_LOG_DIR=/var/log/unillm
 ENV MAGNITUDE_LOG_DIR=/var/log/magnitude
@@ -155,16 +155,16 @@ RUN mkdir -p /root/.vnc && chmod 777 /root /root/.vnc && \
     mkdir -p /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
 
 # Create non-root user for runtime
-RUN useradd -m -u 1000 unity && \
-    mkdir -p /var/log/unity /var/log/unify /var/log/unillm /var/log/magnitude /home/unity/.cache /home/unity/.config && \
+RUN useradd -m -u 1000 droid && \
+    mkdir -p /var/log/droid /var/log/unify /var/log/unillm /var/log/magnitude /home/droid/.cache /home/droid/.config && \
     mkdir -p /run/dbus && chmod 777 /run/dbus && \
-    mkdir -p /tmp/runtime-unity && chown unity:unity /tmp/runtime-unity && chmod 700 /tmp/runtime-unity && \
-    chown -R unity:unity /app /var/log/unity /var/log/unify /var/log/unillm /var/log/magnitude && \
-    cp -r /root/.cache/ms-playwright /home/unity/.cache/ms-playwright && \
-    cp -r /root/.config/xfce4 /home/unity/.config/xfce4 2>/dev/null || true && \
-    chown -R unity:unity /home/unity/.cache /home/unity/.config
+    mkdir -p /tmp/runtime-droid && chown droid:droid /tmp/runtime-droid && chmod 700 /tmp/runtime-droid && \
+    chown -R droid:droid /app /var/log/droid /var/log/unify /var/log/unillm /var/log/magnitude && \
+    cp -r /root/.cache/ms-playwright /home/droid/.cache/ms-playwright && \
+    cp -r /root/.config/xfce4 /home/droid/.config/xfce4 2>/dev/null || true && \
+    chown -R droid:droid /home/droid/.cache /home/droid/.config
 
-USER unity
+USER droid
 
 # Expose the ports that the applications use
 # 8000: conversation manager, 3000: agent-service (Magnitude)

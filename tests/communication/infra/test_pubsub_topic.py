@@ -15,12 +15,13 @@ These tests verify:
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import NotFound as GcpNotFound
 
 import communication.infra.runtime_clients as _runtime_clients_mod
 import communication.infra.views as _views_mod
+from common.settings import SETTINGS
 
 # Keep legacy patch targets pointing at the shared runtime client module objects.
 _views_mod.Credentials = _runtime_clients_mod.Credentials
@@ -73,7 +74,7 @@ def _setup_pubsub_mocks(mock_publisher_class, mock_subscriber_class, mock_creds)
     publisher = MagicMock()
     mock_publisher_class.return_value = publisher
     publisher.topic_path.return_value = (
-        "projects/gcp-project-runtime/topics/unity-test-staging"
+        "projects/gcp-project-runtime/topics/droid-test-staging"
     )
 
     subscriber = MagicMock()
@@ -131,7 +132,7 @@ class TestCreatePubSubTopic:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -155,9 +156,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-sub")
         assert req["filter"] == 'attributes.thread = "inbound"'
         assert req["name"].endswith("-sub")
         assert not req["name"].endswith("-outbound-sub")
@@ -180,9 +181,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-outbound-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-outbound-sub")
         assert req["filter"] == 'attributes.thread = "unify_message_outbound"'
         assert req["name"].endswith("-outbound-sub")
 
@@ -204,9 +205,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-actions-sub")
         assert req["filter"] == 'attributes.thread = "action_event"'
         assert req["name"].endswith("-actions-sub")
 
@@ -229,9 +230,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-actions-sub")
         assert req.get("enable_message_ordering") is True
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
@@ -252,9 +253,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-actions-sub")
         retention = req["message_retention_duration"]
         assert (
             retention.seconds == 1800
@@ -278,9 +279,9 @@ class TestCreatePubSubTopic:
             mock_creds,
         )
 
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+        client.post("/infra/pubsub/topic", data={"topic_name": "droid-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-system-error-sub")
+        req = _request_for_subscription(captured, "droid-test-staging-system-error-sub")
         assert req["filter"] == 'attributes.thread = "system_error"'
         assert req["name"].endswith("-system-error-sub")
 
@@ -304,7 +305,7 @@ class TestCreatePubSubTopic:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         data = response.json()
@@ -332,7 +333,7 @@ class TestCreatePubSubTopic:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         data = response.json()
@@ -361,7 +362,7 @@ class TestCreatePubSubTopic:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -408,7 +409,7 @@ class TestCreatePubSubTopicAlreadyExists:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -456,7 +457,7 @@ class TestCreatePubSubTopicAlreadyExists:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -500,7 +501,7 @@ class TestCreatePubSubTopicAlreadyExists:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -534,7 +535,7 @@ class TestCreatePubSubTopicAlreadyExists:
 
         response = client.post(
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 500
@@ -575,7 +576,7 @@ class TestDeletePubSubTopic:
         publisher = MagicMock()
         mock_pub_cls.return_value = publisher
         publisher.topic_path.return_value = (
-            "projects/gcp-project-runtime/topics/unity-test-staging"
+            "projects/gcp-project-runtime/topics/droid-test-staging"
         )
 
         subscriber = MagicMock()
@@ -583,15 +584,15 @@ class TestDeletePubSubTopic:
 
         # Simulate three subscriptions attached to the topic
         publisher.list_topic_subscriptions.return_value = [
-            "projects/gcp-project-runtime/subscriptions/unity-test-staging-sub",
-            "projects/gcp-project-runtime/subscriptions/unity-test-staging-outbound-sub",
-            "projects/gcp-project-runtime/subscriptions/unity-test-staging-actions-sub",
+            "projects/gcp-project-runtime/subscriptions/droid-test-staging-sub",
+            "projects/gcp-project-runtime/subscriptions/droid-test-staging-outbound-sub",
+            "projects/gcp-project-runtime/subscriptions/droid-test-staging-actions-sub",
         ]
 
         response = client.request(
             "DELETE",
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
@@ -618,15 +619,15 @@ class TestDeletePubSubTopic:
         publisher = MagicMock()
         mock_pub_cls.return_value = publisher
         publisher.topic_path.return_value = (
-            "projects/gcp-project-runtime/topics/unity-test-staging"
+            "projects/gcp-project-runtime/topics/droid-test-staging"
         )
 
         subscriber = MagicMock()
         mock_sub_cls.return_value = subscriber
 
         publisher.list_topic_subscriptions.return_value = [
-            "projects/gcp-project-runtime/subscriptions/unity-test-staging-sub",
-            "projects/gcp-project-runtime/subscriptions/unity-test-staging-actions-sub",
+            "projects/gcp-project-runtime/subscriptions/droid-test-staging-sub",
+            "projects/gcp-project-runtime/subscriptions/droid-test-staging-actions-sub",
         ]
         # First delete succeeds, second raises "not found"
         subscriber.delete_subscription.side_effect = [
@@ -637,9 +638,96 @@ class TestDeletePubSubTopic:
         response = client.request(
             "DELETE",
             "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
+            data={"topic_name": "droid-test-staging"},
         )
 
         assert response.status_code == 200
         assert subscriber.delete_subscription.call_count == 2
         publisher.delete_topic.assert_called_once()
+
+
+# =========================================================================
+# WAKE — _ensure_assistant_topic_on_wake self-heals a missing topic
+# =========================================================================
+
+
+class TestEnsureAssistantTopicOnWake:
+    """Tests for the wake-time topic guard used by ``/infra/job/start``.
+
+    A missing assistant topic permanently dead-ends a wake, so the guard
+    re-creates it. The common case (topic present) must stay cheap: a single
+    ``get_topic`` and no subscription churn. Failures must never propagate.
+    """
+
+    @pytest.mark.asyncio
+    async def test_existing_topic_skips_full_ensure(self):
+        """When the topic already exists, the full create+subscribe path is
+        not invoked (single get_topic, no recreation)."""
+        publisher = MagicMock()
+        publisher.topic_path.return_value = (
+            "projects/gcp-project-runtime/topics/droid-2105-staging"
+        )
+        publisher.get_topic.return_value = MagicMock()
+
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+            ) as mock_ensure,
+        ):
+            await _views_mod._ensure_assistant_topic_on_wake("2105")
+
+        publisher.get_topic.assert_called_once()
+        mock_ensure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_topic_triggers_full_ensure(self):
+        """When the topic is missing, the full create+subscribe path runs for
+        the assistant's topic name."""
+        publisher = MagicMock()
+        publisher.topic_path.return_value = (
+            "projects/gcp-project-runtime/topics/droid-2105-staging"
+        )
+        publisher.get_topic.side_effect = GcpNotFound("Topic not found")
+
+        expected_topic = SETTINGS.assistant_topic("2105")
+
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+                new=AsyncMock(return_value={}),
+            ) as mock_ensure,
+        ):
+            await _views_mod._ensure_assistant_topic_on_wake("2105")
+
+        mock_ensure.assert_awaited_once_with(expected_topic)
+
+    @pytest.mark.asyncio
+    async def test_ensure_failure_is_swallowed(self):
+        """A failure while ensuring the topic must not propagate (the wake
+        proceeds; the failure is observability-only)."""
+        publisher = MagicMock()
+        publisher.topic_path.return_value = (
+            "projects/gcp-project-runtime/topics/droid-2105-staging"
+        )
+        publisher.get_topic.side_effect = GcpNotFound("Topic not found")
+
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+                new=AsyncMock(side_effect=RuntimeError("pubsub admin unavailable")),
+            ),
+        ):
+            # Must not raise.
+            await _views_mod._ensure_assistant_topic_on_wake("2105")

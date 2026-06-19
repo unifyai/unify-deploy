@@ -19,7 +19,7 @@ from common.int_list_codec import normalize_int_list
 from common.team_summaries_codec import decode_team_summaries_from_form
 from .helpers import (
     acquire_named_lease,
-    create_unity_job,
+    create_droid_job,
     delete_job,
     get_job_logs,
     patch_job_labels,
@@ -134,7 +134,7 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
+DEFAULT_DROID_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:latest"
 TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
@@ -164,7 +164,7 @@ async def _publish_desktop_ready(
 ) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
-    Publishes a single inbound message for Unity. Unity's event handler
+    Publishes a single inbound message for Droid. Droid's event handler
     constructs the correct liveview URL (with ``/desktop/custom.html``)
     and re-publishes to the ``assistant_desktop_ready`` thread that
     Console's SSE subscription listens on.
@@ -177,7 +177,7 @@ async def _publish_desktop_ready(
 
     message_data = json.dumps(
         {
-            "thread": "unity_system_event",
+            "thread": "droid_system_event",
             "publish_timestamp": time.time(),
             "event": {
                 "assistant_id": assistant_id,
@@ -597,6 +597,132 @@ def _ensure_subscription(
     )
 
 
+async def _ensure_topic_and_subscriptions(topic_name: str) -> dict[str, str]:
+    """Create the assistant topic and its four subscriptions. Idempotent.
+
+    Returns a mapping of the resource paths that were ensured. Safe to call
+    repeatedly: topic creation swallows "already exists" and each
+    subscription is upserted via ``_ensure_subscription``.
+    """
+    publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
+
+    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
+    subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-sub",
+    )
+    outbound_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-outbound-sub",
+    )
+    actions_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-actions-sub",
+    )
+    system_error_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-system-error-sub",
+    )
+
+    # Create topic (idempotent)
+    try:
+        await asyncio.to_thread(
+            publisher.create_topic,
+            request={"name": topic_path},
+        )
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+
+    # Create/update all subscriptions in parallel
+    await asyncio.gather(
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            subscription_path,
+            'attributes.thread = "inbound"',
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            outbound_subscription_path,
+            'attributes.thread = "unify_message_outbound"',
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            actions_subscription_path,
+            'attributes.thread = "action_event"',
+            enable_message_ordering=True,
+            message_retention_seconds=1800,
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            system_error_subscription_path,
+            'attributes.thread = "system_error"',
+        ),
+    )
+
+    return {
+        "topic_path": topic_path,
+        "subscription_path": subscription_path,
+        "actions_subscription_path": actions_subscription_path,
+        "system_error_subscription_path": system_error_subscription_path,
+    }
+
+
+async def _ensure_assistant_topic_on_wake(assistant_id: str) -> None:
+    """Best-effort guard guaranteeing the assistant topic exists at wake time.
+
+    A missing topic permanently dead-ends a wake: the ``vm_ready`` handshake
+    cannot publish ``assistant_desktop_ready`` and the assistant cannot
+    receive any inbound messages (its subscriptions are gone). The topic is
+    only otherwise provisioned at assistant-creation time, so re-wakes of an
+    assistant whose topic was deleted would never recover.
+
+    A single ``get_topic`` keeps the steady-state cost to one RPC; the full
+    create+subscriptions path only runs when the topic is actually missing.
+    Failures are logged and surfaced via observability but never block the
+    wake, mirroring the best-effort topic provisioning at creation time.
+    """
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    try:
+        publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
+        try:
+            await asyncio.to_thread(
+                publisher.get_topic,
+                request={"topic": topic_path},
+            )
+            return
+        except GcpNotFound:
+            pass
+        await _ensure_topic_and_subscriptions(topic_name)
+        emit_observability_event(
+            "infra.job_start.topic_recreated",
+            assistant_id=assistant_id,
+            topic_name=topic_name,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to ensure pubsub topic %s on wake for assistant %s: %s",
+            topic_name,
+            assistant_id,
+            e,
+        )
+        emit_observability_event(
+            "infra.job_start.topic_ensure_failed",
+            assistant_id=assistant_id,
+            topic_name=topic_name,
+            error=str(e),
+        )
+
+
 # create pubsub topic
 @router.post("/pubsub/topic")
 async def create_pubsub_topic(topic_name: str = Form(...)):
@@ -605,77 +731,15 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
     the name.
     """
     try:
-        publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
-
-        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
-        subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-sub",
-        )
-        outbound_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-outbound-sub",
-        )
-        actions_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-actions-sub",
-        )
-        system_error_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-system-error-sub",
-        )
-
-        # Create topic (idempotent)
-        try:
-            await asyncio.to_thread(
-                publisher.create_topic,
-                request={"name": topic_path},
-            )
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                raise
-
-        # Create/update all subscriptions in parallel
-        await asyncio.gather(
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                subscription_path,
-                'attributes.thread = "inbound"',
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                outbound_subscription_path,
-                'attributes.thread = "unify_message_outbound"',
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                actions_subscription_path,
-                'attributes.thread = "action_event"',
-                enable_message_ordering=True,
-                message_retention_seconds=1800,
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                system_error_subscription_path,
-                'attributes.thread = "system_error"',
-            ),
-        )
+        ensured = await _ensure_topic_and_subscriptions(topic_name)
 
         return {
             "success": True,
             "message": "Topic and subscriptions ensured with no expiration",
-            "topic_name": topic_path,
-            "subscription_name": subscription_path,
-            "actions_subscription_name": actions_subscription_path,
-            "system_error_subscription_name": system_error_subscription_path,
+            "topic_name": ensured["topic_path"],
+            "subscription_name": ensured["subscription_path"],
+            "actions_subscription_name": ensured["actions_subscription_path"],
+            "system_error_subscription_name": ensured["system_error_subscription_path"],
             "project_id": SETTINGS.gcp_project_id,
         }
     except Exception as e:
@@ -735,24 +799,24 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(SETTINGS.default_namespace),
-    image: str = Form(DEFAULT_UNITY_IMAGE),
+    image: str = Form(DEFAULT_DROID_IMAGE),
 ):
     """
-    Create a Kubernetes Job for a Unity assistant.
+    Create a Kubernetes Job for a Droid assistant.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to production/staging)
-        image: Docker image to use (optional, defaults to latest unity image)
+        image: Docker image to use (optional, defaults to latest droid image)
     """
     try:
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = f"unity-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
+        job_name = f"droid-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
 
         job = await asyncio.to_thread(
-            create_unity_job,
+            create_droid_job,
             batch_api=batch_api,
             job_name=job_name,
             namespace=namespace,
@@ -797,7 +861,7 @@ async def delete_kubernetes_job(
     resource_version: str = Form(None),
 ):
     """
-    Delete a Kubernetes Job for a Unity assistant.
+    Delete a Kubernetes Job for a Droid assistant.
 
     Args:
         job_name: Name of the job (required)
@@ -1076,6 +1140,7 @@ async def start_job(
                 session_name=session_name,
                 wait_ms=start_lease_wait_ms,
             )
+        await _ensure_assistant_topic_on_wake(assistant_id)
         control_plane_ready, control_plane_reason = (
             await _assistant_session_control_plane_ready(
                 batch_api,
@@ -1538,7 +1603,7 @@ async def stop_job(
     namespace: str = Form(SETTINGS.default_namespace),
 ):
     """
-    Stop a Kubernetes Job for a Unity assistant.
+    Stop a Kubernetes Job for a Droid assistant.
     """
     causal_token = push_causal_context(
         build_causal_context(
@@ -1649,7 +1714,7 @@ async def stop_job(
 
 
 def _job_started_at(job) -> datetime | None:
-    """Best-effort UTC start time for a Unity job."""
+    """Best-effort UTC start time for a Droid job."""
     creation_timestamp = getattr(job.metadata, "creation_timestamp", None)
     if creation_timestamp is not None:
         if creation_timestamp.tzinfo is None:
@@ -1675,7 +1740,7 @@ def _job_started_at(job) -> datetime | None:
 
 
 def _job_date_selector(now: datetime, hours: int | None) -> str | None:
-    """Return a unity-date label selector covering the full requested window."""
+    """Return a droid-date label selector covering the full requested window."""
     if hours is None:
         return None
 
@@ -1687,7 +1752,7 @@ def _job_date_selector(now: datetime, hours: int | None) -> str | None:
         (start_date + timedelta(days=offset)).isoformat()
         for offset in range(day_count + 1)
     ]
-    return f"unity-date in ({','.join(relevant_dates)})"
+    return f"droid-date in ({','.join(relevant_dates)})"
 
 
 def _job_status(job) -> str:
@@ -1726,16 +1791,16 @@ def _serialize_job(job) -> dict:
 async def list_kubernetes_jobs(
     namespace: str = SETTINGS.default_namespace,
     hours: int | None = None,
-    label_selector: str = "app=unity",
+    label_selector: str = "app=droid",
 ):
     """
-    List all Unity Kubernetes jobs in the namespace.
+    List all Droid Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
         hours: Optional lookback window in hours. When omitted, returns all
             matching jobs without time-based filtering.
-        label_selector: K8s label selector (optional, defaults to "app=unity")
+        label_selector: K8s label selector (optional, defaults to "app=droid")
     """
     try:
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
@@ -1814,11 +1879,11 @@ async def get_job_logs_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to get job logs: {str(e)}")
 
 
-# get latest unity image commit hash
+# get latest droid image commit hash
 @router.get("/image")
-async def get_latest_unity_image_commit():
+async def get_latest_droid_image_commit():
     """
-    Get the commit hash of the latest Unity Docker image from a text file in Google Cloud Storage.
+    Get the commit hash of the latest Droid Docker image from a text file in Google Cloud Storage.
 
     Returns:
         JSON response with image details with commit hash
@@ -1827,7 +1892,7 @@ async def get_latest_unity_image_commit():
         storage_client = storage.Client(credentials=_service_account_credentials())
 
         # Define the bucket and file path
-        bucket_name = "unity-image-hash"
+        bucket_name = "droid-image-hash"
         blob_name = SETTINGS.image_hash_blob
 
         try:
@@ -1870,7 +1935,7 @@ async def get_latest_unity_image_commit():
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get latest Unity image commit: {str(e)}",
+            detail=f"Failed to get latest Droid image commit: {str(e)}",
         )
 
 
@@ -2740,7 +2805,7 @@ async def _runtime_resource_state(
 ) -> dict[str, object]:
     """Return the live runtime resources currently owned by an assistant.
 
-    Offline task runners (``app=unity-offline``) run outside the AssistantSession
+    Offline task runners (``app=droid-offline``) run outside the AssistantSession
     lifecycle but still hold writes against the owning body. They are reported
     alongside online Jobs so callers that gate on quiescence — most notably the
     membership-change runtime barrier behind ``/infra/runtime`` — wait for
@@ -2752,12 +2817,12 @@ async def _runtime_resource_state(
         asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=SETTINGS.default_namespace,
-            label_selector=f"app=unity,assistant-id={sanitized}",
+            label_selector=f"app=droid,assistant-id={sanitized}",
         ),
         asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=SETTINGS.default_namespace,
-            label_selector=f"app=unity-offline,assistant-id={sanitized}",
+            label_selector=f"app=droid-offline,assistant-id={sanitized}",
         ),
     )
     active_job_names = [
@@ -2805,7 +2870,7 @@ async def _binding_runtime_resource_state(
         batch_api.list_namespaced_job,
         namespace=SETTINGS.default_namespace,
         label_selector=(
-            f"app=unity,assistant-id={sanitized_assistant_id},"
+            f"app=droid,assistant-id={sanitized_assistant_id},"
             f"{SESSION_BINDING_ID_LABEL}={sanitized_binding_id}"
         ),
     )
@@ -3199,7 +3264,7 @@ async def reconcile_orphaned_disks_endpoint(
     idle_hours: int | None = None,
     hard_cap_hours: int | None = None,
 ):
-    """Garbage-collect unattached ``unity-disk-*`` assistant disks.
+    """Garbage-collect unattached ``droid-disk-*`` assistant disks.
 
     Three deletion branches cover the cost-leak patterns:
 

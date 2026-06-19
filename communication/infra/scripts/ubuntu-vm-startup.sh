@@ -16,7 +16,7 @@
 #   7. Start supervisord
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   hostname, github-token, orchestra-url, comms-url, droid-environment,
 #   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
@@ -34,7 +34,7 @@ METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attrib
 METADATA_HEADER="Metadata-Flavor: Google"
 START_TIME=$(date +%s)
 
-source /etc/profile.d/unity-vm.sh 2>/dev/null || true
+source /etc/profile.d/droid-vm.sh 2>/dev/null || true
 source /etc/profile.d/bun.sh 2>/dev/null || true
 export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
@@ -52,7 +52,7 @@ get_metadata() {
 
 get_deploy_env() {
     local env_name
-    env_name=$(get_metadata "unity-environment")
+    env_name=$(get_metadata "droid-environment")
     if [[ -n "$env_name" ]]; then
         echo "$env_name"
     elif [[ -n "$(get_metadata "staging")" ]]; then
@@ -111,11 +111,11 @@ echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 # =============================================================================
 # Update Pool Watcher from Metadata
 # =============================================================================
-WATCHER_PATH="/usr/local/bin/unity-pool-watcher.sh"
+WATCHER_PATH="/usr/local/bin/droid-pool-watcher.sh"
 if curl -sf -H "$METADATA_HEADER" "$METADATA_URL/pool-watcher-script" \
     -o "$WATCHER_PATH" 2>/dev/null && [[ -s "$WATCHER_PATH" ]]; then
     chmod +x "$WATCHER_PATH"
-    systemctl restart unity-pool-watcher.service 2>/dev/null || true
+    systemctl restart droid-pool-watcher.service 2>/dev/null || true
     echo "Pool watcher updated from metadata"
 else
     echo "No pool-watcher-script metadata, using baked-in version"
@@ -124,7 +124,7 @@ fi
 # =============================================================================
 # Update Supervisord Config from Metadata
 # =============================================================================
-SUPERVISORD_CONF_PATH="/etc/supervisor/conf.d/unity-vm.conf"
+SUPERVISORD_CONF_PATH="/etc/supervisor/conf.d/droid-vm.conf"
 if curl -sf -H "$METADATA_HEADER" "$METADATA_URL/supervisord-conf" \
     -o "$SUPERVISORD_CONF_PATH" 2>/dev/null && [[ -s "$SUPERVISORD_CONF_PATH" ]]; then
     echo "Supervisord config updated from metadata"
@@ -154,37 +154,37 @@ chmod 711 /root/.cache 2>/dev/null || true
 echo "  /root made traversable (711)"
 
 # Single source of truth for all VM-level environment variables.
-# /etc/default/unity-vm is read by:
+# /etc/default/droid-vm is read by:
 #   - this startup-script (source before launching supervisord)
 #   - systemd supervisor.service (EnvironmentFile in drop-in below)
-#   - interactive shells (/etc/profile.d/unity-vm.sh sources this)
+#   - interactive shells (/etc/profile.d/droid-vm.sh sources this)
 # When adding new env vars, add them HERE and they propagate everywhere.
-cat > /etc/default/unity-vm << 'EOF'
+cat > /etc/default/droid-vm << 'EOF'
 DISPLAY=:1
 VNC_GEOMETRY=1920x1080
 VNC_DEPTH=24
 LANG=en_US.UTF-8
 LC_ALL=en_US.UTF-8
 EOF
-chmod 644 /etc/default/unity-vm
-echo "  /etc/default/unity-vm written (canonical env vars)"
+chmod 644 /etc/default/droid-vm
+echo "  /etc/default/droid-vm written (canonical env vars)"
 
-cat > /etc/profile.d/unity-vm.sh << 'PROFILE'
+cat > /etc/profile.d/droid-vm.sh << 'PROFILE'
 # Interactive shells: export all vars from the canonical env file.
 set -a
-. /etc/default/unity-vm
+. /etc/default/droid-vm
 set +a
 PROFILE
-chmod +x /etc/profile.d/unity-vm.sh
-echo "  /etc/profile.d/unity-vm.sh -> sources /etc/default/unity-vm"
+chmod +x /etc/profile.d/droid-vm.sh
+echo "  /etc/profile.d/droid-vm.sh -> sources /etc/default/droid-vm"
 
 # Systemd drop-in so supervisor.service auto-restarts inherit the env vars.
 # Without this, systemd restarts supervisor without VNC_GEOMETRY/VNC_DEPTH,
 # causing a config parse error and an infinite crash loop.
 mkdir -p /etc/systemd/system/supervisor.service.d
-cat > /etc/systemd/system/supervisor.service.d/unity-env.conf << 'DROPIN'
+cat > /etc/systemd/system/supervisor.service.d/droid-env.conf << 'DROPIN'
 [Service]
-EnvironmentFile=/etc/default/unity-vm
+EnvironmentFile=/etc/default/droid-vm
 DROPIN
 systemctl daemon-reload
 echo "  systemd drop-in created for supervisor.service"
@@ -223,25 +223,25 @@ TerminalEmulator=xfce4-terminal
 EOF
 echo "  XFCE config written to /etc/xdg/xfce4/"
 
-# Pre-create writable dirs in /Unity for XFCE desktop session
-# /Unity itself is root:root 755 (required by SSHD ChrootDirectory)
+# Pre-create writable dirs in /Droid for XFCE desktop session
+# /Droid itself is root:root 755 (required by SSHD ChrootDirectory)
 for dir in .config .local .cache; do
-    mkdir -p "/Unity/$dir"
-    chown unityuser:unityuser "/Unity/$dir"
+    mkdir -p "/Droid/$dir"
+    chown unityuser:unityuser "/Droid/$dir"
 done
 # Symlink Playwright browser cache so $HOME/.cache/ms-playwright resolves to the actual install location
-ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
-echo "  /Unity/.config, .local, .cache created for unityuser"
+ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
+echo "  /Droid/.config, .local, .cache created for unityuser"
 
 # Shell config for unityuser desktop terminal sessions
-cat > /Unity/.bashrc << 'BASHRC'
-if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
-    export UNITY_SHELL_INIT=1
-    cd /Unity
+cat > /Droid/.bashrc << 'BASHRC'
+if [[ -d /Droid ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$DROID_SHELL_INIT" ]]; then
+    export DROID_SHELL_INIT=1
+    cd /Droid
 fi
 BASHRC
-chown unityuser:unityuser /Unity/.bashrc
-echo "  /Unity/.bashrc configured"
+chown unityuser:unityuser /Droid/.bashrc
+echo "  /Droid/.bashrc configured"
 
 echo "Desktop convergence complete"
 
@@ -266,14 +266,14 @@ echo "VNC default password configured"
 # =============================================================================
 if [[ -n "$GITHUB_TOKEN" ]]; then
     MAGNITUDE_URL="https://${GITHUB_TOKEN}@github.com/unifyai/magnitude.git"
-    UNITY_URL="https://${GITHUB_TOKEN}@github.com/unifyai/unity.git"
+    DROID_URL="https://${GITHUB_TOKEN}@github.com/unifyai/droid.git"
 else
     MAGNITUDE_URL="https://github.com/unifyai/magnitude.git"
-    UNITY_URL="https://github.com/unifyai/unity.git"
+    DROID_URL="https://github.com/unifyai/droid.git"
 fi
 case "$DEPLOY_ENV" in
-    staging) UNITY_BRANCH="staging" ;;
-    *) UNITY_BRANCH="main" ;;
+    staging) DROID_BRANCH="staging" ;;
+    *) DROID_BRANCH="main" ;;
 esac
 
 # =============================================================================
@@ -318,7 +318,7 @@ echo ""
 echo "=== Updating Agent Service ==="
 
 saved_hash=$(get_saved_commit_hash /agent-service)
-remote_hash=$(get_remote_commit_hash "$UNITY_URL" "$UNITY_BRANCH")
+remote_hash=$(get_remote_commit_hash "$DROID_URL" "$DROID_BRANCH")
 needs_update=true
 
 if [[ -f "/agent-service/package.json" && -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" ]]; then
@@ -330,7 +330,7 @@ fi
 
 if [[ "$needs_update" == "true" ]]; then
     tmp_dir=$(mktemp -d)
-    git clone --depth 1 --branch "$UNITY_BRANCH" --filter=blob:none --sparse "$UNITY_URL" "$tmp_dir" 2>&1
+    git clone --depth 1 --branch "$DROID_BRANCH" --filter=blob:none --sparse "$DROID_URL" "$tmp_dir" 2>&1
     cd "$tmp_dir"
     git sparse-checkout set agent-service 2>&1
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
@@ -426,19 +426,19 @@ fi
 echo ""
 echo "=== Enforcing firewall rules ==="
 
-for chain in UNITY-INBOUND UNITY-OUTBOUND; do
+for chain in DROID-INBOUND DROID-OUTBOUND; do
     iptables -N $chain 2>/dev/null || iptables -F $chain
 done
 # Wire custom chains into main chains (idempotent)
-iptables -C INPUT -j UNITY-INBOUND 2>/dev/null || iptables -I INPUT -j UNITY-INBOUND
-iptables -C OUTPUT -j UNITY-OUTBOUND 2>/dev/null || iptables -I OUTPUT -j UNITY-OUTBOUND
+iptables -C INPUT -j DROID-INBOUND 2>/dev/null || iptables -I INPUT -j DROID-INBOUND
+iptables -C OUTPUT -j DROID-OUTBOUND 2>/dev/null || iptables -I OUTPUT -j DROID-OUTBOUND
 
 # Inbound: block direct access to internal service ports (6080/3000 behind Caddy)
-iptables -A UNITY-INBOUND -p tcp --dport 6080 ! -i lo -j DROP
-iptables -A UNITY-INBOUND -p tcp --dport 3000 ! -i lo -j DROP
+iptables -A DROID-INBOUND -p tcp --dport 6080 ! -i lo -j DROP
+iptables -A DROID-INBOUND -p tcp --dport 3000 ! -i lo -j DROP
 
 # Outbound: block metadata server for unityuser (prevents reading secrets/tokens)
-iptables -A UNITY-OUTBOUND -d 169.254.169.254 -m owner --uid-owner unityuser -j DROP
+iptables -A DROID-OUTBOUND -d 169.254.169.254 -m owner --uid-owner unityuser -j DROP
 
 echo "  Inbound: ports 6080/3000 blocked (behind Caddy)"
 echo "  Outbound: metadata server blocked for unityuser"
@@ -458,9 +458,9 @@ chown unityuser:unityuser /var/log/agent-service.log
 
 # Source the canonical env file so supervisord inherits all vars.
 set -a
-. /etc/default/unity-vm
+. /etc/default/droid-vm
 set +a
-/usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf &
+/usr/bin/supervisord -n -c /etc/supervisor/conf.d/droid-vm.conf &
 SUPERVISORD_PID=$!
 trap "kill $SUPERVISORD_PID 2>/dev/null; wait $SUPERVISORD_PID 2>/dev/null" EXIT
 
@@ -481,7 +481,7 @@ done
 # =============================================================================
 COMMS_URL=$(get_metadata "comms-url")
 ID_TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=droid-comms-vm&format=full" \
     2>/dev/null || true)
 
 if [[ -n "$COMMS_URL" && -n "$ID_TOKEN" ]]; then

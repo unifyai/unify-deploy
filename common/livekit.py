@@ -30,10 +30,10 @@ from livekit.protocol.sip import (
 def make_room_name(assistant_id: str, medium: str) -> str:
     """Canonical LiveKit room name for a given assistant and medium.
 
-    Format: unity_{assistant_id}_{medium}
-    Examples: unity_25_phone, unity_25_meet, unity_25_teams
+    Format: droid_{assistant_id}_{medium}
+    Examples: droid_25_phone, droid_25_meet, droid_25_teams
     """
-    return f"unity_{assistant_id}_{medium}"
+    return f"droid_{assistant_id}_{medium}"
 
 
 def get_livekit_api() -> LiveKitAPI:
@@ -135,8 +135,8 @@ async def _start_room_egress(
 ):
     """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
     gcs_credentials = os.getenv("GCP_SA_KEY", "")
-    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
-    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
+    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "droid-call-recordings")
+    adapters_url = os.getenv("DROID_ADAPTERS_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
     prefix = SETTINGS.deploy_env
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
@@ -185,7 +185,7 @@ def make_sip_uri(phone_number: str) -> str:
     Uses the E.164 phone number as the user part so that LiveKit can match
     it against the inbound SIP trunk's ``numbers`` field.  A per-trunk
     dispatch rule (created by ``ensure_phone_dispatch_rule``) then routes
-    the SIP participant into the correct ``unity_{id}_{medium}`` room.
+    the SIP participant into the correct ``droid_{id}_{medium}`` room.
     """
     sip_domain = os.getenv("LIVEKIT_SIP_URI", "")
     normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
@@ -274,7 +274,7 @@ async def ensure_phone_dispatch_rule(
                             room_name=room_name,
                         ),
                     ),
-                    name=f"Unity_phone_{normalized}",
+                    name=f"Droid_phone_{normalized}",
                     trunk_ids=[trunk_id],
                 ),
             ),
@@ -317,7 +317,7 @@ async def ensure_call_scoped_dispatch_rule(
             )
             return None
 
-        name = f"Unity_call_{call_id}"
+        name = f"Droid_call_{call_id}"
         dispatch = await livekit_api.sip.create_sip_dispatch_rule(
             CreateSIPDispatchRuleRequest(
                 dispatch_rule=SIPDispatchRuleInfo(

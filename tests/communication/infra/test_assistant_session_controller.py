@@ -117,7 +117,7 @@ def _binding(binding_id: str = "binding-1", **overrides) -> dict:
 
 
 def _job(
-    name: str = "unity-job-1",
+    name: str = "droid-job-1",
     *,
     container_ready: bool = True,
     terminal_phase: str | None = None,
@@ -130,7 +130,7 @@ def _job(
         controller.BINDING_ID_LABEL: "binding-1",
     }
     if terminal_phase == "Succeeded":
-        job.metadata.labels["unity-status"] = "done"
+        job.metadata.labels["droid-status"] = "done"
     job.metadata.annotations = {
         controller.SESSION_REF_ANNOTATION: "assistant-session-1207",
         controller.BINDING_ID_ANNOTATION: "binding-1",
@@ -161,7 +161,7 @@ def _simple_job(
 
     labels = {}
     if terminal:
-        labels["unity-status"] = "done"
+        labels["droid-status"] = "done"
     return types.SimpleNamespace(
         metadata=types.SimpleNamespace(labels=labels),
         spec=types.SimpleNamespace(
@@ -176,7 +176,7 @@ def _simple_job(
 
 
 def _pod(
-    name: str = "unity-pod-1",
+    name: str = "droid-pod-1",
     *,
     phase: str = "Running",
     started_at: str = "2026-04-06T00:00:00+00:00",
@@ -251,7 +251,7 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
 
     assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
     binding = patch_status.call_args.kwargs["binding"]
-    assert binding["jobRef"]["name"] == "unity-job-1"
+    assert binding["jobRef"]["name"] == "droid-job-1"
 
 
 def test_reconcile_preserves_created_at_and_starts_bootstrap_timer_on_claim(
@@ -286,7 +286,7 @@ def test_reconcile_preserves_created_at_and_starts_bootstrap_timer_on_claim(
     monkeypatch.setattr(
         controller,
         "_current_pod_ref",
-        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "staging"},
+        lambda *_args, **_kwargs: {"name": "droid-pod-1", "namespace": "staging"},
     )
     monkeypatch.setattr(controller, "_now_iso", lambda: "2026-04-06T00:00:00+00:00")
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -295,7 +295,7 @@ def test_reconcile_preserves_created_at_and_starts_bootstrap_timer_on_claim(
 
     assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
     binding = patch_status.call_args.kwargs["binding"]
-    assert binding["jobRef"]["name"] == "unity-job-1"
+    assert binding["jobRef"]["name"] == "droid-job-1"
     assert binding["createdAt"] == "2026-04-03T00:00:00+00:00"
     assert binding["containerBootstrapStartedAt"] == "2026-04-06T00:00:00+00:00"
 
@@ -332,7 +332,7 @@ def test_reconcile_suspends_newly_claimed_job_when_jobref_persist_loses(monkeypa
     body = _base_session()
     body["status"]["phase"] = "PendingJob"
     body["status"]["binding"] = _binding("binding-1")
-    claimed_job = _job(name="unity-job-claimed")
+    claimed_job = _job(name="droid-job-claimed")
     patch_status = MagicMock(
         side_effect=ApiException(status=409, reason="status conflict"),
     )
@@ -341,7 +341,7 @@ def test_reconcile_suspends_newly_claimed_job_when_jobref_persist_loses(monkeypa
     latest_body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={
-            "name": "unity-job-authoritative",
+            "name": "droid-job-authoritative",
             "namespace": controller.WATCH_NAMESPACE,
         },
     )
@@ -377,7 +377,7 @@ def test_reconcile_suspends_newly_claimed_job_when_jobref_persist_loses(monkeypa
 
 def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeypatch):
     binding = _binding("binding-1")
-    existing_job = _job(name="unity-job-1", container_ready=False)
+    existing_job = _job(name="droid-job-1", container_ready=False)
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
 
@@ -412,7 +412,7 @@ def test_claim_idle_job_filters_by_current_image_hash(monkeypatch):
 
     assert job is None
     selector = batch_api.list_namespaced_job.call_args_list[-1].kwargs["label_selector"]
-    assert "unity-image-hash=abc123" in selector
+    assert "droid-image-hash=abc123" in selector
 
 
 def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
@@ -433,8 +433,8 @@ def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
     )
 
     selector = batch_api.list_namespaced_job.call_args_list[-1].kwargs["label_selector"]
-    assert selector == "app=unity,unity-status=idle"
-    assert "unity-image-hash" not in selector
+    assert selector == "app=droid,droid-status=idle"
+    assert "droid-image-hash" not in selector
 
 
 def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
@@ -446,14 +446,14 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
 
-    fresh_job = _job(name="unity-override-1207-abc123-staging")
-    create_unity_job_mock = MagicMock(return_value=fresh_job)
-    monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
-    image_uri = "registry/unity-staging:override-myslug-deadbeef"
+    fresh_job = _job(name="droid-override-1207-abc123-staging")
+    create_droid_job_mock = MagicMock(return_value=fresh_job)
+    monkeypatch.setattr(controller, "create_droid_job", create_droid_job_mock)
+    image_uri = "registry/droid-staging:override-myslug-deadbeef"
     runtime_service_env = {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+        "DROID_COMMS_URL": "https://myslug---droid-comms-app-staging.run.app",
+        "DROID_ADAPTERS_URL": "https://myslug---droid-adapters-staging.run.app",
     }
 
     job = controller._claim_idle_job_for_binding(
@@ -465,10 +465,10 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
     )
 
     assert job is fresh_job
-    create_unity_job_mock.assert_called_once()
-    call = create_unity_job_mock.call_args
+    create_droid_job_mock.assert_called_once()
+    call = create_droid_job_mock.call_args
     assert call.kwargs["image"] == image_uri
-    assert call.kwargs["unity_status"] == "running"
+    assert call.kwargs["droid_status"] == "running"
     extra_labels = call.kwargs["extra_labels"]
     assert extra_labels["assistant-id"] == "1207"
     assert extra_labels[controller.SESSION_REF_LABEL] == "assistant-session-1207"
@@ -488,9 +488,9 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
     """If the binding already owns a Job on the override image, reuse it."""
 
     binding = _binding("binding-1")
-    image_uri = "registry/unity-staging:override-myslug-deadbeef"
+    image_uri = "registry/droid-staging:override-myslug-deadbeef"
     existing_job = _job(
-        name="unity-override-existing",
+        name="droid-override-existing",
         container_ready=False,
         image=image_uri,
     )
@@ -498,8 +498,8 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
     batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
-    create_unity_job_mock = MagicMock()
-    monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
+    create_droid_job_mock = MagicMock()
+    monkeypatch.setattr(controller, "create_droid_job", create_droid_job_mock)
 
     job = controller._claim_idle_job_for_binding(
         "1207",
@@ -509,15 +509,15 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
     )
 
     assert job is existing_job
-    create_unity_job_mock.assert_not_called()
+    create_droid_job_mock.assert_not_called()
 
 
 def test_binding_owned_job_image_reads_container_image():
-    job = _simple_job(image="registry/unity-staging:override-slug-deadbeef")
+    job = _simple_job(image="registry/droid-staging:override-slug-deadbeef")
 
     assert (
         controller._binding_owned_job_image(job)
-        == "registry/unity-staging:override-slug-deadbeef"
+        == "registry/droid-staging:override-slug-deadbeef"
     )
 
 
@@ -535,25 +535,25 @@ def test_binding_owned_job_image_returns_none_without_containers():
     ("image", "override", "terminal", "expected"),
     [
         (
-            "registry/unity-staging:override-a",
-            "registry/unity-staging:override-a",
+            "registry/droid-staging:override-a",
+            "registry/droid-staging:override-a",
             False,
             True,
         ),
         (
-            "registry/unity-staging:override-a",
-            "registry/unity-staging:override-b",
+            "registry/droid-staging:override-a",
+            "registry/droid-staging:override-b",
             False,
             False,
         ),
         (
-            "registry/unity-staging:override-a",
-            "registry/unity-staging:override-b",
+            "registry/droid-staging:override-a",
+            "registry/droid-staging:override-b",
             True,
             False,
         ),
-        ("", "registry/unity-staging:override-b", False, False),
-        ("registry/unity-staging:override-a", None, False, True),
+        ("", "registry/droid-staging:override-b", False, False),
+        ("registry/droid-staging:override-a", None, False, True),
     ],
 )
 def test_image_override_job_is_current(image, override, terminal, expected):
@@ -569,15 +569,15 @@ def test_claim_and_bind_pending_job_threads_override_runtime_spec_through(monkey
     """The reconciler propagates override runtime spec to the spawn helper."""
 
     body = _base_session()
-    body["spec"]["imageOverride"] = "registry/unity-staging:override-myslug-deadbeef"
+    body["spec"]["imageOverride"] = "registry/droid-staging:override-myslug-deadbeef"
     body["spec"]["serviceUrls"] = {
         "orchestra": "https://internal.example.com/v0",
-        "comms": "https://myslug---unity-comms-app-staging.run.app",
-        "adapters": "https://myslug---unity-adapters-staging.run.app",
+        "comms": "https://myslug---droid-comms-app-staging.run.app",
+        "adapters": "https://myslug---droid-adapters-staging.run.app",
     }
     body["status"]["phase"] = "PendingJob"
     body["status"]["binding"] = _binding("binding-1")
-    fresh_job = _job(name="unity-override-1207-abc123-staging")
+    fresh_job = _job(name="droid-override-1207-abc123-staging")
     patch_status = MagicMock()
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value.items = []
@@ -605,21 +605,21 @@ def test_claim_and_bind_pending_job_threads_override_runtime_spec_through(monkey
     controller._update_status_for_session(deepcopy(body))
 
     assert captured["image_override"] == (
-        "registry/unity-staging:override-myslug-deadbeef"
+        "registry/droid-staging:override-myslug-deadbeef"
     )
     assert captured["runtime_service_env"] == {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+        "DROID_COMMS_URL": "https://myslug---droid-comms-app-staging.run.app",
+        "DROID_ADAPTERS_URL": "https://myslug---droid-adapters-staging.run.app",
     }
 
 
 def test_claim_idle_job_claims_jobs_in_name_order(monkeypatch):
     binding = _binding("binding-1")
-    old_job = _job(name="unity-2026-01-01-00-00-00-aaa", container_ready=False)
+    old_job = _job(name="droid-2026-01-01-00-00-00-aaa", container_ready=False)
     old_job.status.active = 1
     old_job.metadata.deletion_timestamp = None
-    new_job = _job(name="unity-2026-04-05-12-00-00-bbb", container_ready=False)
+    new_job = _job(name="droid-2026-04-05-12-00-00-bbb", container_ready=False)
     new_job.status.active = 1
     new_job.metadata.deletion_timestamp = None
     batch_api = MagicMock()
@@ -640,12 +640,12 @@ def test_claim_idle_job_claims_jobs_in_name_order(monkeypatch):
 
     assert job is old_job
     patched_name = batch_api.patch_namespaced_job.call_args.kwargs["name"]
-    assert patched_name == "unity-2026-01-01-00-00-00-aaa"
+    assert patched_name == "droid-2026-01-01-00-00-00-aaa"
 
 
 def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):
     binding = _binding("binding-1")
-    existing_job = _job(name="unity-job-1", container_ready=False)
+    existing_job = _job(name="droid-job-1", container_ready=False)
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
 
@@ -661,9 +661,9 @@ def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):
 def test_job_for_binding_does_not_rediscover_when_named_job_is_missing(monkeypatch):
     binding = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
-    existing_job = _job(name="unity-job-2", container_ready=False)
+    existing_job = _job(name="droid-job-2", container_ready=False)
     batch_api = MagicMock()
     batch_api.read_namespaced_job.side_effect = ApiException(status=404)
     batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
@@ -680,14 +680,14 @@ def test_job_for_binding_does_not_rediscover_when_named_job_is_missing(monkeypat
 def test_job_for_binding_does_not_rediscover_when_named_job_mismatches(monkeypatch):
     binding = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
-    mismatched_job = _job(name="unity-job-1", container_ready=False)
+    mismatched_job = _job(name="droid-job-1", container_ready=False)
     mismatched_job.metadata.labels[controller.BINDING_ID_LABEL] = "binding-other"
     batch_api = MagicMock()
     batch_api.read_namespaced_job.return_value = mismatched_job
     batch_api.list_namespaced_job.return_value = MagicMock(
-        items=[_job(name="unity-job-2")],
+        items=[_job(name="droid-job-2")],
     )
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
@@ -731,7 +731,7 @@ def test_reconcile_queues_vm_assignment_for_binding(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -784,11 +784,11 @@ def test_reconcile_advances_to_pending_guest_when_binding_vm_ref_present(monkeyp
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        podRef={"name": "unity-pod-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        podRef={"name": "droid-pod-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmRef={
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
             "vmType": "ubuntu",
         },
@@ -819,7 +819,7 @@ def test_reconcile_advances_to_pending_guest_when_binding_vm_ref_present(monkeyp
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
             "vmType": "ubuntu",
         },
@@ -831,7 +831,7 @@ def test_reconcile_advances_to_pending_guest_when_binding_vm_ref_present(monkeyp
     assert patch_status.call_args.kwargs["phase"] == "PendingGuest"
     assert (
         patch_status.call_args.kwargs["binding"]["vmRef"]["name"]
-        == "unity-pool-ubuntu-1"
+        == "droid-pool-ubuntu-1"
     )
     assert (
         patch_status.call_args.kwargs["binding"]["guestHandshakeStartedAt"]
@@ -843,7 +843,7 @@ def test_reconcile_waits_for_inflight_vm_assignment_attempt(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignment=build_binding_vm_assignment(
             attempt_id="attempt-1",
@@ -885,8 +885,8 @@ def test_reconcile_carries_release_signal_context_into_next_pending_job(monkeypa
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:15+00:00",
     )
     body["status"]["signals"] = {
@@ -894,7 +894,7 @@ def test_reconcile_carries_release_signal_context_into_next_pending_job(monkeypa
             binding_id="binding-1",
             state="completed",
             observed_at="2026-04-03T00:00:20+00:00",
-            vmName="unity-pool-ubuntu-1",
+            vmName="droid-pool-ubuntu-1",
             causal=causal_signal_payload(signal_context),
         ),
     }
@@ -962,7 +962,7 @@ def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerBootstrapStartedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
@@ -1003,7 +1003,7 @@ def test_reconcile_waits_for_pod_running_before_starting_bootstrap_timer(monkeyp
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
     deadline_exceeded = MagicMock(return_value=True)
@@ -1025,7 +1025,7 @@ def test_reconcile_waits_for_pod_running_before_starting_bootstrap_timer(monkeyp
     monkeypatch.setattr(
         controller,
         "_current_pod_ref",
-        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "staging"},
+        lambda *_args, **_kwargs: {"name": "droid-pod-1", "namespace": "staging"},
     )
     monkeypatch.setattr(
         controller,
@@ -1052,8 +1052,8 @@ def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypa
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
     )
@@ -1086,7 +1086,7 @@ def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypa
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -1104,7 +1104,7 @@ def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypa
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_ref={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        vm_ref={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
     )
     assert patch_status.call_args.kwargs["phase"] == "PendingGuest"
     assert (
@@ -1123,8 +1123,8 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         vmReadyObservedAt="2026-04-03T00:00:10+00:00",
@@ -1134,7 +1134,7 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
         controller.SIGNAL_VM_GUEST_HEALTH: build_binding_signal(
             binding_id="binding-1",
             state="ready",
-            vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+            vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         ),
     }
     patch_status = MagicMock()
@@ -1155,7 +1155,7 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -1176,7 +1176,7 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
     body["spec"]["desktop"] = {"required": False, "mode": "macos"}
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -1208,7 +1208,7 @@ def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerBootstrapStartedAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -1256,7 +1256,7 @@ def test_reconcile_restarts_after_terminal_job_cleanup(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
     terminal_job = _job(terminal_phase="Failed")
@@ -1296,7 +1296,7 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
     body["status"]["phase"] = "Active"
     body["status"]["binding"] = _binding(
         "binding-1",
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
     )
     patch_status = MagicMock()
     queue_vm_release = MagicMock(return_value=True)
@@ -1317,7 +1317,7 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
                 {
                     "assistant_id": "1207",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
@@ -1326,7 +1326,7 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -1338,7 +1338,7 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
@@ -1351,7 +1351,7 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
@@ -1373,7 +1373,7 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
                 {
                     "assistant_id": "1207",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
@@ -1382,7 +1382,7 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -1394,7 +1394,7 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
@@ -1409,8 +1409,8 @@ def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
     )
     patch_status = MagicMock()
@@ -1442,12 +1442,12 @@ def test_reconcile_keeps_releasing_while_other_assistant_job_is_still_live(monke
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseCompletedAt="2026-04-03T00:00:45+00:00",
     )
     patch_status = MagicMock()
-    stray_job = _job(name="unity-job-2")
+    stray_job = _job(name="droid-job-2")
     stray_job.metadata.labels["assistant-id"] = "1207"
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -1477,7 +1477,7 @@ def test_reconcile_stopped_without_binding_waits_for_assistant_cleanup(monkeypat
     body = _base_session(desired_state="Stopped")
     body["status"]["phase"] = "Released"
     patch_status = MagicMock()
-    stray_job = _job(name="unity-job-2")
+    stray_job = _job(name="droid-job-2")
     stray_job.metadata.labels["assistant-id"] = "1207"
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -1527,7 +1527,7 @@ def test_reconcile_treats_terminating_session_as_stopped(monkeypatch):
     body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
     body["status"]["binding"] = _binding(
         "binding-1",
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
     )
     patch_status = MagicMock()
     release_state = MagicMock(
@@ -1555,8 +1555,8 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
     )
@@ -1579,7 +1579,7 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
                 {
                     "assistant_id": "1207",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
@@ -1588,7 +1588,7 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -1600,7 +1600,7 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
@@ -1614,7 +1614,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         releaseRequestedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
@@ -1637,7 +1637,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
                     "assistant_id": "1207",
                     "binding_id": "binding-1",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                     "hostname": "vm-1.vm.unify.ai",
                     "vm_type": "ubuntu",
                 },
@@ -1648,7 +1648,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -1660,7 +1660,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
@@ -1668,7 +1668,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
     assert binding["id"] == "binding-1"
     assert binding["releaseGeneration"] == 1
     assert binding["vmRef"] == {
-        "name": "unity-pool-ubuntu-1",
+        "name": "droid-pool-ubuntu-1",
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
@@ -1679,8 +1679,8 @@ def test_reconcile_rearms_timed_out_release_request(monkeypatch):
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseGeneration=1,
     )
@@ -1712,7 +1712,7 @@ def test_reconcile_rearms_timed_out_release_request(monkeypatch):
                     "assistant_id": "1207",
                     "binding_id": "binding-1",
                     "pool_role": "releasing",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
@@ -1721,7 +1721,7 @@ def test_reconcile_rearms_timed_out_release_request(monkeypatch):
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(
         controller,
@@ -1736,7 +1736,7 @@ def test_reconcile_rearms_timed_out_release_request(monkeypatch):
     recover_release.assert_called_once_with(
         "1207",
         "binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         current_release_generation=1,
         allow_rearm=True,
         retire_reason="controller_desired_stop_release_timeout",
@@ -1754,8 +1754,8 @@ def test_reconcile_retires_release_after_hard_timeout(monkeypatch):
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseGeneration=2,
     )
@@ -1776,11 +1776,11 @@ def test_reconcile_retires_release_after_hard_timeout(monkeypatch):
                     "assistant_id": "1207",
                     "binding_id": "binding-1",
                     "pool_role": "releasing",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
-            "unity-pool-ubuntu-1",
+            "droid-pool-ubuntu-1",
         ),
         ([], [], None),
     ]
@@ -1811,7 +1811,7 @@ def test_reconcile_retires_release_after_hard_timeout(monkeypatch):
     recover_release.assert_called_once_with(
         "1207",
         "binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         current_release_generation=2,
         allow_rearm=False,
         retire_reason="controller_desired_stop_release_timeout",
@@ -1826,7 +1826,7 @@ def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch)
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
 
@@ -1859,7 +1859,7 @@ def test_reconcile_waits_for_vm_capacity_when_assignment_fails(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
@@ -1895,7 +1895,7 @@ def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
@@ -1934,8 +1934,8 @@ def test_reconcile_restarts_after_vm_ownership_loss(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
     )
@@ -2051,7 +2051,7 @@ def test_reconcile_terminal_job_stop_intent_patches_spec_stop(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
     )
     body["status"]["suspendIntent"] = build_suspend_intent(
         binding_id="binding-1",
@@ -2129,8 +2129,8 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         guestHandshakeStartedAt="2026-04-03T00:00:05+00:00",
@@ -2156,7 +2156,7 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -2185,8 +2185,8 @@ def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         guestHandshakeStartedAt="2026-04-03T00:00:05+00:00",
@@ -2212,7 +2212,7 @@ def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-windows-1",
+            "name": "droid-pool-windows-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -2243,8 +2243,8 @@ def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(
     body["status"]["phase"] = "Active"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         vmReadyObservedAt="2026-04-03T00:00:10+00:00",
@@ -2254,7 +2254,7 @@ def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(
         controller.SIGNAL_VM_GUEST_HEALTH: build_binding_signal(
             binding_id="binding-1",
             state="failed",
-            vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+            vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         ),
     }
     patch_status = MagicMock()
@@ -2275,7 +2275,7 @@ def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -2296,8 +2296,8 @@ def test_reconcile_restarts_after_desktop_liveness_failure(monkeypatch):
     )
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         vmReadyObservedAt="2026-04-03T00:00:10+00:00",
@@ -2307,7 +2307,7 @@ def test_reconcile_restarts_after_desktop_liveness_failure(monkeypatch):
         controller.SIGNAL_VM_GUEST_HEALTH: build_binding_signal(
             binding_id="binding-1",
             state="failed",
-            vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+            vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         ),
     }
     patch_status = MagicMock()
@@ -2329,7 +2329,7 @@ def test_reconcile_restarts_after_desktop_liveness_failure(monkeypatch):
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-1",
+            "name": "droid-pool-ubuntu-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
@@ -2354,8 +2354,8 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
     body["status"]["observedActivationId"] = "act-1"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        jobRef={"name": "droid-job-1", "namespace": "staging"},
+        vmRef={"name": "droid-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
     )
@@ -2378,7 +2378,7 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
                 {
                     "assistant_id": "1207",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
@@ -2387,7 +2387,7 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -2399,7 +2399,7 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1",
+        vm_name="droid-pool-ubuntu-1",
         release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
@@ -2433,7 +2433,7 @@ def test_reconcile_does_not_mark_released_while_disk_is_still_attached(monkeypat
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+        lambda *_args, **_kwargs: "droid-pool-ubuntu-1",
     )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -2470,7 +2470,7 @@ def test_reconcile_does_not_mark_released_while_other_assistant_vm_exists(monkey
                     "assistant_id": "1207",
                     "binding_id": "binding-other",
                     "pool_role": "assigned",
-                    "vm_name": "unity-pool-ubuntu-2",
+                    "vm_name": "droid-pool-ubuntu-2",
                 },
             ],
         ),
@@ -2500,7 +2500,7 @@ def test_reconcile_finishes_stale_other_binding_release_without_current_vm_ref(
     patch_status = MagicMock()
     complete_release = MagicMock(
         return_value={
-            "vm_name": "unity-pool-ubuntu-2",
+            "vm_name": "droid-pool-ubuntu-2",
             "binding_id": "binding-old",
             "pool_role": "idle",
         },
@@ -2513,10 +2513,10 @@ def test_reconcile_finishes_stale_other_binding_release_without_current_vm_ref(
                     "assistant_id": "1207",
                     "binding_id": "binding-old",
                     "pool_role": "releasing",
-                    "vm_name": "unity-pool-ubuntu-2",
+                    "vm_name": "droid-pool-ubuntu-2",
                 },
             ],
-            "unity-pool-ubuntu-2",
+            "droid-pool-ubuntu-2",
         ),
         ([], [], None),
         ([], [], None),
@@ -2540,7 +2540,7 @@ def test_reconcile_finishes_stale_other_binding_release_without_current_vm_ref(
 
     controller._update_status_for_session(deepcopy(body))
 
-    complete_release.assert_called_once_with("unity-pool-ubuntu-2", "binding-old")
+    complete_release.assert_called_once_with("droid-pool-ubuntu-2", "binding-old")
     assert patch_status.call_args.kwargs["phase"] == "Released"
     assert patch_status.call_args.kwargs["binding"] is None
 
@@ -2559,13 +2559,13 @@ def test_reconcile_finishes_current_binding_release_without_vm_ref_after_signal(
             binding_id="binding-1",
             state="completed",
             observed_at="2026-04-03T00:00:45+00:00",
-            vmName="unity-pool-ubuntu-1",
+            vmName="droid-pool-ubuntu-1",
         ),
     }
     patch_status = MagicMock()
     complete_release = MagicMock(
         return_value={
-            "vm_name": "unity-pool-ubuntu-1",
+            "vm_name": "droid-pool-ubuntu-1",
             "binding_id": "binding-1",
             "pool_role": "idle",
         },
@@ -2577,11 +2577,11 @@ def test_reconcile_finishes_current_binding_release_without_vm_ref_after_signal(
                     "assistant_id": "1207",
                     "binding_id": "binding-1",
                     "pool_role": "releasing",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
-            "unity-pool-ubuntu-1",
+            "droid-pool-ubuntu-1",
         ),
         ([], [], None),
     ]
@@ -2604,7 +2604,7 @@ def test_reconcile_finishes_current_binding_release_without_vm_ref_after_signal(
 
     controller._update_status_for_session(deepcopy(body))
 
-    complete_release.assert_called_once_with("unity-pool-ubuntu-1", "binding-1")
+    complete_release.assert_called_once_with("droid-pool-ubuntu-1", "binding-1")
     assert patch_status.call_args.kwargs["phase"] == "Released"
     assert patch_status.call_args.kwargs["binding"] is None
 
@@ -2622,7 +2622,7 @@ def test_reconcile_retries_current_binding_release_without_vm_ref_after_signal_c
     patch_status = MagicMock()
     complete_release = MagicMock(
         return_value={
-            "vm_name": "unity-pool-ubuntu-1",
+            "vm_name": "droid-pool-ubuntu-1",
             "binding_id": "binding-1",
             "pool_role": "idle",
         },
@@ -2634,11 +2634,11 @@ def test_reconcile_retries_current_binding_release_without_vm_ref_after_signal_c
                     "assistant_id": "1207",
                     "binding_id": "binding-1",
                     "pool_role": "releasing",
-                    "vm_name": "unity-pool-ubuntu-1",
+                    "vm_name": "droid-pool-ubuntu-1",
                 },
             ],
             [],
-            "unity-pool-ubuntu-1",
+            "droid-pool-ubuntu-1",
         ),
         ([], [], None),
     ]
@@ -2661,7 +2661,7 @@ def test_reconcile_retries_current_binding_release_without_vm_ref_after_signal_c
 
     controller._update_status_for_session(deepcopy(body))
 
-    complete_release.assert_called_once_with("unity-pool-ubuntu-1", "binding-1")
+    complete_release.assert_called_once_with("droid-pool-ubuntu-1", "binding-1")
     assert patch_status.call_args.kwargs["phase"] == "Released"
     assert patch_status.call_args.kwargs["binding"] is None
 
@@ -2696,7 +2696,7 @@ def test_delete_handler_waits_for_runtime_cleanup_before_finalizing(monkeypatch)
 def test_session_delete_cleanup_complete_requires_no_assistant_live_jobs(monkeypatch):
     body = _base_session()
     body["status"]["phase"] = "Released"
-    stray_job = _job(name="unity-job-2")
+    stray_job = _job(name="droid-job-2")
     stray_job.metadata.labels["assistant-id"] = "1207"
 
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)

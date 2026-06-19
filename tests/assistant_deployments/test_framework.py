@@ -11,21 +11,21 @@ import json
 
 import pytest
 
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.environments.reconstruct import (
+from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from droid_deploy.assistant_deployments.environments.reconstruct import (
     parse_env_path,
     write_files_to_package,
     import_and_resolve,
 )
-from unity_deploy.assistant_deployments.clients import (
+from droid_deploy.assistant_deployments.clients import (
     ResolvedAssistantDeployment,
 )
-from unity_deploy.assistant_deployments.seed_sync import (
+from droid_deploy.assistant_deployments.seed_sync import (
     _aggregate_hash,
     _record_hash,
     sync_all_seed_data,
 )
-from unity_deploy.assistant_deployments.secrets_file import load_secrets
+from droid_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
 # 1. ActorConfig model
@@ -261,7 +261,7 @@ class TestSecretsAssistantLevel:
 
 class TestCustomFunctionCollection:
     def test_collect_from_empty_dir(self, tmp_path):
-        from unity.function_manager.custom_functions import (
+        from droid.function_manager.custom_functions import (
             collect_custom_functions,
         )
 
@@ -271,14 +271,14 @@ class TestCustomFunctionCollection:
         assert result == {}
 
     def test_collect_ignores_underscore_prefixed_files(self, tmp_path):
-        from unity.function_manager.custom_functions import (
+        from droid.function_manager.custom_functions import (
             collect_custom_functions,
         )
 
         fn_dir = tmp_path / "functions"
         fn_dir.mkdir()
         (fn_dir / "_private.py").write_text(
-            "from unity.function_manager.custom import custom_function\n"
+            "from droid.function_manager.custom import custom_function\n"
             "@custom_function()\n"
             "async def hidden() -> int:\n"
             "    return 1\n",

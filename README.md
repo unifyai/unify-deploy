@@ -1,15 +1,15 @@
-# unity-deploy
+# droid-deploy
 
-Private enterprise deployment overlay for [Unity](https://github.com/unifyai/unity). Contains client-specific assistant deployments, seed data, ingestion pipelines, and the CI/CD infrastructure that produces production Docker images.
+Private enterprise deployment overlay for [Droid](https://github.com/unifyai/droid). Contains client-specific assistant deployments, seed data, ingestion pipelines, and the CI/CD infrastructure that produces production Docker images.
 
-Unity is the open-source AI assistant framework. This repository adds the enterprise layer on top -- client configurations, memoized functions, business rules, and deployment automation -- without modifying Unity's core.
+Droid is the open-source AI assistant framework. This repository adds the enterprise layer on top -- client configurations, memoized functions, business rules, and deployment automation -- without modifying Droid's core.
 
 ## Architecture
 
 ```
-unity (public)          unity-deploy (private)
+droid (public)          droid-deploy (private)
 ┌──────────────────┐    ┌──────────────────────────┐
-│  _init_managers   │    │  unity_deploy/            │
+│  _init_managers   │    │  droid_deploy/            │
 │    ↓              │    │    hook.py ← startup_hook │
 │  entry_points()  ─┼──→ │    assistant_deployments/         │
 │    ↓              │    │      clients/             │
@@ -23,7 +23,7 @@ unity (public)          unity-deploy (private)
                         └──────────────────────────┘
 ```
 
-Unity discovers this package at runtime via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). When the `_UNITY_STARTUP_HOOK_GROUP` environment variable is set (via K8s Secrets in enterprise deployments), Unity calls `importlib.metadata.entry_points()` to find and execute the startup hook declared in this package's `pyproject.toml`. In open-source deployments where the env var is absent, the mechanism is completely inert.
+Droid discovers this package at runtime via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). When the `_DROID_STARTUP_HOOK_GROUP` environment variable is set (via K8s Secrets in enterprise deployments), Droid calls `importlib.metadata.entry_points()` to find and execute the startup hook declared in this package's `pyproject.toml`. In open-source deployments where the env var is absent, the mechanism is completely inert.
 
 The startup hook performs three tasks during manager initialization:
 
@@ -34,11 +34,11 @@ The startup hook performs three tasks during manager initialization:
 ## Repository Structure
 
 ```
-unity-deploy/
+droid-deploy/
 ├── pyproject.toml                    # Package metadata + entry point declaration
-├── .pre-commit-config.yaml           # Hooks matching Unity's config
+├── .pre-commit-config.yaml           # Hooks matching Droid's config
 ├── base/
-│   ├── Dockerfile                    # Mirrored Unity base-image deploy assets
+│   ├── Dockerfile                    # Mirrored Droid base-image deploy assets
 │   ├── cloudbuild-staging.yaml       # Mirrored base-image Cloud Build config
 │   ├── cloudbuild.yaml               # Mirrored base-image Cloud Build config
 │   ├── entrypoint.sh                 # Mirrored runtime entrypoint
@@ -48,7 +48,7 @@ unity-deploy/
 │   ├── Dockerfile                    # Thin enterprise overlay image
 │   ├── cloudbuild-staging.yaml       # Overlay build trigger for staging
 │   └── cloudbuild.yaml               # Overlay build trigger for production
-└── unity_deploy/
+└── droid_deploy/
     ├── hook.py                       # Entry point: startup_hook()
     └── assistant_deployments/
         ├── clients/
@@ -65,8 +65,8 @@ unity-deploy/
 ## Migration Note
 
 During the hosted deploy split, `base/` is the private mirror of the hosted base-image
-assets that still live in `unity/deploy/` today. Treat `base/` as the canonical private
-copy while the live production/staging triggers continue to run from `unity`; cutover
+assets that still live in `droid/deploy/` today. Treat `base/` as the canonical private
+copy while the live production/staging triggers continue to run from `droid`; cutover
 should happen only after the private path is verified end-to-end.
 
 ## Setup
@@ -74,17 +74,17 @@ should happen only after the private path is verified end-to-end.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone git@github.com:unifyai/unity-deploy.git
-cd unity-deploy
+git clone git@github.com:unifyai/droid-deploy.git
+cd droid-deploy
 uv sync --all-groups
 pre-commit install
 ```
 
 ## Adding a New Client
 
-1. Create a new directory under `unity_deploy/assistant_deployments/clients/<client_name>/`.
-2. Define deployment packages under `deployments/<name>/` (each exposes a `DeploymentSpec`, typically via `get_deployment()`), and an `__init__.py` that builds an `EnvironmentConfig` / `DeploymentMapping` and calls `register_client()` from `unity_deploy.assistant_deployments.deployment_types`.
-3. Add the client import to the bottom of `unity_deploy/assistant_deployments/clients/__init__.py` so the client self-registers at module load time.
+1. Create a new directory under `droid_deploy/assistant_deployments/clients/<client_name>/`.
+2. Define deployment packages under `deployments/<name>/` (each exposes a `DeploymentSpec`, typically via `get_deployment()`), and an `__init__.py` that builds an `EnvironmentConfig` / `DeploymentMapping` and calls `register_client()` from `droid_deploy.assistant_deployments.deployment_types`.
+3. Add the client import to the bottom of `droid_deploy/assistant_deployments/clients/__init__.py` so the client self-registers at module load time.
 4. If the client has seed secrets with runtime values, add entries to `.secrets.json` (gitignored, never committed).
 
 ## Deployment
@@ -93,14 +93,14 @@ Cloud Build triggers fire on branch pushes:
 
 | Branch    | Trigger                    | Image name        | Environment |
 | --------- | -------------------------- | ----------------- | ----------- |
-| `staging` | `unity-deploy-staging`     | `unity-staging`   | Staging     |
-| `main`    | `unity-deploy-production`  | `unity`           | Production  |
+| `staging` | `droid-deploy-staging`     | `droid-staging`   | Staging     |
+| `main`    | `droid-deploy-production`  | `droid`           | Production  |
 
-Each build clones Unity (matching branch), installs this package on top, pushes the image to Artifact Registry, updates the GCS image hash, and refreshes the GKE idle job pool. The communication adapters consume these images without any awareness of the overlay -- the image names and hash mechanism are unchanged.
+Each build clones Droid (matching branch), installs this package on top, pushes the image to Artifact Registry, updates the GCS image hash, and refreshes the GKE idle job pool. The communication adapters consume these images without any awareness of the overlay -- the image names and hash mechanism are unchanged.
 
 ## Branch Convention
 
-Mirrors Unity:
+Mirrors Droid:
 
 - **`staging`** -- development and testing
 - **`main`** -- production

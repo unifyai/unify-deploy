@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import logging
 
-from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.deployment_types import (
+from droid_deploy.assistant_deployments.clients import ClientDeploymentEntry
+from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from droid_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
     GuidanceEntry,
 )
-from unity_deploy import deployment_reconcile
-from unity_deploy.deployment_reconcile import executor
-from unity_deploy.scripts import reconcile_deployment
+from droid_deploy import deployment_reconcile
+from droid_deploy.deployment_reconcile import executor
+from droid_deploy.scripts import reconcile_deployment
 
 
 def _spec(name: str, console_config: dict | None = None) -> DeploymentSpec:
@@ -172,7 +172,7 @@ def test_control_plane_apply_reports_missing_optional_assistant(monkeypatch):
         planes=("control-plane",),
         registry=_optional_registry(),
     )
-    from unity_deploy.deployment_reconcile import control_plane
+    from droid_deploy.deployment_reconcile import control_plane
 
     monkeypatch.setattr(
         control_plane,

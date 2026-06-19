@@ -1,6 +1,6 @@
 # Pipeline Operations And Debugging Guide
 
-This is the operator-facing guide for the Unity parse + ingest pipeline:
+This is the operator-facing guide for the Droid parse + ingest pipeline:
 resource layout, dispatch/monitoring tools, rollout paths, live infra
 reconciliation, and incident triage.
 
@@ -15,13 +15,13 @@ staging uses `-staging`.
 | Resource | Production | Staging |
 | --- | --- | --- |
 | Namespace | `production` | `staging` |
-| Worker image | `unity:latest` | `unity-staging:latest` |
+| Worker image | `droid:latest` | `droid-staging:latest` |
 | Artifact bucket | `gs://bucket` | `gs://bucket` |
-| Parse topic | `unity-parse` | `unity-parse-staging` |
-| Ingest topic | `unity-ingest` | `unity-ingest-staging` |
-| Parse subscription | `unity-parse-sub` | `unity-parse-sub-staging` |
-| Ingest subscription | `unity-ingest-sub` | `unity-ingest-sub-staging` |
-| DLQ subscription | `unity-dead-letter-sub` | `unity-dead-letter-sub-staging` |
+| Parse topic | `droid-parse` | `droid-parse-staging` |
+| Ingest topic | `droid-ingest` | `droid-ingest-staging` |
+| Parse subscription | `droid-parse-sub` | `droid-parse-sub-staging` |
+| Ingest subscription | `droid-ingest-sub` | `droid-ingest-sub-staging` |
+| DLQ subscription | `droid-dead-letter-sub` | `droid-dead-letter-sub-staging` |
 
 These settings should stay identical across production and staging:
 
@@ -40,11 +40,11 @@ The pipeline is driven by Pub/Sub messages and GCS artifacts:
 
 ```mermaid
 flowchart TB
-    dispatch["dispatch_pipeline.py or pipeline_control.py"] --> parseTopic["unity-parse topic"]
+    dispatch["dispatch_pipeline.py or pipeline_control.py"] --> parseTopic["droid-parse topic"]
     parseTopic --> parseSub["parse subscription"]
     parseSub --> parseWorker["parse worker"]
     parseWorker --> artifacts["GCS artifact bucket"]
-    parseWorker --> ingestTopic["unity-ingest topic"]
+    parseWorker --> ingestTopic["droid-ingest topic"]
     ingestTopic --> ingestSub["ingest subscription"]
     ingestSub --> ingestWorker["ingest worker"]
     ingestWorker --> dataManager["FileManager/DataManager context"]
@@ -112,24 +112,24 @@ reconnects should not replay old `Completed job=` lines.
 For config-driven submits:
 
 ```bash
-python -m unity_deploy.infra.cli.pipeline_control submit \
+python -m droid_deploy.infra.cli.pipeline_control submit \
   --config path/to/pipeline_config.json \
   --project Assistants
 
-python -m unity_deploy.infra.cli.pipeline_control monitor \
+python -m droid_deploy.infra.cli.pipeline_control monitor \
   --job-id "$JOB_ID" --follow
 
-python -m unity_deploy.infra.cli.pipeline_control cancel \
+python -m droid_deploy.infra.cli.pipeline_control cancel \
   --job-id "$JOB_ID"
 
-python -m unity_deploy.infra.cli.pipeline_control inspect \
+python -m droid_deploy.infra.cli.pipeline_control inspect \
   --job-id "$JOB_ID"
 ```
 
 For direct dispatch tests:
 
 ```bash
-uv run unity_deploy/scripts/dispatch_pipeline.py \
+uv run droid_deploy/scripts/dispatch_pipeline.py \
   --mode dm \
   --files-from ./files.txt \
   --target-context "SalesData"
@@ -156,10 +156,10 @@ Both production and staging parse/ingest subscriptions should use a 120s
 initial ack deadline:
 
 ```bash
-gcloud pubsub subscriptions update unity-ingest-sub-staging --ack-deadline=120
-gcloud pubsub subscriptions update unity-parse-sub-staging --ack-deadline=120
-gcloud pubsub subscriptions update unity-ingest-sub --ack-deadline=120
-gcloud pubsub subscriptions update unity-parse-sub --ack-deadline=120
+gcloud pubsub subscriptions update droid-ingest-sub-staging --ack-deadline=120
+gcloud pubsub subscriptions update droid-parse-sub-staging --ack-deadline=120
+gcloud pubsub subscriptions update droid-ingest-sub --ack-deadline=120
+gcloud pubsub subscriptions update droid-parse-sub --ack-deadline=120
 ```
 
 Long messages are protected by `LeaseController`, which extends by 300s
@@ -204,10 +204,10 @@ from previous implementations and are also covered.
 Verify worker bucket wiring:
 
 ```bash
-kubectl get deployment unity-ingest-worker -n staging \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNITY_GCS_ARTIFACT_BUCKET")].value}'
-kubectl get deployment unity-ingest-worker -n production \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNITY_GCS_ARTIFACT_BUCKET")].value}'
+kubectl get deployment droid-ingest-worker -n staging \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="DROID_GCS_ARTIFACT_BUCKET")].value}'
+kubectl get deployment droid-ingest-worker -n production \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="DROID_GCS_ARTIFACT_BUCKET")].value}'
 ```
 
 ## Deploying And Reconciling Infra
@@ -287,14 +287,14 @@ the bounded auto-retry policy is implemented.
 Verify:
 
 ```bash
-kubectl get cronjob unity-workers-weekly-rollout -n staging
-kubectl get cronjob unity-workers-weekly-rollout -n production
-kubectl get cronjob unity-failed-pod-gc -n staging
-kubectl get cronjob unity-failed-pod-gc -n production
-kubectl get cronjob unity-pipeline-dlq-reconciler -n staging
-kubectl get cronjob unity-pipeline-dlq-reconciler -n production
-kubectl get cronjob unity-pipeline-stale-reconciler -n staging
-kubectl get cronjob unity-pipeline-stale-reconciler -n production
+kubectl get cronjob droid-workers-weekly-rollout -n staging
+kubectl get cronjob droid-workers-weekly-rollout -n production
+kubectl get cronjob droid-failed-pod-gc -n staging
+kubectl get cronjob droid-failed-pod-gc -n production
+kubectl get cronjob droid-pipeline-dlq-reconciler -n staging
+kubectl get cronjob droid-pipeline-dlq-reconciler -n production
+kubectl get cronjob droid-pipeline-stale-reconciler -n staging
+kubectl get cronjob droid-pipeline-stale-reconciler -n production
 ```
 
 `deploy/k8s/workers/stale-reconciler-cronjob.yaml` runs
@@ -315,10 +315,10 @@ Always resolve the environment explicitly before retrying so the CLI reads
 the matching artifact bucket and Pub/Sub topics:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control status \
+DROID_GCP_PIPELINE_ENVIRONMENT=production \
+DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
+DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m droid_deploy.infra.cli.pipeline_control status \
   --env production \
   --dispatch-id <dispatch-id> \
   --show-dlq \
@@ -330,10 +330,10 @@ Dry-run the retry plan first. This should list only DLQ/stale/error jobs to
 retry and skip successful or actively running jobs:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+DROID_GCP_PIPELINE_ENVIRONMENT=production \
+DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
+DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m droid_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
   --only dlq \
@@ -343,18 +343,18 @@ uv run python -m unity_deploy.infra.cli.pipeline_control retry \
 After confirming the skipped/retry sets are correct, publish retry messages:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+DROID_GCP_PIPELINE_ENVIRONMENT=production \
+DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
+DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m droid_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
   --only dlq \
   --execute
 ```
 
-For staging, use `UNITY_GCP_PIPELINE_ENVIRONMENT=staging`,
-`UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts-staging`, and
+For staging, use `DROID_GCP_PIPELINE_ENVIRONMENT=staging`,
+`DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts-staging`, and
 `--env staging`.
 
 ## Running-Stale Recovery
@@ -365,10 +365,10 @@ retried with the DLQ-only path unless a DLQ record exists. Use stale recovery
 so the CLI can read `jobs/<job_id>/outbox/parse.json` and current checkpoints:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+DROID_GCP_PIPELINE_ENVIRONMENT=production \
+DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
+DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m droid_deploy.infra.cli.pipeline_control recover-stale \
   --env production \
   --dispatch-id <dispatch-id> \
   --dry-run
@@ -381,7 +381,7 @@ that complete jobs will finalize and partial jobs will republish from
 `parse_outbox`:
 
 ```bash
-uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+uv run python -m droid_deploy.infra.cli.pipeline_control recover-stale \
   --env production \
   --dispatch-id <dispatch-id> \
   --execute \
@@ -404,10 +404,10 @@ Verify:
 ```bash
 kubectl get deploy -n custom-metrics custom-metrics-stackdriver-adapter
 kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1" | head
-kubectl describe hpa unity-parse-worker-hpa -n staging | rg "ScalingActive|Metrics"
-kubectl describe hpa unity-ingest-worker-hpa -n staging | rg "ScalingActive|Metrics"
-kubectl describe hpa unity-parse-worker-hpa -n production | rg "ScalingActive|Metrics"
-kubectl describe hpa unity-ingest-worker-hpa -n production | rg "ScalingActive|Metrics"
+kubectl describe hpa droid-parse-worker-hpa -n staging | rg "ScalingActive|Metrics"
+kubectl describe hpa droid-ingest-worker-hpa -n staging | rg "ScalingActive|Metrics"
+kubectl describe hpa droid-parse-worker-hpa -n production | rg "ScalingActive|Metrics"
+kubectl describe hpa droid-ingest-worker-hpa -n production | rg "ScalingActive|Metrics"
 ```
 
 Healthy HPAs show `ScalingActive True` and numeric targets such as
@@ -459,9 +459,9 @@ was still `2Gi`.
 Verify both request and limit after rollout:
 
 ```bash
-kubectl get deployment unity-ingest-worker -n staging -o yaml \
+kubectl get deployment droid-ingest-worker -n staging -o yaml \
   | rg 'autopilot.gke.io/resource-adjustment|ephemeral-storage' -C 2
-kubectl get deployment unity-ingest-worker -n production -o yaml \
+kubectl get deployment droid-ingest-worker -n production -o yaml \
   | rg 'autopilot.gke.io/resource-adjustment|ephemeral-storage' -C 2
 ```
 

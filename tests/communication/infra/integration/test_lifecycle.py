@@ -27,7 +27,7 @@ def test_idle_job_creation(comms, batch_api, job_tracker, poll):
     """Creating a Job via the Comms App produces an idle container with correct labels.
 
     Verifies:
-    - Job is created with unity-status=idle
+    - Job is created with droid-status=idle
     - Job has no assistant-id (INV-3)
     - Idle pool capacity is maintained (INV-5)
     """
@@ -46,12 +46,12 @@ def test_idle_job_creation(comms, batch_api, job_tracker, poll):
     )
 
     assert (
-        labels.get("unity-status") == "idle"
-    ), f"Expected idle, got {labels.get('unity-status')}"
+        labels.get("droid-status") == "idle"
+    ), f"Expected idle, got {labels.get('droid-status')}"
     assert (
         labels.get("assistant-id", "") == ""
     ), f"Idle Job should not have assistant-id, got {labels.get('assistant-id')}"
-    assert labels.get("app") == "unity"
+    assert labels.get("app") == "droid"
 
     idle = count_idle_jobs(batch_api)
     assert idle >= 1, f"Idle pool should have capacity, got {idle}"
@@ -74,7 +74,7 @@ def test_startup_transition_sets_labels(
 
     Verifies:
     - Exactly one Job gets the assistant-id (INV-1)
-    - The Job's unity-status becomes 'running' (INV-2)
+    - The Job's droid-status becomes 'running' (INV-2)
     """
     assistant_id = test_id
     start_real_job(comms, real_assistant_data)
@@ -118,8 +118,8 @@ def test_startup_transition_sets_labels(
 
         labels = get_job_labels(batch_api, job_name)
         assert (
-            labels.get("unity-status") == "running"
-        ), f"Expected unity-status=running, got {labels.get('unity-status')}"
+            labels.get("droid-status") == "running"
+        ), f"Expected droid-status=running, got {labels.get('droid-status')}"
         assert labels.get("assistant-id") == assistant_id.lower().replace("_", "-")
     finally:
         expire_test_assistant_records(assistant_id)

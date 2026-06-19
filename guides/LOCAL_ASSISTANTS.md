@@ -6,11 +6,11 @@ The standard deployment model has three pieces working in concert:
 
 1. **Orchestra** -- database and API for assistant management
 2. **Adapters** (in `communication`) -- Cloud Run webhooks that capture inbound messages from Twilio, Gmail, Teams, etc.
-3. **Unity** -- a GKE job (Kubernetes container) that runs the actual assistant logic
+3. **Droid** -- a GKE job (Kubernetes container) that runs the actual assistant logic
 
-In production, when a message arrives the adapters resolve the assistant, start a Unity GKE job if one isn't already running, and route the message via Pub/Sub. This is great for production but painful for local development: you'd need a running GKE cluster just to iterate on Unity code.
+In production, when a message arrives the adapters resolve the assistant, start a Droid GKE job if one isn't already running, and route the message via Pub/Sub. This is great for production but painful for local development: you'd need a running GKE cluster just to iterate on Droid code.
 
-**Local assistants** solve this by letting you run Unity on your own machine while keeping everything else in production. A local assistant is a real record in the Orchestra database with a flag (`is_local = True`) that tells the adapters to **skip GKE job creation and wakeup calls**. Inbound messages still flow through the production adapters and land on the assistant's Pub/Sub topic -- your local Unity instance subscribes to that topic and picks them up.
+**Local assistants** solve this by letting you run Droid on your own machine while keeping everything else in production. A local assistant is a real record in the Orchestra database with a flag (`is_local = True`) that tells the adapters to **skip GKE job creation and wakeup calls**. Inbound messages still flow through the production adapters and land on the assistant's Pub/Sub topic -- your local Droid instance subscribes to that topic and picks them up.
 
 ### What the `is_local` Flag Controls
 
@@ -27,7 +27,7 @@ The flag is **disabled by default** and is not exposed in the frontend. It's pur
 
 ### How It Replaced "Default Assistants"
 
-Before `is_local`, the adapters used brittle heuristics to avoid starting GKE jobs for certain assistants: checking `"default" in assistant_id` or `int(assistant_id) < 10`. These were fragile, undocumented, and semantically confusing (especially since Unity also uses `UNASSIGNED_ASSISTANT_ID` as a sentinel for idle containers, which is an entirely separate concept). The `is_local` flag replaces all of those heuristics with a single, explicit boolean on the assistant record.
+Before `is_local`, the adapters used brittle heuristics to avoid starting GKE jobs for certain assistants: checking `"default" in assistant_id` or `int(assistant_id) < 10`. These were fragile, undocumented, and semantically confusing (especially since Droid also uses `UNASSIGNED_ASSISTANT_ID` as a sentinel for idle containers, which is an entirely separate concept). The `is_local` flag replaces all of those heuristics with a single, explicit boolean on the assistant record.
 
 ## Creating a Local Assistant
 
@@ -41,7 +41,7 @@ The script `scripts/local_assistant.py` handles creation and env-var generation.
 python scripts/local_assistant.py --api-key YOUR_KEY --name "Dev Assistant"
 ```
 
-This calls `POST /v0/assistant` with `is_local=True` and `create_infra=False`, then prints the environment variables Unity needs. If an assistant with that name already exists under your account, the script fetches it instead of creating a duplicate.
+This calls `POST /v0/assistant` with `is_local=True` and `create_infra=False`, then prints the environment variables Droid needs. If an assistant with that name already exists under your account, the script fetches it instead of creating a duplicate.
 
 **Fetch an existing assistant by ID:**
 
@@ -89,19 +89,19 @@ export USER_EMAIL="you@unify.ai"
 export UNIFY_KEY="YOUR_KEY"
 ```
 
-## Running Unity Locally
+## Running Droid Locally
 
-Once you have the env vars set, start Unity:
+Once you have the env vars set, start Droid:
 
 ```bash
 # Source the assistant env vars
 source <(python scripts/local_assistant.py --api-key YOUR_KEY --name "Dev")
 
-# Run unity (assumes all other env vars like GCP_SA_KEY, etc. are in your .env)
-uv run python -m unity
+# Run droid (assumes all other env vars like GCP_SA_KEY, etc. are in your .env)
+uv run python -m droid
 ```
 
-Unity will subscribe to the assistant's Pub/Sub topic and begin processing inbound messages routed by the production adapters.
+Droid will subscribe to the assistant's Pub/Sub topic and begin processing inbound messages routed by the production adapters.
 
 ### With Infrastructure Provisioned
 
@@ -120,7 +120,7 @@ Then use the script to fetch the env vars by ID:
 source <(python scripts/local_assistant.py --api-key YOUR_KEY --id <agent_id>)
 ```
 
-This provisions a real phone number, email address, and Pub/Sub topic. When someone sends a message to that number or email, the production adapters pick it up, see `is_local=True`, skip GKE job creation, and publish to the Pub/Sub topic. Your local Unity instance (subscribed to that topic) processes the message.
+This provisions a real phone number, email address, and Pub/Sub topic. When someone sends a message to that number or email, the production adapters pick it up, see `is_local=True`, skip GKE job creation, and publish to the Pub/Sub topic. Your local Droid instance (subscribed to that topic) processes the message.
 
 ## Implementation Details
 
@@ -130,7 +130,7 @@ This provisions a real phone number, email address, and Pub/Sub topic. When some
 |---|---|
 | **Orchestra** | `is_local` column on `assistants` table, wired through DAO / schema / views. Wakeup skipped for local assistants. |
 | **Communication** | Adapters read `is_local` from Orchestra API response. All old "default assistant" string heuristics replaced with `assistant_data.get("is_local", False)`. |
-| **Unity** | `UNASSIGNED_ASSISTANT_ID` sentinel value changed from `"default-assistant"` to `"unassigned"` to avoid confusion with the local assistant concept. New `scripts/local_assistant.py` added. |
+| **Droid** | `UNASSIGNED_ASSISTANT_ID` sentinel value changed from `"default-assistant"` to `"unassigned"` to avoid confusion with the local assistant concept. New `scripts/local_assistant.py` added. |
 
 ### Key Code Paths
 

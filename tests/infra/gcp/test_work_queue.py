@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity_deploy.infra.gcp.work_queue import PubSubWorkQueue
+from droid.common.pipeline.retry_policy import ResilientRequestPolicy
+from droid_deploy.infra.gcp.work_queue import PubSubWorkQueue
 
 
 def _make_queue() -> tuple[PubSubWorkQueue, MagicMock]:

@@ -2,10 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: unity-ingest-worker
+  name: droid-ingest-worker
   namespace: staging
   labels:
-    app: unity-ingest-worker
+    app: droid-ingest-worker
     component: pipeline-worker
     environment: staging
 spec:
@@ -18,17 +18,17 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: unity-ingest-worker
+      app: droid-ingest-worker
   template:
     metadata:
       labels:
-        app: unity-ingest-worker
+        app: droid-ingest-worker
         component: pipeline-worker
         environment: staging
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      serviceAccountName: unity-pipeline-worker
+      serviceAccountName: droid-pipeline-worker
       # Ingest workers checkpoint per-chunk to GCS
       # (`_make_checkpoint_callback` in ingest_worker.py), so a
       # SIGKILL after the grace window only loses the current chunk:
@@ -41,11 +41,11 @@ spec:
       terminationGracePeriodSeconds: 600
       containers:
       - name: ingest-worker
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-staging:latest
         command:
         - python
         - -m
-        - unity_deploy.infra.workers.entrypoint_ingest
+        - droid_deploy.infra.workers.entrypoint_ingest
         lifecycle:
           preStop:
             exec:
@@ -60,18 +60,18 @@ spec:
             memory: "3Gi"
             ephemeral-storage: "4Gi"
         env:
-        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+        - name: DROID_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
-        - name: UNITY_GCS_ARTIFACT_BUCKET
-          value: "unity-pipeline-artifacts-staging"
+        - name: DROID_GCS_ARTIFACT_BUCKET
+          value: "droid-pipeline-artifacts-staging"
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: unity-secrets
+              name: droid-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: UNITY_PUBSUB_PROJECT_ID
+        - name: DROID_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"
@@ -89,7 +89,7 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: unity-ingest-worker-hpa
+  name: droid-ingest-worker-hpa
   namespace: staging
   labels:
     environment: staging
@@ -97,7 +97,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: unity-ingest-worker
+    name: droid-ingest-worker
   minReplicas: 1
   maxReplicas: 15
   metrics:
@@ -107,7 +107,7 @@ spec:
         name: pubsub.googleapis.com|subscription|num_undelivered_messages
         selector:
           matchLabels:
-            resource.labels.subscription_id: unity-ingest-sub-staging
+            resource.labels.subscription_id: droid-ingest-sub-staging
       target:
         type: AverageValue
         averageValue: "1"
@@ -135,7 +135,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: unity-ingest-worker-pdb
+  name: droid-ingest-worker-pdb
   namespace: staging
   labels:
     environment: staging
@@ -143,4 +143,4 @@ spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: unity-ingest-worker
+      app: droid-ingest-worker

@@ -193,7 +193,7 @@ def _trigger_task_entries(
     return _with_mutable_explicit_types(entries)
 
 
-def _create_unity_task_log(
+def _create_droid_task_log(
     assistant_data: dict[str, Any],
     entries: dict[str, Any],
 ) -> int:
@@ -216,7 +216,7 @@ def _create_unity_task_log(
     return int(response.json()["log_event_ids"][0])
 
 
-def _delete_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> None:
+def _delete_droid_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> None:
     """Delete task rows created by the test."""
 
     if not log_ids:
@@ -237,13 +237,13 @@ def _delete_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> No
     )
 
 
-def _cleanup_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> None:
+def _cleanup_droid_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> None:
     """Best-effort cleanup so teardown never hides the original failure."""
 
     if not log_ids:
         return
     try:
-        _delete_unity_logs(assistant_data, log_ids)
+        _delete_droid_logs(assistant_data, log_ids)
     except AssertionError as exc:
         print(f"[Cleanup] Failed deleting task rows {log_ids}: {exc}")
 
@@ -329,7 +329,7 @@ def _wait_for_activation(
     )
 
 
-def _wait_for_unity_log_substring(
+def _wait_for_droid_log_substring(
     assistant_id: str,
     substring: str,
     *,
@@ -338,7 +338,7 @@ def _wait_for_unity_log_substring(
     gce_client=None,
     timeout: float = 180,
 ) -> list[str]:
-    """Poll Unity container logs until a line contains the requested substring."""
+    """Poll Droid container logs until a line contains the requested substring."""
 
     return poll_until(
         lambda: (
@@ -354,7 +354,7 @@ def _wait_for_unity_log_substring(
                             gce_client=gce_client,
                         )
                         .get("recent_logs", {})
-                        .get("unity", [])
+                        .get("droid", [])
                     )
                     if substring in line
                 ]
@@ -363,7 +363,7 @@ def _wait_for_unity_log_substring(
         ),
         timeout=timeout,
         interval=5,
-        description=f"Unity logs for assistant {assistant_id} to contain {substring!r}",
+        description=f"Droid logs for assistant {assistant_id} to contain {substring!r}",
         failure_snapshot=lambda: _assistant_readiness_snapshot(
             assistant_id,
             batch_api=batch_api,
@@ -418,7 +418,7 @@ class TestTaskActivationFlows:
                 datetime.now(UTC) + timedelta(seconds=TASK_DUE_LEAD_SECONDS)
             ).replace(microsecond=0)
             task_id = _task_id_seed()
-            log_id = _create_unity_task_log(
+            log_id = _create_droid_task_log(
                 assistant,
                 _scheduled_task_entries(
                     assistant,
@@ -485,7 +485,7 @@ class TestTaskActivationFlows:
                 timeout=300,
                 interval=5,
             )
-            _wait_for_unity_log_substring(
+            _wait_for_droid_log_substring(
                 assistant_id,
                 f"Accepted due task {task_id}",
                 batch_api=batch_api,
@@ -494,7 +494,7 @@ class TestTaskActivationFlows:
             )
             _assert_no_outbound_messages(subscriber, assistant_id)
         finally:
-            _cleanup_unity_logs(assistant, created_log_ids)
+            _cleanup_droid_logs(assistant, created_log_ids)
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
@@ -566,7 +566,7 @@ class TestTaskActivationFlows:
             ).replace(microsecond=0)
             task_id = _task_id_seed()
             created_log_ids.append(
-                _create_unity_task_log(
+                _create_droid_task_log(
                     assistant,
                     _scheduled_task_entries(
                         assistant,
@@ -577,7 +577,7 @@ class TestTaskActivationFlows:
             )
             _wait_for_activation(assistant, task_id)
 
-            _wait_for_unity_log_substring(
+            _wait_for_droid_log_substring(
                 assistant_id,
                 f"Accepted due task {task_id}",
                 batch_api=batch_api,
@@ -608,7 +608,7 @@ class TestTaskActivationFlows:
             )
             assert "wake_reasons" not in bootstrap_after
         finally:
-            _cleanup_unity_logs(assistant, created_log_ids)
+            _cleanup_droid_logs(assistant, created_log_ids)
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
@@ -656,7 +656,7 @@ class TestTaskActivationFlows:
             offline_task_id = live_task_id + 1
             created_log_ids.extend(
                 [
-                    _create_unity_task_log(
+                    _create_droid_task_log(
                         assistant,
                         _trigger_task_entries(
                             assistant,
@@ -664,7 +664,7 @@ class TestTaskActivationFlows:
                             from_contact_ids=[1],
                         ),
                     ),
-                    _create_unity_task_log(
+                    _create_droid_task_log(
                         assistant,
                         _trigger_task_entries(
                             assistant,
@@ -690,7 +690,7 @@ class TestTaskActivationFlows:
                 message_response.status_code == 200
             ), f"Message send failed: {message_response.status_code} {message_response.text}"
 
-            _wait_for_unity_log_substring(
+            _wait_for_droid_log_substring(
                 assistant_id,
                 f"Matched trigger candidates [{live_task_id}]",
                 batch_api=batch_api,
@@ -722,7 +722,7 @@ class TestTaskActivationFlows:
             )
             assert messages, f"Expected an outbound reply containing {token}"
         finally:
-            _cleanup_unity_logs(assistant, created_log_ids)
+            _cleanup_droid_logs(assistant, created_log_ids)
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
@@ -748,7 +748,7 @@ class TestTaskActivationFlows:
             ).replace(microsecond=0)
             task_id = _task_id_seed()
             created_log_ids.append(
-                _create_unity_task_log(
+                _create_droid_task_log(
                     assistant,
                     _scheduled_task_entries(
                         assistant,
@@ -781,7 +781,7 @@ class TestTaskActivationFlows:
                 f"for assistant {assistant_id}"
             )
         finally:
-            _cleanup_unity_logs(assistant, created_log_ids)
+            _cleanup_droid_logs(assistant, created_log_ids)
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],

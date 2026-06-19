@@ -10,7 +10,7 @@
 #
 # GCP Metadata Keys:
 #   dns-project       - GCP project that owns the Cloud DNS zone (for ACME DNS-01)
-#   gcs-bucket        - GCS bucket for tunnel config (default: unity-tunnel-config)
+#   gcs-bucket        - GCS bucket for tunnel config (default: droid-tunnel-config)
 #   tunnel-domain     - Base tunnel domain (default: tunnel.unify.ai)
 #   control-port      - rathole control port (default: 7000)
 #
@@ -20,12 +20,18 @@
 #   registry.json     - full tunnel metadata (not used by this VM directly)
 #
 # Usage:
-#   gcloud compute instances create unity-tunnel-server \
+#   gcloud compute instances create droid-tunnel-server \
 #     --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
 #     --machine-type=e2-small --zone=us-central1-a \
-#     --tags=unity-tunnel-server,https-server,http-server,allow-tunnel \
+#     --tags=droid-tunnel-server,https-server,http-server,allow-tunnel \
+#     --labels=environment=production,owner=platform,project=droid,dataclassification=confidential,application=tunnel-server \
 #     --metadata-from-file=startup-script=tunnel-server-startup.sh \
-#     --metadata=dns-project=gcp-project-dns,gcs-bucket=unity-tunnel-config,tunnel-domain=tunnel.unify.ai
+#     --metadata=dns-project=gcp-project-dns,gcs-bucket=droid-tunnel-config,tunnel-domain=tunnel.unify.ai
+#
+# The --labels flag carries the governance labels required by the Vanta GCE
+# required-labels test; every instance must be created with them. For the
+# staging server (droid-tunnel-server-staging) set environment=staging and
+# keep the other four label values identical.
 # =============================================================================
 
 set -e
@@ -65,7 +71,7 @@ CONTROL_PORT=$(get_metadata "control-port")
 
 # Defaults
 DNS_PROJECT=${DNS_PROJECT:-"gcp-project-dns"}
-GCS_BUCKET=${GCS_BUCKET:-"unity-tunnel-config"}
+GCS_BUCKET=${GCS_BUCKET:-"droid-tunnel-config"}
 TUNNEL_DOMAIN=${TUNNEL_DOMAIN:-"tunnel.unify.ai"}
 CONTROL_PORT=${CONTROL_PORT:-"7000"}
 
@@ -298,7 +304,7 @@ echo "=== Generating client install script ==="
 
 cat > "${STATIC_DIR}/install.sh" << 'INSTALLEOF'
 #!/bin/bash
-# Unity Tunnel Client Installer
+# Droid Tunnel Client Installer
 #
 # Usage:
 #   curl -sSL https://__TUNNEL_DOMAIN__/install.sh | bash -s -- \
@@ -326,7 +332,7 @@ fi
 TUNNEL_DOMAIN="__TUNNEL_DOMAIN__"
 CONTROL_PORT="__CONTROL_PORT__"
 
-echo "=== Unity Tunnel Client ==="
+echo "=== Droid Tunnel Client ==="
 echo "  Tunnel ID:  $TUNNEL_ID"
 echo "  Local Port: $LOCAL_PORT"
 echo "  URL:        https://${TUNNEL_ID}.${TUNNEL_DOMAIN}"
@@ -367,7 +373,7 @@ case "$OS" in
         ;;
 esac
 
-INSTALL_DIR="${HOME}/.unity-tunnel"
+INSTALL_DIR="${HOME}/.droid-tunnel"
 mkdir -p "$INSTALL_DIR"
 
 # Download rathole if needed
@@ -419,7 +425,7 @@ echo ""
 echo "=== Generating Windows client install script ==="
 
 cat > "${STATIC_DIR}/install.ps1" << 'PS1EOF'
-# Unity Tunnel Client Installer (Windows)
+# Droid Tunnel Client Installer (Windows)
 #
 # Usage:
 #   irm https://__TUNNEL_DOMAIN__/install.ps1 -OutFile install.ps1
@@ -437,7 +443,7 @@ $RatholeVersion = "0.5.0"
 $TunnelDomain = "__TUNNEL_DOMAIN__"
 $ControlPort = "__CONTROL_PORT__"
 
-Write-Host "=== Unity Tunnel Client ===" -ForegroundColor Cyan
+Write-Host "=== Droid Tunnel Client ===" -ForegroundColor Cyan
 Write-Host "  Tunnel ID:  $TunnelId"
 Write-Host "  Local Port: $LocalPort"
 Write-Host "  URL:        https://$TunnelId.$TunnelDomain"
@@ -446,7 +452,7 @@ Write-Host ""
 # Detect architecture
 $Arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "i686" }
 
-$InstallDir = Join-Path $env:USERPROFILE ".unity-tunnel"
+$InstallDir = Join-Path $env:USERPROFILE ".droid-tunnel"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 $RatholeBin = Join-Path $InstallDir "rathole.exe"

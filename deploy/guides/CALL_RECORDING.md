@@ -58,7 +58,7 @@ This document is the ground truth for how voice calls and Unify Meets are record
                                                       │ recording_ready   │
                                                       ▼                   │
                                                ┌──────────────────┐       │
-                                               │  Unity receives  │◄──────┘
+                                               │  Droid receives  │◄──────┘
                                                │  RecordingReady  │  (URL references
                                                │  event           │   the GCS file)
                                                └──────┬───────────┘
@@ -94,7 +94,7 @@ The egress is started via `start_room_egress()` (or `create_room_and_dispatch_ag
 - **Format:** MP3 (audio-only, `file_type=3`)
 - **Mixing:** Room Composite — all audio tracks in the room are mixed into a single file
 - **Upload target:** GCS bucket via `GCPUpload` with credentials from `LIVEKIT_EGRESS_GCS_CREDENTIALS`
-- **Webhook:** On completion, LiveKit calls `{UNITY_ADAPTERS_URL}/livekit/recording-complete?assistant_id=X&room_name=Y`, signed with `LIVEKIT_API_KEY`
+- **Webhook:** On completion, LiveKit calls `{DROID_ADAPTERS_URL}/livekit/recording-complete?assistant_id=X&room_name=Y`, signed with `LIVEKIT_API_KEY`
 
 ### When Egress Starts
 
@@ -103,7 +103,7 @@ The egress is started via `start_room_egress()` (or `create_room_and_dispatch_ag
 | **Phone call** (Twilio inbound) | After Twilio conference setup in the adapter webhook | `adapters/main.py` line ~177: `await start_room_egress(room_name, assistant_id)` |
 | **Unify Meet** (browser WebRTC) | Inside `create_room_and_dispatch_agent()` when `record=True` | `common/livekit.py` — called from the `/dispatch-livekit-agent` endpoint |
 
-All room names are produced by `make_room_name(assistant_id, medium)` which returns `unity_{assistant_id}_{medium}`. For phone calls: `unity_25_phone`. For Unify Meets: `unity_25_meet`. For Teams calls: `unity_25_teams`. The same value is used as both the LiveKit room name and the agent name.
+All room names are produced by `make_room_name(assistant_id, medium)` which returns `droid_{assistant_id}_{medium}`. For phone calls: `droid_25_phone`. For Unify Meets: `droid_25_meet`. For Teams calls: `droid_25_teams`. The same value is used as both the LiveKit room name and the agent name.
 
 ### Egress Lifecycle
 
@@ -117,7 +117,7 @@ All room names are produced by `make_room_name(assistant_id, medium)` which retu
 
 ## GCS Storage Layout
 
-**Bucket:** `unity-call-recordings` (configurable via `LIVEKIT_EGRESS_GCS_BUCKET`)
+**Bucket:** `droid-call-recordings` (configurable via `LIVEKIT_EGRESS_GCS_BUCKET`)
 
 **File path pattern:** `{environment}/{assistant_id}/{room_name}_{timestamp}.mp3`
 
@@ -125,12 +125,12 @@ The timestamp is UTC in `YYYY-MM-DDTHH-MM-SS` format, generated at egress start 
 
 | Environment | Prefix | Example Path |
 |-------------|--------|--------------|
-| Staging | `staging/` | `staging/25/unity_25_phone_2026-02-19T16-30-45.mp3` |
-| Production | `production/` | `production/25/unity_25_phone_2026-02-19T16-30-45.mp3` |
+| Staging | `staging/` | `staging/25/droid_25_phone_2026-02-19T16-30-45.mp3` |
+| Production | `production/` | `production/25/droid_25_phone_2026-02-19T16-30-45.mp3` |
 
 The environment is determined by the `STAGING` env var in the Communication service. If `STAGING` is truthy, the prefix is `staging`; otherwise `production`.
 
-**Public URL format:** `https://storage.googleapis.com/unity-call-recordings/{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3`
+**Public URL format:** `https://storage.googleapis.com/droid-call-recordings/{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3`
 
 This is the URL stored in exchange metadata as `recording_url`. The Console's `AudioPlayer` component can take this URL and generate a signed URL for playback via the Console's own `/api/media/get` route.
 
@@ -138,7 +138,7 @@ This is the URL stored in exchange metadata as `recording_url`. The Console's `A
 
 ## Pub/Sub Event: recording_ready
 
-When LiveKit Egress completes and the webhook fires, the **adapter** (not the comms app) handles the webhook, ensures the assistant's Unity container is running, and publishes a Pub/Sub message to the assistant's topic.
+When LiveKit Egress completes and the webhook fires, the **adapter** (not the comms app) handles the webhook, ensures the assistant's Droid container is running, and publishes a Pub/Sub message to the assistant's topic.
 
 ### Message Format
 
@@ -147,22 +147,22 @@ When LiveKit Egress completes and the webhook fires, the **adapter** (not the co
     "thread": "recording_ready",
     "event": {
         "assistant_id": "25",
-        "conference_name": "unity_25_phone",
-        "recording_url": "https://storage.googleapis.com/unity-call-recordings/staging/25/unity_25_phone_2026-02-19T16-30-45.mp3"
+        "conference_name": "droid_25_phone",
+        "recording_url": "https://storage.googleapis.com/droid-call-recordings/staging/25/droid_25_phone_2026-02-19T16-30-45.mp3"
     }
 }
 ```
 
 **Key fields:**
-- `conference_name` — the LiveKit room name (produced by `make_room_name()`). This is the join key used to match the recording to its exchange. For phone calls: `unity_25_phone`, for Unify Meets: `unity_25_meet`.
+- `conference_name` — the LiveKit room name (produced by `make_room_name()`). This is the join key used to match the recording to its exchange. For phone calls: `droid_25_phone`, for Unify Meets: `droid_25_meet`.
 - `recording_url` — the public GCS URL for the MP3 file.
 
 ### Publishing Logic
 
 The `/livekit/recording-complete` adapter endpoint in `adapters/main.py`:
 1. Verifies the LiveKit webhook signature via `verify_livekit_webhook()` (shared helper in `common/livekit.py`)
-2. Calls `build_webhook_context()` with `validate_contact=False, ensure_job=True` to ensure the assistant's Unity container is alive (starts a new job if the container shut down while waiting for the recording)
-3. Constructs the Pub/Sub topic name: `unity-{assistant_id}[-staging]`
+2. Calls `build_webhook_context()` with `validate_contact=False, ensure_job=True` to ensure the assistant's Droid container is alive (starts a new job if the container shut down while waiting for the recording)
+3. Constructs the Pub/Sub topic name: `droid-{assistant_id}[-staging]`
 4. Publishes the `recording_ready` JSON message to that topic
 
 ---
@@ -177,8 +177,8 @@ Exchanges support arbitrary `metadata` (a dict). The recording-related keys are:
 
 | Key | Set When | Set By | Value |
 |-----|----------|--------|-------|
-| `conference_name` | Phone call ends (`PhoneCallEnded`) | Event handler in `event_handlers.py` | Twilio conference name, e.g. `Unity_12025551234_2026_02_18_10_30_00` |
-| `room_name` | Unify Meet ends (`UnifyMeetEnded`) | Event handler in `event_handlers.py` | LiveKit room name, e.g. `unity_25_meet` |
+| `conference_name` | Phone call ends (`PhoneCallEnded`) | Event handler in `event_handlers.py` | Twilio conference name, e.g. `Droid_12025551234_2026_02_18_10_30_00` |
+| `room_name` | Unify Meet ends (`UnifyMeetEnded`) | Event handler in `event_handlers.py` | LiveKit room name, e.g. `droid_25_meet` |
 | `recording_url` | Recording is ready (`RecordingReady`) | Event handler in `event_handlers.py` | Full GCS public URL |
 
 ### How Exchange Metadata is Populated
@@ -212,8 +212,8 @@ After both steps complete, the exchange for a call looks like:
     "exchange_id": 42,
     "medium": "phone_call",  # or "unify_meet"
     "metadata": {
-        "conference_name": "Unity_12025551234_2026_02_18_10_30_00",  # or "room_name" for meets
-        "recording_url": "https://storage.googleapis.com/unity-call-recordings/staging/25/unity_25_phone_2026-02-19T16-30-45.mp3"
+        "conference_name": "Droid_12025551234_2026_02_18_10_30_00",  # or "room_name" for meets
+        "recording_url": "https://storage.googleapis.com/droid-call-recordings/staging/25/droid_25_phone_2026-02-19T16-30-45.mp3"
     },
     "messages": [
         {"content": "Hello?", "sender_id": 1, "metadata": {"call_utterance_timestamp": "00.03"}},
@@ -256,10 +256,10 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
 
 1. **Incoming call** → Twilio webhook hits `adapters/main.py` `/twilio/call`
 2. **Conference setup** → `create_conference_response()` creates a Twilio Conference (no recording flag — recording is handled by LiveKit)
-3. **SIP bridge** → Twilio bridges the PSTN caller to a LiveKit room via SIP trunk. Room name: `unity_{assistant_id}_phone` (from `make_room_name()`)
+3. **SIP bridge** → Twilio bridges the PSTN caller to a LiveKit room via SIP trunk. Room name: `droid_{assistant_id}_phone` (from `make_room_name()`)
 4. **Start egress** → `await start_room_egress(room_name, assistant_id)` starts LiveKit Room Composite Egress on the room (fire-and-forget, errors are non-fatal)
-5. **Pub/Sub** → Adapter publishes `call` thread event to `unity-{assistant_id}[-staging]` topic
-6. **Unity receives call** → `CommsManager` routes to `PhoneCallReceived` event → sets `conference_name` on `call_manager`
+5. **Pub/Sub** → Adapter publishes `call` thread event to `droid-{assistant_id}[-staging]` topic
+6. **Droid receives call** → `CommsManager` routes to `PhoneCallReceived` event → sets `conference_name` on `call_manager`
 7. **Call starts** → `PhoneCallStarted` event → sets `call_start_timestamp` on `call_manager`
 8. **Utterances** → Each utterance is logged with `call_utterance_timestamp` in message metadata
 9. **LiveKit Egress records** → Server-side, LiveKit mixes all audio tracks in the room into a single MP3, streaming to GCS
@@ -268,8 +268,8 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
     - Stashes `conference_name -> exchange_id` in `_recording_exchange_ids`
     - Clears all session state (timestamps, exchange IDs, conference_name)
 11. **Egress completes** → LiveKit finishes writing MP3 to GCS, fires webhook to `/livekit/recording-complete` on the adapters
-12. **Adapter handler** → Verifies LiveKit signature, ensures Unity container is alive (starts a job if needed), constructs `recording_url`, publishes `recording_ready` Pub/Sub event
-13. **Unity receives recording** → `CommsManager` routes to `RecordingReady` event → handler looks up `exchange_id` from `_recording_exchange_ids`, stores `recording_url` on exchange metadata
+12. **Adapter handler** → Verifies LiveKit signature, ensures Droid container is alive (starts a job if needed), constructs `recording_url`, publishes `recording_ready` Pub/Sub event
+13. **Droid receives recording** → `CommsManager` routes to `RecordingReady` event → handler looks up `exchange_id` from `_recording_exchange_ids`, stores `recording_url` on exchange metadata
 
 ---
 
@@ -278,8 +278,8 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
 1. **User starts meet** → Console/frontend calls `/phone/dispatch-livekit-agent` with `record=True`, `assistant_id`, `room_name`
 2. **Room creation + agent dispatch** → `create_room_and_dispatch_agent()` in `common/livekit.py` creates a LiveKit room and dispatches the AI agent
 3. **Start egress** → Since `record=True`, `_start_room_egress()` is called immediately after agent dispatch
-4. **Pub/Sub** → A `unify_meet` thread event is published to `unity-{assistant_id}[-staging]` topic
-5. **Unity receives meet** → `CommsManager` routes to `UnifyMeetReceived` event → `call_manager.start_unify_meet()` sets `room_name` on `call_manager`
+4. **Pub/Sub** → A `unify_meet` thread event is published to `droid-{assistant_id}[-staging]` topic
+5. **Droid receives meet** → `CommsManager` routes to `UnifyMeetReceived` event → `call_manager.start_unify_meet()` sets `room_name` on `call_manager`
 6. **Meet starts** → `UnifyMeetStarted` event → sets `unify_meet_start_timestamp` on `call_manager`
 7. **Utterances** → Each utterance is logged with `call_utterance_timestamp` in message metadata
 8. **LiveKit Egress records** → Same as phone calls — full room audio mixed to MP3
@@ -288,7 +288,7 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
     - Stashes `room_name -> exchange_id` in `_recording_exchange_ids`
     - Clears all session state
 10. **Egress completes** → Same adapter webhook flow as phone calls (`/livekit/recording-complete`)
-11. **Unity receives recording** → Same `RecordingReady` handler as phone calls
+11. **Droid receives recording** → Same `RecordingReady` handler as phone calls
 
 ---
 
@@ -303,16 +303,16 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
 | `adapters/helpers.py` | Imports `start_room_egress` from `common.livekit`, `create_conference_response()` (no recording flag) |
 | `communication/phone/views.py` | `/dispatch-livekit-agent` endpoint (for Unify Meets) |
 
-### Unity (`unity/`)
+### Droid (`droid/`)
 
 | File | Role |
 |------|------|
-| `unity/conversation_manager/events.py` | `RecordingReady` event dataclass |
-| `unity/conversation_manager/comms_manager.py` | Routes `recording_ready` Pub/Sub thread to `RecordingReady` event |
-| `unity/conversation_manager/domains/event_handlers.py` | `RecordingReady` handler (stores URL on exchange), `PhoneCallEnded`/`UnifyMeetEnded` handler (stores session ID on exchange) |
-| `unity/conversation_manager/domains/call_manager.py` | `make_room_name()`, `conference_name` and `room_name` attributes, `start_call()`, `start_unify_meet()` |
-| `unity/conversation_manager/domains/managers_utils.py` | `call_utterance_timestamp` computation and storage in message metadata |
-| `unity/conversation_manager/conversation_manager.py` | `_recording_exchange_ids: dict[str, int]` in-memory mapping |
+| `droid/conversation_manager/events.py` | `RecordingReady` event dataclass |
+| `droid/conversation_manager/comms_manager.py` | Routes `recording_ready` Pub/Sub thread to `RecordingReady` event |
+| `droid/conversation_manager/domains/event_handlers.py` | `RecordingReady` handler (stores URL on exchange), `PhoneCallEnded`/`UnifyMeetEnded` handler (stores session ID on exchange) |
+| `droid/conversation_manager/domains/call_manager.py` | `make_room_name()`, `conference_name` and `room_name` attributes, `start_call()`, `start_unify_meet()` |
+| `droid/conversation_manager/domains/managers_utils.py` | `call_utterance_timestamp` computation and storage in message metadata |
+| `droid/conversation_manager/conversation_manager.py` | `_recording_exchange_ids: dict[str, int]` in-memory mapping |
 
 ### Orchestra (`orchestra/`)
 
@@ -337,7 +337,7 @@ The Console's `AudioPlayer` component handles playback of recording URLs. When a
 | `LIVEKIT_API_KEY` | Communication (adapters + comms app) | LiveKit API key — used to start egress and verify webhook signatures |
 | `LIVEKIT_API_SECRET` | Communication (adapters) | LiveKit API secret — used alongside `LIVEKIT_API_KEY` for webhook verification |
 | `LIVEKIT_URL` | Communication (adapters + comms app) | LiveKit server URL |
-| `UNITY_ADAPTERS_URL` | Communication (adapters + comms app) | Public URL of the adapters service — used as the base for the egress webhook callback |
+| `DROID_ADAPTERS_URL` | Communication (adapters + comms app) | Public URL of the adapters service — used as the base for the egress webhook callback |
 | `GCP_PROJECT_ID` | Communication (adapters) | GCP project ID — used for Pub/Sub topic path construction |
 | `STAGING` | Communication (adapters + comms app) | If truthy, recordings go to `staging/` prefix; otherwise `production/` |
 
@@ -345,7 +345,7 @@ The Console's `AudioPlayer` component handles playback of recording URLs. When a
 
 | Variable | Service | Default | Purpose |
 |----------|---------|---------|---------|
-| `LIVEKIT_EGRESS_GCS_BUCKET` | Communication | `unity-call-recordings` | GCS bucket name for recordings |
+| `LIVEKIT_EGRESS_GCS_BUCKET` | Communication | `droid-call-recordings` | GCS bucket name for recordings |
 
 ---
 
@@ -355,13 +355,13 @@ For recording to work end-to-end, the following must be true:
 
 1. **LiveKit Egress must be enabled** on the LiveKit Cloud project (or a self-hosted Egress service must be running). Without this, `start_room_composite_egress` API calls will fail.
 
-2. **`GCP_SA_KEY`** must be set on both the adapters and communication Cloud Run services. This is a GCS service account JSON string with write permissions on the `unity-call-recordings` bucket. This is the same key already used by the adapters for other GCS operations (message attachments, Gmail).
+2. **`GCP_SA_KEY`** must be set on both the adapters and communication Cloud Run services. This is a GCS service account JSON string with write permissions on the `droid-call-recordings` bucket. This is the same key already used by the adapters for other GCS operations (message attachments, Gmail).
 
-3. **`UNITY_ADAPTERS_URL` must be publicly reachable** from LiveKit's infrastructure, so the egress completion webhook can reach `/livekit/recording-complete` on the adapters.
+3. **`DROID_ADAPTERS_URL` must be publicly reachable** from LiveKit's infrastructure, so the egress completion webhook can reach `/livekit/recording-complete` on the adapters.
 
 4. **The `/livekit/recording-complete` adapter endpoint** has no application-level auth beyond LiveKit's own webhook signing (verified via `WebhookReceiver`/`TokenVerifier`). If there's infrastructure-level auth (API gateway, load balancer) that blocks unauthenticated requests to the adapters service, the webhook will be rejected.
 
-5. **The GCS bucket `unity-call-recordings` must exist** in the GCP project (`<gcp-project-comms>`), with the service account from `GCP_SA_KEY` having write access.
+5. **The GCS bucket `droid-call-recordings` must exist** in the GCP project (`<gcp-project-comms>`), with the service account from `GCP_SA_KEY` having write access.
 
 6. **GCP_PROJECT_ID** must be set (already required for all other Pub/Sub publishing).
 

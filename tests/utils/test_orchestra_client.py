@@ -4,7 +4,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from unity_deploy.utils import orchestra_client
+from droid_deploy.utils import orchestra_client
 
 
 class _FakeResponse:

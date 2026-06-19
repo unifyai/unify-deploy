@@ -66,7 +66,7 @@ def _job(
         metadata=SimpleNamespace(
             name=job_name,
             labels={
-                "app": "unity",
+                "app": "droid",
                 "assistant-id": assistant_id,
                 controller.SESSION_REF_LABEL: session_name,
                 controller.BINDING_ID_LABEL: binding_id,
@@ -277,9 +277,9 @@ class AssistantSessionComponentHarness:
     assistant_id: str = "1207"
     binding_id: str = "binding-1"
     activation_id: str = "act-1"
-    job_name: str = "unity-job-1"
-    pod_name: str = "unity-job-1-pod"
-    vm_name: str = "unity-pool-ubuntu-1-staging"
+    job_name: str = "droid-job-1"
+    pod_name: str = "droid-job-1-pod"
+    vm_name: str = "droid-pool-ubuntu-1-staging"
     vm_hostname: str = "vm-1.vm.unify.ai"
     user_api_key: str = "user-key"
     assignment_mode: str = "assigned"
@@ -332,7 +332,7 @@ class AssistantSessionComponentHarness:
                         "type": "ContainerReady",
                         "status": "True",
                         "reason": "Ready",
-                        "message": "Unity session ready",
+                        "message": "Droid session ready",
                     },
                 ],
                 "bootstrapRetries": 0,

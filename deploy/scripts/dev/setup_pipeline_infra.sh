@@ -15,11 +15,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 
 ENV="${1:-staging}"
-PROJECT_ID="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
+PROJECT_ID="${DROID_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
-CLUSTER="${UNITY_GKE_CLUSTER:-unity}"
+CLUSTER="${DROID_GKE_CLUSTER:-droid}"
 
-# Name suffix matches the unity/communication convention:
+# Name suffix matches the droid/communication convention:
 # production resources have no suffix; all other envs suffix with "-${ENV}".
 if [[ "${ENV}" == "production" ]]; then
   SUFFIX=""
@@ -33,7 +33,7 @@ echo "Name suffix: '${SUFFIX}'"
 echo ""
 
 # --- GCS Buckets ---
-BUCKET="unity-pipeline-artifacts${SUFFIX}"
+BUCKET="droid-pipeline-artifacts${SUFFIX}"
 echo "Creating GCS bucket: ${BUCKET}"
 gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET}" 2>/dev/null || echo "  (bucket already exists)"
 
@@ -41,38 +41,38 @@ echo "Applying lifecycle rules..."
 gsutil lifecycle set "${REPO_ROOT}/deploy/k8s/workers/gcs-lifecycle-rules.json" "gs://${BUCKET}"
 
 # --- Pub/Sub Topics ---
-TOPICS=("unity-parse${SUFFIX}" "unity-ingest${SUFFIX}" "unity-dead-letter${SUFFIX}")
+TOPICS=("droid-parse${SUFFIX}" "droid-ingest${SUFFIX}" "droid-dead-letter${SUFFIX}")
 for TOPIC in "${TOPICS[@]}"; do
   echo "Creating topic: ${TOPIC}"
   gcloud pubsub topics create "${TOPIC}" --project="${PROJECT_ID}" 2>/dev/null || echo "  (topic already exists)"
 done
 
 # --- Pub/Sub Subscriptions ---
-echo "Creating subscription: unity-parse-sub${SUFFIX}"
-gcloud pubsub subscriptions create "unity-parse-sub${SUFFIX}" \
-  --topic="unity-parse${SUFFIX}" \
+echo "Creating subscription: droid-parse-sub${SUFFIX}"
+gcloud pubsub subscriptions create "droid-parse-sub${SUFFIX}" \
+  --topic="droid-parse${SUFFIX}" \
   --project="${PROJECT_ID}" \
   --ack-deadline=120 \
   --message-retention-duration=7d \
-  --dead-letter-topic="unity-dead-letter${SUFFIX}" \
+  --dead-letter-topic="droid-dead-letter${SUFFIX}" \
   --max-delivery-attempts=15 \
   --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
-echo "Creating subscription: unity-ingest-sub${SUFFIX}"
-gcloud pubsub subscriptions create "unity-ingest-sub${SUFFIX}" \
-  --topic="unity-ingest${SUFFIX}" \
+echo "Creating subscription: droid-ingest-sub${SUFFIX}"
+gcloud pubsub subscriptions create "droid-ingest-sub${SUFFIX}" \
+  --topic="droid-ingest${SUFFIX}" \
   --project="${PROJECT_ID}" \
   --ack-deadline=120 \
   --message-retention-duration=7d \
-  --dead-letter-topic="unity-dead-letter${SUFFIX}" \
+  --dead-letter-topic="droid-dead-letter${SUFFIX}" \
   --max-delivery-attempts=15 \
   --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
-echo "Creating subscription: unity-dead-letter-sub${SUFFIX}"
-gcloud pubsub subscriptions create "unity-dead-letter-sub${SUFFIX}" \
-  --topic="unity-dead-letter${SUFFIX}" \
+echo "Creating subscription: droid-dead-letter-sub${SUFFIX}"
+gcloud pubsub subscriptions create "droid-dead-letter-sub${SUFFIX}" \
+  --topic="droid-dead-letter${SUFFIX}" \
   --project="${PROJECT_ID}" \
   --ack-deadline=600 \
   --message-retention-duration=31d \
@@ -95,9 +95,9 @@ ADAPTER_GSA="custom-metrics-adapter"
 ADAPTER_GSA_EMAIL="${ADAPTER_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
 ADAPTER_KSA_BINDING="serviceAccount:${PROJECT_ID}.svc.id.goog[custom-metrics/custom-metrics-stackdriver-adapter]"
 ADAPTER_MANIFEST_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/k8s-stackdriver/master/custom-metrics-stackdriver-adapter/deploy/production/adapter_new_resource_model.yaml"
-PIPELINE_GSA="unity-pipeline-worker"
+PIPELINE_GSA="droid-pipeline-worker"
 PIPELINE_GSA_EMAIL="${PIPELINE_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
-PIPELINE_KSA="unity-pipeline-worker"
+PIPELINE_KSA="droid-pipeline-worker"
 
 echo ""
 echo "=== External Metrics Adapter (cluster=${CLUSTER}) ==="
@@ -121,7 +121,7 @@ if ! gcloud iam service-accounts describe "${PIPELINE_GSA_EMAIL}" \
   echo "Creating GSA ${PIPELINE_GSA_EMAIL}..."
   gcloud iam service-accounts create "${PIPELINE_GSA}" \
     --project="${PROJECT_ID}" \
-    --display-name="Unity Pipeline Worker"
+    --display-name="Droid Pipeline Worker"
 else
   echo "  (GSA ${PIPELINE_GSA_EMAIL} already exists)"
 fi
@@ -196,9 +196,9 @@ echo ""
 echo "To test locally against this infrastructure:"
 echo ""
 echo "  # GCP settings (both workers)"
-echo "  export UNITY_GCP_PIPELINE_ENVIRONMENT=${ENV}"
-echo "  export UNITY_GCS_ARTIFACT_BUCKET=${BUCKET}"
-echo "  export UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}"
+echo "  export DROID_GCP_PIPELINE_ENVIRONMENT=${ENV}"
+echo "  export DROID_GCS_ARTIFACT_BUCKET=${BUCKET}"
+echo "  export DROID_PUBSUB_PROJECT_ID=${PROJECT_ID}"
 echo ""
 echo "  # Unify identity (ingest worker only — parse worker does not need these)"
 echo "  export UNIFY_KEY=<your-unify-key>"
@@ -206,16 +206,16 @@ echo "  export USER_ID=<user-id>"
 echo "  export ASSISTANT_ID=<assistant-agent-id>"
 echo ""
 echo "  # Terminal 1: Parse worker (no Unify SDK — GCS + Pub/Sub only)"
-echo "  python -m unity_deploy.infra.workers.entrypoint_parse"
+echo "  python -m droid_deploy.infra.workers.entrypoint_parse"
 echo ""
 echo "  # Terminal 2: Ingest worker (needs UNIFY_KEY, USER_ID, ASSISTANT_ID)"
-echo "  python -m unity_deploy.infra.workers.entrypoint_ingest --project Assistants"
+echo "  python -m droid_deploy.infra.workers.entrypoint_ingest --project Assistants"
 echo ""
 echo "  # Terminal 3: Submit a job"
-echo "  python -m unity_deploy.infra.cli.pipeline_control submit \\"
+echo "  python -m droid_deploy.infra.cli.pipeline_control submit \\"
 echo "    --config path/to/pipeline_config.json --project MyProject"
 echo ""
 echo "  # Monitor / cancel / inspect"
-echo "  python -m unity_deploy.infra.cli.pipeline_control monitor --job-id <id> --follow"
-echo "  python -m unity_deploy.infra.cli.pipeline_control cancel --job-id <id>"
-echo "  python -m unity_deploy.infra.cli.pipeline_control inspect --job-id <id>"
+echo "  python -m droid_deploy.infra.cli.pipeline_control monitor --job-id <id> --follow"
+echo "  python -m droid_deploy.infra.cli.pipeline_control cancel --job-id <id>"
+echo "  python -m droid_deploy.infra.cli.pipeline_control inspect --job-id <id>"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_auth.sh — One-time setup for Unity GKE debug tools.
+# setup_auth.sh — One-time setup for Droid GKE debug tools.
 #
 # Walks you through installing prerequisites and authenticating with GCP
 # so that stream_logs.py can access live and historical job logs.
@@ -17,7 +17,7 @@ fi
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 GCP_PROJECT="gcp-project-runtime"
-GKE_CLUSTER="unity"
+GKE_CLUSTER="droid"
 GKE_REGION="us-central1"
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ check_unify_key() {
         echo "  Ask a team member for the shared Unify API key, then add"
         echo "  it to the project .env file:"
         echo ""
-        echo "    # unity/.env"
+        echo "    # droid/.env"
         echo "    SHARED_UNIFY_KEY='your_key_here'"
         echo ""
         echo "  Both stream_logs.py and this script load from .env automatically."
@@ -190,7 +190,7 @@ print_summary() {
         echo -e "  ${GREEN}${BOLD}All checks passed!${NC} You're ready to use stream_logs.py."
         echo ""
         echo "  Example:"
-        echo "    uv run scripts/dev/job_logs/stream_logs.py --job unity-2026-02-10-17-30-53-staging"
+        echo "    uv run scripts/dev/job_logs/stream_logs.py --job droid-2026-02-10-17-30-53-staging"
     else
         echo -e "  ${YELLOW}${BOLD}Remaining items (${#ISSUES[@]}):${NC}"
         for issue in "${ISSUES[@]}"; do
@@ -206,7 +206,7 @@ print_summary() {
 main() {
     echo ""
     echo -e "${BOLD}════════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}  Unity GKE Debug Tools — Authentication Setup${NC}"
+    echo -e "${BOLD}  Droid GKE Debug Tools — Authentication Setup${NC}"
     echo -e "${BOLD}════════════════════════════════════════════════════════${NC}"
 
     check_gcloud

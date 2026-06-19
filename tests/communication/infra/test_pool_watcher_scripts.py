@@ -7,8 +7,8 @@ import textwrap
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BASH_WATCHER = REPO_ROOT / "communication/infra/scripts/unity-pool-watcher.sh"
-POWERSHELL_WATCHER = REPO_ROOT / "communication/infra/scripts/unity-pool-watcher.ps1"
+BASH_WATCHER = REPO_ROOT / "communication/infra/scripts/droid-pool-watcher.sh"
+POWERSHELL_WATCHER = REPO_ROOT / "communication/infra/scripts/droid-pool-watcher.ps1"
 POWERSHELL = shutil.which("pwsh")
 
 RELEASE_TRIGGER_CASES = [

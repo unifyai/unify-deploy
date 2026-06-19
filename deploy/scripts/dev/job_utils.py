@@ -1,4 +1,4 @@
-"""Shared utilities for Unity GKE job management scripts."""
+"""Shared utilities for Droid GKE job management scripts."""
 
 import os
 import sys
@@ -11,8 +11,8 @@ ORCHESTRA_URLS = {
 }
 
 COMMS_URLS = {
-    "production": "https://unity-comms-app-000000000000.us-central1.run.app",
-    "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+    "production": "https://service.a.run.app",
+    "staging": "https://service.a.run.app",
 }
 
 RED = "\033[0;31m"
@@ -46,10 +46,10 @@ def success(msg):
 def _comms_url(namespace: str) -> str:
     """Resolve the comms service URL for a namespace.
 
-    Prefers the ``UNITY_COMMS_URL`` env var (set in ``.env``); falls back
+    Prefers the ``DROID_COMMS_URL`` env var (set in ``.env``); falls back
     to the per-environment URL mapping.
     """
-    return os.environ.get("UNITY_COMMS_URL", "").rstrip("/") or COMMS_URLS[namespace]
+    return os.environ.get("DROID_COMMS_URL", "").rstrip("/") or COMMS_URLS[namespace]
 
 
 def _admin_key() -> str:
@@ -57,7 +57,7 @@ def _admin_key() -> str:
 
 
 def fetch_running_jobs(namespace: str) -> list[dict]:
-    """Fetch all running Unity jobs from the comms ``/infra/jobs`` endpoint.
+    """Fetch all running Droid jobs from the comms ``/infra/jobs`` endpoint.
 
     Returns a list of job dicts, each containing at least ``job_name``,
     ``assistant_id``, ``status``, and ``labels``.
@@ -65,12 +65,12 @@ def fetch_running_jobs(namespace: str) -> list[dict]:
     url = _comms_url(namespace)
     key = _admin_key()
     if not url or not key:
-        error("UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set.")
+        error("DROID_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set.")
         sys.exit(1)
 
     resp = requests.get(
         f"{url}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=running"},
+        params={"label_selector": "app=droid,droid-status=running"},
         headers={"Authorization": f"Bearer {key}"},
     )
     resp.raise_for_status()
@@ -87,7 +87,7 @@ def is_job_running(job_name: str, namespace: str) -> bool:
     try:
         resp = requests.get(
             f"{url}/infra/jobs",
-            params={"label_selector": f"app=unity,assistant-id={job_name}"},
+            params={"label_selector": f"app=droid,assistant-id={job_name}"},
             headers={"Authorization": f"Bearer {key}"},
         )
         if resp.status_code != 200:
@@ -108,7 +108,7 @@ def is_job_name_running(job_name: str, namespace: str) -> bool:
     try:
         resp = requests.get(
             f"{url}/infra/jobs",
-            params={"label_selector": "app=unity,unity-status=running"},
+            params={"label_selector": "app=droid,droid-status=running"},
             headers={"Authorization": f"Bearer {key}"},
         )
         if resp.status_code != 200:

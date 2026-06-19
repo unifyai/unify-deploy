@@ -1,0 +1,305 @@
+steps:
+  # Pull previous image for Docker layer cache
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'pull-cache'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest || true
+
+  # Build Docker Image with BuildKit inline cache. DROID_SHA is the
+  # head of unifyai/droid@staging at build time; passing it through
+  # busts the cached droid-clone layer inside Dockerfile-comms when
+  # droid has new commits (otherwise the cached layer reuses a stale
+  # snapshot and downstream `from droid.X import Y` calls silently
+  # miss newly-added modules).
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-image'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    DROID_SHA=$$(git ls-remote https://github.com/unifyai/droid.git refs/heads/staging | awk '{print $$1}')
+    echo "Cache-busting droid layer with DROID_SHA=$$DROID_SHA"
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=staging \
+      --build-arg DROID_SHA=$$DROID_SHA \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
+  secretEnv: ['GITHUB_TOKEN']
+  waitFor: ['pull-cache']
+
+  # Push Docker Image (SHA Tag)
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-sha-tag'
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}']
+  waitFor: ['build-image']
+
+  # Push Docker Image (Latest Tag)
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-latest-tag'
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
+  waitFor: ['build-image']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    DOCKER_BUILDKIT=1 docker build -f scripts/assistant-session-controller/Dockerfile \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging:latest .
+  waitFor: ['pull-cache']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-assistant-session-controller'
+  args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging']
+  waitFor: ['build-assistant-session-controller']
+
+  # Deploy to Cloud Run
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
+    kubectl apply -f k8s/assistant-session-controller/crd.yaml
+    kubectl wait --for=condition=Established crd/assistantsessions.infra.unify.ai --timeout=120s
+    sed "s|image:.*assistant-session-controller-staging.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging:${SHORT_SHA}|" \
+      k8s/assistant-session-controller/deployment_staging.yaml | kubectl apply -f -
+    kubectl rollout status deployment/assistant-session-controller-staging -n staging --timeout=300s
+  waitFor: ['push-assistant-session-controller']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'repair-traffic-state'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    repair_traffic_state() {
+    SERVICE_JSON=/tmp/service.json
+    gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format=json > "$$SERVICE_JSON"
+    python3 - "$$SERVICE_JSON" > /tmp/traffic-args.txt <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding="utf-8") as service_file:
+        service = json.load(service_file)
+
+    revisions: list[str] = []
+    status_tags: dict[str, str] = {}
+    for entry in service.get("status", {}).get("traffic", []):
+        revision = entry.get("revisionName")
+        if not revision:
+            continue
+        percent = entry.get("percent")
+        if percent is not None and int(percent) > 0:
+            revisions.append(f"{revision}={int(percent)}")
+        tag = entry.get("tag")
+        if tag:
+            status_tags[tag] = revision
+
+    if not revisions:
+        raise SystemExit("No live traffic revision found to preserve")
+
+    spec_tags = {
+        entry["tag"]: entry.get("revisionName")
+        for entry in service.get("spec", {}).get("traffic", [])
+        if entry.get("tag")
+    }
+    update_tags = [
+        f"{tag}={revision}"
+        for tag, revision in sorted(status_tags.items())
+        if spec_tags.get(tag) != revision
+    ]
+    remove_tags = sorted(
+        tag for tag in spec_tags
+        if tag not in status_tags
+    )
+
+    print("--to-revisions=" + ",".join(revisions))
+    if update_tags:
+        print("--update-tags=" + ",".join(update_tags))
+    if remove_tags:
+        print("--remove-tags=" + ",".join(remove_tags))
+    PY
+    mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
+    run_cloud_run_with_retry gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      "$${TRAFFIC_ARGS[@]}" \
+      --quiet
+    }
+    run_cloud_run_with_retry repair_traffic_state \
+      || echo "Traffic repair skipped; deploy will create a fresh revision"
+  waitFor: ['push-sha-tag', 'push-latest-tag', 'deploy-assistant-session-controller']
+
+  # Deploy to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: Deploy Droid Comms App
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    run_cloud_run_with_retry gcloud \
+      run \
+      deploy \
+      ${_SERVICE_NAME} \
+      --platform=managed \
+      --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
+      --region=${_REGION} \
+      --min-instances=1 \
+      --memory=2Gi \
+      --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_ORCHESTRA_URL},DROID_COMMS_URL=https://${_COMMS_HOST},DROID_ADAPTERS_URL=https://${_ADAPTERS_HOST} \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID} \
+      --quiet
+  waitFor: ['repair-traffic-state']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'route-canonical-traffic'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    route_canonical_traffic() {
+      REVISION=$$(gcloud run services describe ${_SERVICE_NAME} \
+        --region=${_REGION} \
+        --platform=managed \
+        --format="value(status.latestCreatedRevisionName)")
+      if [ -z "$$REVISION" ]; then
+        echo "No deployed revision found for build ${BUILD_ID}" >&2
+        return 1
+      fi
+      REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
+        --region=${_REGION} \
+        --format="value(metadata.labels.gcb-build-id)")
+      if [ "$$REVISION_BUILD_ID" != "${BUILD_ID}" ]; then
+        echo "Skipping traffic route for $$REVISION because it belongs to build $$REVISION_BUILD_ID"
+        return 0
+      fi
+      gcloud run services update-traffic ${_SERVICE_NAME} \
+        --region=${_REGION} \
+        --platform=managed \
+        --to-revisions="$$REVISION=100" \
+        --quiet
+    }
+    run_cloud_run_with_retry route_canonical_traffic
+  waitFor: ['Deploy Droid Comms App']
+
+# Options
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+# Substitution variables
+substitutions:
+  _REGION: 'us-central1'
+  _REPOSITORY: 'droid-comms-app-repo'
+  _SERVICE_NAME: 'droid-comms-app-staging'
+  _CLUSTER: 'unity'
+  _ORCHESTRA_URL: 'https://internal.example.com/v0'
+  _COMMS_HOST: 'service.a.run.app'
+  _ADAPTERS_HOST: 'service.a.run.app'
+
+# Available secrets
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
+    env: 'GITHUB_TOKEN'
+
+# Timeout
+timeout: '1200s'  # 20 minutes
+
+# Images to be pushed (for Cloud Build history)
+images:
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-staging:latest'

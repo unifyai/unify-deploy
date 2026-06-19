@@ -60,7 +60,7 @@ def test_resource_version_guard_prevents_stale_delete(
         data={
             "job_name": job_name,
             "labels": json.dumps(
-                {"unity-status": "running", "assistant-id": "test-guard"},
+                {"droid-status": "running", "assistant-id": "test-guard"},
             ),
         },
     )
@@ -139,7 +139,7 @@ def test_cleanup_does_not_delete_running_jobs(
 
     Creates an idle Job, patches it to running (simulating a live container),
     then triggers cleanup. The Job should survive because:
-    1. It has unity-status=running (cleanup targets idle only)
+    1. It has droid-status=running (cleanup targets idle only)
     2. Even if categorized, the resource_version guard would prevent stale delete
     """
     resp = comms.post("/infra/job/create", data={"namespace": NAMESPACE})
@@ -159,7 +159,7 @@ def test_cleanup_does_not_delete_running_jobs(
         data={
             "job_name": job_name,
             "labels": json.dumps(
-                {"unity-status": "running", "assistant-id": "test-cleanup"},
+                {"droid-status": "running", "assistant-id": "test-cleanup"},
             ),
         },
     )

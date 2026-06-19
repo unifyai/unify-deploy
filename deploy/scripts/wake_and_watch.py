@@ -33,7 +33,7 @@ ORCHESTRA_URLS = {
 }
 
 ADAPTERS_URLS = {
-    "production": "https://unity-adapters-000000000000.us-central1.run.app",
+    "production": "https://service.a.run.app",
     "staging": "https://service.a.run.app",
 }
 
@@ -206,7 +206,7 @@ def wait_for_new_job(
 ) -> str | None:
     """Poll AssistantJobs until a new job_name appears that we haven't seen.
 
-    The AssistantJobs record is created by Unity's ``log_job_startup``
+    The AssistantJobs record is created by Droid's ``log_job_startup``
     after the container starts, so the mere appearance of a new job_name
     means the container is alive.
     """

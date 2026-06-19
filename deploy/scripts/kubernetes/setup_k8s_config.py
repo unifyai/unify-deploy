@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Script to set up Kubernetes ConfigMaps and Secrets for Unity cluster.
+Script to set up Kubernetes ConfigMaps and Secrets for Droid cluster.
 
-Creates cluster-wide configuration that all Unity pods will use.
+Creates cluster-wide configuration that all Droid pods will use.
 Only assistant-specific variables (ASSISTANT_ID, USER_FIRST_NAME, etc.) are set per pod.
 
 API keys are read from GCP Secret Manager. Use --update to reconcile existing
-unity-secrets from versions/latest, or install External Secrets Operator
+droid-secrets from versions/latest, or install External Secrets Operator
 (deploy/k8s/secrets/) for continuous sync.
 
 Usage:
@@ -28,11 +28,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from unity_cluster_secrets import (
+from droid_cluster_secrets import (
     COMM_SA_KEY_SECRET_NAME,
     GCP_SA_KEY_SM_SECRET,
     GCP_SECRETS_PROJECT_ID,
-    UNITY_SECRET_KEYS_FROM_GCP,
+    DROID_SECRET_KEYS_FROM_GCP,
     is_eso_managed_secret,
 )
 
@@ -48,10 +48,10 @@ def fetch_gcp_secret_payload(secret_manager_client, sm_secret_id: str) -> bytes:
     return response.payload.data
 
 
-def build_unity_secrets_data(secret_manager_client) -> dict[str, str]:
-    """Return base64-encoded secret data for unity-secrets from GCP."""
+def build_droid_secrets_data(secret_manager_client) -> dict[str, str]:
+    """Return base64-encoded secret data for droid-secrets from GCP."""
     secrets_data = {}
-    for sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+    for sm_name, k8s_key in DROID_SECRET_KEYS_FROM_GCP:
         raw = fetch_gcp_secret_payload(secret_manager_client, sm_name)
         secrets_data[k8s_key] = base64.b64encode(raw).decode()
     return secrets_data
@@ -104,7 +104,7 @@ def setup_kubernetes_client():
 
 
 def create_namespace(api_client, namespace="default"):
-    """Create the Unity namespace if it doesn't exist"""
+    """Create the Droid namespace if it doesn't exist"""
     try:
         # Check if namespace exists
         try:
@@ -119,7 +119,7 @@ def create_namespace(api_client, namespace="default"):
                     "kind": "Namespace",
                     "metadata": {
                         "name": namespace,
-                        "labels": {"name": namespace, "app": "unity"},
+                        "labels": {"name": namespace, "app": "droid"},
                     },
                 }
 
@@ -141,9 +141,9 @@ def create_global_configmap(api_client, namespace="default"):
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": {
-                "name": "unity-config",
+                "name": "droid-config",
                 "namespace": namespace,
-                "labels": {"app": "unity"},
+                "labels": {"app": "droid"},
             },
             "data": {
                 "PROJECT_ID": "gcp-project-runtime",
@@ -174,7 +174,7 @@ def create_global_configmap(api_client, namespace="default"):
 
 
 def create_global_secrets(api_client, namespace="default", *, reconcile: bool = False):
-    """Create or reconcile unity-secrets and comm-sa-key from GCP Secret Manager."""
+    """Create or reconcile droid-secrets and comm-sa-key from GCP Secret Manager."""
     try:
         from google.cloud import secretmanager
 
@@ -182,21 +182,21 @@ def create_global_secrets(api_client, namespace="default", *, reconcile: bool = 
 
         print("🔐 Fetching secrets from GCP Secret Manager...")
         try:
-            secrets_data = build_unity_secrets_data(sm_client)
+            secrets_data = build_droid_secrets_data(sm_client)
         except Exception as exc:
             print(f"   ❌ Failed to read required secrets: {exc}")
             return False
 
-        for _sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+        for _sm_name, k8s_key in DROID_SECRET_KEYS_FROM_GCP:
             print(f"   ✅ {k8s_key}")
 
-        unity_manifest = {
+        droid_manifest = {
             "apiVersion": "v1",
             "kind": "Secret",
             "metadata": {
-                "name": "unity-secrets",
+                "name": "droid-secrets",
                 "namespace": namespace,
-                "labels": {"app": "unity"},
+                "labels": {"app": "droid"},
             },
             "type": "Opaque",
             "data": secrets_data,
@@ -205,7 +205,7 @@ def create_global_secrets(api_client, namespace="default", *, reconcile: bool = 
         if not upsert_namespaced_secret(
             api_client,
             namespace,
-            unity_manifest,
+            droid_manifest,
             reconcile=reconcile,
         ):
             return False
@@ -218,7 +218,7 @@ def create_global_secrets(api_client, namespace="default", *, reconcile: bool = 
             "metadata": {
                 "name": COMM_SA_KEY_SECRET_NAME,
                 "namespace": namespace,
-                "labels": {"app": "unity"},
+                "labels": {"app": "droid"},
             },
             "type": "Opaque",
             "data": {"key.json": base64.b64encode(key_data).decode()},
@@ -245,7 +245,7 @@ def create_service_account(api_client, namespace="default"):
             "metadata": {
                 "name": "comm-sa",
                 "namespace": namespace,
-                "labels": {"app": "unity"},
+                "labels": {"app": "droid"},
             },
         }
 
@@ -278,16 +278,16 @@ def create_service_account(api_client, namespace="default"):
 
 
 def list_resources(api_client, namespace="default"):
-    """List all Unity resources in the namespace"""
+    """List all Droid resources in the namespace"""
     try:
-        print(f"📋 Unity Resources in namespace '{namespace}':")
+        print(f"📋 Droid Resources in namespace '{namespace}':")
         print()
 
         # List ConfigMaps
         print("🔧 ConfigMaps:")
         configmaps = api_client.list_namespaced_config_map(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for cm in configmaps.items:
             print(f"   - {cm.metadata.name}")
@@ -299,7 +299,7 @@ def list_resources(api_client, namespace="default"):
         print("🔐 Secrets:")
         secrets = api_client.list_namespaced_secret(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for secret in secrets.items:
             print(f"   - {secret.metadata.name}")
@@ -311,7 +311,7 @@ def list_resources(api_client, namespace="default"):
         print("👤 ServiceAccounts:")
         service_accounts = api_client.list_namespaced_service_account(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for sa in service_accounts.items:
             print(f"   - {sa.metadata.name}")
@@ -324,14 +324,14 @@ def list_resources(api_client, namespace="default"):
 
 
 def delete_resources(api_client, namespace="default"):
-    """Delete all Unity resources in the namespace"""
+    """Delete all Droid resources in the namespace"""
     try:
-        print(f"🗑️  Deleting Unity resources in namespace '{namespace}'...")
+        print(f"🗑️  Deleting Droid resources in namespace '{namespace}'...")
 
         # Delete ConfigMaps
         configmaps = api_client.list_namespaced_config_map(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for cm in configmaps.items:
             api_client.delete_namespaced_config_map(
@@ -343,7 +343,7 @@ def delete_resources(api_client, namespace="default"):
         # Delete Secrets
         secrets = api_client.list_namespaced_secret(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for secret in secrets.items:
             api_client.delete_namespaced_secret(
@@ -355,7 +355,7 @@ def delete_resources(api_client, namespace="default"):
         # Delete ServiceAccounts
         service_accounts = api_client.list_namespaced_service_account(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector="app=droid",
         )
         for sa in service_accounts.items:
             api_client.delete_namespaced_service_account(
@@ -364,7 +364,7 @@ def delete_resources(api_client, namespace="default"):
             )
             print(f"   ✅ Deleted ServiceAccount: {sa.metadata.name}")
 
-        print("✅ All Unity resources deleted")
+        print("✅ All Droid resources deleted")
 
     except Exception as e:
         print(f"❌ Error deleting resources: {e}")
@@ -372,7 +372,7 @@ def delete_resources(api_client, namespace="default"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Set up Kubernetes ConfigMaps and Secrets for Unity cluster",
+        description="Set up Kubernetes ConfigMaps and Secrets for Droid cluster",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -389,18 +389,18 @@ Examples:
         help="Create all Kubernetes resources",
     )
 
-    parser.add_argument("--list", action="store_true", help="List all Unity resources")
+    parser.add_argument("--list", action="store_true", help="List all Droid resources")
 
     parser.add_argument(
         "--delete",
         action="store_true",
-        help="Delete all Unity resources",
+        help="Delete all Droid resources",
     )
 
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Reconcile unity-secrets and comm-sa-key from GCP Secret Manager only",
+        help="Reconcile droid-secrets and comm-sa-key from GCP Secret Manager only",
     )
 
     parser.add_argument(
@@ -411,7 +411,7 @@ Examples:
 
     args = parser.parse_args()
 
-    print(f"🔧 Unity Kubernetes Configuration Setup")
+    print(f"🔧 Droid Kubernetes Configuration Setup")
     print(f"   Namespace: {args.namespace}")
     print()
 
@@ -432,7 +432,7 @@ Examples:
 
     if args.delete:
         confirm = input(
-            "⚠️  Are you sure you want to delete all Unity resources? (y/N): ",
+            "⚠️  Are you sure you want to delete all Droid resources? (y/N): ",
         )
         if confirm.lower() == "y":
             delete_resources(api_client, args.namespace)
@@ -444,9 +444,9 @@ Examples:
 
     if args.create or reconcile_secrets:
         if reconcile_secrets and not args.create:
-            print("🔐 Reconciling Unity secrets from GCP Secret Manager...")
+            print("🔐 Reconciling Droid secrets from GCP Secret Manager...")
         else:
-            print("🚀 Setting up Unity Kubernetes resources...")
+            print("🚀 Setting up Droid Kubernetes resources...")
 
         if args.create:
             if not create_global_configmap(api_client, args.namespace):
@@ -461,17 +461,17 @@ Examples:
         ):
             sys.exit(1)
 
-        print("✅ Unity Kubernetes secrets reconciled successfully!")
+        print("✅ Droid Kubernetes secrets reconciled successfully!")
         if args.create:
-            print("✅ Unity Kubernetes bootstrap resources ensured!")
+            print("✅ Droid Kubernetes bootstrap resources ensured!")
         print("\n💡 Next steps:")
         print("   1. Verify resources: python setup_k8s_config.py --list")
         print(
-            "   2. Secret rotation: deploy/guides/UNITY_CLUSTER_SECRETS.md",
+            "   2. Secret rotation: deploy/guides/DROID_CLUSTER_SECRETS.md",
         )
         if reconcile_secrets:
             print(
-                f"   3. Restart Unity jobs in '{args.namespace}' so pods pick up new env",
+                f"   3. Restart Droid jobs in '{args.namespace}' so pods pick up new env",
             )
         else:
             print(

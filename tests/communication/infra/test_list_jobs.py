@@ -44,13 +44,13 @@ def _make_k8s_job(
     so we derive it from the current time minus `minutes_ago`.
     """
     ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
-    name = f"unity-{assistant_id}-{ts.strftime('%Y-%m-%d-%H-%M-%S')}"
+    name = f"droid-{assistant_id}-{ts.strftime('%Y-%m-%d-%H-%M-%S')}"
     job = MagicMock()
     job.metadata.name = name
     job.metadata.labels = {
-        "app": "unity",
+        "app": "droid",
         "assistant-id": assistant_id,
-        "unity-date": ts.strftime("%Y-%m-%d"),
+        "droid-date": ts.strftime("%Y-%m-%d"),
         **(labels or {}),
     }
     job.metadata.resource_version = "12345"
@@ -87,7 +87,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([job]):
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=abc"},
+                params={"label_selector": "app=droid,assistant-id=abc"},
             )
 
         assert resp.status_code == 200
@@ -97,7 +97,7 @@ class TestListJobsContract:
 
         j = data["jobs"][0]
         assert j["status"] == "Running"
-        assert j["job_name"].startswith("unity-abc-")
+        assert j["job_name"].startswith("droid-abc-")
         assert j["assistant_id"] == "abc"
 
     def test_completed_job_reports_completed_status(self, client):
@@ -106,7 +106,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([job]):
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=abc"},
+                params={"label_selector": "app=droid,assistant-id=abc"},
             )
 
         assert resp.status_code == 200
@@ -119,7 +119,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([job]):
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=abc"},
+                params={"label_selector": "app=droid,assistant-id=abc"},
             )
 
         assert resp.status_code == 200
@@ -130,7 +130,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([]):
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=nonexistent"},
+                params={"label_selector": "app=droid,assistant-id=nonexistent"},
             )
 
         assert resp.status_code == 200
@@ -146,7 +146,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([running, completed, failed]):
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=abc"},
+                params={"label_selector": "app=droid,assistant-id=abc"},
             )
 
         assert resp.status_code == 200
@@ -175,7 +175,7 @@ class TestListJobsContract:
         with _mock_k8s_returning([job]) as mock_get_clients:
             resp = client.get(
                 "/infra/jobs",
-                params={"label_selector": "app=unity,assistant-id=abc"},
+                params={"label_selector": "app=droid,assistant-id=abc"},
             )
 
         assert resp.status_code == 200
@@ -183,7 +183,7 @@ class TestListJobsContract:
         batch_api = mock_get_clients.return_value[0]
         batch_api.list_namespaced_job.assert_called_once_with(
             namespace=SETTINGS.default_namespace,
-            label_selector="app=unity,assistant-id=abc",
+            label_selector="app=droid,assistant-id=abc",
         )
 
     def test_explicit_hours_filters_out_jobs_older_than_window(self, client):
@@ -193,7 +193,7 @@ class TestListJobsContract:
             resp = client.get(
                 "/infra/jobs",
                 params={
-                    "label_selector": "app=unity,assistant-id=abc",
+                    "label_selector": "app=droid,assistant-id=abc",
                     "hours": 8,
                 },
             )
@@ -208,7 +208,7 @@ class TestListJobsContract:
             resp = client.get(
                 "/infra/jobs",
                 params={
-                    "label_selector": "app=unity,assistant-id=abc",
+                    "label_selector": "app=droid,assistant-id=abc",
                     "hours": 36,
                 },
             )
@@ -219,5 +219,5 @@ class TestListJobsContract:
         called_selector = batch_api.list_namespaced_job.call_args.kwargs[
             "label_selector"
         ]
-        assert called_selector.startswith("app=unity,assistant-id=abc,unity-date in (")
-        assert "unity-date" in called_selector
+        assert called_selector.startswith("app=droid,assistant-id=abc,droid-date in (")
+        assert "droid-date" in called_selector

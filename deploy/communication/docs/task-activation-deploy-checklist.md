@@ -23,15 +23,15 @@ gcloud projects add-iam-policy-binding gcp-project-runtime \
 
 Production queues:
 
-- `unity-task-due`
-- `unity-task-offline`
-- `unity-task-activation-repair`
+- `droid-task-due`
+- `droid-task-offline`
+- `droid-task-activation-repair`
 
 Staging queues:
 
-- `unity-task-due-staging`
-- `unity-task-offline-staging`
-- `unity-task-activation-repair-staging`
+- `droid-task-due-staging`
+- `droid-task-offline-staging`
+- `droid-task-activation-repair-staging`
 
 Communication lazily creates missing queues during materialization, so the
 runtime identity needs queue create permission before the first scheduled task
@@ -69,5 +69,5 @@ For a healthy scheduled activation, `activation` is present and
 1. Fix Cloud Tasks IAM and rerun `/infra/task-activation/validate`.
 2. Reproject the affected task through Orchestra's admin repair endpoint.
 3. Rerun `/infra/task-activation/diagnose` and verify the Cloud Task is present.
-4. Manually execute any missed occurrence once through Unity with the original
+4. Manually execute any missed occurrence once through Droid with the original
    scheduled timestamp in the request context.

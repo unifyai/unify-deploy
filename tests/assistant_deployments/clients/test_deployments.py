@@ -23,8 +23,8 @@ from typing import List
 
 import pytest
 
-import unity_deploy.assistant_deployments.clients
-from unity_deploy.assistant_deployments.deployment_types import (
+import droid_deploy.assistant_deployments.clients
+from droid_deploy.assistant_deployments.deployment_types import (
     DeploymentSpec,
     load_deployment,
     resolve_deployment_name,
@@ -34,7 +34,7 @@ from unity_deploy.assistant_deployments.deployment_types import (
 # Cross-client deployment discovery
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CLIENTS_DIR = Path(unity_deploy.assistant_deployments.clients.__file__).parent
+_CLIENTS_DIR = Path(droid_deploy.assistant_deployments.clients.__file__).parent
 
 
 def _discover_all_deployments() -> list[tuple[str, str, Path]]:
@@ -389,7 +389,7 @@ def _discover_clients_with_mappings():
             continue
         try:
             mod = importlib.import_module(
-                f"unity_deploy.assistant_deployments.clients.{client_dir.name}",
+                f"droid_deploy.assistant_deployments.clients.{client_dir.name}",
             )
             mapping = getattr(mod, "_MAPPING", None)
             dep_dir = getattr(mod, "_DEPLOYMENTS_DIR", None)

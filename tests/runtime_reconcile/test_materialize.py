@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from unity_deploy.runtime_reconcile.context import RuntimeIdentity
-from unity_deploy.runtime_reconcile import materialize
+from droid_deploy.runtime_reconcile.context import RuntimeIdentity
+from droid_deploy.runtime_reconcile import materialize
 
 
 class _FakeFunctionManager:
@@ -28,16 +28,16 @@ def _install_materialize_fakes(
     venv_collector,
     function_manager: _FakeFunctionManager,
 ) -> None:
-    custom_functions = ModuleType("unity.function_manager.custom_functions")
+    custom_functions = ModuleType("droid.function_manager.custom_functions")
     custom_functions.collect_functions_from_directories = function_collector
     custom_functions.collect_venvs_from_directories = venv_collector
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity.function_manager.custom_functions",
+        "droid.function_manager.custom_functions",
         custom_functions,
     )
 
-    manager_registry = ModuleType("unity.manager_registry")
+    manager_registry = ModuleType("droid.manager_registry")
 
     class ManagerRegistry:
         @staticmethod
@@ -47,15 +47,15 @@ def _install_materialize_fakes(
     manager_registry.ManagerRegistry = ManagerRegistry
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity.manager_registry",
+        "droid.manager_registry",
         manager_registry,
     )
 
-    seed_sync = ModuleType("unity_deploy.assistant_deployments.seed_sync")
+    seed_sync = ModuleType("droid_deploy.assistant_deployments.seed_sync")
     seed_sync.sync_all_seed_data = lambda _resolved: False
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity_deploy.assistant_deployments.seed_sync",
+        "droid_deploy.assistant_deployments.seed_sync",
         seed_sync,
     )
 

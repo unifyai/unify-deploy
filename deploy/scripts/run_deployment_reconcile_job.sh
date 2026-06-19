@@ -9,7 +9,7 @@ Usage:
     --namespace staging|production \
     --image IMAGE \
     --orchestra-url URL \
-    --unity-comms-url URL \
+    --droid-comms-url URL \
     [--planes control-plane] \
     [--concurrency N] \
     [--timeout 600s] \
@@ -17,7 +17,7 @@ Usage:
     [--client CLIENT] \
     [--assistant-id ASSISTANT_ID]
 
-Creates a one-off Kubernetes Job that reconciles deploy-time Unity control-plane state,
+Creates a one-off Kubernetes Job that reconciles deploy-time Droid control-plane state,
 waits for it, prints logs, and deletes it.
 USAGE
 }
@@ -26,7 +26,7 @@ environment=""
 namespace=""
 image=""
 orchestra_url=""
-unity_comms_url=""
+droid_comms_url=""
 planes="control-plane"
 concurrency="8"
 timeout="600s"
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
     --namespace) namespace="${2:-}"; shift 2 ;;
     --image) image="${2:-}"; shift 2 ;;
     --orchestra-url) orchestra_url="${2:-}"; shift 2 ;;
-    --unity-comms-url) unity_comms_url="${2:-}"; shift 2 ;;
+    --droid-comms-url) droid_comms_url="${2:-}"; shift 2 ;;
     --planes) planes="${2:-}"; shift 2 ;;
     --concurrency) concurrency="${2:-}"; shift 2 ;;
     --timeout) timeout="${2:-}"; shift 2 ;;
@@ -70,7 +70,7 @@ require_value "--environment" "$environment"
 require_value "--namespace" "$namespace"
 require_value "--image" "$image"
 require_value "--orchestra-url" "$orchestra_url"
-require_value "--unity-comms-url" "$unity_comms_url"
+require_value "--droid-comms-url" "$droid_comms_url"
 require_value "--planes" "$planes"
 require_value "--concurrency" "$concurrency"
 
@@ -124,7 +124,7 @@ render_manifest() {
     -e "s/__ENVIRONMENT__/$(escape_sed_replacement "$environment")/g" \
     -e "s/__IMAGE__/$(escape_sed_replacement "$image")/g" \
     -e "s/__ORCHESTRA_URL__/$(escape_sed_replacement "$orchestra_url")/g" \
-    -e "s/__UNITY_COMMS_URL__/$(escape_sed_replacement "$unity_comms_url")/g" \
+    -e "s/__DROID_COMMS_URL__/$(escape_sed_replacement "$droid_comms_url")/g" \
     -e "s/__PLANES__/$(escape_sed_replacement "$planes")/g" \
     -e "s/__CONCURRENCY__/$(escape_sed_replacement "$concurrency")/g" \
     -e "s/__CLIENT__/$(escape_sed_replacement "$client")/g" \

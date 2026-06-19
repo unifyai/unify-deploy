@@ -1,4 +1,4 @@
 {
-  "extraPaths": ["../unity", "../unify", "../unillm"],
+  "extraPaths": ["../droid", "../unify", "../unillm"],
   "typeCheckingMode": "off"
 }

@@ -80,14 +80,14 @@ spec:
               imageOverride:
                 type: string
                 description: |
-                  Optional fully-qualified Unity container image URI.  When set,
+                  Optional fully-qualified Droid container image URI.  When set,
                   the controller bypasses the staging idle pool and spawns a
                   fresh Job pinned to this image instead of inheriting
                   shared idle containers built from the canonical image.
               serviceUrls:
                 type: object
                 description: |
-                  Peer service URLs that the Unity runtime should receive as
+                  Peer service URLs that the Droid runtime should receive as
                   environment variables.  Preview Comms App revisions stamp
                   slugged peer URLs here so the singleton staging controller can
                   materialize the requested runtime environment.
