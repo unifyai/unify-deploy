@@ -172,7 +172,7 @@ droid_cm_pidfile() {
 
 droid_cm_process_pids() {
   local main_pids="" pidfile_pid="" merged=""
-  main_pids="$(pgrep -f "[u]nity\.conversation_manager\.main" 2>/dev/null || true)"
+  main_pids="$(pgrep -f "[Pp]ython.*-m droid\.conversation_manager\.main" 2>/dev/null || true)"
   if [[ -f "$(droid_cm_pidfile)" ]]; then
     pidfile_pid="$(cat "$(droid_cm_pidfile)" 2>/dev/null || true)"
     if [[ -n "$pidfile_pid" ]] && ! kill -0 "$pidfile_pid" 2>/dev/null; then
@@ -183,6 +183,7 @@ droid_cm_process_pids() {
   if [[ -n "$merged" ]]; then
     printf '%s\n' "$merged"
   fi
+  return 0
 }
 
 droid_cm_instance_count() {
@@ -246,7 +247,7 @@ self_host_pid_is_service_supervisor() {
 
 self_host_find_service_supervisor_pid() {
   local pid=""
-  pid="$(pgrep -f "[s]ervice\.sh run" 2>/dev/null | head -1 || true)"
+  pid="$(pgrep -f "[b]ash .*/service\.sh run" 2>/dev/null | head -1 || true)"
   if [[ -n "$pid" ]] && self_host_pid_is_service_supervisor "$pid"; then
     printf '%s' "$pid"
     return 0
