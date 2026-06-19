@@ -234,7 +234,7 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     # Clean up stuck starting VMs from previous runs so the deficit
     # calculation is accurate and rebalance actually starts a VM.
     stuck_req = compute_v1.ListInstancesRequest(
-        project="droid-assistant-vms",
+        project="gcp-project-vms",
         zone=VM_ZONE,
         filter="labels.pool-role=starting AND labels.vm-type=ubuntu",
     )
@@ -242,19 +242,19 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
         try:
             if stuck.status == "RUNNING":
                 client.stop(
-                    project="droid-assistant-vms",
+                    project="gcp-project-vms",
                     zone=VM_ZONE,
                     instance=stuck.name,
                 ).result()
             fresh = client.get(
-                project="droid-assistant-vms",
+                project="gcp-project-vms",
                 zone=VM_ZONE,
                 instance=stuck.name,
             )
             labels = dict(fresh.labels or {})
             labels["pool-role"] = "stopped"
             client.set_labels(
-                project="droid-assistant-vms",
+                project="gcp-project-vms",
                 zone=VM_ZONE,
                 instance=stuck.name,
                 instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
@@ -274,7 +274,7 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
 
     def _get_state():
         vm = client.get(
-            project="droid-assistant-vms",
+            project="gcp-project-vms",
             zone=VM_ZONE,
             instance=target_name,
         )

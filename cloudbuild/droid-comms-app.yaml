@@ -68,7 +68,7 @@ steps:
   args:
   - '-c'
   - |
-    gcloud container clusters get-credentials droid --region ${_REGION} --project ${PROJECT_ID}
+    gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
     kubectl apply -f k8s/assistant-session-controller/crd.yaml
     kubectl wait --for=condition=Established crd/assistantsessions.infra.unify.ai --timeout=120s
     sed "s|image:.*assistant-session-controller:latest|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA}|" \
@@ -89,6 +89,8 @@ steps:
   - '--region=${_REGION}'
   - '--min-instances=1'
   - '--update-env-vars=DEPLOY_ENV=production'
+  - '--service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com'
+  - '--set-secrets=GCP_SA_KEY=gcp-sa-key:latest,LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,LIVEKIT_SIP_URI=LIVEKIT_SIP_URI:latest,LIVEKIT_URL=LIVEKIT_URL:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_API_SECRET=TWILIO_API_SECRET:latest,TWILIO_API_SID=TWILIO_API_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TWIML_SIP_PASSWORD=TWIML_SIP_PASSWORD:latest,TWIML_SIP_USERNAME=TWIML_SIP_USERNAME:latest,UNIFY_KEY=UNIFY_KEY:latest,ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,TWILIO_VERIFICATION_NUMBER=TWILIO_VERIFICATION_NUMBER:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,TWILIO_WA_ACCOUNT_SID=TWILIO_WA_ACCOUNT_SID:latest,TWILIO_WA_AUTH_TOKEN=TWILIO_WA_AUTH_TOKEN:latest,OAUTH_STATE_SIGNING_KEY=OAUTH_STATE_SIGNING_KEY:latest,MS365_ADMIN_TENANT_ID=MS365_ADMIN_TENANT_ID:latest,MS365_ADMIN_CLIENT_ID=MS365_ADMIN_CLIENT_ID:latest,MS365_ADMIN_CLIENT_SECRET=MS365_ADMIN_CLIENT_SECRET:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,MS365_BYOD_CLIENT_ID=MS365_BYOD_CLIENT_ID:latest,MS365_BYOD_CLIENT_SECRET=MS365_BYOD_CLIENT_SECRET:latest,OUTLOOK_WEBHOOK_SECRET=OUTLOOK_WEBHOOK_SECRET:latest,TEAMS_WEBHOOK_SECRET=TEAMS_WEBHOOK_SECRET:latest'
   - '--quiet'
   id: Deploy Droid Comms App
   entrypoint: gcloud
@@ -104,6 +106,7 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'droid-comms-app-repo'
   _SERVICE_NAME: 'droid-comms-app'
+  _CLUSTER: 'unity'
 
 # Available secrets
 availableSecrets:

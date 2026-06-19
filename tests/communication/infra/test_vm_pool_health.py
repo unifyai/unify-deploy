@@ -1292,7 +1292,7 @@ def _fake_disk(
     name: str,
     last_detach_seconds_ago: int | None,
     type_url: str = (
-        "projects/droid-assistant-vms/zones/us-central1-f/diskTypes/pd-standard"
+        "projects/gcp-project-vms/zones/us-central1-f/diskTypes/pd-standard"
     ),
     users=(),
     creation_seconds_ago: int | None = None,
@@ -1555,14 +1555,14 @@ def test_reconcile_ignores_non_assistant_and_attached_disks(monkeypatch):
             name="droid-disk-attached-staging",
             last_detach_seconds_ago=old_detach,
             users=[
-                "projects/droid-assistant-vms/zones/us-central1-f/instances/droid-pool-ubuntu-3",
+                "projects/gcp-project-vms/zones/us-central1-f/instances/droid-pool-ubuntu-3",
             ],
         ),
         _fake_disk(
             name="droid-disk-ssd-pool-staging",
             last_detach_seconds_ago=old_detach,
             type_url=(
-                "projects/droid-assistant-vms/zones/us-central1-f/" "diskTypes/pd-ssd"
+                "projects/gcp-project-vms/zones/us-central1-f/" "diskTypes/pd-ssd"
             ),
         ),
     ]

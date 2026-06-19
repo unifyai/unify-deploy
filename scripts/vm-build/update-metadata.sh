@@ -51,7 +51,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-PROJECT="${GCP_PROJECT_ID:-droid-assistant-vms}"
+PROJECT="${GCP_PROJECT_ID:-gcp-project-vms}"
 ZONE="${GCP_ZONE:-us-central1-f}"
 
 # Startup script paths (local files)

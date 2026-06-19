@@ -115,9 +115,9 @@ source .env
 curl -X POST "$TEST_ADAPTERS_URL/scheduled/jobs/create" -H "Authorization: Bearer $ORCHESTRA_ADMIN_KEY"
 ```
 
-**GCE tests skip**: Your `gcloud` auth needs access to the `droid-assistant-vms` project. Verify with:
+**GCE tests skip**: Your `gcloud` auth needs access to the `gcp-project-vms` project. Verify with:
 ```bash
-gcloud compute instances list --project=droid-assistant-vms --zones=us-central1-a --limit=1
+gcloud compute instances list --project=gcp-project-vms --zones=us-central1-a --limit=1
 ```
 
 **Pub/Sub checks fail with `pubsub.subscriptions.consume`**: Your current ADC principal cannot pull from the staging outbound subscription. Set `TEST_GOOGLE_APPLICATION_CREDENTIALS` (or `TEST_GCP_SA_KEY`) to a credential that has `roles/pubsub.subscriber` on `gcp-project-runtime`.

@@ -207,7 +207,7 @@ class Settings:
         )
 
         # VM infrastructure (dedicated GCP project, separate from GKE)
-        self.vm_project_id: str = "droid-assistant-vms"
+        self.vm_project_id: str = "gcp-project-vms"
         self.dns_project_id: str = "gcp-project-dns"
         self.vm_region: str = "us-central1"
         _zone_map = {
