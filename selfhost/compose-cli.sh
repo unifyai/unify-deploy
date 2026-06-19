@@ -8,6 +8,13 @@ DROID_HOME="${DROID_HOME:-$HOME/.droid}"
 COMPOSE_DIR="${DROID_COMPOSE_DIR:-$DROID_HOME}"
 COMPOSE_FILE="${COMPOSE_FILE:-$COMPOSE_DIR/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-$COMPOSE_DIR/.env}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
+
+if [[ -f "$STACK_STATE_SCRIPT" ]]; then
+  # shellcheck disable=SC1090
+  source "$STACK_STATE_SCRIPT"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -57,6 +64,9 @@ require_compose() {
 
 cmd_up() {
   require_compose
+  if declare -F stack_state_refuse_if_source_active >/dev/null 2>&1; then
+    stack_state_refuse_if_source_active || return 1
+  fi
   mkdir -p "$(grep -E '^DROID_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Droid/Local")"
   log_info "Starting Droid self-host stack..."
   compose up -d "$@"

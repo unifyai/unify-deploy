@@ -13,6 +13,8 @@
 #   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub)
 #   ./scripts/stack.sh doctor       Check prerequisites
 #   ./scripts/stack.sh smoke        Verify the running local product
+#   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
+#   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
@@ -28,6 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
+STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
 DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
@@ -35,6 +38,11 @@ CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
+
+if [[ -f "$STACK_STATE_SCRIPT" ]]; then
+  # shellcheck disable=SC1090
+  source "$STACK_STATE_SCRIPT"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -254,6 +262,10 @@ cmd_up() {
   echo "=============================================="
   echo ""
 
+  if declare -F stack_state_refuse_if_compose_active &>/dev/null; then
+    stack_state_refuse_if_compose_active || return 1
+  fi
+
   cleanup_legacy_orchestra_launch_job
 
   if ! cmd_doctor; then
@@ -274,6 +286,7 @@ cmd_up() {
   fi
 
   export SELF_HOST=1
+  export DEPLOY_REPO_PATH
   export ORCHESTRA_REPO_PATH
   export DROID_REPO_PATH
   export CONSOLE_REPO_PATH
@@ -332,12 +345,22 @@ cmd_up() {
       log_info "Starting Coordinator runtime (saved login)..."
       if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
         log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
+      elif declare -F with_droid_runtime_start_lock &>/dev/null; then
+        if ! with_droid_runtime_start_lock 30 bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
+          log_warn "Coordinator start failed — sign in at Console to refresh credentials"
+        else
+          log_success "Coordinator runtime is ready"
+        fi
       elif ! bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
         log_warn "Coordinator start failed — sign in at Console to refresh credentials"
       else
         log_success "Coordinator runtime is ready"
       fi
     fi
+  fi
+
+  if declare -F stack_state_write_source &>/dev/null; then
+    stack_state_write_source
   fi
 
   local console_port="${CONSOLE_PORT:-3000}"
@@ -441,6 +464,61 @@ cmd_status() {
   if [[ -x "$SCRIPT_DIR/service.sh" ]]; then
     echo ""
     bash "$SCRIPT_DIR/service.sh" status
+  fi
+
+  if declare -F stack_state_print_console_env &>/dev/null; then
+    echo ""
+    echo "Expected Console env (non-secret)"
+    echo "---------------------------------"
+    stack_state_print_console_env 2>/dev/null || log_info "No source stack manifest found"
+  fi
+}
+
+cmd_repair_console() {
+  if declare -F stack_state_refuse_if_compose_active &>/dev/null; then
+    stack_state_refuse_if_compose_active || return 1
+  fi
+  if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+    log_error "Missing $CONSOLE_LOCAL_SCRIPT"
+    return 1
+  fi
+
+  export SELF_HOST=1
+  export DEPLOY_REPO_PATH
+  export ORCHESTRA_REPO_PATH
+  export DROID_REPO_PATH
+  export CONSOLE_REPO_PATH
+  export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    export_self_host_coordinator_runtime_file
+    load_self_host_env_file "$DROID_REPO_PATH/.env"
+  fi
+
+  export LIVEKIT_URL="ws://localhost:7880"
+  export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
+  export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
+
+  if ! bash "$CONSOLE_LOCAL_SCRIPT" repair-console --self-host; then
+    log_error "Console repair failed"
+    return 1
+  fi
+  if declare -F stack_state_write_source &>/dev/null; then
+    stack_state_write_source
+  fi
+  log_success "Console repaired at http://localhost:${CONSOLE_PORT:-3000}"
+}
+
+cmd_dev_env() {
+  if declare -F stack_state_print_console_env &>/dev/null; then
+    stack_state_print_console_env
+  else
+    log_error "Missing stack_state.sh"
+    return 1
   fi
 }
 
@@ -600,6 +678,8 @@ main() {
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;
     smoke) cmd_smoke "$@" ;;
+    repair-console|restart-console) cmd_repair_console "$@" ;;
+    dev-env|print-console-env) cmd_dev_env "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
