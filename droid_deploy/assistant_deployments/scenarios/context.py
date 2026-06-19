@@ -9,7 +9,10 @@ from typing import Any, AsyncIterator, Callable, Awaitable
 
 from droid.common.pipeline.types import IngestBinding
 
-from droid_deploy.infra.workers.assistant_key_resolver import resolve_api_key
+from droid_deploy.infra.workers.assistant_key_resolver import (
+    ResolvedAssistant,
+    resolve_assistant,
+)
 from droid_deploy.infra.workers.worker_utils import activate_unify_context
 
 
@@ -25,16 +28,20 @@ class ScenarioIdentity:
 async def resolve_scenario_api_key(
     identity: ScenarioIdentity,
     *,
-    resolver: Callable[[IngestBinding], Awaitable[str]] = resolve_api_key,
+    resolver: Callable[
+        [IngestBinding],
+        Awaitable[ResolvedAssistant],
+    ] = resolve_assistant,
 ) -> str:
     """Resolve the Unify api_key for one scenario assistant identity."""
 
-    return await resolver(
+    resolved = await resolver(
         IngestBinding(
             user_id=identity.user_id,
             assistant_id=identity.assistant_id,
         ),
     )
+    return resolved.api_key
 
 
 @asynccontextmanager
@@ -43,7 +50,10 @@ async def activate_scenario_context(
     *,
     managers: list[type[Any]] | None = None,
     api_key: str | None = None,
-    resolver: Callable[[IngestBinding], Awaitable[str]] = resolve_api_key,
+    resolver: Callable[
+        [IngestBinding],
+        Awaitable[ResolvedAssistant],
+    ] = resolve_assistant,
     activator: Callable[..., None] = activate_unify_context,
 ) -> AsyncIterator[None]:
     """Activate `<user_id>/<assistant_id>` before mutating Droid managers."""

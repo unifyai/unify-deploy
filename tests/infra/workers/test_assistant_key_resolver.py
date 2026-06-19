@@ -31,8 +31,9 @@ from droid.common.pipeline.types import DmBinding, FmBinding, IngestBinding
 from droid.settings import SETTINGS
 from droid_deploy.infra.workers.assistant_key_resolver import (
     AssistantKeyLookupError,
+    ResolvedAssistant,
     clear_cache,
-    resolve_api_key,
+    resolve_assistant,
 )
 
 ORCHESTRA_URL = "https://orchestra.test"
@@ -96,12 +97,58 @@ class TestFmPath:
             logical_path="x.csv",
         )
         async with _mock_client(handler) as client:
-            key = await resolve_api_key(binding, http_client=client)
+            resolved = await resolve_assistant(binding, http_client=client)
 
-        assert key == "unify-live-ABC"
+        assert resolved.api_key == "unify-live-ABC"
         assert captured["auth"] == f"Bearer {ADMIN_KEY}"
         assert "admin/assistant" in captured["url"]
         assert "agent_id=42" in captured["url"]
+
+    @pytest.mark.asyncio
+    async def test_surfaces_team_memberships_from_assistant_response(self) -> None:
+        """The single admin lookup also carries team_ids / team_summaries."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "info": [
+                        {
+                            "agent_id": "42",
+                            "api_key": "unify-live-ABC",
+                            "team_ids": [54, 9],
+                            "team_summaries": [
+                                {"team_id": 54, "name": "ClientBeta", "description": "d"},
+                                {"team_id": 9, "name": "Ops", "description": ""},
+                            ],
+                        },
+                    ],
+                },
+            )
+
+        binding = FmBinding(user_id="alice", assistant_id="42", logical_path="x.csv")
+        async with _mock_client(handler) as client:
+            resolved = await resolve_assistant(binding, http_client=client)
+
+        assert isinstance(resolved, ResolvedAssistant)
+        assert resolved.api_key == "unify-live-ABC"
+        assert resolved.team_ids == [54, 9]
+        assert resolved.team_summaries[0]["team_id"] == 54
+
+    @pytest.mark.asyncio
+    async def test_missing_team_fields_default_to_empty(self) -> None:
+        """An assistant with no team fields resolves to empty memberships."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"info": [{"api_key": "k"}]})
+
+        binding = FmBinding(user_id="alice", assistant_id="42", logical_path="x.csv")
+        async with _mock_client(handler) as client:
+            resolved = await resolve_assistant(binding, http_client=client)
+
+        assert resolved.api_key == "k"
+        assert resolved.team_ids == []
+        assert resolved.team_summaries == []
 
     @pytest.mark.asyncio
     async def test_normalises_orchestra_url_without_v0_suffix(
@@ -117,7 +164,7 @@ class TestFmPath:
         monkeypatch.setattr(SETTINGS, "ORCHESTRA_URL", "https://orchestra.test")
         binding = FmBinding(user_id="u", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
-            await resolve_api_key(binding, http_client=client)
+            await resolve_assistant(binding, http_client=client)
 
         assert "/v0/admin/assistant" in captured["url"]
 
@@ -139,7 +186,7 @@ class TestFmPath:
         )
         binding = FmBinding(user_id="u", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
-            await resolve_api_key(binding, http_client=client)
+            await resolve_assistant(binding, http_client=client)
 
         # No double "/v0/v0/" prefix.
         assert captured["url"].count("/v0/") == 1
@@ -165,9 +212,9 @@ class TestDmBindingAssistantScoped:
             target_context="Orders",
         )
         async with _mock_client(handler) as client:
-            key = await resolve_api_key(binding, http_client=client)
+            resolved = await resolve_assistant(binding, http_client=client)
 
-        assert key == "assistant-key"
+        assert resolved.api_key == "assistant-key"
         assert "admin/assistant" in captured["url"]
         assert "agent_id=42" in captured["url"]
 
@@ -188,10 +235,10 @@ class TestCache:
 
         binding = FmBinding(user_id="alice", assistant_id="42", logical_path="x")
         async with _mock_client(handler) as client:
-            k1 = await resolve_api_key(binding, http_client=client)
-            k2 = await resolve_api_key(binding, http_client=client)
+            k1 = await resolve_assistant(binding, http_client=client)
+            k2 = await resolve_assistant(binding, http_client=client)
 
-        assert k1 == k2 == "cached-key"
+        assert k1.api_key == k2.api_key == "cached-key"
         assert call_count["n"] == 1
 
     @pytest.mark.asyncio
@@ -209,11 +256,11 @@ class TestCache:
         fm = FmBinding(user_id="alice", assistant_id="42", logical_path="x")
         dm = DmBinding(user_id="alice", assistant_id="77", target_context="ctx")
         async with _mock_client(handler) as client:
-            fm_key = await resolve_api_key(fm, http_client=client)
-            dm_key = await resolve_api_key(dm, http_client=client)
+            fm_key = await resolve_assistant(fm, http_client=client)
+            dm_key = await resolve_assistant(dm, http_client=client)
 
-        assert fm_key.startswith("key-")
-        assert dm_key.startswith("key-")
+        assert fm_key.api_key.startswith("key-")
+        assert dm_key.api_key.startswith("key-")
         assert len(call_log) == 2
 
     @pytest.mark.asyncio
@@ -243,13 +290,13 @@ class TestCache:
 
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
-            k1 = await resolve_api_key(binding, http_client=client)
+            k1 = await resolve_assistant(binding, http_client=client)
             # Jump forward past the 5-minute TTL.
             fake_now["t"] += 10_000.0
-            k2 = await resolve_api_key(binding, http_client=client)
+            k2 = await resolve_assistant(binding, http_client=client)
 
-        assert k1 == "k-1"
-        assert k2 == "k-2"
+        assert k1.api_key == "k-1"
+        assert k2.api_key == "k-2"
         assert call_count["n"] == 2
 
 
@@ -267,7 +314,7 @@ class TestErrors:
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
             with pytest.raises(AssistantKeyLookupError) as exc_info:
-                await resolve_api_key(binding, http_client=client)
+                await resolve_assistant(binding, http_client=client)
 
         err = exc_info.value
         assert err.user_id == "a"
@@ -282,7 +329,7 @@ class TestErrors:
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
             with pytest.raises(AssistantKeyLookupError) as exc_info:
-                await resolve_api_key(binding, http_client=client)
+                await resolve_assistant(binding, http_client=client)
 
         err = exc_info.value
         assert err.user_id == "a"
@@ -296,7 +343,7 @@ class TestErrors:
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
             with pytest.raises(AssistantKeyLookupError, match="No assistant found"):
-                await resolve_api_key(binding, http_client=client)
+                await resolve_assistant(binding, http_client=client)
 
     @pytest.mark.asyncio
     async def test_missing_api_key_field_raises(self) -> None:
@@ -306,7 +353,7 @@ class TestErrors:
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
             with pytest.raises(AssistantKeyLookupError, match="no api_key"):
-                await resolve_api_key(binding, http_client=client)
+                await resolve_assistant(binding, http_client=client)
 
     @pytest.mark.asyncio
     async def test_parent_binding_rejects_missing_assistant_id(self) -> None:
@@ -325,7 +372,7 @@ class TestErrors:
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         async with _mock_client(handler) as client:
             with pytest.raises(AssistantKeyLookupError, match="Non-JSON"):
-                await resolve_api_key(binding, http_client=client)
+                await resolve_assistant(binding, http_client=client)
 
     @pytest.mark.asyncio
     async def test_missing_orchestra_url_raises(self, monkeypatch) -> None:
@@ -338,11 +385,11 @@ class TestErrors:
         monkeypatch.setattr(SETTINGS, "ORCHESTRA_URL", "")
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         with pytest.raises(AssistantKeyLookupError, match="ORCHESTRA_URL"):
-            await resolve_api_key(binding)
+            await resolve_assistant(binding)
 
     @pytest.mark.asyncio
     async def test_missing_admin_key_raises(self, monkeypatch) -> None:
         monkeypatch.setattr(SETTINGS, "ORCHESTRA_ADMIN_KEY", SecretStr(""))
         binding = FmBinding(user_id="a", assistant_id="1", logical_path="x")
         with pytest.raises(AssistantKeyLookupError, match="ORCHESTRA_ADMIN_KEY"):
-            await resolve_api_key(binding)
+            await resolve_assistant(binding)
