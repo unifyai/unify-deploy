@@ -50,6 +50,7 @@ this deployment's assistant id.
 | `crm.hygiene_review` | `crm.run_crm_hygiene_review` |
 | `crm.pipeline_review_pack` | `crm.build_pipeline_review_pack` |
 | `outbound.evergreen.<slug>.<tick>` | `outbound.run_evergreen_tick__<tick>` |
+| `outbound.smartlead.reply_processor` | `outbound.run_smartlead_reply_processor` |
 | `influencers.youtube.extract` | `influencers.run_youtube_browser_extraction` |
 | `intel.hackernews.daily_digest` | `intel.run_hackernews_digest_to_whatsapp` |
 

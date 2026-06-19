@@ -93,3 +93,12 @@ async def run_evergreen_tick__orchestrator(**params: Any) -> dict[str, Any]:
 @custom_function()
 async def run_evergreen_tick__funnel(**params: Any) -> dict[str, Any]:
     return _run_evergreen("funnel", dict(params))
+
+
+@custom_function()
+async def run_smartlead_reply_processor(*, limit: int = 20) -> dict[str, Any]:
+    """Drain queued SmartLead reply jobs for REST-triggered webhook runs."""
+
+    from brain.outbound.smartlead_replies.trigger_task import drain_smartlead_reply_jobs
+
+    return drain_smartlead_reply_jobs(limit=limit)
