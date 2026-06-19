@@ -31,6 +31,7 @@ from droid_deploy.assistant_deployments.deployment_types import detect_environme
 # id skips deploy-time reconcile without hiding failures for required customer
 # deployments.
 _ASSISTANT_IDS: dict[str, str] = {
+    "production": "1406",
     "staging": "2108",
 }
 
