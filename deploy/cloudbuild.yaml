@@ -348,7 +348,7 @@ options:
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'droid'
-  _CLUSTER: 'droid'
+  _CLUSTER: 'unity'
   _FORCE_WORKER_REFRESH: 'false'
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base:latest'
   _DROID_SHA: ''
