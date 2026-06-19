@@ -180,7 +180,7 @@ prompt_llm_key() {
     *) log_warn "Skipped LLM key"; return 0 ;;
   esac
 
-  prompt_secret "LLM" "$var_name" "Lets Marty think and reply — required for chat."
+  prompt_secret "LLM" "$var_name" "Lets Twin think and reply — required for chat."
 }
 
 ensure_embedding_search_key() {
@@ -198,8 +198,8 @@ ensure_embedding_search_key() {
 
   echo "" >/dev/tty
   echo -e "${BOLD}OpenAI for tool search (recommended)${NC}" >/dev/tty
-  echo "  Marty picks tools using OpenAI embeddings, even when chat runs on another provider." >/dev/tty
-  echo "  Add an OpenAI key so Marty can reach its desktop, browser, and research tools." >/dev/tty
+  echo "  Twin picks tools using OpenAI embeddings, even when chat runs on another provider." >/dev/tty
+  echo "  Add an OpenAI key so Twin can reach its desktop, browser, and research tools." >/dev/tty
   prompt_secret \
     "OpenAI embeddings" \
     "OPENAI_API_KEY" \
@@ -263,7 +263,7 @@ prompt_anticaptcha_key() {
   local value=""
   echo "" >/dev/tty
   echo -e "${BOLD}AntiCaptcha (optional — computer use)${NC}" >/dev/tty
-  echo "  Lets Marty get past CAPTCHAs while driving the browser/desktop instead of stalling." >/dev/tty
+  echo "  Lets Twin get past CAPTCHAs while driving the browser/desktop instead of stalling." >/dev/tty
   echo "  Not needed for chat or voice-only installs." >/dev/tty
   echo "  Sign up: https://anti-captcha.com" >/dev/tty
   printf "Paste ANTICAPTCHA_KEY (hidden, Enter to skip): " >/dev/tty
@@ -285,14 +285,14 @@ prompt_anticaptcha_key() {
 prompt_research_and_computer() {
   echo ""
   echo -e "${BOLD}Research + computer automation (optional)${NC}"
-  echo "  Tavily:      lets Marty look things up on the web while researching"
-  echo "  AntiCaptcha: lets Marty get past CAPTCHAs while using the browser/desktop"
+  echo "  Tavily:      lets Twin look things up on the web while researching"
+  echo "  AntiCaptcha: lets Twin get past CAPTCHAs while using the browser/desktop"
   echo ""
 
   prompt_secret \
     "Web search — Tavily API key" \
     "DROID_WEB_TAVILY_API_KEY" \
-    "Lets Marty search the web while researching. Free tier: https://tavily.com"
+    "Lets Twin search the web while researching. Free tier: https://tavily.com"
 
   if has_env_value DROID_WEB_TAVILY_API_KEY && ! has_env_value DROID_WEB_ENABLED; then
     upsert_env "DROID_WEB_ENABLED" "true"
@@ -320,14 +320,14 @@ prompt_research_and_computer() {
 prompt_app_integrations() {
   echo ""
   echo -e "${BOLD}App integrations (optional)${NC}"
-  echo "  Lets Marty act in third-party apps (HubSpot, Notion, GitHub, ...) on your"
+  echo "  Lets Twin act in third-party apps (HubSpot, Notion, GitHub, ...) on your"
   echo "  behalf, using your own Composio account."
   echo ""
 
   prompt_secret \
     "App integrations — Composio API key" \
     "COMPOSIO_API_KEY" \
-    "Lets Marty act in apps like Notion, GitHub, and HubSpot. Free tier: https://composio.dev"
+    "Lets Twin act in apps like Notion, GitHub, and HubSpot. Free tier: https://composio.dev"
 
   echo ""
   if has_env_value COMPOSIO_API_KEY; then
@@ -365,7 +365,7 @@ prompt_tts_provider() {
 
   echo "" >/dev/tty
   echo -e "${BOLD}Text-to-speech (required for browser calls)${NC}" >/dev/tty
-  echo "  Picks the voice Marty speaks back with on calls." >/dev/tty
+  echo "  Picks the voice Twin speaks back with on calls." >/dev/tty
   echo "  1) Cartesia   — https://play.cartesia.ai (free credits)" >/dev/tty
   echo "  2) ElevenLabs — https://elevenlabs.io (free credits)" >/dev/tty
   echo "  3) Skip" >/dev/tty
@@ -375,8 +375,8 @@ prompt_tts_provider() {
   choice="${choice:-1}"
 
   case "$choice" in
-    1) prompt_secret "Cartesia (text-to-speech)" "CARTESIA_API_KEY" "Lets Marty speak back on calls. Free credits: https://play.cartesia.ai" ;;
-    2) prompt_secret "ElevenLabs (text-to-speech)" "ELEVEN_API_KEY" "Lets Marty speak back on calls. Free credits: https://elevenlabs.io" ;;
+    1) prompt_secret "Cartesia (text-to-speech)" "CARTESIA_API_KEY" "Lets Twin speak back on calls. Free credits: https://play.cartesia.ai" ;;
+    2) prompt_secret "ElevenLabs (text-to-speech)" "ELEVEN_API_KEY" "Lets Twin speak back on calls. Free credits: https://elevenlabs.io" ;;
     *) log_warn "Skipped text-to-speech"; return 0 ;;
   esac
 
@@ -409,7 +409,7 @@ run_non_interactive_byok() {
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
-    "Lets Marty hear you on browser calls. Free tier: https://console.deepgram.com"
+    "Lets Twin hear you on browser calls. Free tier: https://console.deepgram.com"
   prompt_tts_provider
   sync_anticaptcha_keys
   mark_byok_configured
@@ -460,7 +460,7 @@ main() {
   prompt_secret \
     "Speech-to-text (required for browser calls)" \
     "DEEPGRAM_API_KEY" \
-    "Lets Marty hear you on browser calls. Free tier: https://console.deepgram.com"
+    "Lets Twin hear you on browser calls. Free tier: https://console.deepgram.com"
   prompt_tts_provider
 
   echo ""

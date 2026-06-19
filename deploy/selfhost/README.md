@@ -23,19 +23,19 @@ Requires **Docker** only. The installer:
 
 Register on `/login`, then chat with your Coordinator.
 
-**What you get out of the box:** Marty can chat, call, and use a **managed Linux desktop** inside Docker (view it from Console during a call via assistant screen share — served at `http://127.0.0.1:8090`).
+**What you get out of the box:** Twin can chat, call, and use a **managed Linux desktop** inside Docker (view it from Console during a call via assistant screen share — served at `http://127.0.0.1:8090`).
 
-**Control your physical machine (optional):** To let Marty drive **your real desktop** (apps and files on the host, not the Docker sandbox), install Unify Desktop Assistant on that machine. See [Control your Mac](#control-your-mac-macos), [Control your Linux desktop](#control-your-linux-desktop), or [Control your Windows desktop](#control-your-windows-desktop) below.
+**Control your physical machine (optional):** To let Twin drive **your real desktop** (apps and files on the host, not the Docker sandbox), install Unify Desktop Assistant on that machine. See [Control your Mac](#control-your-mac-macos), [Control your Linux desktop](#control-your-linux-desktop), or [Control your Windows desktop](#control-your-windows-desktop) below.
 
 ## Control your Mac (macOS)
 
-Use this when Marty should drive **your physical Mac** (Finder, Chrome, logged-in apps). Skip it if the managed Docker desktop is enough.
+Use this when Twin should drive **your physical Mac** (Finder, Chrome, logged-in apps). Skip it if the managed Docker desktop is enough.
 
 ### 1. Finish the compose install first
 
 Complete [Quick start](#quick-start) above: `droid stack up`, sign in at Console, hire or open your Coordinator.
 
-Copy **your API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. This is your Orchestra user key (the same one Marty uses), not `ORCHESTRA_ADMIN_KEY`. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. It is **not** written to `~/.droid/.env` (that file is only for stack secrets and BYOK provider keys).
+Copy **your API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. This is your Orchestra user key (the same one Twin uses), not `ORCHESTRA_ADMIN_KEY`. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. It is **not** written to `~/.droid/.env` (that file is only for stack secrets and BYOK provider keys).
 
 ### 2. Install Unify Desktop Assistant
 
@@ -83,11 +83,11 @@ Then in Console → assistant **⋯** → **Connect your desktop**:
 droid restart
 ```
 
-Ask Marty to do something on your Mac (e.g. “take a screenshot of my desktop”). You do **not** need to open `http://127.0.0.1:6080/vnc.html` — that URL is for local debugging; Console shows Marty’s **managed** desktop at `:8090`, not your Mac’s noVNC feed.
+Ask Twin to do something on your Mac (e.g. “take a screenshot of my desktop”). You do **not** need to open `http://127.0.0.1:6080/vnc.html` — that URL is for local debugging; Console shows Twin’s **managed** desktop at `:8090`, not your Mac’s noVNC feed.
 
 ## Control your Linux desktop
 
-Use this when Marty should drive **your physical Linux session** (your logged-in desktop, not the Docker sandbox at `:8090`). Requires a graphical desktop (X11) and `droid stack up` running first.
+Use this when Twin should drive **your physical Linux session** (your logged-in desktop, not the Docker sandbox at `:8090`). Requires a graphical desktop (X11) and `droid stack up` running first.
 
 ### 1. Finish the compose install first
 
@@ -126,11 +126,11 @@ Console → **Connect your desktop** → link your machine → then:
 droid restart
 ```
 
-Ask Marty to do something on **your Linux desktop** (e.g. “take a screenshot of my desktop”).
+Ask Twin to do something on **your Linux desktop** (e.g. “take a screenshot of my desktop”).
 
 ## Control your Windows desktop
 
-Use this when Marty should drive **your physical Windows desktop** (not the Docker sandbox). Requires **`droid stack up`** running (Docker Desktop) before or during assistant setup.
+Use this when Twin should drive **your physical Windows desktop** (not the Docker sandbox). Requires **`droid stack up`** running (Docker Desktop) before or during assistant setup.
 
 ### 1. Finish the compose install first
 
@@ -167,7 +167,7 @@ Console → **Connect your desktop** → link your PC → then:
 droid restart
 ```
 
-Ask Marty to do something on **your Windows desktop**.
+Ask Twin to do something on **your Windows desktop**.
 
 A copy of this guide is written to `~/.droid/README.md` when you run the installer.
 

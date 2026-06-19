@@ -13,7 +13,7 @@ from adapters import main
 from common.livekit import make_call_scoped_sip_uri
 
 
-def _gmail_envelope(email_address="marty@unify.ai", history_id="hist-1"):
+def _gmail_envelope(email_address="twin@unify.ai", history_id="hist-1"):
     data = base64.b64encode(
         json.dumps(
             {
@@ -74,7 +74,7 @@ def _install_shared_gmail_stubs(monkeypatch, *, route):
             "email-1",
             {
                 "sender": "Owner <owner@example.com>",
-                "to": "marty@unify.ai",
+                "to": "twin@unify.ai",
                 "cc": "",
                 "bcc": "",
                 "subject": "Hello",
@@ -122,14 +122,14 @@ def test_shared_gmail_notification_resolves_owner_and_publishes(monkeypatch):
     assert contexts == [
         {
             "channel": "email",
-            "destination": "marty@unify.ai",
+            "destination": "twin@unify.ai",
             "sender": "owner@example.com",
             "assistant_id": "101",
             "validate_contact": False,
         },
     ]
     assert published[0][0][0] == "101"
-    assert published[0][1]["shared_mailbox"] == "marty@unify.ai"
+    assert published[0][1]["shared_mailbox"] == "twin@unify.ai"
 
 
 def test_shared_gmail_notification_reject_action_does_not_publish(monkeypatch):
@@ -502,12 +502,12 @@ def test_scheduled_email_watches_renews_shared_mailbox_once(monkeypatch):
             return {
                 "info": [
                     {
-                        "email": "marty@unify.ai",
+                        "email": "twin@unify.ai",
                         "email_provider": "google_workspace",
                         "secrets": {},
                     },
                     {
-                        "email": "marty@unify.ai",
+                        "email": "twin@unify.ai",
                         "email_provider": "google_workspace",
                         "secrets": {},
                     },
@@ -539,7 +539,7 @@ def test_scheduled_email_watches_renews_shared_mailbox_once(monkeypatch):
     result = main.scheduled_email_watches(main.ScheduledPayload(test=False))
 
     primary_emails = [payload["primary_email"] for payload in posted]
-    assert primary_emails.count("marty@unify.ai") == 1
+    assert primary_emails.count("twin@unify.ai") == 1
     assert "alice@example.com" in primary_emails
     assert result["gmail"][0]["email"] == "alice@example.com"
-    assert any(row["email"] == "marty@unify.ai" for row in result["gmail"])
+    assert any(row["email"] == "twin@unify.ai" for row in result["gmail"])

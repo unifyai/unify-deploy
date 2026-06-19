@@ -364,7 +364,7 @@ main() {
   fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
     echo ""
-    echo "  macOS — let Marty control THIS Mac (not only the Docker desktop):"
+    echo "  macOS — let Twin control THIS Mac (not only the Docker desktop):"
     echo "    1. Install Unify Desktop Assistant (.pkg):"
     echo "       https://github.com/unifyai/unify-desktop-assistant/releases"
     echo "    2. Menu bar app → Settings → paste your API key (from Console → Connect your desktop)"
