@@ -1,7 +1,7 @@
 name: Publish self-host images
 
-# Owned by unity-deploy (self-host image publishing). The droid-selfhost image
-# is built from the droid application source; when run from unity-deploy the
+# Owned by droid-deploy (self-host image publishing). The droid-selfhost image
+# is built from the droid application source; when run from droid-deploy the
 # build context must first clone droid (mirror the clone+overlay pattern in
 # base/cloudbuild.yaml) before `docker build`. Until that wiring lands this
 # workflow is manual-dispatch only.

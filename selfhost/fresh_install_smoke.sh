@@ -19,7 +19,7 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/. DEPLOY_REPO is the unity-deploy
+# This script lives in droid-deploy/selfhost/. DEPLOY_REPO is the droid-deploy
 # checkout; DROID_DEV_REPO is the sibling droid checkout under UNIFY_STACK_ROOT.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"

@@ -29,16 +29,16 @@ steps:
   - |
     docker run --rm \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
+      python -m droid_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
     docker run --rm \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control reconcile-stale --help >/dev/null
+      python -m droid_deploy.infra.cli.pipeline_control reconcile-stale --help >/dev/null
     docker run --rm \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control recover-stale --help >/dev/null
+      python -m droid_deploy.infra.cli.pipeline_control recover-stale --help >/dev/null
     docker run --rm \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
+      python -m droid_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
   waitFor: ['build-image']
 
   # Fetch public Droid integration manifests for the integrations artifact job.
@@ -288,7 +288,7 @@ steps:
         --env="DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts" \
         --env="DROID_PUBSUB_PROJECT_ID=${PROJECT_ID}" \
         --env="ORCHESTRA_URL=${_ORCHESTRA_URL}" \
-        --command -- python -m unity_deploy.infra.cli.pipeline_control \
+        --command -- python -m droid_deploy.infra.cli.pipeline_control \
           worker-refresh-check --env production --dispatch-limit 20 --json $$extra_args
       rc="$$?"
       set -e

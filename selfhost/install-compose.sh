@@ -4,12 +4,12 @@
 # =============================================================================
 set -euo pipefail
 
-# This installer lives in unity-deploy/selfhost/. Run from a unity-deploy
+# This installer lives in droid-deploy/selfhost/. Run from a droid-deploy
 # checkout it copies the local compose bundle; the remote fallback targets the
-# (private) unity-deploy repo and requires credentials.
+# (private) droid-deploy repo and requires credentials.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
 BRANCH="${BRANCH:-staging}"
-REPO_RAW="https://raw.githubusercontent.com/unifyai/unity-deploy/${BRANCH}"
+REPO_RAW="https://raw.githubusercontent.com/unifyai/droid-deploy/${BRANCH}"
 SELFHOST_SRC="${INSTALL_SELFHOST_SRC:-${SCRIPT_DIR:+$SCRIPT_DIR/../deploy/selfhost}}"
 
 DROID_HOME="${DROID_HOME:-$HOME/.droid}"

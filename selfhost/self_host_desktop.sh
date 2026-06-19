@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/; the desktop image and droid venv
+# This script lives in droid-deploy/selfhost/; the desktop image and droid venv
 # come from the sibling droid checkout under UNIFY_STACK_ROOT.
 SELF_HOST_DESKTOP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _DEPLOY_REPO_PATH="$(cd "$SELF_HOST_DESKTOP_SCRIPT_DIR/.." && pwd)"

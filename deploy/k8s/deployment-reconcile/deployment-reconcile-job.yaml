@@ -1,10 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: unity-deployment-reconcile-
+  generateName: droid-deployment-reconcile-
   namespace: __NAMESPACE__
   labels:
-    app: unity-deployment-reconcile
+    app: droid-deployment-reconcile
     component: deployment-reconcile
     environment: __ENVIRONMENT__
 spec:
@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app: unity-deployment-reconcile
+        app: droid-deployment-reconcile
         component: deployment-reconcile
         environment: __ENVIRONMENT__
     spec:
@@ -28,7 +28,7 @@ spec:
         - -c
         - |
           set -eu
-          set -- python -m unity_deploy.scripts.reconcile_deployment \
+          set -- python -m droid_deploy.scripts.reconcile_deployment \
             --environment "${DROID_DEPLOYMENT_ENVIRONMENT}" \
             --planes "${DROID_DEPLOYMENT_PLANES}" \
             --concurrency "${DROID_DEPLOYMENT_CONCURRENCY}" \

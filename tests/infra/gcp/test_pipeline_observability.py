@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from droid.common.pipeline.types import IngestCheckpoint
 from droid.common.pipeline.work_queue import ReceivedWorkItem
 
-from unity_deploy.infra.gcp.artifact_store import LeaseRecord
-from unity_deploy.infra.gcp.pipeline_observability import (
+from droid_deploy.infra.gcp.artifact_store import LeaseRecord
+from droid_deploy.infra.gcp.pipeline_observability import (
     classify_error,
     derive_status,
     dlq_record_from_received_item,

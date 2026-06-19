@@ -5,7 +5,7 @@ Tests the Pydantic models, field validators, and quality tiers.
 
 import pytest
 
-from unity_deploy.assistant_deployments.integrations.types import (
+from droid_deploy.assistant_deployments.integrations.types import (
     Capability,
     DemoSiteConfig,
     IntegrationManifest,

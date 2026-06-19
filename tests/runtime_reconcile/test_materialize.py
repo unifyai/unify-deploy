@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from unity_deploy.runtime_reconcile.context import RuntimeIdentity
-from unity_deploy.runtime_reconcile import materialize
+from droid_deploy.runtime_reconcile.context import RuntimeIdentity
+from droid_deploy.runtime_reconcile import materialize
 
 
 class _FakeFunctionManager:
@@ -51,11 +51,11 @@ def _install_materialize_fakes(
         manager_registry,
     )
 
-    seed_sync = ModuleType("unity_deploy.assistant_deployments.seed_sync")
+    seed_sync = ModuleType("droid_deploy.assistant_deployments.seed_sync")
     seed_sync.sync_all_seed_data = lambda _resolved: False
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity_deploy.assistant_deployments.seed_sync",
+        "droid_deploy.assistant_deployments.seed_sync",
         seed_sync,
     )
 

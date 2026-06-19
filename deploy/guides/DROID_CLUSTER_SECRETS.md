@@ -17,7 +17,7 @@ Droid Job pods read API keys from the Kubernetes Secret `droid-secrets` via `sec
 Requires `helm`, `gcloud`, and cluster admin on the **droid** GKE cluster. Run once per cluster:
 
 ```bash
-cd ~/Unify/unity-deploy
+cd ~/Unify/droid-deploy
 chmod +x deploy/scripts/kubernetes/install_external_secrets_operator.sh
 ./deploy/scripts/kubernetes/install_external_secrets_operator.sh
 ```

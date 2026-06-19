@@ -1,0 +1,38 @@
+name: GitHub
+slug: github
+version: "0.1.0"
+sector: developer-tools
+tier: api
+quality: silver
+description: >
+  Integration with the GitHub REST API for repository, user, and issue
+  lookups.  Public endpoints require no authentication; authenticated
+  requests raise the rate limit from 60 to 5 000 per hour.
+homepage: https://github.com
+
+secrets:
+- name: GITHUB_TOKEN
+  description: Personal access token (optional — public endpoints work without it)
+  required: false
+  sensitive: true
+
+capabilities:
+- id: user_lookup
+  name: User Lookup
+  description: Look up GitHub user profiles and their public repositories
+  functions: [get_user, get_user_repos]
+  guidance: [repo_lookup]
+- id: repo_search
+  name: Repository Search
+  description: Get repository details or search across all public repos
+  functions: [get_repo, search_repos]
+  guidance: [repo_lookup]
+- id: issue_triage
+  name: Issue Triage
+  description: List and filter open issues on a repository
+  functions: [get_repo_issues]
+  guidance: [issue_triage]
+
+requirements: [httpx]
+
+tags: [github, git, repositories, issues, developer-tools]

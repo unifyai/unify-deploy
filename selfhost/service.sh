@@ -22,7 +22,7 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/ and drives the sibling droid,
+# This script lives in droid-deploy/selfhost/ and drives the sibling droid,
 # console, and orchestra checkouts under UNIFY_STACK_ROOT.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"

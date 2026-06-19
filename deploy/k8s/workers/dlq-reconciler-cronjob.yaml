@@ -33,7 +33,7 @@ spec:
             command:
             - python
             - -m
-            - unity_deploy.infra.cli.pipeline_control
+            - droid_deploy.infra.cli.pipeline_control
             - reconcile-dlq
             - --env
             - staging
@@ -84,7 +84,7 @@ spec:
             command:
             - python
             - -m
-            - unity_deploy.infra.cli.pipeline_control
+            - droid_deploy.infra.cli.pipeline_control
             - reconcile-dlq
             - --env
             - production

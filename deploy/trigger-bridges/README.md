@@ -2,7 +2,7 @@
 
 This directory holds the versioned bridge configs that move hosted Droid image
 rollouts from the public `droid` repository into the private canonical build
-path in `unity-deploy`.
+path in `droid-deploy`.
 
 ## Current State
 
@@ -11,8 +11,8 @@ run the private bridge flow:
 
 | Environment | Bridge trigger | Private base trigger | Overlay trigger |
 |-------------|----------------|---------------------|-----------------|
-| **staging** | `droid-staging` (inline, fires on `droid@staging` push) | `droid-base-staging-private` (reads `unity-deploy/base/cloudbuild-staging.yaml`) | `unity-deploy-staging` |
-| **production** | `droid-production-private-bridge` (inline, fires on `droid@main` push) | `droid-base-production-private` (reads `unity-deploy/base/cloudbuild.yaml`) | `unity-deploy` |
+| **staging** | `droid-staging` (inline, fires on `droid@staging` push) | `droid-base-staging-private` (reads `droid-deploy/base/cloudbuild-staging.yaml`) | `droid-deploy-staging` |
+| **production** | `droid-production-private-bridge` (inline, fires on `droid@main` push) | `droid-base-production-private` (reads `droid-deploy/base/cloudbuild.yaml`) | `droid-deploy` |
 
 ## Comms App Bridge
 
@@ -20,13 +20,13 @@ The hosted comms Cloud Run service (`droid-comms-app{,-staging}`) bundles
 `droid.gateway` -- it clones `droid` inside `Dockerfile-comms` and composes on
 top of `droid.gateway.app.create_app()`. The base/overlay chain above only
 rebuilds the assistant Job image, so a `droid` change to the gateway code would
-otherwise not reach the comms service until the next `unity-deploy` push. A
+otherwise not reach the comms service until the next `droid-deploy` push. A
 second, path-scoped bridge closes that gap:
 
 | Environment | Comms bridge trigger | Fires on | Path filter | Runs |
 |-------------|----------------------|----------|-------------|------|
-| **staging** | `droid-comms-bridge-staging` (inline, from `droid-comms-staging-bridge.yaml`) | `droid@staging` push | `droid/gateway/**`, `requirements-gateway.txt` | `droid-comms-app-staging-unity-deploy` |
-| **production** | `droid-comms-bridge-production` (inline, from `droid-comms-production-bridge.yaml`) | `droid@main` push | `droid/gateway/**`, `requirements-gateway.txt` | `droid-comms-app-unity-deploy` |
+| **staging** | `droid-comms-bridge-staging` (inline, from `droid-comms-staging-bridge.yaml`) | `droid@staging` push | `droid/gateway/**`, `requirements-gateway.txt` | `droid-comms-app-staging-droid-deploy` |
+| **production** | `droid-comms-bridge-production` (inline, from `droid-comms-production-bridge.yaml`) | `droid@main` push | `droid/gateway/**`, `requirements-gateway.txt` | `droid-comms-app-droid-deploy` |
 
 The path filter (`includedFiles`) keeps the comms service from rebuilding on
 every `droid` push -- only communication-relevant changes fan out. The comms
@@ -54,7 +54,7 @@ droid@main fast-forward:
 |------|----------|---------|---------|
 | 1 | `f9c41dd4-a213-...` | `droid-production-private-bridge` | SUCCESS (fired on droid@main `7885f958c`) |
 | 2 | `974cf979-9ac2-...` | `droid-base-production-private` | SUCCESS (built `droid-base:7885f958c`) |
-| 3 | `56d0d282-bd7d-...` | `unity-deploy` | SUCCESS (overlay built on top) |
+| 3 | `56d0d282-bd7d-...` | `droid-deploy` | SUCCESS (overlay built on top) |
 
 End-to-end chain (push to running Droid Job image) verified clean.
 
@@ -62,8 +62,8 @@ End-to-end chain (push to running Droid Job image) verified clean.
 
 - **The `droid-base-{staging,production}-private` triggers must keep cloning
   `droid` from the source-of-truth branch (`staging` or `main`) and clobbering
-  `droid/deploy/` with `unity-deploy/base/` before building.** This is what
-  makes `unity-deploy/base/` the canonical hosted deploy source.
+  `droid/deploy/` with `droid-deploy/base/` before building.** This is what
+  makes `droid-deploy/base/` the canonical hosted deploy source.
 - **`droid/deploy/cloudbuild{,-staging}.yaml` are no longer the canonical
   config for production / staging image builds.** They remain in the open-source
   `droid` repo as a reference implementation (OSS users self-deploying Droid

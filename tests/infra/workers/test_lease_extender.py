@@ -11,8 +11,8 @@ import pytest
 from pydantic import BaseModel
 
 from droid.common.pipeline import PipelineHeartbeatManifest
-from unity_deploy.infra.workers import worker_utils
-from unity_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
+from droid_deploy.infra.workers import worker_utils
+from droid_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
 
 
 class _StubQueue:

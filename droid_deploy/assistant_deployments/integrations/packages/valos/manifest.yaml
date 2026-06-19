@@ -1,0 +1,150 @@
+name: Valos
+slug: valos
+version: "0.6.0"
+sector: real-estate
+tier: api
+quality: bronze
+description: >
+  UK property valuation data layer.  Wraps the Ordnance Survey Data Hub
+  (OS Maps API for raster tiles, plus optional OS Names / OS Places for
+  building-level geocoding on Premium plans), PropertyData (Land
+  Registry freeholds, INSPIRE polygon geometry, title information), and
+  the CQC Syndication register (authoritative care-home locations,
+  ratings, and bed counts; free subscription key) and exposes them to the actor as typed
+  primitives covering address resolution, freehold title lookup,
+  polygon retrieval, demographic context, care-home catchment
+  resolution, and OS-tiled map rendering.  ``valos_geocode`` composes a
+  four-step fallback chain (postcodes.io → OS Places → OS Names →
+  Nominatim) so a Standard-tier OS project that only has OS Maps still
+  resolves both postcodes and free-text addresses; ``valos_find_care_homes``
+  resolves competitor care homes by CQC registration (name-only market
+  lists carry no address), placing pins authoritatively inside the
+  catchment.  Replaces the placeholder pass-through to api.valos.ai.
+  Opt-in via two equivalent activation paths: deploy-time wiring through
+  the ``integrations=[...]`` argument on ``BASE_SPEC.derive(...)``
+  (typically with Unify-owned shared credentials), or per-assistant
+  Console paste through the ``valos`` entry in ``INTEGRATION_PROVIDERS``
+  (for one-off testing or BYO-keys clients).  Either path lands the OS +
+  PropertyData secrets in the assistant's ``/Secrets`` context;
+  competitor resolution additionally uses a free CQC subscription key
+  (``CQC_PRIMARY_KEY``), while postcodes.io and Nominatim need no key.
+homepage: https://osdatahub.os.uk
+
+secrets:
+- name: OS_MAPS_API_KEY
+  description: >
+    OS Data Hub project API key.  Required scope is just OS Maps
+    (raster tiles for the rendering primitives).  OS Names and OS
+    Places are optional Premium add-ons that, when present, give
+    ``valos_geocode`` building-level matches with UPRN; on Standard
+    plans the geocoder transparently falls back to postcodes.io
+    (postcode queries) and Nominatim (free-text addresses), neither
+    of which need a key.  May be Unify-owned (deploy-time path) or
+    customer-supplied (Console-paste path) — the runtime is
+    indifferent.  The simple ``?key=...`` query-param flow is used;
+    the OS "Project API Secret" (OAuth client-credentials path) is
+    unused.  Distributing OS rasters in customer-deliverable Word
+    reports is redistribution and may require a separate OS Partner /
+    OS Reseller agreement — confirm commercial terms with Ordnance
+    Survey before producing client-deliverable maps.
+  required: true
+  sensitive: true
+- name: PROPERTYDATA_API_KEY
+  description: >
+    PropertyData API key with the Land Registry endpoints enabled
+    (``/api/freeholds`` and ``/api/title-information``).  May be
+    Unify-owned (deploy-time path) or customer-supplied (Console-paste
+    path).  PropertyData ToS includes reseller / multi-tenant clauses;
+    confirm reseller / multi-tenant terms with PropertyData before
+    using a single Unify-owned key across multiple client deployments.
+  required: true
+  sensitive: true
+- name: CQC_PRIMARY_KEY
+  description: >
+    Care Quality Commission (CQC) Syndication API subscription key —
+    free, from api-portal.service.cqc.org.uk.  Used only by
+    ``valos_find_care_homes`` to resolve competitor care homes from the
+    register of record (authoritative coordinates, CQC rating, bed
+    count).  Passed as the ``Ocp-Apim-Subscription-Key`` header.
+    Optional at the package level: OS + PropertyData primitives work
+    without it, but competitor-pin resolution returns a clear auth
+    error until it is set.  CQC data is Open Government Licence v3.0
+    (commercial reuse permitted with attribution).
+  required: false
+  sensitive: true
+
+capabilities:
+- id: valos_geocode
+  name: Address geocoding
+  description: >
+    Resolve a free-text address or postcode to coordinates (and UPRN
+    where available) via a four-step fallback chain: postcodes.io for
+    postcodes, OS Places + OS Names where the OS plan supports them,
+    Nominatim as the unauthenticated free-text safety net.
+  functions: [valos_geocode]
+- id: valos_freeholds
+  name: Freehold title lookup
+  description: >
+    Look up registered freehold titles for a postcode or coordinate
+    pair, returning title numbers, INSPIRE ids, tenure, and whether
+    polygon geometry is available.
+  functions: [valos_lookup_freeholds]
+- id: valos_title_polygon
+  name: Title boundary polygon
+  description: >
+    Resolve a title number or INSPIRE id to a GeoJSON polygon, plot
+    size, and ownership type.  Backed by PropertyData's structured
+    wrapper around HM Land Registry's INSPIRE Index Polygons.
+  functions: [valos_get_title_polygon]
+- id: valos_demographics
+  name: Postcode demographics
+  description: >
+    Census, deprivation, and wealth indicators for a postcode and
+    surrounding radius via the Office for National Statistics open
+    APIs.  Closes the demographics gap to Carterwood for non-care-
+    home-specific context.
+  functions: [valos_postcode_demographics]
+- id: valos_care_homes
+  name: Care-home catchment resolution
+  description: >
+    List CQC-registered care homes within a radius of a point, with
+    authoritative coordinates, rating, and bed count, and optionally
+    fuzzy-match a list of competitor names (e.g. a Carterwood
+    competition list) against the radius-bounded set.  Backed by the CQC
+    Syndication register via a free subscription key (``CQC_PRIMARY_KEY``);
+    data is Open Government Licence v3.0.
+  functions: [valos_find_care_homes]
+  guidance: [valos_competitor_resolution]
+- id: valos_render
+  name: OS map rendering
+  description: >
+    Render OS Maps WMTS tiles to a PNG, optionally with a polygon
+    overlay, north arrow, and scale bar.  ``valos_render_location_plan``
+    composes a Land-Registry-style location plan; ``valos_render_competitor_map``
+    layers numbered pins for nearby competitors.  All renderers persist
+    PNGs at the supplied filesystem path so ``ImageManager`` can resolve
+    them later via filepath.
+  functions:
+  - valos_render_os_map
+  - valos_render_location_plan
+  - valos_render_competitor_map
+  - valos_render_catchment_map
+
+requirements:
+- httpx
+- pillow
+- shapely
+- pyproj
+
+tags:
+- valos
+- property
+- valuation
+- real-estate
+- ordnance-survey
+- land-registry
+- propertydata
+- ons
+- cqc
+- care-home
+- rics

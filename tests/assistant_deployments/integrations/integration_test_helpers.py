@@ -1,6 +1,6 @@
 """Reusable test helpers for integration function compliance and execution.
 
-The unity-deploy integration framework intentionally separates packages by
+The droid-deploy integration framework intentionally separates packages by
 ownership and runtime use. Tests follow the same separation:
 
 * ``packages/`` holds reusable platform/provider connectors (the
@@ -23,7 +23,7 @@ from pathlib import Path
 
 _INTEGRATIONS_PARENT = (
     Path(__file__).resolve().parent.parent.parent.parent
-    / "unity_deploy"
+    / "droid_deploy"
     / "assistant_deployments"
     / "integrations"
 )

@@ -11,7 +11,7 @@ def _repo_root() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / "pyproject.toml").is_file():
             return parent
-    raise FileNotFoundError("Could not locate unity-deploy repo root")
+    raise FileNotFoundError("Could not locate droid-deploy repo root")
 
 
 SCRIPT_PATH = (

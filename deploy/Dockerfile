@@ -2,8 +2,8 @@ ARG BASE_IMAGE=us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-base-s
 FROM ${BASE_IMAGE}
 
 USER root
-COPY . /app/unity-deploy-src
-RUN cd /app/unity-deploy-src && uv pip install --system --no-cache .
+COPY . /app/droid-deploy-src
+RUN cd /app/droid-deploy-src && uv pip install --system --no-cache .
 
 # Install the brain repo so the brain_operator deployment's function
 # wrappers can `import brain.*` from inside the assistant runtime. The

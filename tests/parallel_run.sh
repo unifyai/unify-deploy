@@ -205,7 +205,7 @@ unset _parse_result
 _NUM_CORES=$DETECTED_CPU_CORES
 
 # ---------------------------------------------------------------------------
-# Orchestra URL (unity-deploy uses staging/production — no local orchestra)
+# Orchestra URL (droid-deploy uses staging/production — no local orchestra)
 # ---------------------------------------------------------------------------
 if [[ -n "${ORCHESTRA_URL:-}" ]]; then
   echo "Using orchestra: $ORCHESTRA_URL"
@@ -276,13 +276,13 @@ is_random_projects_mode() {
 # ---------------------------------------------------------------------------
 delete_shared_project() {
   local phase="$1"  # "start" or "exit"
-  echo "Deleting project '${UNIFY_PROJECT:-UnityDeployTests}'..."
+  echo "Deleting project '${UNIFY_PROJECT:-DroidDeployTests}'..."
   "$VENV_PY" - << 'PYEOF'
 import os
 import sys
 try:
     import unify
-    project_name = os.environ.get("UNIFY_PROJECT", "UnityDeployTests")
+    project_name = os.environ.get("UNIFY_PROJECT", "DroidDeployTests")
     try:
         unify.delete_project(project_name, missing_ok=False)
         print(f"Deleted project '{project_name}'")
@@ -459,7 +459,7 @@ fi
 # DROID_SKIP_SHARED_PROJECT_PREP: When set, skip the heavyweight project
 # preparation entirely. Useful for:
 # - Nested parallel_run.sh calls inside tests (the outer call already prepared)
-# - Running fixture tests that don't need the real UnityDeployTests project
+# - Running fixture tests that don't need the real DroidDeployTests project
 if [[ -n "${DROID_SKIP_SHARED_PROJECT_PREP:-}" ]]; then
   echo "Skipping shared project preparation (DROID_SKIP_SHARED_PROJECT_PREP set)..."
 elif is_random_projects_mode; then
@@ -470,7 +470,7 @@ else
   if is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_START"; then
     delete_shared_project "start"
   fi
-  echo "Preparing shared project '${UNIFY_PROJECT:-UnityDeployTests}'..."
+  echo "Preparing shared project '${UNIFY_PROJECT:-DroidDeployTests}'..."
   if [[ -f "$SCRIPT_DIR/_prepare_shared_project.py" ]]; then
     "$VENV_PY" "$SCRIPT_DIR/_prepare_shared_project.py"
   else

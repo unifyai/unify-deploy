@@ -86,7 +86,7 @@ All arguments except `--monitor` are forwarded directly to `dispatch_pipeline.py
 deploy/scripts/dev/run_pipeline.sh \
   --mode dm \
   --config path/to/pipeline_config.json \
-  --project-root ~/unity-deploy \
+  --project-root ~/droid-deploy \
   --user-id $USER_ID --assistant-id $ASSISTANT_ID \
   --limit 5
 

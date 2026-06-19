@@ -1,0 +1,114 @@
+scenario_id: webex_full_sync_v0
+name: Webex Full Sync (v0)
+description: >-
+  Incremental Webex sync into the assistant's DataManager.  Runs on a
+  scheduler tick; the orchestrator gates per-object cadence by env
+  config so the scheduler tick rate is decoupled from actual sync
+  work.
+#
+# TEMPLATE - this generic scenario is shipped for reference only.  The
+# webex package's manifest does NOT declare ``scenarios: [...]``, so
+# this file is not auto-loaded.  Per-client deployments that want
+# scheduled Webex sync activate it via
+# ``droid_deploy.assistant_deployments.scenarios.types.ScenarioActivation``
+# declared on a ``SeedLayer`` or ``DeploymentSpec``:
+#
+#     register_layer("clientzeta", "assistant", "630", SeedLayer(
+#         scenarios=[
+#             ScenarioActivation(
+#                 scenario_template="webex/webex_full_sync_v0",
+#                 assistant_id="630",
+#                 tasks_enabled=False,
+#             ),
+#         ],
+#     ))
+#
+client: ""           # set per-client by ScenarioActivation
+deployment: ""       # set per-client by ScenarioActivation
+
+integration:
+  package_slug: webex
+  mode: real
+  required_capabilities:
+  - webex_account
+  - webex_people_directory
+  - webex_meetings
+  - webex_recordings
+  - webex_transcripts
+  - webex_incremental_sync
+  - webex_local_query
+  schema_version: webex.comms.sync.v1
+
+data_targets:
+  # ----- People -----------------------------------------------------
+- {table: webex_people, context: Webex/People, unique_key: id, description: Webex directory people.}
+
+  # ----- Rooms ------------------------------------------------------
+- {table: rooms, context: Webex/Rooms, unique_key: id, description: Webex group rooms (1:1 direct rooms excluded).}
+- {table: room_memberships, context: Webex/Rooms/Memberships, unique_key: id, description: Per-room membership rows.}
+
+  # ----- Meetings ---------------------------------------------------
+- {table: meetings, context: Webex/Meetings, unique_key: id, description: Scheduled and past meetings within the lookback window.}
+- {table: meeting_invitees, context: Webex/Meetings/Invitees, unique_key: [meeting_id, email], description: Meeting invitees keyed on lowercased email — join key for HubSpot contacts.}
+
+  # ----- Recordings -------------------------------------------------
+- {table: recordings, context: Webex/Recordings, unique_key: id, description: Recording metadata; bytes not synced; download_url has short TTL.}
+
+  # ----- Transcripts ------------------------------------------------
+- {table: transcripts, context: Webex/Transcripts, unique_key: id, description: Post-meeting transcript metadata; body present only when WEBEX_MIRROR_TRANSCRIPTS=true.}
+
+  # ----- Sync metadata ----------------------------------------------
+- {table: sync_state, context: Webex/Meta/SyncState, unique_key: object_type, description: Per-object last-synced watermarks.}
+- {table: sync_runs, context: Webex/Meta/SyncRuns, description: Append-only audit log of sync ticks.}
+
+timeline:
+- tick: 0
+  capability: webex_incremental_sync
+  function: run_webex_sync_tick
+  label: Initial sync
+  args: {full: true}
+- tick: 1
+  capability: webex_incremental_sync
+  function: run_webex_sync_tick
+  label: Incremental delta
+  args: {}
+
+tasks:
+- id: webex_sync_tick
+    # Disabled by default per a71a840 - keep recurring tasks off until the
+    # control-plane has real TaskScheduler + FunctionManager IDs seeded.
+    # Operators flip to true via ScenarioActivation.tasks_enabled=True.
+  enabled: false
+  execution_mode: live
+  schedule:
+    type: interval
+      # Scheduler tick rate.  Actual sync cadence is gated inside
+      # run_webex_sync_tick by WEBEX_SYNC_MIN_INTERVAL_SECONDS (default 300)
+      # and WEBEX_SYNC_OBJECT_INTERVALS for per-object overrides.  A small
+      # scheduler interval lets env-var changes take effect on the next tick
+      # without redeploying the YAML.
+    interval_seconds: 60
+  target:
+    assistant_id: ""             # set per-client by ScenarioActivation
+    scenario_id: webex_full_sync_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_webex_sync_tick
+    task_name: Webex sync tick
+    task_description: >-
+      Periodic Webex sync into the assistant's DataManager.  Pulls
+      deltas from Webex using the orchestrator's per-object cadence
+      config, upserts into Webex/* contexts, and appends an audit row
+      to Webex/Meta/SyncRuns.
+    recurrence_hint: every_minute_with_internal_cadence_gating
+    visibility_policy: silent_by_default
+  delivery:
+    phase: simulated_outbox
+
+monitors: []
+alert_routes: []
+dashboards: []
+
+metadata:
+  owner: webex
+  documentation: packages/webex/guidance/webex_sync.md

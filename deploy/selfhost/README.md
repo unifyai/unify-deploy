@@ -8,7 +8,7 @@ the hosted Orchestra backend (see `droid/README.md`).
 
 ## Quick start
 
-Run from a `unity-deploy` checkout:
+Run from a `droid-deploy` checkout:
 
 ```bash
 bash selfhost/install-compose.sh
@@ -227,9 +227,9 @@ Workspace files live at `~/Droid/Local` (bind-mounted into CM and desktop contai
 ## Developer source install
 
 Run the full stack from sibling source checkouts (for internal development).
-Lay out `droid`, `unify`, `unillm`, `console`, `orchestra`, and `unity-deploy`
+Lay out `droid`, `unify`, `unillm`, `console`, `orchestra`, and `droid-deploy`
 as siblings under one root (`UNIFY_STACK_ROOT`, defaults to the parent of
-`unity-deploy`), then drive everything from this repo's `selfhost/` scripts:
+`droid-deploy`), then drive everything from this repo's `selfhost/` scripts:
 
 ```bash
 bash selfhost/setup.sh        # one-time bootstrap (local Orchestra, Console env, voice)

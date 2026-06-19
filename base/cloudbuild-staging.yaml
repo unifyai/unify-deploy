@@ -138,7 +138,7 @@ steps:
   - |
     set -euo pipefail
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    gcloud builds triggers run unity-deploy-staging \
+    gcloud builds triggers run droid-deploy-staging \
       --project=${PROJECT_ID} \
       --region=${_REGION} \
       --branch=staging \

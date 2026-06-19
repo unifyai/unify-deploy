@@ -30,9 +30,9 @@ set -e
 # (e.g. ~/dev/{droid,console,orchestra,...}). This mirrors stack.sh's
 # UNIFY_STACK_ROOT resolution so setup and stack always target the same repos.
 # Explicit DROID_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
-# This script lives in unity-deploy/selfhost/ and bootstraps the sibling droid,
+# This script lives in droid-deploy/selfhost/ and bootstraps the sibling droid,
 # console, and orchestra checkouts located under UNIFY_STACK_ROOT (defaults to
-# the parent of unity-deploy). Explicit DROID_HOME / UNIFY_STACK_ROOT / *_REPO
+# the parent of droid-deploy). Explicit DROID_HOME / UNIFY_STACK_ROOT / *_REPO
 # env vars still win.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"

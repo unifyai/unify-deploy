@@ -20,7 +20,7 @@
 #   ./local.sh create-topics      # Create test topics in emulator
 #
 # Environment:
-#   COMMS_REPO_PATH          Path to unity-deploy hosted repo (default: auto-detect)
+#   COMMS_REPO_PATH          Path to droid-deploy hosted repo (default: auto-detect)
 #   ADAPTERS_PORT            Adapters service port (default: 8081)
 #   COMMS_PORT               Communication service port (default: 8082)
 #   PUBSUB_EMULATOR_PORT     Pub/Sub emulator port (default: 8085)
@@ -240,7 +240,7 @@ ensure_comms_droid_deps() {
 
   if ! droid_repo="$(resolve_droid_repo_path)"; then
     log_error "Comms App imports droid.task_scheduler.offline_runner_contract but droid is unavailable"
-    log_info "Clone droid as a sibling of unity-deploy (../droid) or set DROID_REPO_PATH"
+    log_info "Clone droid as a sibling of droid-deploy (../droid) or set DROID_REPO_PATH"
     return 1
   fi
 
@@ -273,7 +273,7 @@ ensure_comms_droid_deps() {
 
   if ! can_import_comms_droid_contract "$python_cmd"; then
     log_error "droid is installed but Comms App still cannot import offline_runner_contract"
-    log_info "Ensure unify and unillm siblings exist under the same parent as unity-deploy"
+    log_info "Ensure unify and unillm siblings exist under the same parent as droid-deploy"
     return 1
   fi
 
@@ -300,20 +300,20 @@ ensure_comms_runtime_deps() {
     return 0
   fi
 
-  log_info "Installing unity-deploy runtime for Adapters/Comms..."
+  log_info "Installing droid-deploy runtime for Adapters/Comms..."
   local req_file="$COMMS_REPO_PATH/scripts/requirements-local-runtime.txt"
   if [[ -f "$req_file" ]]; then
     pip_install_for_comms "$python_cmd" -r "$req_file" || {
-      log_error "Failed to install unity-deploy runtime requirements"
+      log_error "Failed to install droid-deploy runtime requirements"
       return 1
     }
     pip_install_for_comms "$python_cmd" --no-deps -e "$COMMS_REPO_PATH" || {
-      log_error "Failed to install unity-deploy package from $COMMS_REPO_PATH"
+      log_error "Failed to install droid-deploy package from $COMMS_REPO_PATH"
       return 1
     }
   else
     pip_install_for_comms "$python_cmd" -e "$COMMS_REPO_PATH" || {
-      log_error "Failed to install unity-deploy from $COMMS_REPO_PATH"
+      log_error "Failed to install droid-deploy from $COMMS_REPO_PATH"
       return 1
     }
   fi
@@ -911,7 +911,7 @@ cmd_help() {
   echo "  --with-comms       Also start Communication service (for outbound)"
   echo ""
   echo "Environment Variables:"
-  echo "  COMMS_REPO_PATH        Path to unity-deploy hosted repo (default: auto-detect)"
+  echo "  COMMS_REPO_PATH        Path to droid-deploy hosted repo (default: auto-detect)"
   echo "  ADAPTERS_PORT          Adapters service port (default: 8081)"
   echo "  COMMS_PORT             Communication service port (default: 8082)"
   echo "  PUBSUB_EMULATOR_PORT   Pub/Sub emulator port (default: 8085)"

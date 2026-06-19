@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from unity_deploy.infra.workers import entrypoint_ingest
+from droid_deploy.infra.workers import entrypoint_ingest
 
 
 def test_duplicate_defer_seconds_waits_until_near_lease_expiry(monkeypatch) -> None:

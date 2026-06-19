@@ -125,7 +125,7 @@ steps:
       /workspace/droid-src/deploy/scripts/job-watcher/deployment.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
 
-  # Trigger enterprise overlay build in unity-deploy.
+  # Trigger enterprise overlay build in droid-deploy.
 - name: 'gcr.io/cloud-builders/gcloud'
   id: 'trigger-deploy-build'
   entrypoint: 'bash'
@@ -134,7 +134,7 @@ steps:
   - |
     set -euo pipefail
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    gcloud builds triggers run unity-deploy \
+    gcloud builds triggers run droid-deploy \
       --project=${PROJECT_ID} \
       --region=${_REGION} \
       --branch=main \

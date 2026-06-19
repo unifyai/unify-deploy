@@ -16,12 +16,12 @@ import yaml
 from tests.helpers import _handle_project
 from droid.guidance_manager.guidance_manager import GuidanceManager
 from droid.guidance_manager.types.guidance import Guidance
-from unity_deploy.assistant_deployments.integrations.loader import (
+from droid_deploy.assistant_deployments.integrations.loader import (
     LoadedIntegration,
     _load_guidance,
     load_integration,
 )
-from unity_deploy.assistant_deployments.integrations.types import (
+from droid_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     SecretSchema,
 )

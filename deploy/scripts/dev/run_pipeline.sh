@@ -14,7 +14,7 @@ set -euo pipefail
 #     --env staging \
 #     --mode dm \
 #     --config path/to/pipeline_config.json \
-#     --project-root ~/unity-deploy \
+#     --project-root ~/droid-deploy \
 #     --user-id UUID --assistant-id 1823 \
 #     [--limit 5] [extra dispatch_pipeline.py flags...]
 #
@@ -113,7 +113,7 @@ cleanup() {
       echo "Final dispatch status JSON:"
       (
         cd "$REPO_ROOT"
-        uv run python -m unity_deploy.infra.cli.pipeline_control status \
+        uv run python -m droid_deploy.infra.cli.pipeline_control status \
           --env "$PIPELINE_ENV" \
           --dispatch-id "$DISPATCH_ID" \
           --json > "$LOG_DIR/summary.json"
@@ -210,7 +210,7 @@ if (( ! MONITOR_ONLY )); then
 
   echo "[1/5] Dispatching pipeline job..."
   cd "$REPO_ROOT"
-  uv run unity_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
+  uv run droid_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
   DISPATCH_EXIT=${PIPESTATUS[0]}
 
   if [ "$DISPATCH_EXIT" -ne 0 ]; then
@@ -349,14 +349,14 @@ if [[ -n "$DISPATCH_ID" ]]; then
 while true; do
   cd '$REPO_ROOT'
   echo \"--- \$(date +%H:%M:%S) dispatch=$DISPATCH_ID ---\"
-  uv run python -m unity_deploy.infra.cli.pipeline_control status \
+  uv run python -m droid_deploy.infra.cli.pipeline_control status \
     --env '$PIPELINE_ENV' \
     --dispatch-id '$DISPATCH_ID' \
     --show-checkpoints \
     --show-dlq \
     --show-retry-plan 2>&1
   echo
-  uv run python -m unity_deploy.infra.cli.pipeline_control status \
+  uv run python -m droid_deploy.infra.cli.pipeline_control status \
     --env '$PIPELINE_ENV' \
     --dispatch-id '$DISPATCH_ID' \
     --json > '$LOG_DIR/summary.json' 2>/dev/null || true

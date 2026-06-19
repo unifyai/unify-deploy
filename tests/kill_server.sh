@@ -176,7 +176,7 @@ if (( ! SKIP_PURGE )); then
       [[ -z "$pid" ]] && continue
       kill -TERM "$pid" 2>/dev/null || true
       ((purge_count++)) || true
-    done < <(pgrep -f "unity-deploy/.venv.*pytest" 2>/dev/null || true)
+    done < <(pgrep -f "droid-deploy/.venv.*pytest" 2>/dev/null || true)
 
     while IFS= read -r pid; do
       [[ -z "$pid" ]] && continue
@@ -190,7 +190,7 @@ if (( ! SKIP_PURGE )); then
 
     if (( purge_count > 0 )); then
       sleep 1
-      pkill -9 -f "unity-deploy/.venv.*pytest" 2>/dev/null || true
+      pkill -9 -f "droid-deploy/.venv.*pytest" 2>/dev/null || true
     fi
   else
     # Killing single socket - only purge processes for THIS socket

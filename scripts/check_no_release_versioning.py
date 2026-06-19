@@ -14,7 +14,7 @@ FIRST_PARTY = {
     "unify",
     "unillm",
     "droid",
-    "unity-deploy",
+    "droid-deploy",
 }
 INERT_VERSION = "0.0.0"
 

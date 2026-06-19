@@ -45,7 +45,7 @@ spec:
         command:
         - python
         - -m
-        - unity_deploy.infra.workers.entrypoint_parse
+        - droid_deploy.infra.workers.entrypoint_parse
         lifecycle:
           preStop:
             exec:

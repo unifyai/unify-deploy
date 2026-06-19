@@ -1,0 +1,166 @@
+name: Salto KS
+slug: salto_ks
+version: "0.3.0"
+sector: physical-access-control
+tier: api
+quality: bronze
+description: >
+  Salto KS (cloud) connector for access control — users, credentials,
+  sites, locks, access events, access rights, access groups, and time
+  schedules.  Live API access goes through a single ``salto_request``
+  tool that exposes the underlying authenticated HTTP client to the
+  actor; account / installation introspection is kept as a typed
+  helper because it's the canonical connectivity smoke test.  No
+  DataManager mirror — Salto operations affect physical doors and
+  every read is best-served fresh from the API.  Authenticated via
+  Salto's documented "Backend Server" integration type, which uses
+  OAuth 2.0 Resource Owner Password Credentials (ROPC) layered with
+  OpenID Connect: HTTP Basic auth carries the OAuth client credentials
+  while the token request body carries a Salto KS user account's email
+  and password (best practice: a dedicated service-account user the
+  customer creates in their KS dashboard).  Customers paste all four
+  values into chat (or Console -> Settings -> Secrets); the runtime
+  mints short-lived bearer tokens server-side at call time.  403
+  responses are returned as graceful error envelopes rather than
+  raised, so capability gating is uniform.
+homepage: https://saltoks.com
+
+secrets:
+  # ----- OAuth client identity (issued by regional Salto BU) ----------
+  # The customer requests these from their regional Salto Business Unit
+  # (EU/US/AP).  Sent as HTTP Basic auth on the token request — same
+  # values for every API call from this assistant.
+
+- name: SALTO_KS_CLIENT_ID
+  description: >
+    OAuth client ID issued by the customer's regional Salto Business
+    Unit.  Public per OAuth spec — not sensitive.  Customer pastes
+    via chat or Console -> Settings -> Secrets.
+  required: true
+  sensitive: false
+
+- name: SALTO_KS_CLIENT_SECRET
+  description: >
+    OAuth client secret paired with ``SALTO_KS_CLIENT_ID``.  Sent
+    with the Client ID as HTTP Basic auth on every token-mint
+    request.  Issued alongside the Client ID by the regional BU.
+  required: true
+  sensitive: true
+
+  # ----- Service account (the resource owner under ROPC) --------------
+  # Salto's "Backend Server" integration type uses ROPC, which means
+  # the token-mint request also requires a Salto KS user account's
+  # email and password.  Customer should create a dedicated service-
+  # account user in their KS dashboard rather than reusing a real
+  # person's login — passwords are held long-term in SecretManager
+  # and rotated only when explicitly re-pasted.
+
+- name: SALTO_KS_USERNAME
+  description: >
+    Email of the Salto KS user account that acts as the resource
+    owner for ROPC.  Best practice: a dedicated service-account
+    user with an email like ``svc-droid@customer.com`` and the KS
+    role(s) required for the resources the assistant needs to read
+    and write.  Created in the customer's Salto KS dashboard.
+  required: true
+  sensitive: false
+
+- name: SALTO_KS_PASSWORD
+  description: >
+    Password of the Salto KS service-account user named in
+    ``SALTO_KS_USERNAME``.  Held in SecretManager between calls; the
+    runtime sends it on the token-mint POST body to Salto's
+    ``/connect/token`` endpoint each time the cached access token
+    expires (typically every ~1h).  Re-paste when rotated upstream.
+  required: true
+  sensitive: true
+
+  # ----- Default site -------------------------------------------------
+
+- name: SALTO_KS_DEFAULT_SITE_ID
+  description: >
+    Optional site ID to scope list calls to when the operator
+    hasn't specified one.  Useful when the installation has many
+    sites and the customer typically operates from one.
+  required: false
+  sensitive: false
+
+  # ----- Endpoint overrides (optional, rarely needed) -----------------
+  # All three default to the documented EU production hosts.  Set
+  # ``SALTO_KS_IDENTITY_HOST`` (and usually ``SALTO_KS_BASE_URL``) for
+  # sandbox (acceptance), non-EU regions, or any BU-issued
+  # non-standard host.  ``SALTO_KS_OAUTH_TOKEN_URL`` is a full-URL
+  # escape hatch for the token endpoint only.
+
+- name: SALTO_KS_BASE_URL
+  description: >
+    Salto Connect API host override.  Defaults to
+    ``https://user-api.eu.my-clay.com`` (best guess — the API host
+    is not documented in Salto's public docs as of 2026-05;
+    extrapolated from the identity host pattern and the
+    ``user_api.full_access`` scope name).  Verify with the regional
+    BU and override here for non-EU regions, sandbox, or if the
+    guess is wrong.
+  required: false
+  sensitive: false
+
+- name: SALTO_KS_IDENTITY_HOST
+  description: >
+    OpenID identity-server host override (origin only, no path).
+    Defaults to ``https://identity.eu.my-clay.com`` (the documented
+    EU production identity server).  ``/connect/token`` is appended
+    automatically.  Override here for sandbox
+    (``https://identity-acc.eu.my-clay.com``), non-EU regional
+    clouds, or any non-standard host the BU has issued.
+  required: false
+  sensitive: false
+
+- name: SALTO_KS_OAUTH_TOKEN_URL
+  description: >
+    Full token-endpoint URL override (host + path).  Takes
+    precedence over ``SALTO_KS_IDENTITY_HOST``.  Defaults to
+    ``<identity_host>/connect/token``.  Rarely needed.
+  required: false
+  sensitive: false
+
+- name: SALTO_KS_OAUTH_SCOPES
+  description: >
+    Space-separated OAuth scope string requested when minting
+    access tokens.  Defaults to ``user_api.full_access`` — the
+    coarse scope Salto's docs use in their "Backend Server"
+    example.  Override only if the regional BU has issued a client
+    with non-default scopes.
+  required: false
+  sensitive: false
+
+capabilities:
+  # ----- Live API access ---------------------------------------------
+  # Single generic tool — the actor constructs the URL/method/params
+  # using Salto's API docs and the structured 4xx error envelopes the
+  # helper returns when something's malformed.  Writes (lock state
+  # changes, credential issuance, user creation) are NOT gated in
+  # code; the actor surfaces what's about to change to the user
+  # before issuing a destructive verb because Salto operations affect
+  # physical access on real buildings.
+- id: salto_ks_live
+  name: Live API access
+  description: >
+    One tool covering the entire Salto Connect REST surface (users,
+    sites, locks, access events, access rights, credentials, time
+    schedules, etc.).  First-page only — for bulk pulls re-issue
+    with the cursor from the response's ``links.next``.
+  functions: [salto_request]
+  guidance: [salto_ks_overview, salto_ks_setup]
+
+  # ----- Account / installation pinning -------------------------------
+- id: salto_ks_account
+  name: Account
+  description: >
+    Verify credentials and identify the connected Salto installation.
+    Use ``get_salto_account_info`` as the canonical "is the integration
+    working?" smoke test before relying on any other live function.
+  functions: [get_salto_account_info, list_salto_installations]
+  guidance: [salto_ks_overview, salto_ks_setup]
+
+requirements: [httpx]
+tags: [salto, salto-ks, access-control, physical-security, locks, oauth-ropc, openid-connect]

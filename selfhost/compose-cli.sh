@@ -42,7 +42,7 @@ compose() {
 require_compose() {
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     log_err "Compose stack not found at $COMPOSE_FILE"
-    log_info "Run the self-host installer: unity-deploy/selfhost/install-compose.sh"
+    log_info "Run the self-host installer: droid-deploy/selfhost/install-compose.sh"
     exit 1
   fi
   if ! command -v docker >/dev/null 2>&1; then

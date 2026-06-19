@@ -1,0 +1,178 @@
+scenario_id: eh_full_sync_v0
+name: Employment Hero Full Sync (v0)
+description: >-
+  Incremental Employment Hero sync into the assistant's DataManager.  Runs
+  on a scheduler tick; the orchestrator gates per-object cadence by env
+  config so the scheduler tick rate is decoupled from actual sync work.
+#
+# TEMPLATE - this generic scenario is shipped for reference only.  The
+# employment_hero package's manifest does NOT declare ``scenarios: [...]``,
+# so this file is not auto-loaded.  Per-client deployments that want
+# scheduled Employment Hero sync activate it via
+# ``droid_deploy.assistant_deployments.scenarios.types.ScenarioActivation``
+# declared on a ``SeedLayer`` or ``DeploymentSpec``:
+#
+#     register_layer("clientzeta", "assistant", "630", SeedLayer(
+#         scenarios=[
+#             ScenarioActivation(
+#                 scenario_template="employment_hero/eh_full_sync_v0",
+#                 assistant_id="630",
+#                 tasks_enabled=False,
+#             ),
+#         ],
+#     ))
+#
+# At resolution time, the framework substitutes the empty placeholder
+# fields below (``client``, ``deployment``, ``tasks[*].target.assistant_id``,
+# ``tasks[*].target.scenario_id``, etc.) with the activation's per-client
+# values.  See ScenarioActivation's docstring for the full override surface.
+#
+client: ""           # set per-client by ScenarioActivation
+deployment: ""       # set per-client by ScenarioActivation
+
+integration:
+  package_slug: employment_hero
+  mode: real
+  required_capabilities:
+  - account
+  - workforce
+  - employee_personal
+  - employee_notes
+  - leave_management
+  - time_tracking
+  - expense_management
+  - policies
+  - documents
+  - custom_fields
+  - onboarding
+  - qualifications
+  - performance_management
+  - recognition
+  - surveys
+  - learning
+  - recruitment
+  - pay_runs
+  - incremental_sync
+  schema_version: employment-hero.workforce.sync.v1
+
+data_targets:
+  # ----- Workforce graph ------------------------------------------------
+- {table: employees, context: EmploymentHero/Employees, unique_key: id, description: Employee master records (active + terminated).}
+- {table: employments, context: EmploymentHero/Employees/Employments, unique_key: id, description: Employment-history rows.}
+- {table: positions, context: EmploymentHero/Employees/Positions, unique_key: id, description: Position-history rows.}
+- {table: teams, context: EmploymentHero/Teams, unique_key: id, description: Team master records.}
+- {table: team_memberships, context: EmploymentHero/Teams/Memberships, unique_key: [team_id, employee_id], description: Team membership.}
+- {table: locations, context: EmploymentHero/Locations, unique_key: id, description: Organisation locations / managed properties.}
+
+  # ----- Personal (filtered) -------------------------------------------
+- {table: emergency_contacts, context: EmploymentHero/Employees/Personal/EmergencyContacts, unique_key: id, description: Emergency contacts; PII redacted at snapshot.}
+- {table: dependants_counts, context: EmploymentHero/Employees/Personal/DependantsCounts, unique_key: employee_id, description: Per-employee dependant counts (no detail).}
+- {table: visa_status, context: EmploymentHero/Employees/Personal/VisaStatus, unique_key: employee_id, description: Right-to-Work / visa status.}
+- {table: probation_status, context: EmploymentHero/Employees/Personal/ProbationStatus, unique_key: employee_id, description: Probation period status.}
+- {table: employee_notes, context: EmploymentHero/Employees/Notes, unique_key: id, description: HR notes (high-tier; body redacted).}
+
+  # ----- Leave ----------------------------------------------------------
+- {table: leave_categories, context: EmploymentHero/Leave/Categories, unique_key: id, description: Leave types.}
+- {table: leave_balances, context: EmploymentHero/Leave/Balances, unique_key: [employee_id, category_id], description: Per-employee per-category balances.}
+- {table: leave_requests, context: EmploymentHero/Leave/Requests, unique_key: id, description: Leave requests.}
+
+  # ----- Time + money ---------------------------------------------------
+- {table: timesheets, context: EmploymentHero/Timesheets, unique_key: id, description: Timesheet entries (rolling 14-day window).}
+- {table: expense_claims, context: EmploymentHero/Expenses/Claims, unique_key: id, description: Expense claims.}
+- {table: expense_categories, context: EmploymentHero/Expenses/Categories, unique_key: id, description: Expense categories.}
+
+  # ----- Compliance + ops -----------------------------------------------
+- {table: policies, context: EmploymentHero/Policies, unique_key: id, description: HR policies + versions.}
+- {table: policy_acknowledgements, context: EmploymentHero/Policies/Acknowledgements, unique_key: [policy_id, employee_id], description: Per-employee acknowledgements.}
+- {table: documents, context: EmploymentHero/Documents, unique_key: id, description: Document metadata (file content not synced).}
+- {table: document_templates, context: EmploymentHero/Documents/Templates, unique_key: id, description: Org document templates.}
+- {table: custom_field_definitions, context: EmploymentHero/CustomFields/Definitions, unique_key: id, description: Org-defined custom fields.}
+- {table: custom_field_values, context: EmploymentHero/CustomFields/Values, unique_key: [employee_id, field_id], description: Per-employee values (long format).}
+- {table: onboardings, context: EmploymentHero/Onboarding/Processes, unique_key: id, description: Onboarding flow definitions.}
+- {table: onboarding_tasks, context: EmploymentHero/Onboarding/Tasks, unique_key: id, description: Task templates.}
+- {table: employee_onboarding_status, context: EmploymentHero/Onboarding/EmployeeStatus, unique_key: id, description: Per-employee task completion.}
+- {table: qualifications, context: EmploymentHero/Qualifications/Catalogue, unique_key: id, description: Qualification catalogue.}
+- {table: employee_qualifications, context: EmploymentHero/Qualifications/EmployeeRecords, unique_key: id, description: Per-employee certs with expiry — marquee for compliance.}
+
+  # ----- Performance (free-text redacted) -------------------------------
+- {table: reviews, context: EmploymentHero/Performance/Reviews, unique_key: id, description: Performance reviews; free-text redacted.}
+- {table: goals, context: EmploymentHero/Performance/Goals, unique_key: id, description: Goals + progress.}
+- {table: one_on_ones, context: EmploymentHero/Performance/OneOnOnes, unique_key: id, description: 1:1 meetings; notes redacted.}
+- {table: feedback, context: EmploymentHero/Performance/Feedback, unique_key: id, description: Feedback events; body redacted.}
+
+  # ----- Recognition / surveys / learning / recruitment ----------------
+- {table: cheers, context: EmploymentHero/Recognition/Cheers, unique_key: id, description: Cheers recognition events.}
+- {table: hi_fives, context: EmploymentHero/Recognition/HiFives, unique_key: id, description: Hi-five events.}
+- {table: awards, context: EmploymentHero/Recognition/Awards, unique_key: id, description: Recognition awards.}
+- {table: surveys, context: EmploymentHero/Surveys/Definitions, unique_key: id, description: Survey definitions.}
+- {table: survey_aggregates, context: EmploymentHero/Surveys/Aggregates, unique_key: [survey_id, question_id, metric], description: Anonymous survey aggregates.}
+- {table: survey_responses, context: EmploymentHero/Surveys/Responses, description: Per-respondent rows for non-anonymous surveys; free-text redacted.}
+- {table: courses, context: EmploymentHero/Learning/Courses, unique_key: id, description: Course catalogue.}
+- {table: course_assignments, context: EmploymentHero/Learning/Assignments, unique_key: id, description: Per-employee assignments.}
+- {table: course_completions, context: EmploymentHero/Learning/Completions, unique_key: id, description: Per-employee completions.}
+- {table: jobs, context: EmploymentHero/Recruitment/Jobs, unique_key: id, description: Open positions.}
+- {table: applicants, context: EmploymentHero/Recruitment/Applicants, unique_key: id, description: Applicants; PII redacted; retention-windowed.}
+- {table: offers, context: EmploymentHero/Recruitment/Offers, unique_key: id, description: Offers extended.}
+- {table: interview_stages, context: EmploymentHero/Recruitment/InterviewStages, unique_key: id, description: Interview stage definitions.}
+
+  # ----- Pay (banded) ---------------------------------------------------
+- {table: pay_runs, context: EmploymentHero/Pay/Runs, unique_key: id, description: Pay run org-totals only.}
+- {table: pay_categories, context: EmploymentHero/Pay/Categories, unique_key: id, description: Pay category definitions.}
+- {table: employment_terms, context: EmploymentHero/Pay/EmploymentTerms, unique_key: [employee_id, effective_from], description: Per-employee employment terms; rate banded.}
+
+  # ----- Sync metadata --------------------------------------------------
+- {table: sync_state, context: EmploymentHero/Workforce/Meta/SyncState, unique_key: object_type, description: Per-object last-synced watermarks.}
+- {table: sync_runs, context: EmploymentHero/Workforce/Meta/SyncRuns, description: Append-only audit log of sync ticks.}
+
+timeline:
+- tick: 0
+  capability: incremental_sync
+  function: run_employmenthero_sync_tick
+  label: Initial sync
+  args: {full: true}
+- tick: 1
+  capability: incremental_sync
+  function: run_employmenthero_sync_tick
+  label: Incremental delta
+  args: {}
+
+tasks:
+- id: eh_sync_tick
+    # Disabled by default per a71a840 - keep recurring tasks off until the
+    # control-plane has real TaskScheduler + FunctionManager IDs seeded.
+    # Operators flip to true via ScenarioActivation.tasks_enabled=True
+    # (or override per-client at deploy time).
+  enabled: false
+  execution_mode: live
+  schedule:
+    type: interval
+      # Scheduler tick rate.  Actual sync cadence is gated inside
+      # run_employmenthero_sync_tick by EMPLOYMENTHERO_SYNC_MIN_INTERVAL_SECONDS
+      # (default 300) and EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS for per-object
+      # overrides.  A small scheduler interval lets env-var changes take
+      # effect on the next tick without redeploying the YAML.
+    interval_seconds: 60
+  target:
+    assistant_id: ""             # set per-client by ScenarioActivation
+    scenario_id: eh_full_sync_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_employmenthero_sync_tick
+    task_name: Employment Hero sync tick
+    task_description: >-
+      Periodic Employment Hero sync into the assistant's DataManager.
+      Pulls deltas from EH using the orchestrator's per-object cadence
+      config, upserts into EmploymentHero/* contexts, and appends an
+      audit row to EmploymentHero/Workforce/Meta/SyncRuns.
+    recurrence_hint: every_minute_with_internal_cadence_gating
+    visibility_policy: silent_by_default
+  delivery:
+    phase: simulated_outbox
+
+monitors: []
+alert_routes: []
+dashboards: []
+
+metadata:
+  owner: employment_hero
+  documentation: packages/employment_hero/guidance/sync_runbook.md

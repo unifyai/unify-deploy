@@ -1,4 +1,4 @@
-"""Unit tests for ``unity_deploy.infra.workers.ingest_worker``.
+"""Unit tests for ``droid_deploy.infra.workers.ingest_worker``.
 
 These focus narrowly on the per-message ``UNIFY_KEY`` lifecycle managed
 by :func:`_with_unify_key`:
@@ -29,10 +29,10 @@ from droid.common.pipeline.types import (
     ObjectStoreArtifactHandle,
     TableMeta,
 )
-from unity_deploy.infra.workers import ingest_worker
-from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
-from unity_deploy.infra.workers import worker_utils
-from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+from droid_deploy.infra.workers import ingest_worker
+from droid_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from droid_deploy.infra.workers import worker_utils
+from droid_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
 @pytest.mark.asyncio
@@ -662,7 +662,7 @@ def test_table_meta_falls_back_to_default_when_context_absent():
 
 def test_merge_table_config_threads_context():
     """_merge_table_config picks up 'context' from table_config entries."""
-    from unity_deploy.infra.workers.parse_worker import _merge_table_config
+    from droid_deploy.infra.workers.parse_worker import _merge_table_config
 
     plan = IngestPlan(
         run_id="run-merge",

@@ -6,7 +6,7 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    gcloud builds triggers run droid-comms-app-unity-deploy \
+    gcloud builds triggers run droid-comms-app-droid-deploy \
       --project=${PROJECT_ID} \
       --region=${_REGION} \
       --branch=main

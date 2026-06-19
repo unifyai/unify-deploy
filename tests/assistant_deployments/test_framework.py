@@ -11,21 +11,21 @@ import json
 
 import pytest
 
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.environments.reconstruct import (
+from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from droid_deploy.assistant_deployments.environments.reconstruct import (
     parse_env_path,
     write_files_to_package,
     import_and_resolve,
 )
-from unity_deploy.assistant_deployments.clients import (
+from droid_deploy.assistant_deployments.clients import (
     ResolvedAssistantDeployment,
 )
-from unity_deploy.assistant_deployments.seed_sync import (
+from droid_deploy.assistant_deployments.seed_sync import (
     _aggregate_hash,
     _record_hash,
     sync_all_seed_data,
 )
-from unity_deploy.assistant_deployments.secrets_file import load_secrets
+from droid_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
 # 1. ActorConfig model

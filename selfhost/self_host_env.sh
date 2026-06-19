@@ -12,7 +12,7 @@ set -euo pipefail
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
-# script in unity-deploy/deploy/selfhost/.
+# script in droid-deploy/deploy/selfhost/.
 _SELF_HOST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF_HOST_DEPLOY_SELFHOST_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_ENV_DIR/../deploy/selfhost}"
 

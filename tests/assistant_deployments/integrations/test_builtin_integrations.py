@@ -10,18 +10,18 @@ import ast
 import pytest
 from pathlib import Path
 
-from unity_deploy.assistant_deployments.integrations.discovery import (
+from droid_deploy.assistant_deployments.integrations.discovery import (
     _BUILTIN_DIR,
     _CLIENT_DIR,
     _MOCK_DIR,
     discover_from_directory,
     _load_manifest,
 )
-from unity_deploy.assistant_deployments.integrations.types import (
+from droid_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     QualityTier,
 )
-from unity_deploy.assistant_deployments.integrations.validation import (
+from droid_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
 
@@ -144,7 +144,7 @@ class TestProviderBackedBoundary:
         for backend_slug in ["composio", "pipedream"]:
             assert backend_slug not in _available_package_slugs(), (
                 f"{backend_slug} is a provider backend owned by Orchestra; "
-                "do not add a placeholder unity-deploy package for it."
+                "do not add a placeholder droid-deploy package for it."
             )
 
     def test_common_provider_apps_are_not_placeholder_packages(self):
@@ -159,7 +159,7 @@ class TestProviderBackedBoundary:
 
         assert provider_app_slugs.isdisjoint(_available_package_slugs()), (
             "Dynamic provider app catalogs belong in Orchestra. Add a Level 3 "
-            "package only when the app needs custom unity-deploy runtime code."
+            "package only when the app needs custom droid-deploy runtime code."
         )
 
 

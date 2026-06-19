@@ -9,8 +9,8 @@ from droid.common.pipeline.types import (
     IngestPlan,
     TableMeta,
 )
-from unity_deploy.infra.cli import pipeline_control
-from unity_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
+from droid_deploy.infra.cli import pipeline_control
+from droid_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
 
 
 class _ArtifactStore:

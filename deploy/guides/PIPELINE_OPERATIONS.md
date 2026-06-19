@@ -112,24 +112,24 @@ reconnects should not replay old `Completed job=` lines.
 For config-driven submits:
 
 ```bash
-python -m unity_deploy.infra.cli.pipeline_control submit \
+python -m droid_deploy.infra.cli.pipeline_control submit \
   --config path/to/pipeline_config.json \
   --project Assistants
 
-python -m unity_deploy.infra.cli.pipeline_control monitor \
+python -m droid_deploy.infra.cli.pipeline_control monitor \
   --job-id "$JOB_ID" --follow
 
-python -m unity_deploy.infra.cli.pipeline_control cancel \
+python -m droid_deploy.infra.cli.pipeline_control cancel \
   --job-id "$JOB_ID"
 
-python -m unity_deploy.infra.cli.pipeline_control inspect \
+python -m droid_deploy.infra.cli.pipeline_control inspect \
   --job-id "$JOB_ID"
 ```
 
 For direct dispatch tests:
 
 ```bash
-uv run unity_deploy/scripts/dispatch_pipeline.py \
+uv run droid_deploy/scripts/dispatch_pipeline.py \
   --mode dm \
   --files-from ./files.txt \
   --target-context "SalesData"
@@ -318,7 +318,7 @@ the matching artifact bucket and Pub/Sub topics:
 DROID_GCP_PIPELINE_ENVIRONMENT=production \
 DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
 DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control status \
+uv run python -m droid_deploy.infra.cli.pipeline_control status \
   --env production \
   --dispatch-id <dispatch-id> \
   --show-dlq \
@@ -333,7 +333,7 @@ retry and skip successful or actively running jobs:
 DROID_GCP_PIPELINE_ENVIRONMENT=production \
 DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
 DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+uv run python -m droid_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
   --only dlq \
@@ -346,7 +346,7 @@ After confirming the skipped/retry sets are correct, publish retry messages:
 DROID_GCP_PIPELINE_ENVIRONMENT=production \
 DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
 DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+uv run python -m droid_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
   --only dlq \
@@ -368,7 +368,7 @@ so the CLI can read `jobs/<job_id>/outbox/parse.json` and current checkpoints:
 DROID_GCP_PIPELINE_ENVIRONMENT=production \
 DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts \
 DROID_PUBSUB_PROJECT_ID=gcp-project-runtime \
-uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+uv run python -m droid_deploy.infra.cli.pipeline_control recover-stale \
   --env production \
   --dispatch-id <dispatch-id> \
   --dry-run
@@ -381,7 +381,7 @@ that complete jobs will finalize and partial jobs will republish from
 `parse_outbox`:
 
 ```bash
-uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+uv run python -m droid_deploy.infra.cli.pipeline_control recover-stale \
   --env production \
   --dispatch-id <dispatch-id> \
   --execute \

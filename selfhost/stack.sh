@@ -21,9 +21,9 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/. The self-host stack orchestrates
+# This script lives in droid-deploy/selfhost/. The self-host stack orchestrates
 # the sibling droid, console, and orchestra checkouts located under
-# UNIFY_STACK_ROOT (defaults to the parent of unity-deploy).
+# UNIFY_STACK_ROOT (defaults to the parent of droid-deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"

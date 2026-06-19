@@ -26,7 +26,7 @@ The Droid system is a comprehensive multi-channel communication platform that dy
 The hosted system is split across three main code areas:
 
 1. **Orchestra** (`@https://github.com/unifyai/orchestra`) - Main orchestration service with database containing assistants
-2. **Hosted infrastructure** (`@https://github.com/unifyai/unity-deploy`) - Contains deploy overlays plus the hosted comms app and adapters
+2. **Hosted infrastructure** (`@https://github.com/unifyai/droid-deploy`) - Contains deploy overlays plus the hosted comms app and adapters
 3. **Droid** (`@https://github.com/unifyai/droid`) - The container deployed on GKE (each job on GKE is a separate container)
 
 ### External Services

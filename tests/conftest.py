@@ -2,7 +2,7 @@
 tests/conftest.py
 =================
 
-Lightweight pytest configuration for unity-deploy.
+Lightweight pytest configuration for droid-deploy.
 
 Droid-deploy tests are mostly offline unit tests.  The heavy session lifecycle
 (project create/delete, per-test context isolation, cost tracking, stub
@@ -57,7 +57,7 @@ def _check_orchestra_available() -> bool:
 # --------------------------------------------------------------------------- #
 def pytest_configure(config):
     try:
-        from unity_deploy.utils.load_repo_env import load_repo_dotenv
+        from droid_deploy.utils.load_repo_env import load_repo_dotenv
 
         load_repo_dotenv(override=False)
     except Exception:

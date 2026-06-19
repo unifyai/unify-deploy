@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Internal module to prepare the shared UnityDeployTests project for parallel runs.
+Internal module to prepare the shared DroidDeployTests project for parallel runs.
 
 This script is called by parallel_run.sh before spawning tmux sessions.
 It ensures the shared project and contexts exist, making subsequent
@@ -31,11 +31,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT = "UnityDeployTests"
+PROJECT = "DroidDeployTests"
 
 
 def prepare_shared_project() -> None:
-    """Prepare the shared UnityDeployTests project and Combined context."""
+    """Prepare the shared DroidDeployTests project and Combined context."""
     try:
         import unify
     except ImportError:

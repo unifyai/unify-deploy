@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 
-from unity_deploy.assistant_deployments.seed_sync import (
+from droid_deploy.assistant_deployments.seed_sync import (
     _aggregate_hash,
     _manager_api,
     _record_hash,
@@ -14,7 +14,7 @@ from unity_deploy.assistant_deployments.seed_sync import (
     sync_seed_data,
 )
 from droid.guidance_manager.types.guidance import Guidance
-from unity_deploy.assistant_deployments.secrets_file import load_secrets
+from droid_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
 # Hash helpers

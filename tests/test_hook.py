@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-from unity_deploy import hook
-from unity_deploy import startup_config
-from unity_deploy.runtime_reconcile import runner as runtime_runner
-from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
-from unity_deploy.utils.orchestra_client import OrchestraClientError
+from droid_deploy import hook
+from droid_deploy import startup_config
+from droid_deploy.runtime_reconcile import runner as runtime_runner
+from droid_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+from droid_deploy.utils.orchestra_client import OrchestraClientError
 
 
 def test_sync_console_config_repairs_assistant_console_config(monkeypatch):

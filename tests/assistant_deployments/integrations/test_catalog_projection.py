@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from unity_deploy.assistant_deployments.integrations.activation import (
+from droid_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
-from unity_deploy.assistant_deployments.integrations.catalog_projection import (
+from droid_deploy.assistant_deployments.integrations.catalog_projection import (
     NATIVE_INTEGRATION_BACKEND_ID,
     native_catalog_app_from_registry_row,
     native_catalog_apps_from_registry,
@@ -84,7 +84,7 @@ def test_sync_native_catalog_seeds_builtins_app_rows(monkeypatch) -> None:
         "status": "synced",
         "backend_id": NATIVE_INTEGRATION_BACKEND_ID,
         "source_type": "native",
-        "cache_version": "unity-deploy-native-v1",
+        "cache_version": "droid-deploy-native-v1",
         "apps_upserted": 1,
         "tools_upserted": 0,
     }

@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 import logging
 
-from unity_deploy.assistant_deployments.clients import (
+from droid_deploy.assistant_deployments.clients import (
     ClientDeploymentEntry,
     ResolvedAssistantDeployment,
     _spec_to_resolved,
 )
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.deployment_types import DeploymentMapping
-from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
-from unity_deploy.assistant_deployments.deployment_types import DeploymentTarget
-from unity_deploy.assistant_deployments.deployment_types import SeedLayer
-from unity_deploy.assistant_deployments.integrations.activation import (
+from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from droid_deploy.assistant_deployments.deployment_types import DeploymentMapping
+from droid_deploy.assistant_deployments.deployment_types import DeploymentSpec
+from droid_deploy.assistant_deployments.deployment_types import DeploymentTarget
+from droid_deploy.assistant_deployments.deployment_types import SeedLayer
+from droid_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
 
@@ -59,7 +59,7 @@ def test_expand_fetch_mcp_integration_adds_mcp_config():
 
 
 def test_native_package_expansion_survives_provider_backed_sync_model():
-    """Native packages still expand through unity-deploy assets, not provider rows."""
+    """Native packages still expand through droid-deploy assets, not provider rows."""
 
     resolved = _empty_resolved(
         integrations=["github", "fetch_mcp", "client_alpha_repairs_mock"],

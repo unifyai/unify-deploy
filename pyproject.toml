@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unity-deploy"
+name = "droid-deploy"
 version = "0.0.0"
 description = "Hosted deployment and communication infrastructure for Droid"
 requires-python = ">=3.12,<4.0"
@@ -63,11 +63,11 @@ adapters = [
     "uvicorn[standard]>=0.24.0",
 ]
 
-[project.entry-points."unity_deploy.init"]
-enterprise = "unity_deploy.hook:startup_hook"
+[project.entry-points."droid_deploy.init"]
+enterprise = "droid_deploy.hook:startup_hook"
 
 [project.entry-points."droid.deploy_runtime"]
-enterprise = "unity_deploy.runtime:register_runtime_backends"
+enterprise = "droid_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
 dev = [
@@ -100,10 +100,10 @@ venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.setuptools.packages.find]
-include = ["unity_deploy*", "communication*", "adapters*", "common*"]
+include = ["droid_deploy*", "communication*", "adapters*", "common*"]
 
 [tool.setuptools.package-data]
-"unity_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
+"droid_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
 "*" = ["*.json", "*.md", "*.yaml", "*.yml", "data/*.json", "data/*.md", "data/*.yaml", "data/*.yml"]
 "communication" = ["**/*.md", "**/*.ps1", "**/*.sh", "**/*.html", "**/*.conf", "**/*.hcl"]
 

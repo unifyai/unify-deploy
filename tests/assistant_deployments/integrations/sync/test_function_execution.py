@@ -87,7 +87,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unity-deploy-native-integration-test"
+name = "droid-deploy-native-integration-test"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = []
@@ -146,7 +146,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = []
 """.strip(),
-    # These native packages import helpers from unity_deploy inside their
+    # These native packages import helpers from droid_deploy inside their
     # registered functions. FunctionManager correctly treats that as an
     # external import boundary for registration, even though the integration
     # suite only checks add_functions here and does not execute these callables.
