@@ -7,9 +7,11 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    git clone --depth 1 --branch ${_DROID_REF} https://$$GITHUB_TOKEN@github.com/unifyai/droid.git /workspace/droid-src
-    if [ -n "${_DROID_SHA}" ]; then
-      git -C /workspace/droid-src fetch --depth 1 origin ${_DROID_SHA}
+    DROID_REF="${_DROID_REF:-${_UNITY_REF:-main}}"
+    DROID_SHA_OVERRIDE="${_DROID_SHA:-${_UNITY_SHA:-}}"
+    git clone --depth 1 --branch "$${DROID_REF}" https://$$GITHUB_TOKEN@github.com/unifyai/droid.git /workspace/droid-src
+    if [ -n "$${DROID_SHA_OVERRIDE}" ]; then
+      git -C /workspace/droid-src fetch --depth 1 origin "$${DROID_SHA_OVERRIDE}"
       git -C /workspace/droid-src checkout --detach FETCH_HEAD
     fi
     git -C /workspace/droid-src rev-parse --short=12 HEAD > /workspace/droid_sha.txt
@@ -120,7 +122,7 @@ steps:
   - |
     set -euo pipefail
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    gcloud container clusters get-credentials droid --region ${_REGION} --project ${PROJECT_ID}
+    gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
     sed "s|image:.*job-watcher.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:$${DROID_SHA}|" \
       /workspace/droid-src/deploy/scripts/job-watcher/deployment.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
@@ -148,6 +150,7 @@ options:
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'droid'
+  _CLUSTER: 'unity'
   _DROID_REF: 'main'
   _DROID_SHA: ''
 
