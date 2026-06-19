@@ -80,6 +80,14 @@ uv sync --all-groups
 pre-commit install
 ```
 
+## Full Local Development
+
+For the internal source-checkout stack and safe edit/reload workflow, use
+[`docs/local-full-stack-inner-loop.md`](docs/local-full-stack-inner-loop.md).
+That runbook is the default path for developing across the sibling `droid`,
+`console`, and `orchestra` repos without accidentally replacing individual
+services with mismatched local processes.
+
 ## Adding a New Client
 
 1. Create a new directory under `droid_deploy/assistant_deployments/clients/<client_name>/`.

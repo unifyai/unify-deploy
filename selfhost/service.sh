@@ -262,7 +262,11 @@ ensure_runtime_backend() {
   fi
   export DROID_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
   export DROID_SERVICE_RUNTIME=1
-  bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend
+  if declare -F with_droid_runtime_start_lock >/dev/null 2>&1; then
+    with_droid_runtime_start_lock 30 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend
+  else
+    bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend
+  fi
 }
 
 cmd_run() {
