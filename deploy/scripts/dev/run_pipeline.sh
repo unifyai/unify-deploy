@@ -16,7 +16,16 @@ set -euo pipefail
 #     --config path/to/pipeline_config.json \
 #     --project-root ~/droid-deploy \
 #     --user-id UUID --assistant-id 1823 \
+#     [--destination personal|team:<id>] \
 #     [--limit 5] [extra dispatch_pipeline.py flags...]
+#
+#   # --destination (DM mode) chooses where the same pipeline_config lands:
+#   #   personal (default)  -> {user_id}/{assistant_id}/Data/<ctx>
+#   #   team:<id>           -> shared Teams/<id>/Data/<ctx> readable by every
+#   #                          assistant in the team. The ingest worker validates
+#   #                          that the dispatching assistant is a member first.
+#   # Unknown flags like --destination are forwarded verbatim to
+#   # dispatch_pipeline.py, so the config itself stays destination-agnostic.
 #
 #   # Mixed DM/FM ingestion is intentionally two isolated dispatches: run once
 #   # with --mode dm and a DM config, then again with --mode fm and an FM config.
