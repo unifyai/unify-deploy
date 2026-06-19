@@ -282,7 +282,7 @@ steps:
         --attach=true \
         --restart=Never \
         --pod-running-timeout=5m \
-        --serviceaccount=droid-pipeline-worker \
+        --overrides='{"spec":{"serviceAccountName":"droid-pipeline-worker"}}' \
         --image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid:${SHORT_SHA}" \
         --env="DROID_GCP_PIPELINE_ENVIRONMENT=production" \
         --env="DROID_GCS_ARTIFACT_BUCKET=droid-pipeline-artifacts" \

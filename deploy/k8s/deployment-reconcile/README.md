@@ -91,7 +91,7 @@ environment reconciliation; only pass `--client` or `--assistant-id` when
 recovering a specific target.
 
 ```bash
-gcloud container clusters get-credentials droid --region us-central1
+gcloud container clusters get-credentials unity --region us-central1
 
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment staging \
@@ -103,7 +103,7 @@ bash deploy/scripts/run_deployment_reconcile_job.sh \
 ```
 
 ```bash
-gcloud container clusters get-credentials droid --region us-central1
+gcloud container clusters get-credentials unity --region us-central1
 
 bash deploy/scripts/run_deployment_reconcile_job.sh \
   --environment production \

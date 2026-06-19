@@ -79,7 +79,7 @@ commands before merging to `main`:
 
 ```bash
 # Connect to the production GKE cluster
-gcloud container clusters get-credentials droid \
+gcloud container clusters get-credentials unity \
   --region us-central1 \
   --project gcp-project-runtime
 
