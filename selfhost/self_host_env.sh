@@ -10,6 +10,8 @@ set -euo pipefail
 
 # Matches get_local_root() in droid/file_manager/settings.py (~/Droid/Local).
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
+SELF_HOST_COORDINATOR_VOICE_PROVIDER="${SELF_HOST_COORDINATOR_VOICE_PROVIDER:-elevenlabs}"
+SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53GoZ742B}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in droid-deploy/deploy/selfhost/.
@@ -124,6 +126,15 @@ append_self_host_droid_runtime_env() {
   workspace="$(default_self_host_workspace)"
   ensure_self_host_workspace_dir
   _target_array+=("DROID_LOCAL_ROOT=$workspace")
+  _target_array+=(
+    "DROID_CONVERSATION_LOCAL_COMMS_ENABLED=${DROID_CONVERSATION_LOCAL_COMMS_ENABLED:-true}"
+    "DROID_CONVERSATION_LOCAL_COMMS_MODE=${DROID_CONVERSATION_LOCAL_COMMS_MODE:-local}"
+    "DROID_CONVERSATION_LOCAL_COMMS_HOST=${DROID_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
+    "DROID_CONVERSATION_LOCAL_COMMS_PORT=${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+  )
+  if [[ "${VOICE_PROVIDER:-}" == "elevenlabs" && -z "${VOICE_ID:-}" ]]; then
+    _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
+  fi
 
   local key val
   for key in \
@@ -138,7 +149,8 @@ append_self_host_droid_runtime_env() {
     DEEPGRAM_API_KEY \
     CARTESIA_API_KEY \
     ELEVEN_API_KEY \
-    VOICE_PROVIDER; do
+    VOICE_PROVIDER \
+    VOICE_ID; do
     val="${!key:-}"
     if [[ -n "$val" ]]; then
       _target_array+=("$key=$val")
