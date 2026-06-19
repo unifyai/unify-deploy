@@ -49,6 +49,14 @@ Config-driven DM dispatch (bindings from config tables)::
         --mode dm --config pipeline_config.json \\
         --project-root ~/droid-deploy \\
         --user-id alice --assistant-id 42
+
+Config-driven DM dispatch into a shared team Data context::
+
+    uv run unity_deploy/scripts/dispatch_pipeline.py \\
+        --mode dm --config pipeline_config.json \\
+        --project-root ~/unity-deploy \\
+        --user-id alice --assistant-id 42 \\
+        --destination team:54
 """
 
 from __future__ import annotations
@@ -173,6 +181,21 @@ def main() -> int:
         default="",
         help="DmBinding.create_table_prefix (default: '').",
     )
+    dm_group.add_argument(
+        "--destination",
+        default="personal",
+        metavar="personal|team:<id>",
+        help=(
+            "Which root/scope the resolved --target-context is written "
+            "under (a separate axis from the context path itself). "
+            "Accepted values: 'personal' (default) -> the dispatching "
+            "assistant's own Data root {user}/{assistant}/Data/<ctx>; "
+            "'team:<id>' -> the shared team Data root Teams/<id>/Data/<ctx> "
+            "that every member assistant can read (the ingest worker "
+            "validates team membership before honouring it). Only "
+            "meaningful for --mode dm."
+        ),
+    )
 
     parser.add_argument(
         "--debug",
@@ -186,6 +209,24 @@ def main() -> int:
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # -- normalize the write destination -----------------------------------
+    # ``canonical_destination`` is the single source of truth for the
+    # "personal" / "team:<id>" grammar: it returns ``None`` for personal
+    # and ``"team:<id>"`` for shared, raising on anything else.
+    from droid.common.context_registry import ContextRegistry
+
+    try:
+        args.destination = ContextRegistry.canonical_destination(args.destination)
+    except ValueError as exc:
+        logger.error("--destination is invalid: %s", exc)
+        return 2
+    if args.destination is not None and args.mode != "dm":
+        logger.error(
+            "--destination %s is only supported with --mode dm.",
+            args.destination,
+        )
+        return 2
 
     # -- build dispatch items from ad-hoc files ----------------------------
     dispatch_items = _collect_adhoc_items(args)
@@ -367,12 +408,14 @@ def _dispatch(
     dispatch_id = uuid4().hex
 
     logger.info(
-        "=== Dispatch %s [mode=%s, env=%s, user_id=%s, assistant_id=%s] ===",
+        "=== Dispatch %s [mode=%s, env=%s, user_id=%s, assistant_id=%s, "
+        "destination=%s] ===",
         dispatch_id,
         args.mode,
         settings.environment,
         user_id,
         assistant_id,
+        args.destination or "personal",
     )
     logger.info("Dispatching %d file(s)...", len(items))
 
@@ -394,6 +437,7 @@ def _dispatch(
                 assistant_id=assistant_id,
                 target_context=(dm_context_override or args.target_context or ""),
                 create_table_prefix=args.create_table_prefix,
+                destination=args.destination,
             )
 
         source_kwargs: dict = {}
