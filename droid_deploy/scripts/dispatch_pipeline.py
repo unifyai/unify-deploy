@@ -52,9 +52,9 @@ Config-driven DM dispatch (bindings from config tables)::
 
 Config-driven DM dispatch into a shared team Data context::
 
-    uv run unity_deploy/scripts/dispatch_pipeline.py \\
+    uv run droid_deploy/scripts/dispatch_pipeline.py \\
         --mode dm --config pipeline_config.json \\
-        --project-root ~/unity-deploy \\
+        --project-root ~/droid-deploy \\
         --user-id alice --assistant-id 42 \\
         --destination team:54
 """
