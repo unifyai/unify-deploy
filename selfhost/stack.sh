@@ -15,6 +15,7 @@
 #   ./scripts/stack.sh doctor       Check prerequisites
 #   ./scripts/stack.sh smoke        Verify the running local product
 #   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
+#   ./scripts/stack.sh reset        Purge local self-host onboarding/chat history
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
 #
 # Environment:
@@ -32,6 +33,7 @@ DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
+RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
 DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
@@ -585,6 +587,14 @@ cmd_repair_console() {
   log_success "Console repaired at http://localhost:${CONSOLE_PORT:-3000}"
 }
 
+cmd_reset() {
+  if [[ ! -f "$RESET_DB_SCRIPT" ]]; then
+    log_error "Missing $RESET_DB_SCRIPT"
+    return 1
+  fi
+  bash "$RESET_DB_SCRIPT" "$@"
+}
+
 cmd_dev_env() {
   if declare -F stack_state_print_console_env &>/dev/null; then
     stack_state_print_console_env
@@ -758,6 +768,7 @@ main() {
     logs) cmd_logs "$@" ;;
     smoke) cmd_smoke "$@" ;;
     repair-console|restart-console) cmd_repair_console "$@" ;;
+    reset|reset-db) cmd_reset "$@" ;;
     dev-env|print-console-env) cmd_dev_env "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
