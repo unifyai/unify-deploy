@@ -306,7 +306,7 @@ with SessionLocal() as session:
         "role",
         "user",
     }
-    special_tables = {"assistants", "organization", "project", "onboarding_status"}
+    special_tables = {"assistants", "organization", "project", "onboarding_status", "voices"}
 
     table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
     inspector = inspect(engine)
@@ -334,6 +334,16 @@ with SessionLocal() as session:
         text("DELETE FROM assistants WHERE agent_id <> :keep_assistant_id"),
         {"keep_assistant_id": keep_assistant_id},
     ).rowcount or 0
+    reset_coordinator_profile(coordinator)
+    session.flush()
+    deleted_voices = 0
+    if "voices" in existing_tables:
+        deleted_voices = session.execute(
+            text('DELETE FROM voices WHERE user_id IN :voice_user_ids').bindparams(
+                bindparam("voice_user_ids", expanding=True),
+            ),
+            {"voice_user_ids": values["all_user_ids"] or ["__none__"]},
+        ).rowcount or 0
     deleted_organizations = session.execute(text("DELETE FROM organization")).rowcount or 0
     deleted_users = session.execute(
         text('DELETE FROM "user" WHERE id <> :owner_id'),
@@ -392,6 +402,7 @@ with SessionLocal() as session:
         "deleted_assistants": int(deleted_assistants),
         "deleted_organizations": int(deleted_organizations),
         "deleted_users": int(deleted_users),
+        "deleted_voices": int(deleted_voices),
         "deleted_projects": int(deleted_projects),
         "deleted_scoped_rows": int(deleted_rows),
         "default_tasks": default_tasks,
