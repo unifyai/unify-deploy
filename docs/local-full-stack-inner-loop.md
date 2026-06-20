@@ -36,6 +36,23 @@ Run a product smoke check:
 bash /Users/djl11/droid-deploy/selfhost/stack.sh smoke
 ```
 
+## Cursor Agent Startup
+
+When a Cursor agent starts the full source stack for someone else to use, it must
+use the durable launcher:
+
+```bash
+bash /Users/djl11/droid-deploy/selfhost/stack.sh up --durable
+```
+
+The durable launcher owns a `tmux` session named `droid-stack`, waits for the
+stack-ready marker, verifies Console over HTTP, and prints attach/stop commands.
+This keeps Console, Orchestra, LiveKit, the Droid gateway, and the Coordinator
+runtime out of the Cursor shell job's process group, so they keep running after
+the agent command exits. A plain `stack.sh up` is fine from a long-lived human
+terminal, but agents should not emulate persistence with `nohup`, backgrounded
+subshells, or sleep loops.
+
 ## Safe Checks While The Stack Is Running
 
 Use repo-specific checks that do not write production build artifacts into the
