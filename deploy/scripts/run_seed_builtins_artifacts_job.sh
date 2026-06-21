@@ -21,6 +21,10 @@ Optional:
   --backend-id BACKEND
   --dry-run
 
+A full resync (bypassing the manifest-hash and per-unit/checkpoint skips) is
+requested declaratively via ``sync.force = true`` on the relevant provider in the
+integration bootstrap manifest, not from this script or Cloud Build.
+
 The job runs from the Droid image and seeds all Builtins artifacts:
 functions, guidance, and provider-backed integrations. Orchestra remains the
 backend API/materializer for integration context writes; it is not exposed as a
