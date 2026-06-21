@@ -8,12 +8,14 @@
 #
 # Usage:
 #   ./scripts/stack.sh up           Start full stack (+ Coordinator if registered)
+#   ./scripts/stack.sh up --durable Start full stack in a persistent tmux session
 #   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
 #   ./scripts/stack.sh status       Show service status
 #   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub)
 #   ./scripts/stack.sh doctor       Check prerequisites
 #   ./scripts/stack.sh smoke        Verify the running local product
 #   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
+#   ./scripts/stack.sh reset        Purge local self-host onboarding/chat history
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
 #
 # Environment:
@@ -31,6 +33,7 @@ DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
+RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
 DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
@@ -387,6 +390,77 @@ cmd_up() {
   echo ""
 }
 
+cmd_up_durable() {
+  local session="${DROID_STACK_TMUX_SESSION:-droid-stack}"
+  local timeout_seconds="${DROID_STACK_TMUX_READY_TIMEOUT_SECONDS:-180}"
+  local console_port="${CONSOLE_PORT:-3000}"
+  local bash_bin="${DROID_STACK_BASH:-bash}"
+
+  if [[ "$(uname -s)" == "Darwin" && -x "/opt/homebrew/bin/bash" ]]; then
+    bash_bin="/opt/homebrew/bin/bash"
+  elif ! command -v "$bash_bin" &>/dev/null; then
+    log_error "Bash not found: $bash_bin"
+    return 1
+  fi
+
+  if ! command -v tmux &>/dev/null; then
+    log_error "tmux is required for durable stack startup"
+    log_info "Install tmux or run stack up from a long-lived human terminal"
+    return 1
+  fi
+
+  if tmux has-session -t "=${session}" 2>/dev/null; then
+    log_warn "Durable stack session already exists: $session"
+    log_info "Attach: tmux attach -t $session"
+    log_info "Stop:   bash $SCRIPT_DIR/stack.sh down"
+    cmd_status || true
+    return 0
+  fi
+
+  local shell_bin="${SHELL:-/bin/bash}"
+  local stack_command
+  printf -v stack_command '%q -lc %q' "$bash_bin" \
+    "export PATH=\"/opt/homebrew/bin:\$PATH\"; cd \"$DEPLOY_REPO_PATH\"; \"$bash_bin\" \"$SCRIPT_DIR/stack.sh\" up; rc=\$?; echo __DROID_STACK_UP_EXIT_\${rc}__; exec \"$shell_bin\" -l"
+
+  log_info "Starting durable stack session: $session"
+  tmux new-session -d -s "$session" "$stack_command"
+
+  local elapsed=0
+  local pane=""
+  while (( elapsed < timeout_seconds )); do
+    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
+    if [[ "$pane" == *"__DROID_STACK_UP_EXIT_0__"* && "$pane" == *"Self-host stack is ready"* ]]; then
+      log_success "Durable stack session is ready: $session"
+      break
+    fi
+    if [[ "$pane" == *"__DROID_STACK_UP_EXIT_"* && "$pane" != *"__DROID_STACK_UP_EXIT_0__"* ]]; then
+      log_error "Durable stack startup failed in tmux session: $session"
+      echo "$pane"
+      return 1
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  if (( elapsed >= timeout_seconds )); then
+    log_error "Timed out waiting for durable stack startup"
+    log_info "Attach for logs: tmux attach -t $session"
+    return 1
+  fi
+
+  if ! curl -fsSI --max-time 10 "http://localhost:${console_port}/" >/dev/null; then
+    log_error "Console did not respond at http://localhost:${console_port}"
+    log_info "Attach for logs: tmux attach -t $session"
+    return 1
+  fi
+
+  cmd_status
+  echo ""
+  log_success "Console is responding at http://localhost:${console_port}"
+  log_info "Attach: tmux attach -t $session"
+  log_info "Stop:   bash $SCRIPT_DIR/stack.sh down"
+}
+
 cmd_down() {
   local full_stop="false"
   while [[ $# -gt 0 ]]; do
@@ -511,6 +585,14 @@ cmd_repair_console() {
     stack_state_write_source
   fi
   log_success "Console repaired at http://localhost:${CONSOLE_PORT:-3000}"
+}
+
+cmd_reset() {
+  if [[ ! -f "$RESET_DB_SCRIPT" ]]; then
+    log_error "Missing $RESET_DB_SCRIPT"
+    return 1
+  fi
+  bash "$RESET_DB_SCRIPT" "$@"
 }
 
 cmd_dev_env() {
@@ -673,12 +755,20 @@ main() {
   local cmd="${1:-up}"
   shift || true
   case "$cmd" in
-    up) cmd_up "$@" ;;
+    up)
+      if [[ "${1:-}" == "--durable" ]]; then
+        shift
+        cmd_up_durable "$@"
+      else
+        cmd_up "$@"
+      fi
+      ;;
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;
     smoke) cmd_smoke "$@" ;;
     repair-console|restart-console) cmd_repair_console "$@" ;;
+    reset|reset-db) cmd_reset "$@" ;;
     dev-env|print-console-env) cmd_dev_env "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
