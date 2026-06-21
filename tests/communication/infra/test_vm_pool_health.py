@@ -14,6 +14,7 @@ from communication.infra.vm_helpers import (
     _start_one_stopped_vm,
     assign_pool_vm,
     delete_assistant_disk,
+    reclaim_orphaned_assistant_disk,
     release_pool_vm,
     replenish_pool,
     split_binding_runtime_vms,
@@ -922,6 +923,71 @@ def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypat
         assign_pool_vm("assistant-123", "binding-new", "unify-key")
 
     claim_idle.assert_not_called()
+
+
+def test_reclaim_orphaned_disk_detaches_from_idle_vm(monkeypatch):
+    detach = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1-staging",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._attached_disk_vm_state",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-1-staging",
+            "assistant_id": "",
+            "binding_id": "",
+            "pool_role": "idle",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.detach_assistant_disk",
+        detach,
+    )
+
+    result = reclaim_orphaned_assistant_disk("2101", current_binding_id="bc0d")
+
+    assert result["detached"] is True
+    assert result["vm_name"] == "unity-pool-ubuntu-1-staging"
+    detach.assert_called_once_with("unity-pool-ubuntu-1-staging", "2101")
+
+
+def test_reclaim_orphaned_disk_skips_assigned_vm(monkeypatch):
+    detach = MagicMock()
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1-staging",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._attached_disk_vm_state",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-1-staging",
+            "assistant_id": "2101",
+            "binding_id": "bc0d",
+            "pool_role": "assigned",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.detach_assistant_disk",
+        detach,
+    )
+
+    result = reclaim_orphaned_assistant_disk("2101", current_binding_id="bc0d")
+
+    assert result["detached"] is False
+    assert result["reason"] == "vm_assigned"
+    detach.assert_not_called()
+
+
+def test_reclaim_orphaned_disk_noop_when_no_disk(monkeypatch):
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = reclaim_orphaned_assistant_disk("2101")
+
+    assert result == {"detached": False, "reason": "no_attached_disk"}
 
 
 def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
