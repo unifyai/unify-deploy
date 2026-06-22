@@ -74,11 +74,17 @@ should happen only after the private path is verified end-to-end.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
+git clone git@github.com:unifyai/droid.git
+git clone git@github.com:unifyai/unify.git
+git clone git@github.com:unifyai/unillm.git
 git clone git@github.com:unifyai/droid-deploy.git
 cd droid-deploy
 uv sync --all-groups
 pre-commit install
 ```
+
+The first-party Python dependencies resolve from sibling editable checkouts so
+cross-repo local changes are picked up by `uv sync` without lockfile upgrades.
 
 ## Full Local Development
 

@@ -83,9 +83,9 @@ dev = [
 ]
 
 [tool.uv.sources]
-droid = { git = "https://github.com/unifyai/droid.git", branch = "staging" }
-unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }
-unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }
+droid = { path = "../droid", editable = true }
+unify = { path = "../unify", editable = true }
+unillm = { path = "../unillm", editable = true }
 
 [tool.pyright]
 extraPaths = ["../droid", "../unify", "../unillm", "."]
