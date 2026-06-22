@@ -72,7 +72,7 @@ from droid_deploy.infra.gcp.pipeline_observability import (
     make_receipt_hash,
     write_job_event,
 )
-from .worker_utils import DuplicateLiveAttempt
+from .worker_utils import DuplicateLiveAttempt, is_shutdown_requested
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
@@ -82,6 +82,14 @@ logger = logging.getLogger(__name__)
 _TERMINAL_JOB_STATUSES = {"success", "error", "cancelled"}
 _PRIVATE_INGEST_KEY = "_droid_ingest_key"
 
+# Distinctive marker embedded in the surrender RetryWorkItem message. The
+# per-chunk hook raises RetryWorkItem, but ingest_artifacts' run_with_retry
+# captures it (it is an ``Exception``) into the work-result error string rather
+# than propagating it. _run_dm_mode_inner detects this sentinel and re-raises
+# RetryWorkItem so the entrypoint nacks for immediate redelivery (mirrors the
+# retryable-lease-error -> DuplicateLiveAttempt re-raise).
+_SURRENDER_SENTINEL = "surrendering in-flight chunk"
+
 
 @dataclass
 class _ActiveIngestLease:
@@ -89,6 +97,71 @@ class _ActiveIngestLease:
     owner_id: str
     attempt_id: str
     generation: int | None
+
+
+# Module-level registry of GCS attempt-leases currently held by this worker
+# process. The per-table ingest path releases its lease on every exit, but this
+# registry lets the handle_ingest_message ``finally`` release any lease still
+# held (e.g. if an exception skipped the per-table cleanup) so a terminated pod
+# never strands a lease for a survivor to wait out (the orphaned-lease stall:
+# the survivor would otherwise defer ~TTL+grace before it could take over).
+_active_ingest_leases: dict[str, _ActiveIngestLease] = {}
+
+
+def _track_ingest_lease(lease: _ActiveIngestLease) -> None:
+    _active_ingest_leases[lease.key] = lease
+
+
+def _release_ingest_lease(
+    artifact_store: Any,
+    lease: _ActiveIngestLease,
+    *,
+    reason: str,
+) -> None:
+    """Best-effort release of a GCS attempt-lease held by this attempt.
+
+    Releasing promptly (instead of waiting for TTL expiry) lets a fresh
+    delivery acquire the lease and resume from checkpoint immediately. Ownership
+    is verified inside ``release_lease``; a lease already taken over by another
+    attempt raises :class:`StaleLeaseError` and is left untouched.
+    """
+    _active_ingest_leases.pop(lease.key, None)
+    try:
+        artifact_store.release_lease(
+            lease.key,
+            owner_id=lease.owner_id,
+            attempt_id=lease.attempt_id,
+            generation=lease.generation,
+        )
+        logger.info("[ingest] Released attempt lease key=%s (%s)", lease.key, reason)
+    except StaleLeaseError:
+        logger.info(
+            "[ingest] Attempt lease key=%s already taken over; skipping release",
+            lease.key,
+        )
+    except Exception:
+        logger.debug(
+            "[ingest] Best-effort lease release failed key=%s",
+            lease.key,
+            exc_info=True,
+        )
+
+
+def _release_tracked_job_leases(artifact_store: Any, job_id: str) -> None:
+    """Backstop release of any leases still tracked for ``job_id``.
+
+    No-op when the per-table ingest path already released everything (the common
+    case). Scoped by the job's lease-key prefix so it never touches another
+    in-flight job's lease.
+    """
+    prefix = f"jobs/{job_id}/leases/"
+    for key, lease in list(_active_ingest_leases.items()):
+        if key.startswith(prefix):
+            _release_ingest_lease(
+                artifact_store,
+                lease,
+                reason="handle_ingest_message finally backstop",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +878,7 @@ def _acquire_ingest_lease(
             owner_id=owner_id,
             attempt_id=attempt_id,
             stage="ingest",
-            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "900")),
+            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "480")),
         )
     except LeaseNotAcquired as exc:
         lease = exc.lease
@@ -846,7 +919,7 @@ def _refresh_ingest_lease(artifact_store: Any, lease: _ActiveIngestLease) -> Non
             owner_id=lease.owner_id,
             attempt_id=lease.attempt_id,
             generation=lease.generation,
-            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "900")),
+            ttl_seconds=int(os.environ.get("DROID_INGEST_ATTEMPT_LEASE_TTL", "480")),
         )
     except StaleLeaseError:
         raise
@@ -1050,8 +1123,6 @@ async def handle_ingest_message(
        ``attachment_ingestion_complete`` envelope when the message
        originated from a CM attachment dispatch.
     """
-    from .worker_utils import is_shutdown_requested
-
     msg = IngestRequested.model_validate(item.payload)
     run_id = msg.job_id
 
@@ -1372,6 +1443,18 @@ async def handle_ingest_message(
             await watch.stop()
         except Exception:
             logger.debug("[ingest] control watcher stop failed for job=%s", run_id)
+        # Backstop: release any GCS attempt-lease still held for this job. The
+        # per-table ingest path already releases on its own exit, so this is a
+        # no-op in the common case; it only fires if an exception skipped that
+        # cleanup, preventing an orphaned lease from stalling a survivor pod.
+        try:
+            _release_tracked_job_leases(artifact_store, run_id)
+        except Exception:
+            logger.debug(
+                "[ingest] lease backstop release failed for job=%s",
+                run_id,
+                exc_info=True,
+            )
         run_ledger.close()
         cost_ledger.close()
         scratch_dir_ctx.cleanup()
@@ -1859,22 +1942,31 @@ async def _run_dm_mode_inner(
             attempt_id=pl.get("attempt_id", ""),
         )
         pl["lease"] = lease
+        _track_ingest_lease(lease)
 
         def _before_insert_chunk(**_kwargs) -> None:
             if is_cancelled and is_cancelled():
                 raise PipelineCancelled(
                     f"Job {msg.job_id} cancelled before next DM chunk",
                 )
-            # The Pub/Sub lease hit its lifetime cap and was surrendered
-            # (nacked) by the LeaseController. Unwind at this safe between-chunk
-            # boundary so the message is reclaimed and resumes from the durable
-            # checkpoint, instead of holding the lease open indefinitely. Raise
-            # RetryWorkItem (not a generic error) so the entrypoint redelivers
-            # rather than dead-lettering.
+            # A SIGTERM (HPA scale-down / rollout) or the Pub/Sub lease-lifetime
+            # cap both mean we must stop owning this message. Unwind at this safe
+            # between-chunk boundary and raise RetryWorkItem (not a generic
+            # error) so the entrypoint nacks for immediate redelivery; the outer
+            # finally releases the GCS attempt-lease so a fresh pod resumes from
+            # the durable checkpoint with no orphaned lease to wait out.
+            if is_shutdown_requested():
+                raise RetryWorkItem(
+                    f"Job {msg.job_id} {_SURRENDER_SENTINEL}: worker shutting "
+                    "down; will resume from checkpoint",
+                    delay_seconds=float(
+                        os.environ.get("DROID_INGEST_SURRENDER_RETRY_SECONDS", "30"),
+                    ),
+                )
             if should_surrender and should_surrender():
                 raise RetryWorkItem(
-                    f"Job {msg.job_id} surrendering in-flight chunk: lease "
-                    "lifetime cap reached; will resume from checkpoint",
+                    f"Job {msg.job_id} {_SURRENDER_SENTINEL}: lease lifetime cap "
+                    "reached; will resume from checkpoint",
                     delay_seconds=float(
                         os.environ.get("DROID_INGEST_SURRENDER_RETRY_SECONDS", "30"),
                     ),
@@ -1905,29 +1997,41 @@ async def _run_dm_mode_inner(
             pl.get("skip_rows", 0),
             pl.get("initial_chunks", 0),
         )
-        result = pl["dm"].ingest(
-            pl["context"],
-            None,
-            destination=pl.get("destination"),
-            table_input_handle=pl["handle"],
-            chunk_size=pl["batch_size"],
-            description=pl.get("description"),
-            fields=pl.get("fields"),
-            unique_keys=pl.get("unique_keys"),
-            embed_columns=pl.get("embed_columns"),
-            embed_strategy=pl.get("embed_strategy", "off"),
-            post_ingest=pl.get("post_ingest"),
-            on_task_complete=on_complete,
-            storage_client=pl.get("storage_client"),
-            skip_rows=pl.get("skip_rows", 0),
-            expected_total_rows=item.row_count if item.row_count is not None else None,
-            private_ingest_key_column=_PRIVATE_INGEST_KEY,
-            private_ingest_key_prefix=(
-                f"{msg.dispatch_id or 'dispatch'}:{msg.job_id}:"
-                f"{pl.get('table_id', '')}"
-            ),
-            before_insert_chunk=_before_insert_chunk,
-        )
+        try:
+            result = pl["dm"].ingest(
+                pl["context"],
+                None,
+                destination=pl.get("destination"),
+                table_input_handle=pl["handle"],
+                chunk_size=pl["batch_size"],
+                description=pl.get("description"),
+                fields=pl.get("fields"),
+                unique_keys=pl.get("unique_keys"),
+                embed_columns=pl.get("embed_columns"),
+                embed_strategy=pl.get("embed_strategy", "off"),
+                post_ingest=pl.get("post_ingest"),
+                on_task_complete=on_complete,
+                storage_client=pl.get("storage_client"),
+                skip_rows=pl.get("skip_rows", 0),
+                expected_total_rows=(
+                    item.row_count if item.row_count is not None else None
+                ),
+                private_ingest_key_column=_PRIVATE_INGEST_KEY,
+                private_ingest_key_prefix=(
+                    f"{msg.dispatch_id or 'dispatch'}:{msg.job_id}:"
+                    f"{pl.get('table_id', '')}"
+                ),
+                before_insert_chunk=_before_insert_chunk,
+            )
+        finally:
+            # Release on every exit (success, surrender/shutdown via
+            # RetryWorkItem, cancel, or error) so the next delivery resumes
+            # immediately instead of waiting out the lease TTL.
+            _release_ingest_lease(
+                artifact_store,
+                lease,
+                reason="table attempt ended",
+            )
         elapsed = time.perf_counter() - ingest_started
         rows_inserted = int(getattr(result, "rows_inserted", 0) or 0)
         logger.info(
@@ -1948,6 +2052,7 @@ async def _run_dm_mode_inner(
     total_rows = 0
     error: str | None = None
     retryable_lease_error: str | None = None
+    surrender_error: str | None = None
     start = time.perf_counter()
     try:
         with instrumentation:
@@ -1974,6 +2079,12 @@ async def _run_dm_mode_inner(
                 error = ar.error or "ingest failed"
             if retryable_lease_error is None and _is_retryable_lease_error(ar.error):
                 retryable_lease_error = ar.error
+            if surrender_error is None and _SURRENDER_SENTINEL in str(ar.error or ""):
+                surrender_error = ar.error
+    except RetryWorkItem:
+        # A surrender that propagated directly (e.g. run_with_retry bypassed):
+        # let it flow to the entrypoint for an immediate nack/redelivery.
+        raise
     except PipelineCancelled:
         raise
     except DuplicateLiveAttempt:
@@ -1981,6 +2092,18 @@ async def _run_dm_mode_inner(
     except Exception as exc:
         error = str(exc) or "ingest_artifacts raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
+
+    # A shutdown / lease-lifetime-cap surrender is captured by run_with_retry as
+    # an error string; re-raise it as RetryWorkItem so the entrypoint nacks for
+    # immediate redelivery and resume-from-checkpoint, instead of finalizing the
+    # job as a terminal error (which would be acked and never resumed).
+    if surrender_error is not None:
+        raise RetryWorkItem(
+            surrender_error,
+            delay_seconds=float(
+                os.environ.get("DROID_INGEST_SURRENDER_RETRY_SECONDS", "30"),
+            ),
+        )
 
     if retryable_lease_error is not None:
         raise DuplicateLiveAttempt(

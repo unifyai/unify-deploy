@@ -30,7 +30,11 @@ from droid.common.pipeline.types import (
     TableMeta,
 )
 from droid_deploy.infra.workers import ingest_worker
-from droid_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from droid_deploy.infra.gcp.artifact_store import (
+    LeaseNotAcquired,
+    LeaseRecord,
+    StaleLeaseError,
+)
 from droid_deploy.infra.workers import worker_utils
 from droid_deploy.infra.workers.assistant_key_resolver import ResolvedAssistant
 from droid_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
@@ -710,6 +714,153 @@ async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> 
     assert rows == 0
     assert error == "boom before artifact results"
     assert ledger.entries[-1].status == "error"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: attempt-lease release on shutdown/surrender
+# ---------------------------------------------------------------------------
+
+
+def test_release_ingest_lease_releases_and_untracks() -> None:
+    calls: list[tuple] = []
+
+    class _Store:
+        def release_lease(self, key, *, owner_id, attempt_id, generation):
+            calls.append((key, owner_id, attempt_id, generation))
+
+    lease = ingest_worker._ActiveIngestLease(
+        key="jobs/job-1/leases/ingest-t.json",
+        owner_id="owner-a",
+        attempt_id="attempt-a",
+        generation=5,
+    )
+    ingest_worker._track_ingest_lease(lease)
+    assert lease.key in ingest_worker._active_ingest_leases
+
+    ingest_worker._release_ingest_lease(_Store(), lease, reason="test")
+
+    assert calls == [("jobs/job-1/leases/ingest-t.json", "owner-a", "attempt-a", 5)]
+    assert lease.key not in ingest_worker._active_ingest_leases
+
+
+def test_release_ingest_lease_swallows_stale_lease_error() -> None:
+    class _Store:
+        def release_lease(self, *_a, **_k):
+            raise StaleLeaseError("owner changed")
+
+    lease = ingest_worker._ActiveIngestLease(
+        key="jobs/job-1/leases/ingest-t.json",
+        owner_id="owner-a",
+        attempt_id="attempt-a",
+        generation=1,
+    )
+    ingest_worker._track_ingest_lease(lease)
+
+    # A lease taken over by another attempt must not raise out of release.
+    ingest_worker._release_ingest_lease(_Store(), lease, reason="test")
+    assert lease.key not in ingest_worker._active_ingest_leases
+
+
+def test_release_tracked_job_leases_is_scoped_by_job_prefix() -> None:
+    released: list[str] = []
+
+    class _Store:
+        def release_lease(self, key, **_k):
+            released.append(key)
+
+    keep = ingest_worker._ActiveIngestLease(
+        key="jobs/job-B/leases/ingest-t1.json",
+        owner_id="o",
+        attempt_id="a",
+        generation=1,
+    )
+    drop = ingest_worker._ActiveIngestLease(
+        key="jobs/job-A/leases/ingest-t1.json",
+        owner_id="o",
+        attempt_id="a",
+        generation=1,
+    )
+    ingest_worker._track_ingest_lease(keep)
+    ingest_worker._track_ingest_lease(drop)
+
+    ingest_worker._release_tracked_job_leases(_Store(), "job-A")
+
+    assert released == ["jobs/job-A/leases/ingest-t1.json"]
+    assert keep.key in ingest_worker._active_ingest_leases
+    # cleanup the unrelated tracked lease
+    ingest_worker._active_ingest_leases.pop(keep.key, None)
+
+
+@pytest.mark.asyncio
+async def test_dm_mode_reraises_retry_on_surrender(monkeypatch) -> None:
+    """A captured surrender error must re-raise RetryWorkItem (not finalize)."""
+    from droid.common.pipeline.work_queue import RetryWorkItem
+
+    class _DataManager:
+        def ingest(self, *args, **kwargs):
+            return None
+
+    import droid.data_manager as data_manager_module
+
+    monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
+
+    surrender = (
+        "Job job-1 surrendering in-flight chunk: worker shutting down; "
+        "will resume from checkpoint"
+    )
+    monkeypatch.setattr(
+        ingest_worker,
+        "ingest_artifacts",
+        lambda **_kwargs: [
+            SimpleNamespace(success=False, error=surrender, value=None),
+        ],
+    )
+
+    class _ArtifactStore:
+        def read_checkpoint(self, *_args, **_kwargs):
+            return None
+
+    class _Infra:
+        artifact_store = _ArtifactStore()
+        storage_client = None
+
+    class _RunLedger:
+        def __init__(self):
+            self.entries = []
+
+        def write(self, entry):
+            self.entries.append(entry)
+
+    plan = IngestPlan(
+        run_id="job-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(table_id="table_1", label="table_1", columns=["a"], row_count=1),
+        ],
+        table_inputs={
+            "table_1": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=1),
+        },
+    )
+
+    with pytest.raises(RetryWorkItem, match="surrendering in-flight chunk"):
+        await ingest_worker._run_dm_mode_inner(
+            plan=plan,
+            msg=type(
+                "_Msg",
+                (),
+                {"job_id": "job-1", "dispatch_id": "dispatch-1", "batch_size": 100},
+            )(),
+            infra=_Infra(),
+            run_ledger=_RunLedger(),
+            dm_binding=DmBinding(
+                user_id="user-1",
+                assistant_id="assistant-1",
+                target_context="ctx",
+            ),
+            default_target="ctx",
+            activate_unify_context=lambda **_kwargs: None,
+        )
 
 
 def _make_plan(
