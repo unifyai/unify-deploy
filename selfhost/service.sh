@@ -78,6 +78,23 @@ load_self_host_context() {
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
     load_self_host_env_file "$DROID_REPO_PATH/.env"
+    # Hosted Coordinator email (internal dev): load the comms SA so the gateway
+    # this supervisor launches can send Coordinator email. No-op when absent.
+    if declare -F self_host_export_comms_sa &>/dev/null; then
+      self_host_export_comms_sa
+    fi
+    # Self-host always runs with Console, so the Coordinator onboarding flow
+    # (narration + reference quiz) must stay active. The public droid default
+    # (droid/.env) disables it for headless installs; force it on here.
+    export DROID_CONSOLE_UI=true
+    # The self-host CM is the personal Coordinator, so surface its universal
+    # email (and provider) the way the hosted assignment event would. Without
+    # this the CM boots with no email and outbound Coordinator mail / the
+    # reference quiz fail. No-op until a Coordinator mailbox is configured.
+    if [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+      export ASSISTANT_EMAIL="${DROID_COORDINATOR_EMAIL_ADDRESS}"
+      export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
+    fi
   fi
 }
 
@@ -281,6 +298,11 @@ cmd_run() {
       sleep 15
       continue
     fi
+    # Keep the Gmail ingress bridge alive when hosted Coordinator email is
+    # configured (idempotent; restarts it if it died). No-op otherwise.
+    if declare -F self_host_ensure_gmail_bridge &>/dev/null; then
+      self_host_ensure_gmail_bridge || log_warn "Gmail ingress bridge failed to start"
+    fi
     sleep 30
     local count
     count="$(droid_cm_instance_count)"
@@ -357,6 +379,10 @@ cmd_stop() {
     self_host_clear_service_supervisor_pidfile
   else
     self_host_clear_service_supervisor_pidfile
+  fi
+
+  if declare -F self_host_stop_gmail_bridge &>/dev/null; then
+    self_host_stop_gmail_bridge || true
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then

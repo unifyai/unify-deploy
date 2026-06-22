@@ -62,6 +62,10 @@ skip = {
     "ORCHESTRA_URL",
     "DROID_COMMS_URL",
     "DROID_ADAPTERS_URL",
+    # Self-host always runs with Console, so the stack forces DROID_CONSOLE_UI=on
+    # (see stack.sh / service.sh). Ignore the public droid/.env value, which is
+    # the headless-install default, so it can't clobber the stack's export.
+    "DROID_CONSOLE_UI",
 }
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 seen: set[str] = set()
@@ -85,6 +89,24 @@ PYEOF
   if [[ -n "$exports" ]]; then
     # shellcheck disable=SC1090
     eval "$exports"
+  fi
+}
+
+self_host_export_comms_sa() {
+  # Internal-dev hosted Coordinator email: export the comms service-account key
+  # so the gateway can send Coordinator email through the hosted Gmail mailbox
+  # (and the gmail_ingress_bridge can poll replies). The key is read only from
+  # the self-host state dir (~/.droid by default) and never written to a repo.
+  # No-op when absent, so the default fully-local stack is unchanged.
+  local sa_file
+  sa_file="${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_sa.json}"
+  if [[ ! -f "$sa_file" ]]; then
+    return 0
+  fi
+  local sa_json
+  sa_json="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))' "$sa_file" 2>/dev/null || true)"
+  if [[ -n "$sa_json" ]]; then
+    export GCP_SA_KEY="$sa_json"
   fi
 }
 

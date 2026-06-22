@@ -307,6 +307,28 @@ cmd_up() {
     fi
   fi
 
+  # Internal-dev hosted Coordinator email: load the comms service-account key
+  # (from ~/.droid, never a repo) so the gateway can send Coordinator email via
+  # the hosted Gmail mailbox. The gmail_ingress_bridge that polls replies is
+  # started by the runtime supervisor. No-op when no key is present.
+  if declare -F self_host_export_comms_sa &>/dev/null; then
+    self_host_export_comms_sa
+  fi
+
+  # Self-host always runs with Console, so the Coordinator onboarding flow
+  # (narration + reference quiz) must stay active even though the public droid
+  # default (droid/.env) disables it for headless installs.
+  export DROID_CONSOLE_UI=true
+
+  # The self-host CM is the personal Coordinator; surface its universal email
+  # (and provider) the way the hosted assignment event would, so outbound
+  # Coordinator mail + the reference quiz work. No-op until a Coordinator
+  # mailbox is configured.
+  if [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+    export ASSISTANT_EMAIL="${DROID_COORDINATOR_EMAIL_ADDRESS}"
+    export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
+  fi
+
   # voice.sh runs a local LiveKit server with dev credentials. droid/.env
   # often also contains cloud LiveKit keys that override the dev pair when
   # sourced, which breaks browser meet token minting in Console.
