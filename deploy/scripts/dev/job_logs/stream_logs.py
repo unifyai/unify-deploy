@@ -73,7 +73,7 @@ from droid.syntax_highlight import highlight_code_blocks
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 GCP_PROJECT = "gcp-project-runtime"
-GKE_CLUSTER = "droid"
+GKE_CLUSTER = os.environ.get("DROID_GKE_CLUSTER_NAME", "unity")
 GKE_REGION = "us-central1"
 SHARED_UNIFY_KEY = os.environ["SHARED_UNIFY_KEY"]
 

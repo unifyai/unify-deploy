@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 ENV="${1:-staging}"
 PROJECT_ID="${DROID_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
-CLUSTER="${DROID_GKE_CLUSTER:-droid}"
+CLUSTER="${DROID_GKE_CLUSTER_NAME:-unity}"
 
 # Name suffix matches the droid/communication convention:
 # production resources have no suffix; all other envs suffix with "-${ENV}".

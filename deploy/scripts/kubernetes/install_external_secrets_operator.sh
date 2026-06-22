@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 PROJECT_ID="${GCP_PROJECT_ID:-gcp-project-runtime}"
-CLUSTER="${GKE_CLUSTER:-droid}"
+CLUSTER="${DROID_GKE_CLUSTER_NAME:-unity}"
 REGION="${GKE_REGION:-us-central1}"
 ESO_VERSION="${ESO_VERSION:-0.14.2}"
 

@@ -8,16 +8,24 @@
 
 set -euo pipefail
 
+# Resolve the repo root from this script's location so .env handling works
+# regardless of the caller's current working directory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd -P)"
+ENV_FILE="${REPO_ROOT}/.env"
+
 # Load .env from the project root.
-if [[ -f ".env" ]]; then
+if [[ -f "${ENV_FILE}" ]]; then
     set -a
-    source .env
+    source "${ENV_FILE}"
     set +a
 fi
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 GCP_PROJECT="gcp-project-runtime"
-GKE_CLUSTER="droid"
+# Fallback only; the live cluster name is auto-discovered (see discover_cluster)
+# and persisted to .env as DROID_GKE_CLUSTER_NAME.
+GKE_CLUSTER="${DROID_GKE_CLUSTER_NAME:-unity}"
 GKE_REGION="us-central1"
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
@@ -109,9 +117,53 @@ setup_gcp_auth() {
     success "Project set to ${GCP_PROJECT}"
 }
 
+# Upsert KEY=VALUE into the project .env (single source of truth for the
+# cluster name that the dev scripts read).
+persist_env_var() {
+    local key="$1" val="$2"
+    touch "${ENV_FILE}"
+    if grep -q "^${key}=" "${ENV_FILE}"; then
+        sed -i.bak "s|^${key}=.*|${key}=${val}|" "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+    else
+        echo "${key}=${val}" >> "${ENV_FILE}"
+    fi
+    success "Wrote ${key}=${val} to ${ENV_FILE}"
+}
+
+# Discover the GKE cluster name from the project so renames self-heal. Sets
+# the global GKE_CLUSTER. Returns non-zero if no cluster can be resolved.
+discover_cluster() {
+    local names
+    mapfile -t names < <(gcloud container clusters list \
+        --project "$GCP_PROJECT" --format="value(name)" 2>/dev/null)
+
+    if [[ ${#names[@]} -eq 1 ]]; then
+        GKE_CLUSTER="${names[0]}"
+        success "Discovered cluster: ${GKE_CLUSTER}"
+    elif [[ ${#names[@]} -gt 1 ]]; then
+        info "Multiple clusters found in ${GCP_PROJECT}; pick one:"
+        local c
+        select c in "${names[@]}"; do
+            if [[ -n "$c" ]]; then
+                GKE_CLUSTER="$c"
+                break
+            fi
+        done
+    else
+        error "No GKE clusters found in ${GCP_PROJECT} (or no access)."
+        ISSUES+=("Get GKE cluster access from a team admin")
+        return 1
+    fi
+}
+
 # ─── Step 4: GKE Cluster Credentials ────────────────────────────────────────
 setup_gke_credentials() {
     step 4 "GKE Cluster Credentials"
+
+    info "Discovering GKE cluster in ${GCP_PROJECT}..."
+    if ! discover_cluster; then
+        return 1
+    fi
 
     info "Fetching credentials for cluster '${GKE_CLUSTER}' (region ${GKE_REGION})..."
 
@@ -119,6 +171,7 @@ setup_gke_credentials() {
             --region "$GKE_REGION" \
             --project "$GCP_PROJECT" 2>&1; then
         success "Cluster credentials configured."
+        persist_env_var "DROID_GKE_CLUSTER_NAME" "$GKE_CLUSTER"
     else
         error "Failed to get cluster credentials."
         echo ""
