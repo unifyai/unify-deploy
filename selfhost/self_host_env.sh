@@ -95,7 +95,7 @@ PYEOF
 self_host_export_comms_sa() {
   # Internal-dev hosted Coordinator email: export the comms service-account key
   # so the gateway can send Coordinator email through the hosted Gmail mailbox
-  # (and the gmail_ingress_bridge can poll replies). The key is read only from
+  # (and the comms ingress bridge can poll replies). The key is read only from
   # the self-host state dir (~/.droid by default) and never written to a repo.
   # No-op when absent, so the default fully-local stack is unchanged.
   local sa_file
@@ -107,6 +107,27 @@ self_host_export_comms_sa() {
   sa_json="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))' "$sa_file" 2>/dev/null || true)"
   if [[ -n "$sa_json" ]]; then
     export GCP_SA_KEY="$sa_json"
+  fi
+}
+
+self_host_export_comms_twilio() {
+  # Internal-dev hosted Coordinator SMS/WhatsApp: load Twilio creds + the
+  # Coordinator numbers so the gateway can send as the Coordinator and the comms
+  # bridge can poll inbound. Read only from the self-host state dir; never
+  # written to a repo. No-op when absent, so the default stack is unchanged.
+  local twilio_file
+  twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_twilio.env}"
+  [[ -f "$twilio_file" ]] || return 0
+  load_self_host_env_file "$twilio_file"
+  # Surface the Coordinator numbers to both the assistant identity (outbound,
+  # like the hosted assignment event) and the comms bridge (inbound poll target).
+  if [[ -n "${DROID_COORDINATOR_PHONE:-}" ]]; then
+    export ASSISTANT_NUMBER="${ASSISTANT_NUMBER:-$DROID_COORDINATOR_PHONE}"
+    export COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-$DROID_COORDINATOR_PHONE}"
+  fi
+  if [[ -n "${DROID_COORDINATOR_WHATSAPP_NUMBER:-}" ]]; then
+    export ASSISTANT_WHATSAPP_NUMBER="${ASSISTANT_WHATSAPP_NUMBER:-$DROID_COORDINATOR_WHATSAPP_NUMBER}"
+    export COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-$DROID_COORDINATOR_WHATSAPP_NUMBER}"
   fi
 }
 

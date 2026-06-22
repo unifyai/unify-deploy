@@ -309,10 +309,13 @@ cmd_up() {
 
   # Internal-dev hosted Coordinator email: load the comms service-account key
   # (from ~/.droid, never a repo) so the gateway can send Coordinator email via
-  # the hosted Gmail mailbox. The gmail_ingress_bridge that polls replies is
+  # the hosted Gmail mailbox. The comms ingress bridge that polls replies is
   # started by the runtime supervisor. No-op when no key is present.
   if declare -F self_host_export_comms_sa &>/dev/null; then
     self_host_export_comms_sa
+  fi
+  if declare -F self_host_export_comms_twilio &>/dev/null; then
+    self_host_export_comms_twilio
   fi
 
   # Self-host always runs with Console, so the Coordinator onboarding flow

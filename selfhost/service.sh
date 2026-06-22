@@ -78,10 +78,14 @@ load_self_host_context() {
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
     load_self_host_env_file "$DROID_REPO_PATH/.env"
-    # Hosted Coordinator email (internal dev): load the comms SA so the gateway
-    # this supervisor launches can send Coordinator email. No-op when absent.
+    # Hosted Coordinator comms (internal dev): load the comms SA (Gmail) and
+    # Twilio creds/numbers so the gateway this supervisor launches can send as
+    # the Coordinator and the comms bridge can poll inbound. No-op when absent.
     if declare -F self_host_export_comms_sa &>/dev/null; then
       self_host_export_comms_sa
+    fi
+    if declare -F self_host_export_comms_twilio &>/dev/null; then
+      self_host_export_comms_twilio
     fi
     # Self-host always runs with Console, so the Coordinator onboarding flow
     # (narration + reference quiz) must stay active. The public droid default
@@ -298,10 +302,10 @@ cmd_run() {
       sleep 15
       continue
     fi
-    # Keep the Gmail ingress bridge alive when hosted Coordinator email is
+    # Keep the comms ingress bridge alive when hosted Coordinator comms are
     # configured (idempotent; restarts it if it died). No-op otherwise.
-    if declare -F self_host_ensure_gmail_bridge &>/dev/null; then
-      self_host_ensure_gmail_bridge || log_warn "Gmail ingress bridge failed to start"
+    if declare -F self_host_ensure_comms_bridge &>/dev/null; then
+      self_host_ensure_comms_bridge || log_warn "Comms ingress bridge failed to start"
     fi
     sleep 30
     local count
@@ -381,8 +385,8 @@ cmd_stop() {
     self_host_clear_service_supervisor_pidfile
   fi
 
-  if declare -F self_host_stop_gmail_bridge &>/dev/null; then
-    self_host_stop_gmail_bridge || true
+  if declare -F self_host_stop_comms_bridge &>/dev/null; then
+    self_host_stop_comms_bridge || true
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
