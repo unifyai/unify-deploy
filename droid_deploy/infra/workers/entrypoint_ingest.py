@@ -83,19 +83,36 @@ def _lease_lifetime_cap() -> tuple[float | None, int | None]:
 
 
 def _duplicate_defer_seconds(expires_at: str) -> int:
-    default_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_SECONDS", "300"))
+    # Short fallback when the holder's expiry is unreadable. A flat multi-minute
+    # wait (the old 300s) blinds us to a lease that may already be stealable and
+    # turns a ~30s wait into a 5-min stall; re-check soon instead, bounded by
+    # DROID_DUPLICATE_DEFER_MAX_ATTEMPTS.
+    fallback_seconds = int(
+        os.environ.get("DROID_DUPLICATE_DEFER_FALLBACK_SECONDS", "30"),
+    )
     max_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_MAX_SECONDS", "600"))
     jitter_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
+    # An expired lease only becomes stealable after a grace window
+    # (acquire_lease steal_expired_after_seconds, default 30s); add a small
+    # buffer on top. Waking on the dot of expiry would land before the lease is
+    # reclaimable and re-defer a whole cycle.
+    steal_grace = int(os.environ.get("DROID_INGEST_LEASE_STEAL_GRACE_SECONDS", "30"))
+    buffer_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_BUFFER_SECONDS", "5"))
     until_expiry = _parse_expiry_seconds(expires_at)
     if until_expiry is None:
-        base = default_seconds
+        logger.warning(
+            "[ingest] Duplicate-defer: lease expiry %r unparseable; using short "
+            "%ds fallback instead of blocking a full cycle",
+            expires_at,
+            fallback_seconds,
+        )
+        base = fallback_seconds
     else:
-        # Wake shortly after the current GCS owner lease should have expired so
-        # the redelivered duplicate can acquire it instead of thrashing while it
-        # is still held. Pub/Sub caps modify_ack_deadline at 600s, so a lease
-        # TTL above that self-corrects within a couple of redeliveries rather
-        # than in one — bounded by DROID_DUPLICATE_DEFER_MAX_ATTEMPTS.
-        base = max(0, int(until_expiry) + 5)
+        # Wake right after the current GCS owner lease is actually stealable so
+        # the redelivered duplicate can acquire it. Pub/Sub caps
+        # modify_ack_deadline at 600s, so a lease TTL above that self-corrects
+        # within a couple of redeliveries rather than in one.
+        base = max(0, int(until_expiry) + steal_grace + buffer_seconds)
     if base > 0 and jitter_seconds > 0:
         base += random.randint(0, jitter_seconds)
     return max(0, min(base, max_seconds))
@@ -146,10 +163,14 @@ async def main() -> None:
         while not is_shutdown_requested():
             try:
                 # Pre-pull shutdown check: belt-and-suspenders against the
-                # race where SIGTERM arrives between the while-guard and
-                # the receive call. Once past this point we own any
-                # message we pull and will finish it (24h grace gives us
-                # the headroom rather than re-delivering to another pod).
+                # race where SIGTERM arrives between the while-guard and the
+                # receive call. If SIGTERM lands mid-message after this point,
+                # the ingest hot loop surrenders at the next chunk boundary
+                # (see ingest_worker._before_insert_chunk): it releases the GCS
+                # attempt-lease and nacks via RetryWorkItem so a surviving pod
+                # resumes from the durable checkpoint within the deployment's
+                # terminationGracePeriod (600s), rather than relying on lease
+                # TTL expiry.
                 if is_shutdown_requested():
                     break
 

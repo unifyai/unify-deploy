@@ -5,13 +5,17 @@ from datetime import datetime, timedelta, timezone
 from droid_deploy.infra.workers import entrypoint_ingest
 
 
-def test_duplicate_defer_seconds_waits_until_near_lease_expiry(monkeypatch) -> None:
+def test_duplicate_defer_seconds_waits_past_steal_grace(monkeypatch) -> None:
     monkeypatch.setenv("DROID_DUPLICATE_DEFER_JITTER_SECONDS", "0")
+    monkeypatch.delenv("DROID_INGEST_LEASE_STEAL_GRACE_SECONDS", raising=False)
+    monkeypatch.delenv("DROID_DUPLICATE_DEFER_BUFFER_SECONDS", raising=False)
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()
 
     delay = entrypoint_ingest._duplicate_defer_seconds(expires_at)
 
-    assert 120 <= delay <= 125
+    # ~120s to expiry + 30s steal grace + 5s buffer = ~155s, so the redelivery
+    # lands after the lease is actually reclaimable (not on the dot of expiry).
+    assert 153 <= delay <= 157
 
 
 def test_duplicate_defer_seconds_is_bounded(monkeypatch) -> None:
@@ -22,6 +26,23 @@ def test_duplicate_defer_seconds_is_bounded(monkeypatch) -> None:
     # Pub/Sub caps modify_ack_deadline at 600s, so the defer is bounded there
     # even when the owner lease nominally lasts longer.
     assert entrypoint_ingest._duplicate_defer_seconds(expires_at) == 600
+
+
+def test_duplicate_defer_seconds_short_fallback_when_expiry_unparseable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DROID_DUPLICATE_DEFER_JITTER_SECONDS", "0")
+    monkeypatch.delenv("DROID_DUPLICATE_DEFER_FALLBACK_SECONDS", raising=False)
+
+    # An unreadable expiry must fall back to a short re-check, not a 5-min stall.
+    assert entrypoint_ingest._duplicate_defer_seconds("not-a-timestamp") == 30
+
+
+def test_duplicate_defer_seconds_fallback_is_tunable(monkeypatch) -> None:
+    monkeypatch.setenv("DROID_DUPLICATE_DEFER_JITTER_SECONDS", "0")
+    monkeypatch.setenv("DROID_DUPLICATE_DEFER_FALLBACK_SECONDS", "45")
+
+    assert entrypoint_ingest._duplicate_defer_seconds("") == 45
 
 
 def test_lease_lifetime_cap_defaults(monkeypatch) -> None:
