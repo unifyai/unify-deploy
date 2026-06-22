@@ -157,6 +157,51 @@ def test_plan_stale_recovery_marks_missing_payload_needs_operator(monkeypatch) -
     assert plan[0]["payload_source"] == "missing"
 
 
+def test_plan_stale_recovery_includes_queued_stale(monkeypatch) -> None:
+    artifact_store = _ArtifactStore(_manifest(), _payload())
+    infra = _patch_stores(monkeypatch, artifact_store)
+    queued_stale_snapshot = JobObservabilitySnapshot(
+        job_id="job-1",
+        dispatch_id="dispatch-1",
+        durable_status="queued",
+        derived_status="queued-stale",
+        retry_classification="operator_retryable",
+        retry_eligible=True,
+        checkpoints={},
+    )
+    monkeypatch.setattr(
+        pipeline_control,
+        "_load_job_snapshot",
+        lambda *_args, **_kwargs: queued_stale_snapshot,
+    )
+
+    class _QueuedJobStore:
+        def read_job(self, _job_id: str):
+            return SimpleNamespace(
+                status="queued",
+                metadata={},
+                dispatch_id="dispatch-1",
+            )
+
+    monkeypatch.setattr(
+        pipeline_control,
+        "_get_job_store",
+        lambda _infra: _QueuedJobStore(),
+    )
+
+    plan, skipped = pipeline_control._plan_stale_recovery(
+        infra,
+        ["job-1"],
+        max_jobs=0,
+        max_attempts=3,
+        force=False,
+    )
+
+    assert skipped == []
+    assert plan[0]["action"] == "republish_ingest"
+    assert plan[0]["derived_status"] == "queued-stale"
+
+
 # ---------------------------------------------------------------------------
 # Phase 0: cross-command in-flight publish guard
 # ---------------------------------------------------------------------------

@@ -59,6 +59,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -388,6 +389,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--json", action="store_true")
     p_verify.add_argument("--debug", action="store_true")
 
+    # -- throughput ----------------------------------------------------------
+
+    p_throughput = sub.add_parser(
+        "throughput",
+        help=(
+            "Live ingest throughput from durable checkpoints: aggregate rows/s, "
+            "per-job progress + ETA, and stall detection. Immune to worker log "
+            "spam (reads GCS checkpoints, not logs)."
+        ),
+    )
+    throughput_target = p_throughput.add_mutually_exclusive_group(required=True)
+    throughput_target.add_argument("--dispatch-id", default=None)
+    throughput_target.add_argument("--job-id", default=None)
+    p_throughput.add_argument("--env", default="", help="Pipeline environment override")
+    p_throughput.add_argument("--project", default="", help="Pub/Sub project override")
+    p_throughput.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        help="Seconds between checkpoint samples (default: 60)",
+    )
+    p_throughput.add_argument(
+        "--iterations",
+        type=int,
+        default=0,
+        help="Stop after N samples (0 = run until all jobs terminal)",
+    )
+    p_throughput.add_argument("--json", action="store_true")
+    p_throughput.add_argument("--debug", action="store_true")
+
     return parser
 
 
@@ -490,12 +521,21 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     events = list_job_events(artifact_store, job_id) if include_events else []
     heartbeat_at = latest_heartbeat_at(artifact_store, job_id)
     leases = read_active_leases(artifact_store, job_id)
+    # Queued-age signal for queued-stale detection: prefer an explicit
+    # metadata "queued_at" (set whenever a job is (re)enqueued) and fall back
+    # to the job's created_at for jobs predating that metadata.
+    queued_at = ""
+    if job is not None:
+        queued_at = str(
+            (job.metadata or {}).get("queued_at") or job.created_at or "",
+        )
     derived_status, retry_classification, retry_eligible = derive_status(
         durable_status=durable_status,
         dlq_records=dlq_records,
         checkpoints=checkpoints,
         heartbeat_at=heartbeat_at,
         leases=leases,
+        queued_at=queued_at,
     )
     latest_checkpoint = None
     if checkpoints:
@@ -524,7 +564,7 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     if derived_status in {"dlq", "partial-dlq"}:
         next_action = f"pipeline_control retry --job-id {job_id} --only dlq --dry-run"
         queue_location = "dlq"
-    elif derived_status == "running-stale":
+    elif derived_status in {"running-stale", "queued-stale"}:
         next_action = f"pipeline_control recover-stale --job-id {job_id} --dry-run"
         queue_location = "none"
     elif durable_status == "queued":
@@ -545,13 +585,18 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
         status_reason = f"latest DLQ classification={retry_classification}"
     elif derived_status == "running-stale":
         status_reason = "durable status is running with no fresh heartbeat or lease"
+    elif derived_status == "queued-stale":
+        status_reason = (
+            "durable status is queued past the stale threshold with no fresh "
+            "heartbeat, lease, or in-flight message (limbo)"
+        )
     else:
         status_reason = derived_status
 
     retry_payload_source = "dlq" if latest_dlq and latest_dlq.payload else ""
     checkpoint_complete: bool | None = None
     recovery_action = ""
-    if derived_status == "running-stale":
+    if derived_status in {"running-stale", "queued-stale"}:
         payload, outbox_source = _read_parse_outbox_payload(artifact_store, job_id)
         if payload is not None:
             retry_payload_source = outbox_source
@@ -851,11 +896,11 @@ def _plan_stale_recovery(
         if snap.derived_status == "running-active" and not force:
             skipped.append({"job_id": job_id, "reason": "fresh lease or heartbeat"})
             continue
-        if snap.derived_status != "running-stale" and not force:
+        if snap.derived_status not in {"running-stale", "queued-stale"} and not force:
             skipped.append(
                 {
                     "job_id": job_id,
-                    "reason": f"not running-stale ({snap.derived_status})",
+                    "reason": f"not stale ({snap.derived_status})",
                 },
             )
             continue
@@ -1018,6 +1063,7 @@ async def _execute_stale_recovery(
                     "previous_status": previous_status,
                     "last_stale_recovery_message_id": message_id,
                     "last_publish_at": utc_now_iso(),
+                    "queued_at": utc_now_iso(),
                     "resume_rows": item["resume_rows"],
                     "resume_chunks": item["resume_chunks"],
                 }
@@ -1998,6 +2044,174 @@ async def cmd_verify(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+_THROUGHPUT_TERMINAL_STATUSES = {"success", "error", "cancelled"}
+
+
+def _collect_throughput_sample(infra, job_ids: list[str]) -> list[dict]:
+    """Per-job committed/expected/status snapshot for one throughput tick.
+
+    Reads durable GCS checkpoints (hardened: each blob is parsed and validated
+    individually by ``list_job_checkpoints``), so it is immune to worker log
+    spam and partial-read swings.
+    """
+    from droid_deploy.infra.gcp.pipeline_observability import list_job_checkpoints
+
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    sample: list[dict] = []
+    for job_id in job_ids:
+        try:
+            checkpoints = list_job_checkpoints(artifact_store, job_id)
+        except Exception:
+            checkpoints = {}
+        committed = sum(int(cp.rows_committed or 0) for cp in checkpoints.values())
+        try:
+            job = job_store.read_job(job_id)
+            status = job.status
+            expected = int((job.metadata or {}).get("rows_expected") or 0)
+        except Exception:
+            status = "unknown"
+            expected = 0
+        sample.append(
+            {
+                "job_id": job_id,
+                "committed_rows": committed,
+                "expected_rows": expected,
+                "status": status,
+            },
+        )
+    return sample
+
+
+def _build_throughput_report(
+    *,
+    current: list[dict],
+    prev_by_job: dict[str, int] | None,
+    dt_seconds: float,
+) -> dict:
+    """Compute aggregate rows/s, per-job deltas/ETA, and stall/terminal flags.
+
+    Pure function (no I/O) so the rate math is unit-testable. ``prev_by_job`` is
+    ``None`` on the first (baseline) sample, in which case rates are unknown.
+    """
+    total = sum(int(j["committed_rows"]) for j in current)
+    per_job: list[dict] = []
+    nonterminal = 0
+    for j in current:
+        terminal = j["status"] in _THROUGHPUT_TERMINAL_STATUSES
+        if not terminal:
+            nonterminal += 1
+        prev = prev_by_job.get(j["job_id"]) if prev_by_job is not None else None
+        delta = (j["committed_rows"] - prev) if prev is not None else None
+        rate = (delta / dt_seconds) if (delta is not None and dt_seconds > 0) else None
+        expected = int(j["expected_rows"] or 0)
+        remaining = max(0, expected - j["committed_rows"]) if expected else None
+        eta_seconds = (remaining / rate) if (remaining and rate and rate > 0) else None
+        per_job.append(
+            {
+                "job_id": j["job_id"],
+                "status": j["status"],
+                "committed_rows": j["committed_rows"],
+                "expected_rows": expected,
+                "delta_rows": delta,
+                "rows_per_s": round(rate, 1) if rate is not None else None,
+                "remaining_rows": remaining,
+                "eta_seconds": round(eta_seconds) if eta_seconds is not None else None,
+                "terminal": terminal,
+            },
+        )
+    prev_total = sum(prev_by_job.values()) if prev_by_job is not None else None
+    agg_delta = (total - prev_total) if prev_total is not None else None
+    agg_rate = (
+        (agg_delta / dt_seconds) if (agg_delta is not None and dt_seconds > 0) else None
+    )
+    # Stall: we have a prior sample, jobs are still running, yet no rows moved.
+    stalled = bool(
+        prev_by_job is not None and nonterminal > 0 and agg_delta == 0,
+    )
+    return {
+        "committed_rows": total,
+        "delta_rows": agg_delta,
+        "rows_per_s": round(agg_rate, 1) if agg_rate is not None else None,
+        "stalled": stalled,
+        "all_terminal": nonterminal == 0,
+        "nonterminal_jobs": nonterminal,
+        "jobs": per_job,
+    }
+
+
+def _print_throughput_report(report: dict) -> None:
+    rate = report["rows_per_s"]
+    rate_str = f"{rate} rows/s" if rate is not None else "baseline"
+    delta = report["delta_rows"] if report["delta_rows"] is not None else 0
+    stall = "  *** STALL ***" if report["stalled"] else ""
+    print(
+        f"[{utc_now_iso()[11:19]}] committed_rows={report['committed_rows']} "
+        f"(+{delta}) => {rate_str} "
+        f"nonterminal_jobs={report['nonterminal_jobs']}{stall}",
+        flush=True,
+    )
+    for j in report["jobs"]:
+        moved = bool(j["delta_rows"])
+        pending = (not j["terminal"]) and bool(j["remaining_rows"])
+        if not (moved or pending):
+            continue
+        progress = f"/{j['expected_rows']}" if j["expected_rows"] else ""
+        eta = f" eta={j['eta_seconds']}s" if j["eta_seconds"] is not None else ""
+        print(
+            f"    job={j['job_id'][:12]} status={j['status']} "
+            f"rows={j['committed_rows']}{progress} "
+            f"(+{j['delta_rows'] or 0}){eta}",
+            flush=True,
+        )
+
+
+async def cmd_throughput(args: argparse.Namespace) -> None:
+    """Live checkpoint-based ingest throughput monitor."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    if args.job_id:
+        job_ids = [args.job_id]
+    else:
+        job_ids = list(job_store.read_dispatch(args.dispatch_id).job_ids)
+
+    interval = max(1.0, float(args.interval))
+    prev_by_job: dict[str, int] | None = None
+    prev_clock: float | None = None
+    iteration = 0
+    if not args.json:
+        print(
+            f"=== throughput monitor: {len(job_ids)} job(s), "
+            f"interval={interval:.0f}s ===",
+            flush=True,
+        )
+    while True:
+        clock = time.monotonic()
+        current = _collect_throughput_sample(infra, job_ids)
+        dt = (clock - prev_clock) if prev_clock is not None else interval
+        report = _build_throughput_report(
+            current=current,
+            prev_by_job=prev_by_job,
+            dt_seconds=dt,
+        )
+        if args.json:
+            print(json.dumps({"ts": utc_now_iso(), **report}, default=str), flush=True)
+        else:
+            _print_throughput_report(report)
+
+        prev_by_job = {j["job_id"]: int(j["committed_rows"]) for j in current}
+        prev_clock = clock
+        iteration += 1
+        if report["all_terminal"]:
+            if not args.json:
+                print("All jobs terminal; throughput monitor done.", flush=True)
+            break
+        if args.iterations and iteration >= args.iterations:
+            break
+        await asyncio.sleep(interval)
+
+
 async def cmd_worker_refresh_check(args: argparse.Namespace) -> None:
     """Fail closed when worker restart would interrupt active ingestion."""
     _apply_runtime_overrides(args)
@@ -2491,6 +2705,7 @@ def main() -> None:
         "delete": cmd_delete,
         "inspect": cmd_inspect,
         "verify": cmd_verify,
+        "throughput": cmd_throughput,
     }
 
     handler = commands.get(args.command)
