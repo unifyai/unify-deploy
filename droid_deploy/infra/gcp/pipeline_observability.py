@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -473,6 +474,18 @@ def read_active_leases(store: GcsArtifactStore, job_id: str) -> list[LeaseRecord
     return leases
 
 
+def queued_stale_age_seconds() -> int:
+    """Min seconds a job may sit ``durable=queued`` before it is recoverable.
+
+    Guards against prematurely "recovering" a freshly enqueued job whose ingest
+    message is still in flight. Tunable via ``DROID_QUEUED_STALE_AGE_SECONDS``.
+    """
+    try:
+        return int(os.environ.get("DROID_QUEUED_STALE_AGE_SECONDS", "900"))
+    except ValueError:
+        return 900
+
+
 def derive_status(
     *,
     durable_status: str,
@@ -480,6 +493,7 @@ def derive_status(
     checkpoints: dict[str, IngestCheckpoint],
     heartbeat_at: str = "",
     leases: list[LeaseRecord] | None = None,
+    queued_at: str = "",
 ) -> tuple[str, str, bool]:
     if durable_status in {"success", "cancelled", "paused"}:
         return (
@@ -500,6 +514,20 @@ def derive_status(
         return "error", "needs_operator", False
     if durable_status == "running":
         return "running-stale", "operator_retryable", True
+    if durable_status == "queued":
+        # A job stuck in durable=queued with no fresh heartbeat/lease is either
+        # (a) freshly enqueued with its ingest message still in flight, or
+        # (b) limbo: the message was lost during pause/resume/rollout churn and
+        # no worker will ever pick it up. Distinguish by queued-age — only
+        # classify as recoverable once it has sat queued past the guard window,
+        # so the 15-min reconcile cron can self-heal limbo without racing a
+        # just-dispatched job's in-flight message.
+        if not queued_at or is_fresh_timestamp(
+            queued_at,
+            max_age_seconds=queued_stale_age_seconds(),
+        ):
+            return "queued", "queued", False
+        return "queued-stale", "operator_retryable", True
     return durable_status or "unknown", "unknown", False
 
 
