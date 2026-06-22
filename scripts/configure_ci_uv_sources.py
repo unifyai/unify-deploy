@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-
 FIRST_PARTY_REPOS = {
     "droid": "droid",
     "unify": "unify",
