@@ -862,6 +862,171 @@ def _is_retryable_lease_error(error: str | None) -> bool:
     )
 
 
+def _declared_table_totals(plan: IngestPlan) -> dict[str, int]:
+    """Map ``table_id -> declared row_count`` for a DM ingest plan.
+
+    Mirrors the strict row-count resolution used when building work items
+    (manifest ``meta.row_count``, falling back to the streaming handle's
+    ``row_count``). Tables without a resolvable count are omitted.
+    """
+    totals: dict[str, int] = {}
+    table_inputs = plan.table_inputs or {}
+    for meta in plan.tables_meta or []:
+        table_id = str(meta.table_id or "")
+        if not table_id:
+            continue
+        handle = table_inputs.get(table_id)
+        declared = (
+            meta.row_count
+            if meta.row_count is not None
+            else getattr(handle, "row_count", None)
+        )
+        if declared is None:
+            continue
+        totals[table_id] = int(declared)
+    return totals
+
+
+def _incomplete_dm_tables(
+    plan: IngestPlan,
+    artifact_store: Any,
+    job_id: str,
+) -> list[tuple[str, int, int]]:
+    """Return ``(table_id, rows_committed, declared_row_count)`` for any DM
+    table whose durable checkpoint is short of the parser-declared total.
+
+    This is the authoritative completion check used at finalization to
+    refuse a false ``success`` when ingestion returns without error but the
+    checkpoint never reached the declared total (e.g. a duplicate
+    redelivery acking from a stalled checkpoint).
+    """
+    shorts: list[tuple[str, int, int]] = []
+    for table_id, declared in _declared_table_totals(plan).items():
+        try:
+            ckpt = artifact_store.read_checkpoint(job_id, table_id)
+        except Exception:
+            ckpt = None
+        committed = int(getattr(ckpt, "rows_committed", 0) or 0) if ckpt else 0
+        if committed < declared:
+            shorts.append((table_id, committed, declared))
+    return shorts
+
+
+def _enforce_ingest_completion(
+    *,
+    plan: IngestPlan,
+    artifact_store: Any,
+    job_store: Any,
+    infra: WorkerInfra,
+    msg: IngestRequested,
+    run_id: str,
+    item: ReceivedWorkItem,
+) -> None:
+    """Finalization correctness gate (Phase 0).
+
+    Refuse to let a DM ingest finalize as ``success`` while any table's
+    durable checkpoint is short of the parser-declared ``row_count``.
+    Records the discrepancy, emits a ``job_incomplete`` event, and either
+    nacks for a fresh resume (``RetryWorkItem``) or, once the bounded retry
+    budget is exhausted, raises to dead-letter the job so the shortfall
+    surfaces instead of disappearing as a silent under-ingest.
+
+    The job is kept non-terminal across resume attempts on purpose: a
+    terminal status would be acked without work by the duplicate-terminal
+    fast path at the top of :func:`handle_ingest_message`.
+    """
+    shorts = _incomplete_dm_tables(plan, artifact_store, run_id)
+    if not shorts:
+        return
+
+    detail = "; ".join(f"{t}: {c}/{d}" for t, c, d in shorts)
+    max_retries = int(os.environ.get("DROID_INGEST_INCOMPLETE_MAX_RETRIES", "5"))
+    retry_delay = int(os.environ.get("DROID_INGEST_INCOMPLETE_RETRY_SECONDS", "15"))
+
+    attempt = 0
+    exhausted = False
+    try:
+        job = job_store.read_job(run_id)
+        attempt = int((job.metadata or {}).get("incomplete_retry_attempt", 0)) + 1
+        exhausted = attempt > max_retries
+        job.metadata = {
+            **(job.metadata or {}),
+            "incomplete_retry_attempt": attempt,
+            "incomplete_detail": detail,
+            "rows_expected": sum(d for _, _, d in shorts),
+            "rows_committed_short": sum(c for _, c, _ in shorts),
+        }
+        if exhausted and job.status not in ("cancelled", "paused"):
+            # Bounded backstop: stop resuming and surface the shortfall.
+            job.status = "error"
+            job.error = (
+                f"ingest incomplete after {attempt - 1} resume attempts: {detail}"
+            )
+            job.finished_at = utc_now_iso()
+        job_store.upsert_job(job)
+    except Exception:
+        logger.debug(
+            "[ingest] Could not persist incomplete state for %s",
+            run_id,
+            exc_info=True,
+        )
+
+    try:
+        write_job_event(
+            artifact_store,
+            PipelineJobEvent(
+                event_type="job_incomplete",
+                environment=getattr(infra.settings, "environment", ""),
+                project_id=getattr(infra.settings.pubsub, "project_id", ""),
+                job_id=run_id,
+                dispatch_id=msg.dispatch_id or "",
+                stage="ingest",
+                pubsub_message_id=item.pubsub_message_id or item.message_id,
+                delivery_attempt=item.delivery_attempt,
+                receipt_hash=make_receipt_hash(item.receipt_id),
+                source_subscription=item.source_subscription,
+                worker_pod=os.environ.get("HOSTNAME", ""),
+                error_message=detail,
+                next_action="dead_letter" if exhausted else "nack",
+                metadata={
+                    "incomplete_retry_attempt": attempt,
+                    "max_retries": max_retries,
+                },
+            ),
+        )
+    except Exception:
+        logger.debug(
+            "[ingest] Failed to write job_incomplete event for %s",
+            run_id,
+            exc_info=True,
+        )
+
+    if exhausted:
+        logger.error(
+            "[ingest] Job=%s still incomplete after %d resume attempts (%s); "
+            "dead-lettering instead of finalizing success.",
+            run_id,
+            attempt - 1,
+            detail,
+        )
+        raise RuntimeError(
+            f"ingest incomplete after {attempt - 1} resume attempts: {detail}",
+        )
+
+    logger.warning(
+        "[ingest] Job=%s finalize blocked: checkpoint short of declared rows "
+        "(%s); nacking to resume from checkpoint (attempt %d/%d).",
+        run_id,
+        detail,
+        attempt,
+        max_retries,
+    )
+    raise RetryWorkItem(
+        f"ingest incomplete; resuming from checkpoint: {detail}",
+        delay_seconds=float(retry_delay),
+    )
+
+
 async def handle_ingest_message(
     item: ReceivedWorkItem,
     *,
@@ -999,6 +1164,21 @@ async def handle_ingest_message(
                 phase="after_durable_ingest",
             )
 
+            # Finalization correctness gate (Phase 0): never finalize a DM
+            # ingest as success while any table's durable checkpoint is short
+            # of the parser-declared row_count. Raises RetryWorkItem to resume
+            # from checkpoint, or dead-letters once the retry budget is spent.
+            if msg.ingestion_mode != "fm":
+                _enforce_ingest_completion(
+                    plan=plan,
+                    artifact_store=artifact_store,
+                    job_store=job_store,
+                    infra=infra,
+                    msg=msg,
+                    run_id=run_id,
+                    item=item,
+                )
+
         try:
             job = job_store.read_job(run_id)
             if msg.dispatch_id and not job.dispatch_id:
@@ -1007,10 +1187,19 @@ async def handle_ingest_message(
                 job.status = "success" if overall_error is None else "error"
                 job.finished_at = utc_now_iso()
                 job.error = overall_error
-                job.metadata = {
-                    **(job.metadata or {}),
+                metadata_updates: dict[str, Any] = {
                     "total_rows_inserted": total_rows,
                     "finalized_before_ack": overall_error is None,
+                }
+                if msg.ingestion_mode != "fm":
+                    declared_totals = _declared_table_totals(plan)
+                    if declared_totals:
+                        metadata_updates["rows_expected"] = sum(
+                            declared_totals.values(),
+                        )
+                job.metadata = {
+                    **(job.metadata or {}),
+                    **metadata_updates,
                 }
             job_store.upsert_job(job)
         except Exception:
@@ -1635,6 +1824,12 @@ async def _run_dm_mode_inner(
         # Treat it as done (so the message acks) instead of acquiring a lease and
         # raising DuplicateLiveAttempt, which would otherwise churn on short
         # retries even though there is nothing left to ingest.
+        #
+        # Gated on a known declared total (item.row_count): we never short-circuit
+        # to "complete" when the total is unknown. A stalled checkpoint that has
+        # NOT reached row_count falls through to a real ingest, and the
+        # finalization gate (_enforce_ingest_completion) is the backstop that
+        # refuses success if the checkpoint is still short at the end.
         if item.row_count is not None:
             try:
                 existing_ckpt = artifact_store.read_checkpoint(msg.job_id, table_id)

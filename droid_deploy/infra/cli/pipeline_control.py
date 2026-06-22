@@ -15,6 +15,15 @@ Commands:
     inspect  -- Read parse manifests and display table schemas/samples
     reconcile-dlq -- Persist Pub/Sub DLQ messages to GCS and mark jobs visible
     retry    -- Safely re-publish persisted DLQ/stale/error jobs
+    verify   -- Compare declared manifest row_count vs durable checkpoint across
+                a dispatch/job; non-zero exit on any shortfall (audit gate)
+
+WARNING: Do not run ``retry`` and ``recover-stale`` on the same job
+concurrently. Both publish an ingest message; two live messages for one job
+contend for the GCS attempt-lease and can freeze the durable checkpoint,
+leading to a silent under-ingest. Both commands now refuse to publish while a
+recent in-flight message exists (override with ``--force`` only when you are
+certain the prior message is gone).
 
 Usage:
     python -m droid_deploy.infra.cli.pipeline_control submit \\
@@ -38,6 +47,8 @@ Usage:
         --dispatch-id <id> --only dlq --execute
     python -m droid_deploy.infra.cli.pipeline_control recover-stale --env production \\
         --dispatch-id <id> --dry-run
+    python -m droid_deploy.infra.cli.pipeline_control verify --env production \\
+        --dispatch-id <id>
 """
 
 from __future__ import annotations
@@ -350,6 +361,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p_refresh_check.add_argument("--allow-queued", action="store_true")
     p_refresh_check.add_argument("--json", action="store_true")
     p_refresh_check.add_argument("--debug", action="store_true")
+
+    # -- verify --------------------------------------------------------------
+
+    p_verify = sub.add_parser(
+        "verify",
+        help=(
+            "Verify ingest completeness: declared manifest row_count vs durable "
+            "checkpoint rows_committed across a dispatch or job. Exits non-zero "
+            "if any table is short or unverifiable."
+        ),
+    )
+    verify_target = p_verify.add_mutually_exclusive_group(required=True)
+    verify_target.add_argument("--dispatch-id", default=None)
+    verify_target.add_argument("--job-id", default=None)
+    p_verify.add_argument("--env", default="", help="Pipeline environment override")
+    p_verify.add_argument("--project", default="", help="Pub/Sub project override")
+    p_verify.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Treat tables with an unknown declared row_count as failures "
+            "(default: only a checkpoint short of a known total fails)"
+        ),
+    )
+    p_verify.add_argument("--json", action="store_true")
+    p_verify.add_argument("--debug", action="store_true")
 
     return parser
 
@@ -670,6 +707,129 @@ def _table_checkpoint_plan(
     return rows, complete
 
 
+def _verify_jobs(
+    infra,
+    job_ids: list[str],
+    *,
+    strict: bool = False,
+) -> tuple[list[dict], bool]:
+    """Compare each job's declared manifest row_count to its durable checkpoint.
+
+    Returns ``(results, all_ok)``. A job fails when any table's
+    ``rows_committed`` is short of the declared ``row_count`` (the exact
+    fact_TelematicsTrips 166k/206,719 signature), when the manifest cannot be
+    resolved, or - under ``strict`` - when a table has no declared total to
+    verify against. Destination context counts are intentionally left
+    out-of-band to keep this off the worker hot path.
+    """
+    from droid_deploy.infra.gcp.pipeline_observability import list_job_checkpoints
+
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    results: list[dict] = []
+    all_ok = True
+    for job_id in job_ids:
+        try:
+            job = job_store.read_job(job_id)
+            durable_status = str(getattr(job, "status", "") or "")
+        except Exception:
+            durable_status = "unknown"
+        checkpoints = list_job_checkpoints(artifact_store, job_id)
+        payload, payload_source = _read_parse_outbox_payload(artifact_store, job_id)
+        tables, _complete = _table_checkpoint_plan(
+            artifact_store=artifact_store,
+            payload=payload,
+            checkpoints=checkpoints,
+        )
+        if not tables:
+            all_ok = False
+            results.append(
+                {
+                    "job_id": job_id,
+                    "durable_status": durable_status,
+                    "ok": False,
+                    "reason": f"unverifiable (no manifest; payload={payload_source})",
+                    "tables": [],
+                },
+            )
+            continue
+        shorts: list[dict] = []
+        unknown: list[str] = []
+        for row in tables:
+            expected = row["expected_rows"]
+            if expected is None:
+                unknown.append(row["table_id"])
+            elif int(row["rows_committed"]) < int(expected):
+                shorts.append(row)
+        ok = not shorts and (not unknown or not strict)
+        if not ok:
+            all_ok = False
+        reason = ""
+        if shorts:
+            reason = "short: " + "; ".join(
+                f"{r['table_id']} {r['rows_committed']}/{r['expected_rows']}"
+                for r in shorts
+            )
+        elif unknown:
+            reason = "unknown declared row_count: " + ",".join(unknown)
+        results.append(
+            {
+                "job_id": job_id,
+                "durable_status": durable_status,
+                "ok": ok,
+                "reason": reason,
+                "tables": tables,
+            },
+        )
+    return results, all_ok
+
+
+# Freshness window for the in-flight publish guard. A job queued by
+# retry/recover-stale within this window is presumed to still have a live (or
+# about-to-be-delivered) ingest message; publishing a second one creates the
+# duplicate-message lease/checkpoint race that silently under-ingests (the
+# fact_TelematicsTrips 166k/206,719 case). Markers older than the window are
+# treated as a lost message so recovery can proceed without --force.
+_INFLIGHT_GUARD_SECONDS = int(os.environ.get("DROID_INFLIGHT_GUARD_SECONDS", "900"))
+
+
+def _recent_inflight_publish(job: Any, *, now: datetime | None = None) -> str | None:
+    """Return a skip reason if ``job`` has a recent in-flight publish from
+    either ``retry`` or ``recover-stale``; otherwise ``None``.
+
+    This is the cross-command guard: ``retry`` and ``recover-stale`` each only
+    track their own publish marker, so without this a second command would
+    re-publish while the first message is still in flight. Returns a reason
+    while the marker is fresh (status queued/running); stale markers are
+    ignored so a genuinely lost message can still be recovered.
+    """
+    metadata = getattr(job, "metadata", None) or {}
+    status = str(getattr(job, "status", "") or "")
+    if status not in {"queued", "running"}:
+        return None
+    retry_msg = metadata.get("last_retry_message_id")
+    stale_msg = metadata.get("last_stale_recovery_message_id")
+    msg_id = retry_msg or stale_msg
+    if not msg_id:
+        return None
+    published_at = metadata.get("last_publish_at")
+    if published_at:
+        try:
+            ts = datetime.fromisoformat(str(published_at))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            now = now or datetime.now(timezone.utc)
+            if (now - ts).total_seconds() > _INFLIGHT_GUARD_SECONDS:
+                return None  # presumed lost; allow recovery without --force
+        except Exception:
+            pass  # unparseable timestamp -> conservatively treat as in-flight
+    source = "retry" if retry_msg else "recover-stale"
+    return (
+        f"in-flight message {msg_id} from {source} (status={status}); "
+        "use --force to publish anyway"
+    )
+
+
 def _plan_stale_recovery(
     infra,
     job_ids: list[str],
@@ -707,20 +867,9 @@ def _plan_stale_recovery(
             recovery_attempt = (
                 int((job.metadata or {}).get("stale_recovery_attempt", 0)) + 1
             )
-            if (
-                job.status == "queued"
-                and (job.metadata or {}).get("last_stale_recovery_message_id")
-                and not force
-            ):
-                skipped.append(
-                    {
-                        "job_id": job_id,
-                        "reason": (
-                            "already queued by stale recovery message "
-                            f"{job.metadata.get('last_stale_recovery_message_id')}"
-                        ),
-                    },
-                )
+            inflight_reason = _recent_inflight_publish(job)
+            if inflight_reason and not force:
+                skipped.append({"job_id": job_id, "reason": inflight_reason})
                 continue
             if recovery_attempt > max_attempts and not force:
                 skipped.append(
@@ -868,6 +1017,7 @@ async def _execute_stale_recovery(
                     "stale_recovery_source": "parse_outbox",
                     "previous_status": previous_status,
                     "last_stale_recovery_message_id": message_id,
+                    "last_publish_at": utc_now_iso(),
                     "resume_rows": item["resume_rows"],
                     "resume_chunks": item["resume_chunks"],
                 }
@@ -1593,20 +1743,9 @@ async def cmd_retry(args: argparse.Namespace) -> None:
         try:
             job = job_store.read_job(job_id)
             retry_attempt = int((job.metadata or {}).get("retry_attempt", 0)) + 1
-            if (
-                job.status == "queued"
-                and (job.metadata or {}).get("last_retry_message_id")
-                and not args.force
-            ):
-                skipped.append(
-                    {
-                        "job_id": job_id,
-                        "reason": (
-                            "already queued by retry message "
-                            f"{job.metadata.get('last_retry_message_id')}"
-                        ),
-                    },
-                )
+            inflight_reason = _recent_inflight_publish(job)
+            if inflight_reason and not args.force:
+                skipped.append({"job_id": job_id, "reason": inflight_reason})
                 continue
             if retry_attempt > args.max_attempts and not args.force:
                 skipped.append(
@@ -1696,6 +1835,7 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                         "retry_source": "pipeline_control retry",
                         "previous_status": previous_status,
                         "last_retry_message_id": message_id,
+                        "last_publish_at": utc_now_iso(),
                     }
                     job_store.upsert_job(job)
                 write_job_event(
@@ -1812,6 +1952,50 @@ async def cmd_recover_stale(args: argparse.Namespace) -> None:
 async def cmd_reconcile_stale(args: argparse.Namespace) -> None:
     """Cron-friendly bounded stale-running reconciler."""
     await cmd_recover_stale(args)
+
+
+async def cmd_verify(args: argparse.Namespace) -> None:
+    """Verify ingest completeness (declared row_count vs durable checkpoint)."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    if args.job_id:
+        job_ids = [args.job_id]
+    else:
+        job_ids = list(job_store.read_dispatch(args.dispatch_id).job_ids)
+
+    results, all_ok = _verify_jobs(infra, job_ids, strict=args.strict)
+
+    if args.json:
+        print(json.dumps({"ok": all_ok, "results": results}, indent=2, default=str))
+        if not all_ok:
+            sys.exit(1)
+        return
+
+    print(f"Verifying {len(job_ids)} job(s)...", flush=True)
+    for result in results:
+        mark = "OK  " if result["ok"] else "FAIL"
+        suffix = f" {result['reason']}" if result["reason"] else ""
+        print(
+            f"  [{mark}] job={result['job_id']} "
+            f"status={result['durable_status']}{suffix}",
+            flush=True,
+        )
+        for row in result["tables"]:
+            print(
+                f"        table={row['table_id']} "
+                f"rows={row['rows_committed']}/{row['expected_rows']} "
+                f"complete={row['complete']}",
+                flush=True,
+            )
+    ok_count = sum(1 for result in results if result["ok"])
+    print(f"\n{ok_count}/{len(results)} job(s) verified complete.", flush=True)
+    if not all_ok:
+        print(
+            "DISCREPANCY: at least one job is short of its declared row_count.",
+            flush=True,
+        )
+        sys.exit(1)
 
 
 async def cmd_worker_refresh_check(args: argparse.Namespace) -> None:
@@ -2306,6 +2490,7 @@ def main() -> None:
         "worker-refresh-check": cmd_worker_refresh_check,
         "delete": cmd_delete,
         "inspect": cmd_inspect,
+        "verify": cmd_verify,
     }
 
     handler = commands.get(args.command)

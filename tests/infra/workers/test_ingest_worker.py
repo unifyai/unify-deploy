@@ -273,6 +273,11 @@ async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -
             assert key == "jobs/job-1/manifests/demo.json"
             return plan.model_dump(mode="json")
 
+        def read_checkpoint(self, _job_id, _table_id):
+            # A completed ingest leaves a checkpoint matching the declared
+            # row_count so the finalization gate accepts the success.
+            return SimpleNamespace(rows_committed=1, chunks_committed=1)
+
     class _JobStore:
         def __init__(self):
             self.job = SimpleNamespace(
@@ -376,6 +381,254 @@ async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -
 
     assert acked is True
     assert events == ["upsert:success", "ack"]
+    assert infra.job_store.job.metadata.get("rows_expected") == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 0: finalization correctness gate
+# ---------------------------------------------------------------------------
+
+
+def _completion_plan(*, row_count: int) -> IngestPlan:
+    return IngestPlan(
+        run_id="job-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(
+                table_id="table_1",
+                label="table_1",
+                columns=["a"],
+                row_count=row_count,
+            ),
+        ],
+        table_inputs={
+            "table_1": InlineRowsHandle(
+                rows=[{"a": 1}],
+                columns=["a"],
+                row_count=row_count,
+            ),
+        },
+    )
+
+
+def test_declared_table_totals_resolves_meta_and_handle_row_counts() -> None:
+    plan = IngestPlan(
+        run_id="job-x",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(table_id="t_meta", label="t_meta", columns=["a"], row_count=7),
+            TableMeta(table_id="t_handle", label="t_handle", columns=["a"]),
+            TableMeta(table_id="t_unknown", label="t_unknown", columns=["a"]),
+        ],
+        table_inputs={
+            "t_meta": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=7),
+            "t_handle": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=3),
+            "t_unknown": InlineRowsHandle(rows=[{"a": 1}], columns=["a"]),
+        },
+    )
+    totals = ingest_worker._declared_table_totals(plan)
+    # meta.row_count wins for t_meta; handle.row_count is the fallback for
+    # t_handle; t_unknown is omitted because no count is resolvable.
+    assert totals == {"t_meta": 7, "t_handle": 3}
+
+
+def test_incomplete_dm_tables_flags_short_checkpoint() -> None:
+    plan = _completion_plan(row_count=10)
+
+    class _Store:
+        def read_checkpoint(self, _job_id, _table_id):
+            return SimpleNamespace(rows_committed=6, chunks_committed=6)
+
+    shorts = ingest_worker._incomplete_dm_tables(plan, _Store(), "job-1")
+    assert shorts == [("table_1", 6, 10)]
+
+
+def test_incomplete_dm_tables_accepts_complete_checkpoint() -> None:
+    plan = _completion_plan(row_count=10)
+
+    class _Store:
+        def read_checkpoint(self, _job_id, _table_id):
+            return SimpleNamespace(rows_committed=10, chunks_committed=10)
+
+    assert ingest_worker._incomplete_dm_tables(plan, _Store(), "job-1") == []
+
+
+async def _run_completion_gate_message(
+    monkeypatch,
+    *,
+    declared_row_count: int,
+    committed_rows: int,
+    initial_metadata: dict | None = None,
+    max_retries_env: str | None = None,
+):
+    """Drive handle_ingest_message for a DM job whose checkpoint is short.
+
+    Returns ``(events, job_store, captured_events)`` so callers can assert on
+    the finalized job state and the emitted pipeline events.
+    """
+    plan = _completion_plan(row_count=declared_row_count)
+    events: list[str] = []
+    captured_events: list[str] = []
+
+    class _ArtifactStore:
+        def get_json(self, key):
+            return plan.model_dump(mode="json")
+
+        def read_checkpoint(self, _job_id, _table_id):
+            return SimpleNamespace(
+                rows_committed=committed_rows,
+                chunks_committed=committed_rows,
+            )
+
+    class _JobStore:
+        def __init__(self):
+            self.job = SimpleNamespace(
+                job_id="job-1",
+                dispatch_id="dispatch-1",
+                status="running",
+                finished_at=None,
+                error=None,
+                metadata=dict(initial_metadata or {}),
+            )
+
+        def read_job(self, _job_id):
+            return self.job
+
+        def upsert_job(self, job):
+            events.append(f"upsert:{job.status}")
+            self.job = job
+
+    class _Queue:
+        async def is_cancelled(self, _job_id):
+            return False
+
+    class _Ledger:
+        def write(self, _entry):
+            pass
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    class _Watch:
+        is_cancelled = None
+
+        def paused(self):
+            return False
+
+        async def stop(self):
+            pass
+
+    infra = SimpleNamespace(
+        artifact_store=_ArtifactStore(),
+        work_queue=_Queue(),
+        job_store=_JobStore(),
+        run_ledger_factory=lambda _run_id: _Ledger(),
+        cost_ledger_factory=lambda _run_id: _Ledger(),
+        settings=SimpleNamespace(
+            environment="test",
+            pubsub=SimpleNamespace(project_id="proj"),
+        ),
+    )
+    if max_retries_env is not None:
+        monkeypatch.setenv("DROID_INGEST_INCOMPLETE_MAX_RETRIES", max_retries_env)
+    monkeypatch.setattr(worker_utils, "_shutdown_event", None)
+    monkeypatch.setattr(ingest_worker, "_spawn_control_watcher", lambda *_a: _Watch())
+    monkeypatch.setattr(ingest_worker, "_mark_ingest_running", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        ingest_worker,
+        "_stage_remote_handles",
+        lambda plan, **_kwargs: plan,
+    )
+    monkeypatch.setattr(ingest_worker, "_guard_scratch_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        ingest_worker,
+        "_delete_staged_scratch_files",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        ingest_worker,
+        "write_job_event",
+        lambda _store, event: captured_events.append(event.event_type),
+    )
+
+    async def _fake_run_dm_mode(**_kwargs):
+        # Ingest "succeeds" without error, but the checkpoint is short.
+        return committed_rows, None
+
+    monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
+
+    item = SimpleNamespace(
+        payload=IngestRequested(
+            job_id="job-1",
+            dispatch_id="dispatch-1",
+            manifest_key="jobs/job-1/manifests/demo.json",
+            ingestion_mode="dm",
+            dm_binding=DmBinding(
+                user_id="user-1",
+                assistant_id="assistant-1",
+                target_context="ctx",
+            ),
+        ).model_dump(mode="json"),
+        message_id="msg-1",
+        pubsub_message_id="msg-1",
+        delivery_attempt=1,
+        receipt_id="receipt-1",
+        source_subscription="sub",
+    )
+
+    async def _ack():
+        events.append("ack")
+
+    return infra, item, events, captured_events, _ack
+
+
+@pytest.mark.asyncio
+async def test_completion_gate_nacks_when_checkpoint_short(monkeypatch) -> None:
+    """A short checkpoint must block success and nack for a resume."""
+    from droid.common.pipeline.work_queue import RetryWorkItem
+
+    infra, item, events, captured, ack = await _run_completion_gate_message(
+        monkeypatch,
+        declared_row_count=10,
+        committed_rows=6,
+    )
+
+    with pytest.raises(RetryWorkItem):
+        await ingest_worker.handle_ingest_message(item, infra=infra, ack_receipt=ack)
+
+    # Never finalized success, never acked.
+    assert "upsert:success" not in events
+    assert "ack" not in events
+    assert "job_incomplete" in captured
+    job = infra.job_store.job
+    assert job.status == "running"  # kept non-terminal so resume can proceed
+    assert job.metadata.get("incomplete_retry_attempt") == 1
+    assert job.metadata.get("rows_expected") == 10
+
+
+@pytest.mark.asyncio
+async def test_completion_gate_dead_letters_when_budget_exhausted(monkeypatch) -> None:
+    """Once the resume budget is spent, the job errors out instead of looping."""
+    infra, item, events, captured, ack = await _run_completion_gate_message(
+        monkeypatch,
+        declared_row_count=10,
+        committed_rows=6,
+        initial_metadata={"incomplete_retry_attempt": 1},
+        max_retries_env="1",
+    )
+
+    with pytest.raises(RuntimeError, match="ingest incomplete"):
+        await ingest_worker.handle_ingest_message(item, infra=infra, ack_receipt=ack)
+
+    assert "ack" not in events
+    job = infra.job_store.job
+    assert job.status == "error"
+    assert "incomplete" in (job.error or "")
 
 
 @pytest.mark.asyncio
