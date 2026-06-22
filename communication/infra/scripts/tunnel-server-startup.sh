@@ -32,6 +32,15 @@
 # required-labels test; every instance must be created with them. For the
 # staging server (droid-tunnel-server-staging) set environment=staging and
 # keep the other four label values identical.
+#
+# Firewall (one-off, per project — prod and staging):
+#   The rathole control port (7000) and the HTTP pool reach the VM via the
+#   existing allow-tunnel rule + Caddy on 443. Raw-TCP tunnels (SFTP band
+#   61000-61999, see tunnel_config.SFTP_PORT_RANGE_*) are dialled directly and
+#   must be opened explicitly on the allow-tunnel tag:
+#
+#   gcloud compute firewall-rules create allow-tunnel-sftp \
+#     --allow=tcp:61000-61999 --target-tags=allow-tunnel --source-ranges=0.0.0.0/0
 # =============================================================================
 
 set -e
