@@ -69,6 +69,7 @@ from communication.infra.vm_helpers import (
     complete_pool_vm_release,
     find_vm_with_disk,
     POOL_ROLE_RELEASING,
+    reclaim_orphaned_assistant_disk,
     recover_stuck_pool_vm_release,
     release_pool_vm,
     split_binding_runtime_vms,
@@ -1785,6 +1786,34 @@ def _binding_release_state(
                         assistant_id,
                         current_binding_id,
                     )
+                )
+        if disk_vm_name is not None:
+            reclaim_result = reclaim_orphaned_assistant_disk(
+                assistant_id,
+                current_binding_id=current_binding_id,
+            )
+            if reclaim_result.get("detached"):
+                owned_runtime_vms, other_runtime_vms, disk_vm_name = (
+                    _owned_runtime_cleanup_state(
+                        assistant_id,
+                        current_binding_id,
+                    )
+                )
+                emit_observability_event(
+                    "controller.release_state.reclaimed_orphaned_disk",
+                    **_release_observability_fields(
+                        assistant_id=assistant_id,
+                        session_name=session_name,
+                        binding=binding,
+                        source_reason=source_reason,
+                        job_live=job_live,
+                        release_requested_at=release_requested_at,
+                        release_completed_at=release_completed_at,
+                        owned_runtime_vms=owned_runtime_vms,
+                        other_runtime_vms=other_runtime_vms,
+                        disk_vm_name=disk_vm_name,
+                    ),
+                    reclaim_result=reclaim_result,
                 )
         emit_observability_event(
             "controller.release_state.no_vm_ref",

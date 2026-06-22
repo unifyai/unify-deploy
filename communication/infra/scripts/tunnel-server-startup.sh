@@ -23,7 +23,7 @@
 #   gcloud compute instances create droid-tunnel-server \
 #     --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
 #     --machine-type=e2-small --zone=us-central1-a \
-#     --tags=droid-tunnel-server,https-server,http-server,allow-tunnel \
+#     --tags=droid-tunnel-server,https-server,http-server,allow-7000 \
 #     --labels=environment=production,owner=platform,project=droid,dataclassification=confidential,application=tunnel-server \
 #     --metadata-from-file=startup-script=tunnel-server-startup.sh \
 #     --metadata=dns-project=gcp-project-dns,gcs-bucket=droid-tunnel-config,tunnel-domain=tunnel.unify.ai
@@ -32,6 +32,11 @@
 # required-labels test; every instance must be created with them. For the
 # staging server (droid-tunnel-server-staging) set environment=staging and
 # keep the other four label values identical.
+#
+# Firewall (one-off, per project — prod and staging):
+#   Rathole control (7000): allow-7000 tag. HTTP tunnels: https-server/http-server + Caddy.
+#   Raw-TCP tunnels (SFTP band 61000-61999, see tunnel_config.SFTP_PORT_RANGE_*)
+#   bind on the VM but are not opened to 0.0.0.0/0 without an explicit firewall rule.
 # =============================================================================
 
 set -e

@@ -235,7 +235,8 @@ def _decode_team_ids_form(team_ids: str) -> list[int]:
         parsed = json.loads(team_ids)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=400, detail="team_ids must be valid JSON"
+            status_code=400,
+            detail="team_ids must be valid JSON",
         ) from exc
     try:
         return normalize_int_list(parsed, field_name="team_ids")
@@ -1969,6 +1970,7 @@ async def register_tunnel_endpoint(
         user_id=user_id,
         local_port=request_body.local_port,
         name=request_body.name,
+        protocol=request_body.protocol,
     )
     return TunnelRegisterResponse(**result)
 

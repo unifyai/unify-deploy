@@ -1885,45 +1885,95 @@ def delete_assistant_disk(assistant_id: str) -> bool:
 
 
 def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
-    """Detach the attached assistant data disk, if this VM still has one."""
+    """Detach every assistant data disk still attached to this VM.
+
+    A pool VM should hold at most one assistant disk, but a release that idles a
+    VM without detaching its disk can leave the disk stranded; a later assignment
+    then stacks a second assistant disk onto the same VM. Releasing such a VM
+    must clear all of them so no assistant's binding release is left blocked by a
+    disk that ``find_vm_with_disk`` keeps reporting as attached.
+    """
     client = compute_v1.InstancesClient()
     vm = client.get(
         project=SETTINGS.vm_project_id,
         zone=SETTINGS.vm_zone,
         instance=vm_name,
     )
-    attached_disk = None
-    for disk in vm.disks or []:
-        source = getattr(disk, "source", "") or ""
-        if getattr(disk, "boot", False):
-            continue
-        if "/disks/droid-disk-" not in source:
-            continue
-        attached_disk = disk
-        break
-    if attached_disk is None:
+    attached_disks = [
+        disk
+        for disk in vm.disks or []
+        if not getattr(disk, "boot", False)
+        and "/disks/droid-disk-" in (getattr(disk, "source", "") or "")
+    ]
+    if not attached_disks:
         return False, None
 
-    disk_name = (attached_disk.source or "").rsplit("/", 1)[-1]
-    client.detach_disk(
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-        instance=vm_name,
-        device_name=attached_disk.device_name,
-    ).result()
-    logger.info(
-        "Detached assistant disk %s from %s during release completion",
-        disk_name,
-        vm_name,
-    )
+    last_disk_name: Optional[str] = None
+    for attached_disk in attached_disks:
+        disk_name = (attached_disk.source or "").rsplit("/", 1)[-1]
+        client.detach_disk(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+            device_name=attached_disk.device_name,
+        ).result()
+        last_disk_name = disk_name
+        logger.info(
+            "Detached assistant disk %s from %s during release completion",
+            disk_name,
+            vm_name,
+        )
+        _log_vm_pool_event(
+            "detach_disk",
+            vm_name=vm_name,
+            disk_name=disk_name,
+            device_name=attached_disk.device_name,
+            reason="release_complete",
+        )
+    return True, last_disk_name
+
+
+def reclaim_orphaned_assistant_disk(
+    assistant_id: str,
+    *,
+    current_binding_id: str | None = None,
+) -> Dict[str, Any]:
+    """Detach this assistant's disk from a pool VM that no longer owns it.
+
+    Release completion normally detaches the assistant data disk while the VM is
+    still labelled ``releasing``. If a VM is returned to the idle pool (ownership
+    labels cleared) before its disk was detached, the disk is stranded:
+    ``find_vm_with_disk`` keeps reporting it, so the binding release can never
+    complete and the assistant can never be woken again. This reclaims that
+    stranded disk by detaching it directly. It never touches a VM that is
+    actively ``assigned`` (in use by a live binding); those are handled by the
+    normal assignment/release paths.
+    """
+    vm_name = find_vm_with_disk(assistant_id)
+    if not vm_name:
+        return {"detached": False, "reason": "no_attached_disk"}
+
+    owner = _attached_disk_vm_state(vm_name)
+    owner_role = str(owner.get("pool_role", "") or "")
+    if owner_role == "assigned":
+        return {"detached": False, "reason": "vm_assigned", "vm_name": vm_name}
+
+    detached = detach_assistant_disk(vm_name, assistant_id)
     _log_vm_pool_event(
-        "detach_disk",
+        "reclaim_orphaned_disk",
+        assistant_id=assistant_id,
+        binding_id=current_binding_id,
         vm_name=vm_name,
-        disk_name=disk_name,
-        device_name=attached_disk.device_name,
-        reason="release_complete",
+        pool_role=owner_role or None,
+        owner_assistant_id=str(owner.get("assistant_id", "") or "") or None,
+        owner_binding_id=str(owner.get("binding_id", "") or "") or None,
+        detached=detached,
     )
-    return True, disk_name
+    return {
+        "detached": detached,
+        "vm_name": vm_name,
+        "pool_role": owner_role or None,
+    }
 
 
 def _update_instance_metadata(

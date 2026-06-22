@@ -21,7 +21,7 @@ TUNNEL_VM_IMAGE_PROJECT = "ubuntu-os-cloud"
 TUNNEL_VM_DISK_SIZE_GB = 20
 TUNNEL_VM_DISK_TYPE = "pd-ssd"
 TUNNEL_VM_NETWORK = "default"
-TUNNEL_VM_TAGS = ["droid-tunnel-server", "https-server", "http-server", "allow-tunnel"]
+TUNNEL_VM_TAGS = ["droid-tunnel-server", "https-server", "http-server", "allow-7000"]
 TUNNEL_STATIC_IP_NAME = "droid-tunnel-server-ip"
 
 # =============================================================================
@@ -33,8 +33,14 @@ DNS_ZONE_NAME = "unifyai"  # Existing Cloud DNS managed zone in gcp-project-dns
 # Tunnel Relay (rathole) Configuration
 # =============================================================================
 TUNNEL_CONTROL_PORT = 7000  # rathole server control port (clients connect here)
-TUNNEL_PORT_RANGE_START = 10000  # Internal port range for tunnel services
+TUNNEL_PORT_RANGE_START = 10000  # Internal port range for HTTP tunnel services
 TUNNEL_PORT_RANGE_END = 60000
+
+# Dedicated band for raw-TCP tunnels (e.g. SFTP to a user's home). It sits above
+# the HTTP pool so existing allocations need no migration. These ports are opened
+# directly on the tunnel VM firewall and are NOT fronted by Caddy.
+SFTP_PORT_RANGE_START = 61000
+SFTP_PORT_RANGE_END = 61999
 
 # =============================================================================
 # GCS State Storage (blob names only; bucket name is in SETTINGS)

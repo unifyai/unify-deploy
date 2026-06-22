@@ -160,6 +160,7 @@ class TunnelRegisterRequest(BaseModel):
 
     local_port: int = 8080  # Client's local application port
     name: Optional[str] = None  # Optional friendly name for the tunnel
+    protocol: str = "http"  # "http" (Caddy-fronted) or "tcp" (raw TCP, e.g. SFTP)
 
 
 class TunnelRegisterResponse(BaseModel):
@@ -172,6 +173,8 @@ class TunnelRegisterResponse(BaseModel):
     client_token: str  # Secret token for tunnel authentication
     client_config: str  # rathole client TOML config content
     setup_commands: dict[str, str]  # Per-OS commands (keys: "bash", "powershell")
+    tcp_host: Optional[str] = None  # Raw-TCP tunnels only: host to dial
+    tcp_port: Optional[int] = None  # Raw-TCP tunnels only: port to dial
 
 
 class TunnelStatusResponse(BaseModel):

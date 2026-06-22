@@ -30,6 +30,8 @@ from .tunnel_config import (
     TUNNEL_CONTROL_PORT,
     TUNNEL_PORT_RANGE_START,
     TUNNEL_PORT_RANGE_END,
+    SFTP_PORT_RANGE_START,
+    SFTP_PORT_RANGE_END,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,7 +118,11 @@ def _push_server_config(registry: Dict[str, Any]) -> None:
         lines.append(f'token = "{token}"')
         lines.append(f'bind_addr = "0.0.0.0:{internal_port}"')
         lines.append("")
-        port_map[tunnel_id] = internal_port
+        # Only HTTP tunnels are fronted by Caddy. Raw-TCP tunnels (protocol
+        # "tcp", e.g. SFTP) bind a rathole port but get no Caddy reverse-proxy
+        # entry — clients reach them directly at host:port.
+        if tunnel.get("protocol", "http") != "tcp":
+            port_map[tunnel_id] = internal_port
 
     if not registry:
         lines.append("[server.services]")
@@ -154,24 +160,29 @@ def generate_tunnel_token(length: int = 32) -> str:
     return secrets.token_urlsafe(length)
 
 
-def allocate_port(registry: Dict[str, Any]) -> int:
+def allocate_port(registry: Dict[str, Any], protocol: str = "http") -> int:
     """
     Allocate an unused internal port for a new tunnel.
-    Scans the registry to avoid collisions.
+
+    Ports are drawn from a protocol-specific band: HTTP tunnels from the
+    Caddy-fronted pool, raw-TCP tunnels (e.g. SFTP) from a dedicated high band
+    opened directly on the VM firewall. Scans the registry to avoid collisions.
     """
     used_ports = {t["internal_port"] for t in registry.values()}
-    # Start from a random point in the range to reduce clustering
+    if protocol == "tcp":
+        lo, hi = SFTP_PORT_RANGE_START, SFTP_PORT_RANGE_END
+    else:
+        lo, hi = TUNNEL_PORT_RANGE_START, TUNNEL_PORT_RANGE_END
+    # Start from a random point in the band to reduce clustering
     import random
 
-    start = random.randint(TUNNEL_PORT_RANGE_START, TUNNEL_PORT_RANGE_END)
-    for offset in range(TUNNEL_PORT_RANGE_END - TUNNEL_PORT_RANGE_START):
-        port = TUNNEL_PORT_RANGE_START + (
-            (start - TUNNEL_PORT_RANGE_START + offset)
-            % (TUNNEL_PORT_RANGE_END - TUNNEL_PORT_RANGE_START)
-        )
+    span = hi - lo
+    start = random.randint(lo, hi)
+    for offset in range(span):
+        port = lo + ((start - lo + offset) % span)
         if port not in used_ports:
             return port
-    raise RuntimeError("No available ports in tunnel range")
+    raise RuntimeError(f"No available ports in {protocol} tunnel range")
 
 
 # =============================================================================
@@ -246,12 +257,13 @@ def register_tunnel(
     user_id: str,
     local_port: int = 8080,
     name: Optional[str] = None,
+    protocol: str = "http",
 ) -> Dict[str, Any]:
     """
     Register a new tunnel for a user.
 
     1. Generate tunnel_id and token
-    2. Allocate unused internal port
+    2. Allocate unused internal port (from the protocol-specific band)
     3. Add to registry in GCS
     4. Push updated server.toml and port-map.json to GCS
     5. Return response with client config and setup command
@@ -260,6 +272,8 @@ def register_tunnel(
         user_id: The user who owns this tunnel.
         local_port: The port on the client's machine to tunnel to.
         name: Optional friendly name for the tunnel.
+        protocol: "http" (Caddy-fronted, default) or "tcp" (raw TCP, e.g. SFTP;
+            reached directly at host:port with no Caddy and no TLS).
 
     Returns:
         Dict with tunnel details (matches TunnelRegisterResponse).
@@ -272,7 +286,7 @@ def register_tunnel(
         tunnel_id = generate_tunnel_id()
 
     token = generate_tunnel_token()
-    internal_port = allocate_port(registry)
+    internal_port = allocate_port(registry, protocol)
 
     # Store tunnel entry
     registry[tunnel_id] = {
@@ -282,6 +296,7 @@ def register_tunnel(
         "internal_port": internal_port,
         "local_port": local_port,
         "name": name,
+        "protocol": protocol,
         "status": "pending",
         "hostname": get_tunnel_hostname(tunnel_id),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -292,11 +307,11 @@ def register_tunnel(
     _push_server_config(registry)
 
     logger.info(
-        f"Registered tunnel {tunnel_id} for user {user_id} "
+        f"Registered {protocol} tunnel {tunnel_id} for user {user_id} "
         f"(internal port {internal_port})",
     )
 
-    return {
+    response: Dict[str, Any] = {
         "tunnel_id": tunnel_id,
         "hostname": get_tunnel_hostname(tunnel_id),
         "url": get_tunnel_url(tunnel_id),
@@ -305,6 +320,12 @@ def register_tunnel(
         "client_config": generate_client_config(tunnel_id, token, local_port),
         "setup_commands": generate_setup_commands(tunnel_id, token, local_port),
     }
+    if protocol == "tcp":
+        # Raw-TCP tunnels are dialled directly on the shared tunnel host at the
+        # allocated internal port (no Caddy subdomain, no TLS termination).
+        response["tcp_host"] = SETTINGS.tunnel_subdomain
+        response["tcp_port"] = internal_port
+    return response
 
 
 def unregister_tunnel(tunnel_id: str, user_id: str) -> Dict[str, Any]:
