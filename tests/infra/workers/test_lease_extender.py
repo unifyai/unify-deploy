@@ -299,6 +299,72 @@ def test_lease_controller_heartbeat_failures_do_not_stop_extension() -> None:
     assert ledger.attempts == len(queue.calls)
 
 
+def test_lease_controller_surrenders_after_max_lifetime() -> None:
+    """Past ``max_lifetime_s`` the controller stops extending, flags
+    surrender, and nacks (deadline 0) so the message is reclaimable —
+    this is what lets pause/stop reclaim an in-flight chunk."""
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-cap",
+        job_id="job-cap",
+        period_seconds=0.05,
+        extension_seconds=300,
+        max_lifetime_s=0.12,
+    )
+
+    controller.start()
+    time.sleep(0.6)
+
+    assert controller.surrendered is True
+    # At least one real extension fired before the cap was hit.
+    assert any(seconds == 300 for _, seconds in queue.calls)
+    # The final call is the surrender nack (deadline 0) for immediate reclaim.
+    assert queue.calls[-1] == ("rcpt-cap", 0)
+    controller.stop(outcome="nack")
+
+
+def test_lease_controller_surrenders_after_max_extensions() -> None:
+    """``max_extensions`` bounds the number of renewals before surrender."""
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-ext-cap",
+        job_id="job-ext-cap",
+        period_seconds=0.04,
+        extension_seconds=300,
+        max_extensions=2,
+    )
+
+    controller.start()
+    time.sleep(0.6)
+
+    assert controller.surrendered is True
+    assert controller.extensions == 2
+    # Two real extensions, then the surrender nack.
+    assert [s for _, s in queue.calls] == [300, 300, 0]
+    controller.stop(outcome="nack")
+
+
+def test_lease_controller_no_cap_does_not_surrender() -> None:
+    """Without a cap the controller keeps extending and never surrenders
+    (preserves the prior unbounded behavior for opt-out callers)."""
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-nocap",
+        period_seconds=0.04,
+        extension_seconds=300,
+    )
+
+    controller.start()
+    time.sleep(0.2)
+    assert controller.surrendered is False
+    assert len(queue.calls) >= 2
+    assert all(seconds == 300 for _, seconds in queue.calls)
+    controller.stop(outcome="ack")
+
+
 def test_lease_controller_logs_only_receipt_hash(caplog) -> None:
     queue = _StubQueue()
     raw_receipt = "raw-receipt-secret"

@@ -56,6 +56,32 @@ def _parse_expiry_seconds(expires_at: str) -> float | None:
     return (expires - datetime.now(timezone.utc)).total_seconds()
 
 
+def _lease_lifetime_cap() -> tuple[float | None, int | None]:
+    """Resolve the lease-lifetime cap for in-flight ingest messages.
+
+    Defense-in-depth so a single chunk can never hold a message forever
+    (we observed 2.5h / 76 extensions), which is what made pause/stop
+    unable to reclaim an in-flight chunk. The default (30 min) sits well
+    above a healthy chunk time once the O(n^2) counter scan is gone; set
+    ``DROID_INGEST_LEASE_MAX_LIFETIME_S=0`` to disable.
+    """
+    raw_lifetime = os.environ.get("DROID_INGEST_LEASE_MAX_LIFETIME_S", "1800")
+    try:
+        lifetime = float(raw_lifetime)
+    except ValueError:
+        lifetime = 1800.0
+    max_lifetime_s = lifetime if lifetime > 0 else None
+
+    raw_extensions = os.environ.get("DROID_INGEST_LEASE_MAX_EXTENSIONS", "")
+    try:
+        extensions = int(raw_extensions)
+    except ValueError:
+        extensions = 0
+    max_extensions = extensions if extensions > 0 else None
+
+    return max_lifetime_s, max_extensions
+
+
 def _duplicate_defer_seconds(expires_at: str) -> int:
     default_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_SECONDS", "300"))
     max_seconds = int(os.environ.get("DROID_DUPLICATE_DEFER_MAX_SECONDS", "600"))
@@ -64,7 +90,11 @@ def _duplicate_defer_seconds(expires_at: str) -> int:
     if until_expiry is None:
         base = default_seconds
     else:
-        # Wake shortly after the current GCS owner lease should have expired.
+        # Wake shortly after the current GCS owner lease should have expired so
+        # the redelivered duplicate can acquire it instead of thrashing while it
+        # is still held. Pub/Sub caps modify_ack_deadline at 600s, so a lease
+        # TTL above that self-corrects within a couple of redeliveries rather
+        # than in one — bounded by DROID_DUPLICATE_DEFER_MAX_ATTEMPTS.
         base = max(0, int(until_expiry) + 5)
     if base > 0 and jitter_seconds > 0:
         base += random.randint(0, jitter_seconds)
@@ -163,6 +193,7 @@ async def main() -> None:
                                 "persisted heartbeats",
                                 job_id,
                             )
+                    lease_max_lifetime_s, lease_max_extensions = _lease_lifetime_cap()
                     lease_extender = LeaseExtender(
                         work_queue=infra.work_queue,
                         receipt_id=item.receipt_id,
@@ -170,6 +201,8 @@ async def main() -> None:
                         run_ledger=heartbeat_ledger,
                         run_id=job_id or None if heartbeat_ledger else None,
                         stage="ingest" if heartbeat_ledger else None,
+                        max_lifetime_s=lease_max_lifetime_s,
+                        max_extensions=lease_max_extensions,
                     )
                     lease_extender.start()
                     lease_outcome = "error"
@@ -184,6 +217,7 @@ async def main() -> None:
                         acked = await handle_ingest_message(
                             item,
                             infra=infra,
+                            should_surrender=lambda: lease_extender.surrendered,
                             ack_receipt=lambda: (
                                 record_worker_event(
                                     infra,
