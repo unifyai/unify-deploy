@@ -132,6 +132,8 @@ class LeaseController:
         run_id: str | None = None,
         stage: str | None = None,
         max_consecutive_failures: int = 3,
+        max_lifetime_s: float | None = None,
+        max_extensions: int | None = None,
     ):
         self._work_queue = work_queue
         self._receipt_id = receipt_id
@@ -143,6 +145,19 @@ class LeaseController:
         self._run_id = run_id
         self._stage = stage
         self._max_consecutive_failures = max(1, int(max_consecutive_failures))
+        # Lease-lifetime cap (defense-in-depth). When a single message is held
+        # past either bound we stop extending, flag surrender, and nack so the
+        # message becomes reclaimable — this is what lets pause/stop actually
+        # reclaim an in-flight chunk instead of extending the deadline forever.
+        # ``None`` disables the cap (preserves the prior unbounded behavior for
+        # callers that do not opt in).
+        self._max_lifetime_s = (
+            float(max_lifetime_s) if max_lifetime_s and max_lifetime_s > 0 else None
+        )
+        self._max_extensions = (
+            int(max_extensions) if max_extensions and max_extensions > 0 else None
+        )
+        self._surrendered = threading.Event()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._state: Literal[
@@ -232,6 +247,15 @@ class LeaseController:
     def state(self) -> str:
         return self._state
 
+    @property
+    def surrendered(self) -> bool:
+        """True once the lifetime cap was hit and the lease was surrendered.
+
+        Worker bodies poll this at a safe boundary (e.g. between chunks) and
+        unwind cleanly so the message can be reclaimed for pause/stop.
+        """
+        return self._surrendered.is_set()
+
     def _write_heartbeat(self, elapsed: float) -> None:
         """Append a liveness record to the heartbeat ledger.
 
@@ -286,6 +310,34 @@ class LeaseController:
                     late_by,
                 )
             next_tick = now + self._period_s
+
+            # Enforce the lifetime cap BEFORE extending again. Once exceeded we
+            # stop renewing the deadline, flag surrender (so the worker body can
+            # unwind at its next safe boundary), nack for immediate redelivery,
+            # and exit the loop. The durable checkpoint makes resume safe.
+            elapsed = now - self._started_at
+            over_lifetime = (
+                self._max_lifetime_s is not None and elapsed >= self._max_lifetime_s
+            )
+            over_extensions = (
+                self._max_extensions is not None
+                and self._extensions >= self._max_extensions
+            )
+            if over_lifetime or over_extensions:
+                logger.warning(
+                    "Lease lifetime cap reached (job=%s receipt_hash=%s "
+                    "elapsed=%.0fs extensions=%d max_lifetime_s=%s "
+                    "max_extensions=%s) — surrendering for reclaim",
+                    self._job_id or "?",
+                    self._receipt_hash,
+                    elapsed,
+                    self._extensions,
+                    self._max_lifetime_s,
+                    self._max_extensions,
+                )
+                self._surrendered.set()
+                self.nack_now(reason="lease:max_lifetime")
+                return
 
             try:
                 extend_started = time.monotonic()

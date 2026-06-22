@@ -867,6 +867,7 @@ async def handle_ingest_message(
     *,
     infra: WorkerInfra,
     ack_receipt: Callable[[], Awaitable[None]] | None = None,
+    should_surrender: Callable[[], bool] | None = None,
 ) -> bool:
     """Process one ``IngestRequested`` message end-to-end.
 
@@ -989,6 +990,7 @@ async def handle_ingest_message(
                     infra=infra,
                     run_ledger=run_ledger,
                     is_cancelled=check_cancelled,
+                    should_surrender=should_surrender,
                 )
             _delete_staged_scratch_files(scratch_dir, run_id=run_id)
             _guard_scratch_usage(
@@ -1447,6 +1449,7 @@ async def _run_dm_mode(
     infra: WorkerInfra,
     run_ledger,
     is_cancelled: CancellationCheck | None = None,
+    should_surrender: Callable[[], bool] | None = None,
 ) -> tuple[int, str | None]:
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
@@ -1480,6 +1483,7 @@ async def _run_dm_mode(
             default_target=default_target,
             activate_unify_context=activate_unify_context,
             is_cancelled=is_cancelled,
+            should_surrender=should_surrender,
         )
 
 
@@ -1493,6 +1497,7 @@ async def _run_dm_mode_inner(
     default_target: str,
     activate_unify_context,
     is_cancelled: CancellationCheck | None = None,
+    should_surrender: Callable[[], bool] | None = None,
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
     from droid.data_manager import DataManager
@@ -1623,10 +1628,39 @@ async def _run_dm_mode_inner(
 
     def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
         pl = item.payload
+        table_id = pl.get("table_id", "")
+
+        # Duplicate-delivery fast path: if this table is already fully committed
+        # per the durable checkpoint, a redelivered message has no work to do.
+        # Treat it as done (so the message acks) instead of acquiring a lease and
+        # raising DuplicateLiveAttempt, which would otherwise churn on short
+        # retries even though there is nothing left to ingest.
+        if item.row_count is not None:
+            try:
+                existing_ckpt = artifact_store.read_checkpoint(msg.job_id, table_id)
+            except Exception:
+                existing_ckpt = None
+            if (
+                existing_ckpt is not None
+                and existing_ckpt.rows_committed >= item.row_count
+            ):
+                logger.info(
+                    "[ingest] Table already complete (rows_committed=%s >= "
+                    "total=%s); acking duplicate for job=%s table=%s",
+                    existing_ckpt.rows_committed,
+                    item.row_count,
+                    msg.job_id,
+                    table_id,
+                )
+                return {
+                    "row_count": int(existing_ckpt.rows_committed),
+                    "already_complete": True,
+                }
+
         lease = _acquire_ingest_lease(
             artifact_store,
             job_id=msg.job_id,
-            table_id=pl.get("table_id", ""),
+            table_id=table_id,
             attempt_id=pl.get("attempt_id", ""),
         )
         pl["lease"] = lease
@@ -1635,6 +1669,20 @@ async def _run_dm_mode_inner(
             if is_cancelled and is_cancelled():
                 raise PipelineCancelled(
                     f"Job {msg.job_id} cancelled before next DM chunk",
+                )
+            # The Pub/Sub lease hit its lifetime cap and was surrendered
+            # (nacked) by the LeaseController. Unwind at this safe between-chunk
+            # boundary so the message is reclaimed and resumes from the durable
+            # checkpoint, instead of holding the lease open indefinitely. Raise
+            # RetryWorkItem (not a generic error) so the entrypoint redelivers
+            # rather than dead-lettering.
+            if should_surrender and should_surrender():
+                raise RetryWorkItem(
+                    f"Job {msg.job_id} surrendering in-flight chunk: lease "
+                    "lifetime cap reached; will resume from checkpoint",
+                    delay_seconds=float(
+                        os.environ.get("DROID_INGEST_SURRENDER_RETRY_SECONDS", "30"),
+                    ),
                 )
             _refresh_ingest_lease(artifact_store, lease)
 
