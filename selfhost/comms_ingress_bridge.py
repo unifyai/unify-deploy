@@ -100,14 +100,19 @@ class GmailAdapter:
                 ],
                 subject=self._mailbox,
             )
-            self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+            self._service = build(
+                "gmail", "v1", credentials=creds, cache_discovery=False
+            )
         return self._service
 
     def poll(self, since_ms: int, seen: set[str]) -> int:
         service = self._gmail()
         query = f"in:inbox after:{since_ms // 1000}"
         listing = (
-            service.users().messages().list(userId="me", q=query, maxResults=25).execute()
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=25)
+            .execute()
         )
         delivered = 0
         for entry in listing.get("messages", []):
@@ -145,7 +150,9 @@ def _email_body(message: Message) -> str:
                     continue
                 if part.get_content_type() == content_type:
                     payload = part.get_payload(decode=True) or b""
-                    return payload.decode(part.get_content_charset() or "utf-8", "replace")
+                    return payload.decode(
+                        part.get_content_charset() or "utf-8", "replace"
+                    )
         return ""
     payload = message.get_payload(decode=True) or b""
     return payload.decode(message.get_content_charset() or "utf-8", "replace")
@@ -281,9 +288,7 @@ class TwilioAdapter:
 def _build_adapters() -> list:
     adapters: list = [GmailAdapter()]
     allowlist = {
-        n.strip()
-        for n in _env("COMMS_BRIDGE_TWILIO_ALLOWLIST").split(",")
-        if n.strip()
+        n.strip() for n in _env("COMMS_BRIDGE_TWILIO_ALLOWLIST").split(",") if n.strip()
     }
     twilio_configured = bool(_env("TWILIO_ACCOUNT_SID") and _env("TWILIO_AUTH_TOKEN"))
     if twilio_configured and not allowlist:
