@@ -110,7 +110,7 @@ class GmailAdapter:
 
     def poll(self, since_ms: int, seen: set[str]) -> int:
         service = self._gmail()
-        query = f"in:inbox after:{since_ms // 1000}"
+        query = f"in:inbox is:unread after:{since_ms // 1000}"
         listing = (
             service.users()
             .messages()
@@ -128,14 +128,23 @@ class GmailAdapter:
                 .get(userId="me", id=gmail_id, format="raw")
                 .execute()
             )
-            if int(fetched.get("internalDate", "0")) < since_ms:
+            internal_ms = int(fetched.get("internalDate", "0"))
+            if internal_ms < since_ms:
                 seen.add(gmail_id)
                 continue
             message = message_from_bytes(
                 base64.urlsafe_b64decode(fetched["raw"].encode("ascii")),
             )
-            _post("/local/comms/envelope", _email_envelope(message))
             seen.add(gmail_id)
+            if _message_from_mailbox(message, self._mailbox):
+                _mark_gmail_read(service, gmail_id)
+                print(
+                    f"[bridge] skipped self email subject={message.get('Subject','')!r}",
+                    flush=True,
+                )
+                continue
+            _post("/local/comms/envelope", _email_envelope(message, internal_ms))
+            _mark_gmail_read(service, gmail_id)
             delivered += 1
             print(
                 f"[bridge] email from={message.get('From','')!r} "
@@ -162,14 +171,31 @@ def _email_body(message: Message) -> str:
     return payload.decode(message.get_content_charset() or "utf-8", "replace")
 
 
+def _mark_gmail_read(service, gmail_id: str) -> None:
+    service.users().messages().modify(
+        userId="me",
+        id=gmail_id,
+        body={"removeLabelIds": ["UNREAD"]},
+    ).execute()
+
+
 def _email_recipients(header_value: str | None) -> list[str]:
     if not header_value:
         return []
     return [addr for _, addr in getaddresses([header_value]) if addr]
 
 
-def _email_envelope(message: Message) -> dict:
-    return {
+def _message_from_mailbox(message: Message, mailbox: str) -> bool:
+    mailbox_lower = mailbox.strip().lower()
+    if not mailbox_lower:
+        return False
+    return any(
+        addr.lower() == mailbox_lower for addr in _email_recipients(message.get("From"))
+    )
+
+
+def _email_envelope(message: Message, internal_ms: int | None = None) -> dict:
+    envelope = {
         "thread": "email",
         "event": {
             "from": message.get("From", ""),
@@ -182,6 +208,9 @@ def _email_envelope(message: Message) -> dict:
             "bcc": _email_recipients(message.get("Bcc")),
         },
     }
+    if internal_ms is not None:
+        envelope["publish_timestamp"] = internal_ms / 1000
+    return envelope
 
 
 # --------------------------------------------------------------------------- #
