@@ -32,6 +32,7 @@ Adapters & env:
     COMMS_BRIDGE_INGRESS_URL  CM local ingress base (default
                               ``http://127.0.0.1:8787``).
     COMMS_BRIDGE_POLL_SECONDS Poll interval (default ``10``).
+    GMAIL_BRIDGE_POLL_SECONDS Gmail poll interval (default ``2``).
     COMMS_BRIDGE_LOOKBACK_SECONDS  Only forward items newer than now minus this
                               (default ``0`` = since bridge start).
 """
@@ -79,6 +80,8 @@ class GmailAdapter:
             Path.home() / ".droid" / "comms_sa.json",
         )
         self._service = None
+        self._history_id: str | None = None
+        self.poll_interval = float(_env("GMAIL_BRIDGE_POLL_SECONDS", "2"))
 
     def configured(self) -> bool:
         return bool(self._mailbox and Path(self._sa_file).is_file())
@@ -110,6 +113,24 @@ class GmailAdapter:
 
     def poll(self, since_ms: int, seen: set[str]) -> int:
         service = self._gmail()
+        if self._history_id is None:
+            self._history_id = _gmail_current_history_id(service)
+            return self._poll_unread_since(service, since_ms, seen)
+
+        try:
+            return self._poll_history(service, since_ms, seen)
+        except Exception as exc:
+            if _is_expired_gmail_history(exc):
+                print(
+                    "[bridge] Gmail history cursor expired; falling back to unread search",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._history_id = _gmail_current_history_id(service)
+                return self._poll_unread_since(service, since_ms, seen)
+            raise
+
+    def _poll_unread_since(self, service, since_ms: int, seen: set[str]) -> int:
         query = f"in:inbox is:unread after:{since_ms // 1000}"
         listing = (
             service.users()
@@ -119,39 +140,78 @@ class GmailAdapter:
         )
         delivered = 0
         for entry in listing.get("messages", []):
-            gmail_id = entry["id"]
-            if gmail_id in seen:
-                continue
-            fetched = (
-                service.users()
-                .messages()
-                .get(userId="me", id=gmail_id, format="raw")
-                .execute()
-            )
-            internal_ms = int(fetched.get("internalDate", "0"))
-            if internal_ms < since_ms:
-                seen.add(gmail_id)
-                continue
-            message = message_from_bytes(
-                base64.urlsafe_b64decode(fetched["raw"].encode("ascii")),
-            )
+            if self._process_gmail_message(service, entry["id"], since_ms, seen):
+                delivered += 1
+        return delivered
+
+    def _poll_history(self, service, since_ms: int, seen: set[str]) -> int:
+        delivered = 0
+        page_token = None
+        latest_history_id = self._history_id
+        while True:
+            kwargs = {
+                "userId": "me",
+                "startHistoryId": self._history_id,
+                "historyTypes": ["messageAdded"],
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            request = service.users().history().list(**kwargs)
+            response = request.execute()
+            latest_history_id = response.get("historyId") or latest_history_id
+            for history in response.get("history", []):
+                for gmail_id in _history_message_ids(history):
+                    if self._process_gmail_message(service, gmail_id, since_ms, seen):
+                        delivered += 1
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        self._history_id = (
+            str(latest_history_id) if latest_history_id else self._history_id
+        )
+        return delivered
+
+    def _process_gmail_message(
+        self,
+        service,
+        gmail_id: str,
+        since_ms: int,
+        seen: set[str],
+    ) -> bool:
+        if gmail_id in seen:
+            return False
+        fetched = (
+            service.users()
+            .messages()
+            .get(userId="me", id=gmail_id, format="raw")
+            .execute()
+        )
+        internal_ms = int(fetched.get("internalDate", "0"))
+        if internal_ms < since_ms:
             seen.add(gmail_id)
-            if _message_from_mailbox(message, self._mailbox):
-                _mark_gmail_read(service, gmail_id)
-                print(
-                    f"[bridge] skipped self email subject={message.get('Subject','')!r}",
-                    flush=True,
-                )
-                continue
-            _post("/local/comms/envelope", _email_envelope(message, internal_ms))
+            return False
+        if "UNREAD" not in fetched.get("labelIds", []):
+            seen.add(gmail_id)
+            return False
+        message = message_from_bytes(
+            base64.urlsafe_b64decode(fetched["raw"].encode("ascii")),
+        )
+        seen.add(gmail_id)
+        if _message_from_mailbox(message, self._mailbox):
             _mark_gmail_read(service, gmail_id)
-            delivered += 1
             print(
-                f"[bridge] email from={message.get('From','')!r} "
-                f"subject={message.get('Subject','')!r}",
+                f"[bridge] skipped self email subject={message.get('Subject','')!r}",
                 flush=True,
             )
-        return delivered
+            return False
+        _post("/local/comms/envelope", _email_envelope(message, internal_ms))
+        _mark_gmail_read(service, gmail_id)
+        print(
+            f"[bridge] email from={message.get('From','')!r} "
+            f"subject={message.get('Subject','')!r}",
+            flush=True,
+        )
+        return True
 
 
 def _email_body(message: Message) -> str:
@@ -177,6 +237,31 @@ def _mark_gmail_read(service, gmail_id: str) -> None:
         id=gmail_id,
         body={"removeLabelIds": ["UNREAD"]},
     ).execute()
+
+
+def _gmail_current_history_id(service) -> str:
+    profile = service.users().getProfile(userId="me").execute()
+    return str(profile.get("historyId", ""))
+
+
+def _history_message_ids(history: dict) -> list[str]:
+    ids: list[str] = []
+    for entry in history.get("messagesAdded", []):
+        message = entry.get("message", {})
+        gmail_id = message.get("id")
+        if gmail_id:
+            ids.append(gmail_id)
+    for message in history.get("messages", []):
+        gmail_id = message.get("id")
+        if gmail_id:
+            ids.append(gmail_id)
+    return ids
+
+
+def _is_expired_gmail_history(exc: Exception) -> bool:
+    response = getattr(exc, "resp", None) or getattr(exc, "response", None)
+    status = getattr(response, "status", None) or getattr(response, "status_code", None)
+    return int(status or 0) in {400, 404}
 
 
 def _email_recipients(header_value: str | None) -> list[str]:
@@ -233,6 +318,7 @@ class TwilioAdapter:
         self._allowlist = allowlist
         self._wa = channel == "whatsapp"
         self._client = None
+        self.poll_interval = float(_env("COMMS_BRIDGE_POLL_SECONDS", "10"))
 
     def _creds(self) -> tuple[str, str]:
         # WhatsApp is a distinct Twilio account from SMS/voice; fall back to the
@@ -340,7 +426,6 @@ def _build_adapters() -> list:
 
 
 def main() -> None:
-    interval = float(_env("COMMS_BRIDGE_POLL_SECONDS", "10"))
     lookback = float(_env("COMMS_BRIDGE_LOOKBACK_SECONDS", "0"))
     since_ms = int((time.time() - lookback) * 1000)
     adapters = _build_adapters()
@@ -349,13 +434,17 @@ def main() -> None:
         return
     print(
         f"[bridge] polling {', '.join(a.describe() for a in adapters)} -> "
-        f"{_ingress_url()} every {interval:g}s; forwarding items newer than "
+        f"{_ingress_url()}; forwarding items newer than "
         f"{datetime.fromtimestamp(since_ms / 1000)}",
         flush=True,
     )
     seen: dict[str, set[str]] = {a.name: set() for a in adapters}
+    next_poll_at: dict[str, float] = {a.name: 0 for a in adapters}
     while True:
+        now = time.time()
         for adapter in adapters:
+            if now < next_poll_at[adapter.name]:
+                continue
             try:
                 adapter.poll(since_ms, seen[adapter.name])
             except Exception as exc:  # keep the bridge alive across transient errors
@@ -364,7 +453,12 @@ def main() -> None:
                     file=sys.stderr,
                     flush=True,
                 )
-        time.sleep(interval)
+            finally:
+                next_poll_at[adapter.name] = now + getattr(adapter, "poll_interval", 10)
+        sleep_for = min(
+            max(next_poll_at[name] - time.time(), 0.25) for name in next_poll_at
+        )
+        time.sleep(sleep_for)
 
 
 if __name__ == "__main__":
