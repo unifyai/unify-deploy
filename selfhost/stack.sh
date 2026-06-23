@@ -659,6 +659,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -730,13 +731,20 @@ api_key = credentials.get("apiKey") or credentials.get("api_key")
 assistant_id = credentials.get("coordinatorAgentId") or credentials.get("coordinator_agent_id")
 if api_key and assistant_id:
     auth_headers = {"apiKey": str(api_key)}
+    catalog_query = urllib.parse.urlencode(
+        {
+            "projectName": "Builtins",
+            "context": "Integrations/Apps",
+            "limit": "1",
+            "offset": "0",
+            "fromFields": "canonical_app_slug,display_name,source_type",
+            "sorting": json.dumps({"display_name": "ascending"}),
+        }
+    )
     check(
         "Integration catalog",
         "GET",
-        (
-            f"{console}/api/integrations/provider/apps"
-            f"?owner_scope=assistant&assistant_id={assistant_id}&limit=100&offset=0&detail_level=summary"
-        ),
+        f"{console}/api/logs?{catalog_query}",
         {200},
         headers=auth_headers,
     )
