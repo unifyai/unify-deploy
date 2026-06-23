@@ -12,6 +12,9 @@ set -euo pipefail
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
 SELF_HOST_COORDINATOR_VOICE_PROVIDER="${SELF_HOST_COORDINATOR_VOICE_PROVIDER:-elevenlabs}"
 SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53GoZ742B}"
+SELF_HOST_COORDINATOR_EMAIL_ADDRESS="${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:-local-twin@unify.ai}"
+SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
+SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in droid-deploy/deploy/selfhost/.
@@ -40,9 +43,28 @@ ensure_self_host_workspace_dir() {
   mkdir -p "$workspace"
 }
 
+self_host_export_coordinator_contact_env() {
+  # The local Coordinator uses fixed, shared contact identities so every
+  # developer's localhost deployment converges on the same Twin contact rows.
+  export DROID_COORDINATOR_EMAIL_ADDRESS="$SELF_HOST_COORDINATOR_EMAIL_ADDRESS"
+  export ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS="${ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS:-$DROID_COORDINATOR_EMAIL_ADDRESS}"
+
+  export DROID_COORDINATOR_PHONE_US="$SELF_HOST_COORDINATOR_PHONE_US"
+  export ORCHESTRA_DROID_COORDINATOR_PHONE_US="${ORCHESTRA_DROID_COORDINATOR_PHONE_US:-$DROID_COORDINATOR_PHONE_US}"
+  export DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY="$SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY"
+  export ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY="${ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY:-$DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY}"
+
+  export DROID_COORDINATOR_PHONE="${SELF_HOST_COORDINATOR_PHONE:-$DROID_COORDINATOR_PHONE_US}"
+  export ASSISTANT_NUMBER="$DROID_COORDINATOR_PHONE"
+  export COMMS_BRIDGE_SMS_NUMBER="$DROID_COORDINATOR_PHONE"
+}
+
+self_host_export_coordinator_contact_env
+
 load_self_host_env_file() {
   local env_file="${1:-}"
   if [[ -z "$env_file" || ! -f "$env_file" ]]; then
+    self_host_export_coordinator_contact_env
     return 0
   fi
   # Parse KEY=VALUE lines only — never `source` the whole file, which breaks on
@@ -90,6 +112,7 @@ PYEOF
     # shellcheck disable=SC1090
     eval "$exports"
   fi
+  self_host_export_coordinator_contact_env
 }
 
 self_host_export_comms_sa() {
@@ -119,12 +142,9 @@ self_host_export_comms_twilio() {
   twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_twilio.env}"
   [[ -f "$twilio_file" ]] || return 0
   load_self_host_env_file "$twilio_file"
-  # Surface the Coordinator numbers to both the assistant identity (outbound,
-  # like the hosted assignment event) and the comms bridge (inbound poll target).
-  if [[ -n "${DROID_COORDINATOR_PHONE:-}" ]]; then
-    export ASSISTANT_NUMBER="${ASSISTANT_NUMBER:-$DROID_COORDINATOR_PHONE}"
-    export COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-$DROID_COORDINATOR_PHONE}"
-  fi
+  # Twilio credentials live in the local state file; Coordinator numbers come
+  # from the canonical self-host contact env above.
+  self_host_export_coordinator_contact_env
   if [[ -n "${DROID_COORDINATOR_WHATSAPP_NUMBER:-}" ]]; then
     export ASSISTANT_WHATSAPP_NUMBER="${ASSISTANT_WHATSAPP_NUMBER:-$DROID_COORDINATOR_WHATSAPP_NUMBER}"
     export COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-$DROID_COORDINATOR_WHATSAPP_NUMBER}"
