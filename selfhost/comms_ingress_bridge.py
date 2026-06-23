@@ -76,7 +76,7 @@ class GmailAdapter:
     def __init__(self) -> None:
         self._mailbox = _env("GMAIL_BRIDGE_MAILBOX")
         self._sa_file = _env("GMAIL_BRIDGE_SA_FILE") or str(
-            Path.home() / ".droid" / "comms_sa.json"
+            Path.home() / ".droid" / "comms_sa.json",
         )
         self._service = None
 
@@ -101,7 +101,10 @@ class GmailAdapter:
                 subject=self._mailbox,
             )
             self._service = build(
-                "gmail", "v1", credentials=creds, cache_discovery=False
+                "gmail",
+                "v1",
+                credentials=creds,
+                cache_discovery=False,
             )
         return self._service
 
@@ -129,9 +132,9 @@ class GmailAdapter:
                 seen.add(gmail_id)
                 continue
             message = message_from_bytes(
-                base64.urlsafe_b64decode(fetched["raw"].encode("ascii"))
+                base64.urlsafe_b64decode(fetched["raw"].encode("ascii")),
             )
-            _post("/local/comms/email", _email_envelope(message))
+            _post("/local/comms/envelope", _email_envelope(message))
             seen.add(gmail_id)
             delivered += 1
             print(
@@ -151,7 +154,8 @@ def _email_body(message: Message) -> str:
                 if part.get_content_type() == content_type:
                     payload = part.get_payload(decode=True) or b""
                     return payload.decode(
-                        part.get_content_charset() or "utf-8", "replace"
+                        part.get_content_charset() or "utf-8",
+                        "replace",
                     )
         return ""
     payload = message.get_payload(decode=True) or b""
@@ -301,7 +305,7 @@ def _build_adapters() -> list:
         )
     adapters.append(TwilioAdapter("sms", _env("COMMS_BRIDGE_SMS_NUMBER"), allowlist))
     adapters.append(
-        TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER"), allowlist)
+        TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER"), allowlist),
     )
     return [a for a in adapters if a.configured()]
 
