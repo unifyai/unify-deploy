@@ -377,6 +377,8 @@ class TwilioAdapter:
             if sender not in self._allowlist:
                 continue
             _post("/local/comms/envelope", self._envelope(msg, sender))
+            if self._wa:
+                self._touch_inbound_window(sender)
             seen.add(msg.sid)
             delivered += 1
             print(
@@ -384,6 +386,30 @@ class TwilioAdapter:
                 flush=True,
             )
         return delivered
+
+    def _touch_inbound_window(self, sender: str) -> None:
+        """Tell Orchestra an inbound arrived so the WhatsApp 24h free-form window
+        opens for this (pool, sender).
+
+        The hosted adapter resolves every inbound via Orchestra, which records
+        ``last_inbound_at``; self-host delivers inbound by polling and dispatches
+        routing locally, so this best-effort call exists purely for that
+        side-effect. It never blocks ingest — a failed touch only means the next
+        reply may fall back to a template.
+        """
+        admin_key = _env("ORCHESTRA_ADMIN_KEY")
+        if not admin_key:
+            return
+        base = _env("ORCHESTRA_URL", "http://127.0.0.1:8000/v0").rstrip("/")
+        try:
+            requests.get(
+                f"{base}/admin/whatsapp/resolve",
+                params={"pool_number": self._number, "sender": sender},
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=10,
+            )
+        except Exception as exc:  # best-effort: never block inbound forwarding
+            print(f"[bridge] whatsapp window touch failed: {exc}", flush=True)
 
     def _envelope(self, msg, sender: str) -> dict:
         thread = "whatsapp" if self._wa else "msg"

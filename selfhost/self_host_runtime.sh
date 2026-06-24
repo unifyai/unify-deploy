@@ -164,11 +164,16 @@ self_host_ensure_comms_bridge() {
   # Email channel keys off the comms SA + Coordinator mailbox; Twilio channels
   # key off TWILIO_* + the Coordinator numbers + an explicit sender allowlist
   # (all inherited from the exported env). TWILIO_* are already in the env.
+  # ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY let the bridge open the WhatsApp 24h
+  # free-form window in Orchestra on inbound (best-effort), mirroring the hosted
+  # adapter; without them every Coordinator reply falls back to a template.
   GMAIL_BRIDGE_MAILBOX="${DROID_COORDINATOR_EMAIL_ADDRESS:-}" \
     GMAIL_BRIDGE_SA_FILE="$(self_host_comms_sa_file)" \
     COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${DROID_COORDINATOR_PHONE:-}}" \
     COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${DROID_COORDINATOR_WHATSAPP_NUMBER:-}}" \
     COMMS_BRIDGE_TWILIO_ALLOWLIST="${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" \
+    ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}" \
+    ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     nohup "$py" "$script" >>"$log_file" 2>&1 &
   local pid=$!
   disown "$pid" 2>/dev/null || true
