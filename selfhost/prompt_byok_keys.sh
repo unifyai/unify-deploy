@@ -383,6 +383,101 @@ prompt_tts_provider() {
   ensure_voice_provider_from_keys
 }
 
+_calls_enabled() {
+  case "${SELF_HOST_CALLS_ENABLED:-0}" in
+    1 | true | TRUE | yes | YES | on | ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+livekit_cloud_file() {
+  printf '%s' "${SELF_HOST_LIVEKIT_CLOUD_FILE:-$DROID_HOME/livekit_cloud.env}"
+}
+
+file_has_key() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] && grep -qE "^${key}=.+$" "$file"
+}
+
+upsert_file_kv() {
+  local file="$1" key="$2" val="$3"
+  val="${val//$'\n'/}"
+  val="${val//$'\r'/}"
+  mkdir -p "$(dirname "$file")"
+  if [[ ! -f "$file" ]]; then
+    touch "$file"
+    chmod 600 "$file" 2>/dev/null || true
+  fi
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    python3 - "$file" "$key" "$val" <<'PYEOF'
+import re
+import sys
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    lines = f.readlines()
+pat = re.compile(rf'^{re.escape(key)}=')
+for i, line in enumerate(lines):
+    if pat.match(line):
+        lines[i] = f'{key}={val}\n'
+        break
+else:
+    lines.append(f'{key}={val}\n')
+with open(path, 'w') as f:
+    f.writelines(lines)
+PYEOF
+  else
+    printf '%s=%s\n' "$key" "$val" >>"$file"
+  fi
+}
+
+prompt_to_file() {
+  local label="$1" var="$2" hint="$3" file="$4" value=""
+  if file_has_key "$file" "$var"; then
+    log_success "$var already set"
+    return 0
+  fi
+  if [[ "$NON_INTERACTIVE" == "true" ]] || [[ ! -r /dev/tty ]] || [[ ! -w /dev/tty ]]; then
+    log_warn "$var not set — add it to $file"
+    log_info "  $hint"
+    return 0
+  fi
+  echo "" >/dev/tty
+  echo -e "${BOLD}$label${NC}" >/dev/tty
+  echo "  $hint" >/dev/tty
+  printf "Paste %s (Enter to skip): " "$var" >/dev/tty
+  IFS= read -r value </dev/tty || value=""
+  if [[ -z "$value" ]]; then
+    log_warn "Skipped $var"
+    return 0
+  fi
+  upsert_file_kv "$file" "$var" "$value"
+  log_success "Wrote $var to $file"
+}
+
+prompt_call_support() {
+  # Opt-in: phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go
+  # to the self-host state dir (never droid/.env), so they are loaded only when
+  # SELF_HOST_CALLS_ENABLED is set. No-op otherwise.
+  _calls_enabled || return 0
+  local file
+  file="$(livekit_cloud_file)"
+  echo ""
+  echo -e "${BOLD}Phone & WhatsApp calls (opt-in) — LiveKit Cloud SIP${NC}"
+  echo "  Inbound calls bridge Twilio -> LiveKit Cloud SIP (the local dev LiveKit"
+  echo "  used for browser meet has no SIP). Create a LiveKit Cloud project at"
+  echo "  https://cloud.livekit.io, enable SIP, and paste its credentials."
+  echo "  Stored in $file (chmod 600, never committed)."
+  prompt_to_file "LiveKit Cloud URL" "LIVEKIT_URL" \
+    "wss://<project>.livekit.cloud" "$file"
+  prompt_to_file "LiveKit API Key" "LIVEKIT_API_KEY" \
+    "From LiveKit Cloud project settings" "$file"
+  prompt_to_file "LiveKit API Secret" "LIVEKIT_API_SECRET" \
+    "From LiveKit Cloud project settings" "$file"
+  prompt_to_file "LiveKit SIP URI" "LIVEKIT_SIP_URI" \
+    "SIP domain, e.g. <project>.sip.livekit.cloud" "$file"
+  echo ""
+}
+
 import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
@@ -472,6 +567,7 @@ main() {
 
   prompt_research_and_computer
   prompt_app_integrations
+  prompt_call_support
   mark_byok_configured
 }
 

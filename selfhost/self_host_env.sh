@@ -32,6 +32,15 @@ SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
 SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"
 SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
 
+# Inbound/outbound phone & WhatsApp calls are opt-in. Unlike text (which the
+# comms ingress bridge polls), a call is synchronous: Twilio POSTs the number's
+# voice webhook and needs TwiML back in seconds, so calls need a live public
+# webhook (a cloudflared tunnel to the local CM ingress) and a LiveKit Cloud SIP
+# trunk for the media leg (the local `livekit-server --dev` used for browser meet
+# has no SIP service). When disabled (default) the stack stays poll-only and the
+# localhost numbers keep cleared voice webhooks. See selfhost/sync_comms_webhooks.py.
+SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-0}"
+
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in droid-deploy/deploy/selfhost/.
 _SELF_HOST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -167,6 +176,32 @@ self_host_export_comms_twilio() {
   self_host_export_coordinator_contact_env
 }
 
+self_host_calls_enabled() {
+  # True when the opt-in phone/WhatsApp call support is turned on.
+  case "${SELF_HOST_CALLS_ENABLED:-0}" in
+    1 | true | TRUE | yes | YES | on | ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+self_host_livekit_cloud_file() {
+  printf '%s' \
+    "${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/livekit_cloud.env}"
+}
+
+self_host_export_livekit_cloud() {
+  # Calls bridge Twilio -> LiveKit Cloud SIP, so they need a LiveKit Cloud
+  # project (URL/key/secret + SIP URI), distinct from the local dev LiveKit used
+  # for browser meet. The creds live in the self-host state dir (never a repo).
+  # No-op unless calls are enabled and the file exists, so the default
+  # browser-meet stack (local dev LiveKit) is untouched.
+  self_host_calls_enabled || return 0
+  local lk_file
+  lk_file="$(self_host_livekit_cloud_file)"
+  [[ -f "$lk_file" ]] || return 0
+  load_self_host_env_file "$lk_file"
+}
+
 self_host_apply_user_desktops_export() {
   local agent_id="${1:-}"
   local script="${SELF_HOST_DEPLOY_SELFHOST_DIR}/fetch_assistant_user_desktops.py"
@@ -243,6 +278,34 @@ append_self_host_droid_runtime_env() {
 
   if [[ "${VOICE_PROVIDER:-}" == "elevenlabs" && -z "${VOICE_ID:-}" ]]; then
     _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
+  fi
+
+  # Phone & WhatsApp calls (opt-in): forward the LiveKit Cloud creds + SIP URI so
+  # the persistent LiveKit worker registers with the cloud, and the public tunnel
+  # URL (exported by stack.sh/service.sh once cloudflared is up) so the local
+  # ingress reconstructs Twilio signature URLs and recording callbacks correctly.
+  # No-op when calls are disabled. LiveKit creds are otherwise inherited from the
+  # exported environment for the local dev server (browser meet).
+  if self_host_calls_enabled; then
+    # Load the LiveKit Cloud creds last so they win over any dev LIVEKIT_* that
+    # load_self_host_env_file just pulled from droid/.env (voice.sh writes the
+    # local dev pair there for browser meet).
+    self_host_export_livekit_cloud
+    local _call_key
+    for _call_key in \
+      LIVEKIT_URL \
+      LIVEKIT_API_KEY \
+      LIVEKIT_API_SECRET \
+      LIVEKIT_SIP_URI; do
+      if [[ -n "${!_call_key:-}" ]]; then
+        _target_array+=("$_call_key=${!_call_key}")
+      fi
+    done
+    if [[ -n "${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}" ]]; then
+      _target_array+=(
+        "DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}"
+      )
+    fi
   fi
 
   local key val

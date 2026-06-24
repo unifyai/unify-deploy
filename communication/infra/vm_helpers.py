@@ -61,7 +61,7 @@ from .vm_config import (
     POOL_VM_CONTRACT_GENERATION,
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
-    POOL_VM_NAME_PREFIX,
+    pool_vm_name_prefix,
     POOL_ASSISTANT_ARCHIVE_BUCKET,
     POOL_ASSISTANT_DISK_IDLE_HOURS,
     POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
@@ -923,19 +923,22 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
 
 
 def _pool_vm_name(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{SETTINGS.env_suffix}"
+    return f"{pool_vm_name_prefix(vm_type)}-{vm_type}-{n}{SETTINGS.env_suffix}"
 
 
 def _pool_ip_name(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-{n}{SETTINGS.env_suffix}"
+    return f"{pool_vm_name_prefix(vm_type)}-{vm_type}-ip-{n}{SETTINGS.env_suffix}"
 
 
 def _pool_hostname(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
+    return (
+        f"{pool_vm_name_prefix(vm_type)}-{vm_type}-{n}"
+        f"{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
+    )
 
 
 def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
-    prefix = f"{POOL_VM_NAME_PREFIX}-{vm_type}-"
+    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"
     if not vm_name.startswith(prefix):
         return None
     number_text = vm_name[len(prefix) :]
@@ -957,12 +960,8 @@ def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
 
 
 def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
-    prefix = f"{POOL_VM_NAME_PREFIX}-"
-    if not vm_name.startswith(prefix):
-        return None
-    remainder = vm_name[len(prefix) :]
     for vm_type in ("ubuntu", "windows"):
-        if remainder.startswith(f"{vm_type}-"):
+        if vm_name.startswith(f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"):
             return vm_type
     return None
 
@@ -975,7 +974,7 @@ def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
 
 
 def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
-    prefix = f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-"
+    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-ip-"
     if not ip_name.startswith(prefix):
         return None
     vm_name = ip_name.replace("-ip-", "-", 1)

@@ -28,7 +28,7 @@ DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for VMs
 WINDOWS_VM_MACHINE_TYPE = "e2-standard-4"  # 4 vCPU, 16GB RAM
 WINDOWS_VM_DISK_SIZE_GB = 100
 WINDOWS_VM_IMAGE_PROJECT = "gcp-project-vms"
-WINDOWS_VM_TAGS = ["droid-windows-vm", "https-server", "allow-2222"]
+WINDOWS_VM_TAGS = ["unity-windows-vm", "https-server", "allow-2222"]
 
 # Path to the Windows init script
 WINDOWS_INIT_SCRIPT_PATH = os.path.join(
@@ -101,6 +101,16 @@ POOL_VM_CONTRACT_GENERATION = os.getenv(
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
 POOL_VM_NAME_PREFIX = "droid-pool"
+# The Ubuntu pool was migrated to droid-pool-*, but the Windows pool VMs, static
+# IPs, and DNS records are still unity-pool-* (not migrated), so the live name
+# prefix is per OS family.
+WINDOWS_POOL_VM_NAME_PREFIX = "unity-pool"
+
+
+def pool_vm_name_prefix(vm_type: str) -> str:
+    """Return the live pool VM name prefix for the given OS family."""
+    return WINDOWS_POOL_VM_NAME_PREFIX if vm_type == "windows" else POOL_VM_NAME_PREFIX
+
 
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
@@ -126,7 +136,8 @@ POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS = 300
 
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "droid-pool-ubuntu-vm"
-POOL_WINDOWS_VM_IMAGE_FAMILY = "droid-pool-windows-vm"
+# Windows pool is not yet migrated; live Windows VMs use the unity image family.
+POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
 
 # Governance labels required by the Vanta "GCE instances have required labels"
 # test. Applied to every pool VM at creation so new VMs are born compliant.

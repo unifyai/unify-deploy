@@ -1213,7 +1213,8 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
         "-staging" if vm_helpers_module.SETTINGS.env_suffix != "-staging" else ""
     )
     foreign_ip_name = (
-        f"{vm_helpers_module.POOL_VM_NAME_PREFIX}-windows-ip-77{foreign_suffix}"
+        f"{vm_helpers_module.pool_vm_name_prefix('windows')}"
+        f"-windows-ip-77{foreign_suffix}"
     )
 
     instance_client = MagicMock()

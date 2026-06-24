@@ -305,6 +305,62 @@ ensure_node() {
   return 1
 }
 
+_cloudflared_works() {
+  command -v cloudflared &>/dev/null
+}
+
+_try_install_cloudflared() {
+  if [[ "$ENSURE_PREREQS_AUTO_INSTALL" != "1" ]]; then
+    return 1
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew &>/dev/null; then
+        _ensure_prereqs_log_info "Installing cloudflared via Homebrew..."
+        if brew install cloudflared &>/dev/null; then
+          _cloudflared_works && return 0
+        fi
+      fi
+      ;;
+    Linux)
+      # cloudflared is not in the default apt repos; fetch the static binary.
+      local arch bin_url="" dest="/usr/local/bin/cloudflared"
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64 | amd64) arch="amd64" ;;
+        aarch64 | arm64) arch="arm64" ;;
+        *) arch="" ;;
+      esac
+      if [[ -n "$arch" ]]; then
+        bin_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}"
+        _ensure_prereqs_log_info "Downloading cloudflared (linux-${arch})..."
+        if curl -fsSL "$bin_url" -o /tmp/cloudflared 2>/dev/null; then
+          chmod +x /tmp/cloudflared 2>/dev/null || true
+          if mv /tmp/cloudflared "$dest" 2>/dev/null \
+            || sudo mv /tmp/cloudflared "$dest" 2>/dev/null; then
+            _cloudflared_works && return 0
+          fi
+        fi
+      fi
+      ;;
+  esac
+  return 1
+}
+
+ensure_cloudflared() {
+  if _cloudflared_works; then
+    return 0
+  fi
+  if _try_install_cloudflared; then
+    _ensure_prereqs_log_success "cloudflared installed"
+    return 0
+  fi
+  _ensure_prereqs_log_error "cloudflared is required to expose the local call webhook"
+  _ensure_prereqs_log_info "macOS:  brew install cloudflared"
+  _ensure_prereqs_log_info "Linux:  https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+  return 1
+}
+
 ensure_self_host_stack_prereqs() {
   ensure_node && ensure_java && ensure_pubsub_emulator
 }

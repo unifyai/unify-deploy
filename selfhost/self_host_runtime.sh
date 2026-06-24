@@ -191,6 +191,171 @@ self_host_stop_comms_bridge() {
   rm -f "$pidfile"
 }
 
+# --- Inbound-call tunnel (cloudflared) ---------------------------------------
+# Phone/WhatsApp calls need a live public webhook (a call is synchronous: Twilio
+# POSTs the number's voice URL and needs TwiML back in seconds), unlike text,
+# which the comms bridge polls. cloudflared exposes the local CM ingress
+# (127.0.0.1:<port>/local/twilio/*) at a public https URL that the localhost
+# number's voice webhook points at. Opt-in (SELF_HOST_CALLS_ENABLED); no-op
+# otherwise, so the default poll-only stack is unchanged.
+
+self_host_local_comms_port() {
+  printf '%s' "${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+}
+
+self_host_tunnel_pidfile() {
+  printf '%s/call-tunnel.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_tunnel_log_file() {
+  printf '%s/call-tunnel.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_tunnel_url_file() {
+  printf '%s/call-tunnel-url' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_sync_comms_script() {
+  printf '%s/sync_comms_webhooks.py' "$_SELF_HOST_RUNTIME_DIR"
+}
+
+self_host_voice_synced_url_file() {
+  printf '%s/call-voice-synced-url' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_tunnel_is_running() {
+  local pidfile pid
+  pidfile="$(self_host_tunnel_pidfile)"
+  [[ -f "$pidfile" ]] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+self_host_tunnel_url() {
+  local url_file
+  url_file="$(self_host_tunnel_url_file)"
+  [[ -f "$url_file" ]] || return 1
+  cat "$url_file" 2>/dev/null || true
+}
+
+# Start the cloudflared quick tunnel and resolve its public URL. Idempotent: when
+# already running with a recorded URL it just re-exports it. Returns non-zero
+# (and leaves no URL) when cloudflared is missing or the URL can't be resolved.
+self_host_ensure_tunnel() {
+  self_host_calls_enabled || return 0
+  self_host_ensure_state_dir
+
+  if self_host_tunnel_is_running; then
+    local existing
+    existing="$(self_host_tunnel_url 2>/dev/null || true)"
+    if [[ -n "$existing" ]]; then
+      export DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$existing"
+      return 0
+    fi
+    # Running but URL not yet recorded — fall through to re-resolve from the log.
+  fi
+
+  command -v cloudflared >/dev/null 2>&1 || {
+    echo "[call-tunnel] cloudflared not installed — inbound calls disabled" >&2
+    return 1
+  }
+
+  local port log_file url_file
+  port="$(self_host_local_comms_port)"
+  log_file="$(self_host_tunnel_log_file)"
+  url_file="$(self_host_tunnel_url_file)"
+  rm -f "$url_file"
+
+  if ! self_host_tunnel_is_running; then
+    : >"$log_file"
+    nohup cloudflared tunnel --no-autoupdate \
+      --url "http://127.0.0.1:${port}" >>"$log_file" 2>&1 &
+    local pid=$!
+    disown "$pid" 2>/dev/null || true
+    echo "$pid" >"$(self_host_tunnel_pidfile)"
+  fi
+
+  # cloudflared prints the assigned https://<sub>.trycloudflare.com to its log.
+  local url="" attempt
+  for attempt in $(seq 1 40); do
+    url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true)"
+    [[ -n "$url" ]] && break
+    sleep 0.5
+  done
+
+  if [[ -z "$url" ]]; then
+    echo "[call-tunnel] failed to resolve tunnel URL — see $log_file" >&2
+    return 1
+  fi
+
+  printf '%s' "$url" >"$url_file"
+  export DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url"
+  # The tunnel exposes the CM comms ingress (8787), NOT the gateway (8001).
+  # droid/scripts/local.sh defaults DROID_GATEWAY_PUBLIC_URL to the comms public
+  # URL when unset, which would point the gateway health check + outbound
+  # callback base at the comms tunnel. Pin the gateway to its local URL so only
+  # the CM ingress is tunneled.
+  export DROID_GATEWAY_PUBLIC_URL="${DROID_GATEWAY_PUBLIC_URL:-http://127.0.0.1:${DROID_GATEWAY_PORT:-8001}}"
+  if declare -F self_host_patch_runtime_state &>/dev/null; then
+    self_host_patch_runtime_state "call_tunnel_url=$url" || true
+  fi
+  return 0
+}
+
+self_host_stop_tunnel() {
+  local pidfile pid
+  pidfile="$(self_host_tunnel_pidfile)"
+  if [[ -f "$pidfile" ]]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    rm -f "$pidfile"
+  fi
+  rm -f "$(self_host_tunnel_url_file)" "$(self_host_voice_synced_url_file)"
+  if declare -F self_host_patch_runtime_state &>/dev/null; then
+    self_host_patch_runtime_state "call_tunnel_url=" || true
+  fi
+}
+
+# Re-point the localhost number's Twilio voice webhook at the current tunnel when
+# the tunnel URL changed (e.g. cloudflared restarted with a fresh quick-tunnel
+# host). Called from the runtime supervisor loop. Best-effort; no-op when calls
+# are disabled, no tunnel URL is known, or the URL is unchanged since last sync.
+self_host_resync_voice_webhooks_if_changed() {
+  self_host_calls_enabled || return 0
+  local url marker prev script py
+  url="$(self_host_tunnel_url 2>/dev/null || true)"
+  [[ -n "$url" ]] || return 0
+  marker="$(self_host_voice_synced_url_file)"
+  prev=""
+  [[ -f "$marker" ]] && prev="$(cat "$marker" 2>/dev/null || true)"
+  [[ "$url" == "$prev" ]] && return 0
+  script="$(self_host_sync_comms_script)"
+  [[ -f "$script" ]] || return 0
+  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  [[ -x "$py" ]] || py="python3"
+  if DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url" \
+    "$py" "$script" --set-voice >/dev/null 2>&1; then
+    printf '%s' "$url" >"$marker"
+  fi
+}
+
+# Clear the localhost number's voice webhook back to poll-only. Called when the
+# runtime is going away (service stop / stack down --full) so the shared number
+# never keeps pointing at a dead tunnel. Best-effort; no-op when calls disabled.
+self_host_revert_voice_webhooks() {
+  self_host_calls_enabled || return 0
+  local script py
+  script="$(self_host_sync_comms_script)"
+  [[ -f "$script" ]] || return 0
+  if declare -F self_host_export_comms_twilio &>/dev/null; then
+    self_host_export_comms_twilio
+  fi
+  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  [[ -x "$py" ]] || py="python3"
+  "$py" "$script" --revert-voice >/dev/null 2>&1 || true
+  rm -f "$(self_host_voice_synced_url_file)"
+}
+
 self_host_patch_runtime_state() {
   self_host_ensure_state_dir
   python3 - "$(self_host_runtime_state_file)" "$@" <<'PY'
@@ -508,7 +673,7 @@ self_host_runtime_doctor_line() {
 
   printf 'service: %s\n' "$service_label"
   printf 'CM: %s\n' "$cm_label"
-  if self_host_gateway_process_is_running; then
+  if self_host_gateway_is_healthy; then
     printf 'gateway: running (%s)\n' "$(self_host_gateway_base_url)"
   else
     printf 'gateway: stopped (%s)\n' "$(self_host_gateway_base_url)"
@@ -524,6 +689,13 @@ self_host_runtime_doctor_line() {
       printf 'comms-bridge: running (%s)\n' "${_bridge_channels:-configured}"
     else
       printf 'comms-bridge: stopped\n'
+    fi
+  fi
+  if self_host_calls_enabled; then
+    if self_host_tunnel_is_running; then
+      printf 'call-tunnel: running (%s)\n' "$(self_host_tunnel_url 2>/dev/null || echo '?')"
+    else
+      printf 'call-tunnel: stopped\n'
     fi
   fi
 }

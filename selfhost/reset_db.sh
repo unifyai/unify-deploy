@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from decimal import Decimal
 from typing import Any
 
@@ -156,6 +157,22 @@ def normalize_json(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
     return value
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+def owner_display_name(owner: User) -> str | None:
+    parts = [
+        getattr(owner, "name", None),
+        getattr(owner, "last_name", None),
+        getattr(owner, "surname", None),
+    ]
+    display_name = " ".join(str(part).strip() for part in parts if str(part or "").strip())
+    return display_name or None
 
 
 def delete_matching(session, table_name: str, columns: set[str], values: dict[str, list[Any]]) -> int:
@@ -408,5 +425,21 @@ with SessionLocal() as session:
         "default_tasks": default_tasks,
         "credits": normalize_json(billing_account.credits if billing_account else None),
     }
+    state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("DROID_HOME") or Path.home() / ".droid")
+    write_json_file(
+        state_dir / "coordinator-runtime.json",
+        {
+            "apiKey": api_key,
+            "coordinatorAgentId": str(coordinator.agent_id),
+        },
+    )
+    write_json_file(
+        state_dir / "self-host-owner.json",
+        {
+            "userId": str(owner.id),
+            "email": owner.email,
+            "name": owner_display_name(owner),
+        },
+    )
     print(json.dumps(payload, sort_keys=True))
 PY
