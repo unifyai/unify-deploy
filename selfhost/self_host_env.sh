@@ -211,6 +211,26 @@ append_self_host_droid_runtime_env() {
     "DROID_CONVERSATION_LOCAL_COMMS_HOST=${DROID_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
     "DROID_CONVERSATION_LOCAL_COMMS_PORT=${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
   )
+
+  # Local deployment is a debugging surface like the test suite (rapid iteration,
+  # breaking changes), so it adopts the same OTel convention as the test harness
+  # (droid/tests/parallel_run.sh): emit cross-repo {trace_id}.jsonl spans from
+  # droid, unify, and unillm into the droid repo's logs/all/ for unified traces.
+  # These are opt-out defaults — any *_OTEL value exported beforehand wins.
+  local _droid_repo_root="${DROID_REPO_PATH:-${DROID_REPO:-}}"
+  if [[ -n "$_droid_repo_root" ]]; then
+    local _otel_log_dir="${DROID_OTEL_LOG_DIR:-$_droid_repo_root/logs/all}"
+    mkdir -p "$_otel_log_dir" 2>/dev/null || true
+    _target_array+=(
+      "DROID_OTEL=${DROID_OTEL:-true}"
+      "UNIFY_OTEL=${UNIFY_OTEL:-true}"
+      "UNILLM_OTEL=${UNILLM_OTEL:-true}"
+      "DROID_OTEL_LOG_DIR=$_otel_log_dir"
+      "UNIFY_OTEL_LOG_DIR=${UNIFY_OTEL_LOG_DIR:-$_otel_log_dir}"
+      "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
+    )
+  fi
+
   if [[ "${VOICE_PROVIDER:-}" == "elevenlabs" && -z "${VOICE_ID:-}" ]]; then
     _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
   fi
