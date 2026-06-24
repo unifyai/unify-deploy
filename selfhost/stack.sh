@@ -7,8 +7,8 @@
 # the Droid CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
-#   ./scripts/stack.sh up           Fresh redeploy: reset, seed, start, smoke
-#   ./scripts/stack.sh up --durable Fresh redeploy in a persistent tmux session
+#   ./scripts/stack.sh up           Clean redeploy: purge DB, seed, start, smoke
+#   ./scripts/stack.sh up --durable Clean redeploy in a persistent tmux session
 #   ./scripts/stack.sh resume       Start/resume without resetting local history
 #   ./scripts/stack.sh redeploy     Alias for up
 #   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
@@ -598,7 +598,7 @@ check_account_page() {
 cmd_redeploy() {
   echo ""
   echo "=============================================="
-  echo "  Fresh self-host redeploy"
+  echo "  Clean self-host redeploy"
   echo "=============================================="
   echo ""
 
@@ -608,6 +608,7 @@ cmd_redeploy() {
 
   stop_durable_stack_session
   cmd_down --full || true
+  cmd_purge_orchestra_db
 
   cmd_resume
   cmd_reset --yes
@@ -624,6 +625,19 @@ cmd_redeploy() {
 
   echo ""
   cmd_status
+}
+
+cmd_purge_orchestra_db() {
+  local orchestra_local_script="$ORCHESTRA_REPO_PATH/scripts/local.sh"
+  if [[ ! -f "$orchestra_local_script" ]]; then
+    log_error "Missing $orchestra_local_script"
+    return 1
+  fi
+
+  log_info "Purging local Orchestra database for a clean redeploy..."
+  ORCHESTRA_ALLOW_ISOLATED=1 \
+    ORCHESTRA_DB_PORT="$(default_orchestra_db_port)" \
+    bash "$orchestra_local_script" purge
 }
 
 cmd_resume() {
@@ -827,31 +841,42 @@ cmd_up_durable() {
   local stack_command
   printf -v stack_command '%q -lc %q' "$bash_bin" "$inner"
 
-  log_info "Starting durable stack session: $session"
-  tmux new-session -d -s "$session" "$stack_command"
-
-  local elapsed=0
+  local recovered_missing_db="false"
   local pane=""
-  while (( elapsed < timeout_seconds )); do
-    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
-    if [[ "$pane" == *"__DROID_STACK_UP_EXIT_0__"* ]]; then
-      log_success "Durable stack session is ready: $session"
-      break
-    fi
-    if [[ "$pane" == *"__DROID_STACK_UP_EXIT_"* && "$pane" != *"__DROID_STACK_UP_EXIT_0__"* ]]; then
-      log_error "Durable stack startup failed in tmux session: $session"
-      echo "$pane"
-      return 1
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
+  while true; do
+    log_info "Starting durable stack session: $session"
+    tmux new-session -d -s "$session" "$stack_command"
 
-  if (( elapsed >= timeout_seconds )); then
+    local elapsed=0
+    pane=""
+    while (( elapsed < timeout_seconds )); do
+      pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
+      if [[ "$pane" == *"__DROID_STACK_UP_EXIT_0__"* ]]; then
+        log_success "Durable stack session is ready: $session"
+        break 2
+      fi
+      if [[ "$pane" == *"__DROID_STACK_UP_EXIT_"* && "$pane" != *"__DROID_STACK_UP_EXIT_0__"* ]]; then
+        if [[ "$recovered_missing_db" == "false" \
+          && ( "$pane" == *"database \"orchestra\" does not exist"* \
+            || "$pane" == *"database 'orchestra' is missing"* ) ]]; then
+          log_warn "Detected invalid local Orchestra database; purging and retrying once"
+          tmux kill-session -t "=${session}" 2>/dev/null || true
+          cmd_purge_orchestra_db
+          recovered_missing_db="true"
+          continue 2
+        fi
+        log_error "Durable stack startup failed in tmux session: $session"
+        echo "$pane"
+        return 1
+      fi
+      sleep 2
+      elapsed=$((elapsed + 2))
+    done
+
     log_error "Timed out waiting for durable stack startup"
     log_info "Attach for logs: tmux attach -t $session"
     return 1
-  fi
+  done
 
   if ! curl -fsSI --max-time 10 "http://localhost:${console_port}/" >/dev/null; then
     log_error "Console did not respond at http://localhost:${console_port}"
@@ -1232,7 +1257,7 @@ main() {
         cmd_redeploy "$@"
       fi
       ;;
-    redeploy|fresh) cmd_redeploy "$@" ;;
+    redeploy|fresh|clean|clean-redeploy) cmd_redeploy "$@" ;;
     resume) cmd_resume "$@" ;;
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;
