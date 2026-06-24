@@ -3429,6 +3429,27 @@ def on_session_change(body, **_):
         _update_status_for_session(body)
 
 
+def _is_terminally_released(body: dict) -> bool:
+    """Whether a session is fully released and idle, so the timer can skip it.
+
+    A session only reaches phase ``Released`` after the release path has already
+    confirmed there are no remaining jobs, runtime VMs, or attached disks, and a
+    ``Stopped`` session with no binding has nothing further to drive. Re-running
+    the reconcile for such a session performs GCP VM/disk ownership lookups on
+    every timer tick for zero benefit; at steady-state session counts that fan-out
+    saturates the operator and starves its liveness probe. Any transition back to
+    active arrives as a create/update watch event (handled by ``on_session_change``)
+    which reconciles immediately, and stale released CRs are removed by the
+    ``/sessions/prune-terminal`` job, so the periodic timer can safely skip these.
+    """
+    snapshot = SessionSnapshot.from_body(body)
+    return (
+        snapshot.desired_state == DESIRED_STATE_STOPPED
+        and snapshot.phase == "Released"
+        and not snapshot.current_binding_id
+    )
+
+
 @kopf.timer(
     SETTINGS.assistant_session_group,
     SETTINGS.assistant_session_version,
@@ -3436,6 +3457,8 @@ def on_session_change(body, **_):
     interval=RECONCILE_INTERVAL_SECONDS,
 )
 def reconcile_session(body, **_):
+    if _is_terminally_released(body):
+        return
     with bind_causal_context(
         build_causal_context(
             caller="controller.reconcile_timer",

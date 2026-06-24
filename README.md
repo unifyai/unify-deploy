@@ -291,6 +291,24 @@ Land changes on `staging`, let staging deploy/validate, then promote `staging` �
 
 ## 9. Known rename loose ends & gotchas
 
+> **Finalization decision (2026-06-24): stabilize, do not keep migrating.** The
+> platform-wide forward migration to `droid-*` is **halted**. The goal is now
+> **code ⇆ live infrastructure agreement at the current mixed state**, not "everything
+> must be `droid`". GitHub repo names stay `droid`/`droid-deploy`; the immutable trio
+> (project IDs + cluster, row 16) stays `unity`; the cleanly-migrated pieces (Ubuntu
+> pool, archives, Cloud Run, Artifact Registry, per-assistant Pub/Sub, code identifiers)
+> stay `droid`; and the parts still live on `unity` (tunnel, Windows pool) are now
+> **pointed at `unity` in code on purpose** rather than chased to `droid`. Code aligned
+> for this: `tunnel_config.py` (tag/IP → `unity-tunnel-server*`), `vm_config.py` +
+> `vm_helpers.py` (per-OS pool prefix: Ubuntu `droid-pool-*`, Windows `unity-pool-*`;
+> Windows image family/tags → `unity-*`), and `droid` CI (`tests.yml`,
+> `llm-cache-refresh.yml`) read the real `UNITY_COMMS_URL` secret. The 2026-06-22
+> production `assistant-session-controller` crash-loop was a **controller defect**
+> (the timer reconcile ran per-session GCP VM/disk ownership scans over ~110 terminal
+> sessions every interval, starving its liveness probe), **not** a name mismatch; fixed
+> by skipping the timer reconcile for terminally-`Released` sessions. No mass create/
+> delete/DNS/Pub-Sub churn is required.
+
 Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation, `P2` = cleanup/clarity.
 
 | # | Pri | Item | Detail / fix |
@@ -298,13 +316,13 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 | 1 | **P0** | Tunnel fixes stranded on `staging` | `8b5097a9` (tunnel bucket/VM → `unity-*`) and `244ad103` (SFTP firewall band) are on `origin/staging` **not `origin/main`**. Prod `common/settings.py` may still point tunnel at non-existent `droid-tunnel-*`. **Merging `staging`→`main` is required** for these (but does **not** fix #2/#3 which are identical on both branches). |
 | 2 | **P0** | Pool image families (RESOLVED 2026-06-24) | Code wanted `droid-pool-ubuntu-vm`; only `unity-pool-ubuntu-vm` existed → 404 on every desktop provision → `assistant-session-controller` CrashLoop. Fixed by creating `droid-pool-*` families. **Keep the families fresh:** `build-ubuntu.sh`/`build-windows.sh` publish to them. |
 | 3 | **P0** | Archive bucket (RESOLVED 2026-06-24) | Code wanted `droid-assistant-archives`; only `unity-assistant-archives` existed → no cross-session file persistence. Fixed by bucket create + rsync (183 objects). |
-| 4 | **P1** | CI URL name split | Workflows read `DROID_COMMS_URL`/`DROID_ADAPTERS_URL`; only org secrets `UNITY_COMMS_URL`/`UNITY_ADAPTERS_URL` exist → empty at runtime in `droid-deploy/hosted-tests.yml`, `droid/tests.yml`, `droid/llm-cache-refresh.yml`. Rename the org secrets (or add the `DROID_*` repo vars/secrets). |
+| 4 | **P1** | CI URL name split | RESOLVED (code aligned): `droid/tests.yml` + `droid/llm-cache-refresh.yml` now read the live `secrets.UNITY_COMMS_URL` instead of the non-existent `vars.DROID_COMMS_URL`. Org secrets stay `UNITY_*` (no new resources). Re-check `droid-deploy/hosted-tests.yml` if it references these. |
 | 5 | **P1** | Orphaned GitHub environments | `droid` repo has `unity-testing` (full secret set) and `unity-llm-cache-refresh` superseded by `droid-testing` / `droid-llm-cache-refresh`. Migrate env-scoped secrets + delete the `unity-*` envs. |
 | 6 | **P1** | Stale Cloud Build triggers | Triggers bound to `repositories/unity` / `unity-deploy` (e.g. `adapters-unity-deploy`, `unity-comms-app-*`) fail at source-fetch (~3-6s, no steps) even though GitHub redirects the repo. Recreate as `droid-*` triggers against `repositories/droid` / `droid-deploy`. Compat files `cloudbuild/unity-comms-app*.yaml` exist for old trigger names. |
 | 7 | **P1** | Referenced-but-unconfigured secrets | `PYPI_API_TOKEN` (unillm `pypi.yml`), `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (console build-arg), `TWILIO_*`/`LIVEKIT_*`/`GCP_SA_KEY` (droid-deploy `hosted-tests.yml`) are not configured → empty/skip. |
 | 8 | **P2** | `magnitude@unity-modifications` | `droid` `install.sh`/CI and droid-deploy `droid-pool-watcher.sh`/`cloud-bootstrap.sh` fetch the `unity-modifications` branch of `unifyai/magnitude`. Rename the branch + update refs as a coordinated change. |
 | 9 | **P2** | OS user `unityuser` (HOME `/Droid`) | Across droid desktop scripts + droid-deploy packer/pool scripts + `file_manager/sync/config.py`. Renaming requires rebuilding pool images. |
-| 10 | **P2** | Windows pool entirely `unity-*` | Images, VMs, IPs, DNS for Windows desktops not migrated (Ubuntu done). They survive because long-lived; will break on next Windows image rebuild/replenish. |
+| 10 | **P2** | Windows pool entirely `unity-*` | RESOLVED (code aligned): Windows pool stays `unity-*` by design. `vm_config.py`/`vm_helpers.py` now use a per-OS prefix (`pool_vm_name_prefix`): Ubuntu → `droid-pool-*`, Windows → `unity-pool-*`; Windows image family → `unity-pool-windows-vm`, tag → `unity-windows-vm`. New Windows VMs/IPs/DNS now match the live pool, so replenish no longer breaks. |
 | 11 | **P2** | Pub/Sub ~84% `unity-*` | 1,334 topics / 5,198 subs legacy vs 252 / 1,021 droid; per-assistant duplication. Cut over + delete legacy. |
 | 12 | **P2** | Empty `droid-*` data buckets | `droid-call-recordings`, `droid-pod-logs`, `droid-pipeline-artifacts`, `droid-image-hash` created empty; code partly still reads/writes `unity-*` (which hold the data). `unity-tunnel-config`/`unity-youtube-extraction` have no droid copy. |
 | 13 | **P2** | Duplicate service accounts | `unity-pipeline-worker` + `droid-pipeline-worker` both exist. |

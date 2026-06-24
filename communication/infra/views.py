@@ -2380,9 +2380,12 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
     consecutive_failures = 0
     max_failures = 3
     while provisioned < request.count:
-        from .vm_config import POOL_VM_NAME_PREFIX
+        from .vm_config import pool_vm_name_prefix
 
-        candidate = f"{POOL_VM_NAME_PREFIX}-{request.vm_type}-{n}{SETTINGS.env_suffix}"
+        candidate = (
+            f"{pool_vm_name_prefix(request.vm_type)}-{request.vm_type}-{n}"
+            f"{SETTINGS.env_suffix}"
+        )
         if candidate not in existing_names:
             try:
                 result = await asyncio.to_thread(provision_pool_vm, request.vm_type, n)

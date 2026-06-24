@@ -2186,7 +2186,7 @@ def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "droid-job-1", "namespace": "staging"},
-        vmRef={"name": "droid-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
+        vmRef={"name": "unity-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
         guestHandshakeStartedAt="2026-04-03T00:00:05+00:00",
@@ -2212,7 +2212,7 @@ def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "droid-pool-windows-1",
+            "name": "unity-pool-windows-1",
             "hostname": "vm-1.vm.unify.ai",
         },
     )
