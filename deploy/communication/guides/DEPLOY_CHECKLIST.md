@@ -22,7 +22,7 @@ used** in the startup path. The current design works as follows:
 | Location | Status |
 |----------|--------|
 | `scripts/local.sh` | Creates topic in Pub/Sub emulator — **remove** |
-| `guides/INFRA.md`, `guides/infra/*.md` | Describe the old flow — **update** |
+| Root `README.md` (system source of truth), `guides/infra/*.md` | Describe the old flow — **update** |
 | Droid Grafana dashboards | Legacy metric references — **update when convenient** |
 
 ### Action items
