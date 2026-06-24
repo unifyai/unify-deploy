@@ -371,6 +371,11 @@ do_assign() {
         mkdir -p "/Droid/$dir"
         chown unityuser:unityuser "/Droid/$dir"
     done
+    # unityuser's home is /Unity, so the agent's browser launches read
+    # /Unity/.cache/ms-playwright; link it there as well as the /Droid chroot copy.
+    mkdir -p /Unity/.cache
+    chown unityuser:unityuser /Unity/.cache
+    ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
     ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
 
     local vnc_password

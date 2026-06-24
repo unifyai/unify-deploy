@@ -258,9 +258,14 @@ for dir in .config .local .cache; do
     mkdir -p "/Droid/$dir"
     chown unityuser:unityuser "/Droid/$dir"
 done
-# Symlink Playwright browser cache so $HOME/.cache/ms-playwright resolves to the actual install location
+# Symlink Playwright browser cache so $HOME/.cache/ms-playwright resolves to the
+# actual install location. unityuser's home is /Unity, so the agent's browser
+# launches read /Unity/.cache; /Droid keeps a copy for the chroot/XFCE session.
+mkdir -p /Unity/.cache
+chown unityuser:unityuser /Unity/.cache
+ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
 ln -sfn /root/.cache/ms-playwright /Droid/.cache/ms-playwright
-echo "  /Droid/.config, .local, .cache created for unityuser"
+echo "  Playwright cache linked for unityuser (/Unity + /Droid)"
 
 # Shell config for unityuser desktop terminal sessions
 cat > /Droid/.bashrc << 'BASHRC'
