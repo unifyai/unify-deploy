@@ -535,10 +535,27 @@ check_account_page() {
     "http://localhost:${console_port}/account" || true)"
   if [[ "$status" == "200" ]]; then
     log_success "Account page reachable: http://localhost:${console_port}/account"
-    return 0
+  else
+    log_error "Account page check failed: HTTP ${status:-000}"
+    return 1
   fi
-  log_error "Account page check failed: HTTP ${status:-000}"
-  return 1
+
+  local node_bin="${NODE_BIN:-node}"
+  local browser_smoke_script="$SCRIPT_DIR/account_browser_smoke.mjs"
+  if [[ ! -f "$browser_smoke_script" ]]; then
+    log_error "Missing browser smoke script: $browser_smoke_script"
+    return 1
+  fi
+  if ! command -v "$node_bin" >/dev/null 2>&1; then
+    log_error "Node.js is required for authenticated browser smoke checks"
+    return 1
+  fi
+
+  CONSOLE_REPO_PATH="$CONSOLE_REPO_PATH" \
+    CONSOLE_PORT="$console_port" \
+    DROID_HOME="${DROID_HOME:-$HOME/.droid}" \
+    SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}" \
+    "$node_bin" "$browser_smoke_script"
 }
 
 cmd_redeploy() {
