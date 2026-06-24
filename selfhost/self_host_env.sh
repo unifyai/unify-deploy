@@ -213,14 +213,21 @@ append_self_host_droid_runtime_env() {
   )
 
   # Local deployment is a debugging surface like the test suite (rapid iteration,
-  # breaking changes), so it adopts the same OTel convention as the test harness
-  # (droid/tests/parallel_run.sh): emit cross-repo {trace_id}.jsonl spans from
-  # droid, unify, and unillm into the droid repo's logs/all/ for unified traces.
-  # These are opt-out defaults — any *_OTEL value exported beforehand wins.
+  # breaking changes), so it adopts the test harness logging convention
+  # (droid/tests/parallel_run.sh): cross-repo OTel spans from droid, unify, and
+  # unillm aggregate into the droid repo's logs/all/ (one {trace_id}.jsonl per
+  # run), while each repo's full file logs — including the LLM request/response
+  # with reasoning — land in a per-repo logs/<repo>/ dir. All are opt-out: any
+  # value exported beforehand wins. Orchestra runs as a separate process; its
+  # equivalent dirs are set where it is launched (console start_orchestra).
   local _droid_repo_root="${DROID_REPO_PATH:-${DROID_REPO:-}}"
   if [[ -n "$_droid_repo_root" ]]; then
     local _otel_log_dir="${DROID_OTEL_LOG_DIR:-$_droid_repo_root/logs/all}"
-    mkdir -p "$_otel_log_dir" 2>/dev/null || true
+    mkdir -p \
+      "$_otel_log_dir" \
+      "$_droid_repo_root/logs/droid" \
+      "$_droid_repo_root/logs/unify" \
+      "$_droid_repo_root/logs/unillm" 2>/dev/null || true
     _target_array+=(
       "DROID_OTEL=${DROID_OTEL:-true}"
       "UNIFY_OTEL=${UNIFY_OTEL:-true}"
@@ -228,6 +235,9 @@ append_self_host_droid_runtime_env() {
       "DROID_OTEL_LOG_DIR=$_otel_log_dir"
       "UNIFY_OTEL_LOG_DIR=${UNIFY_OTEL_LOG_DIR:-$_otel_log_dir}"
       "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
+      "DROID_LOG_DIR=${DROID_LOG_DIR:-$_droid_repo_root/logs/droid}"
+      "UNIFY_LOG_DIR=${UNIFY_LOG_DIR:-$_droid_repo_root/logs/unify}"
+      "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_droid_repo_root/logs/unillm}"
     )
   fi
 
