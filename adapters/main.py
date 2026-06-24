@@ -49,6 +49,43 @@ def _redact_email(email: str) -> str:
     return "***"
 
 
+_ASSISTANT_UPDATE_STRING_FIELDS = {
+    "api_key",
+    "medium",
+    "assistant_id",
+    "user_id",
+    "user_first_name",
+    "user_surname",
+    "user_email",
+    "user_number",
+    "user_whatsapp_number",
+    "assistant_first_name",
+    "assistant_surname",
+    "assistant_age",
+    "assistant_nationality",
+    "assistant_about",
+    "assistant_job_title",
+    "assistant_timezone",
+    "assistant_number",
+    "assistant_whatsapp_number",
+    "assistant_discord_bot_id",
+    "assistant_slack_bot_user_id",
+    "assistant_email",
+    "assistant_email_provider",
+    "voice_provider",
+    "voice_id",
+    "desktop_mode",
+}
+
+
+def _coerce_assistant_update_event(event: dict[str, Any]) -> dict[str, Any]:
+    coerced = dict(event)
+    for field in _ASSISTANT_UPDATE_STRING_FIELDS:
+        if coerced.get(field) is None:
+            coerced[field] = ""
+    return coerced
+
+
 def _store_refreshed_oauth_secrets(
     *,
     provider: str,
@@ -402,7 +439,7 @@ async def twilio_call_webhook(request: Request):
         if not sip_dispatch_rule_id:
             resp_user = VoiceResponse()
             resp_user.say(
-                "This number cannot accept calls right now. Please try again later."
+                "This number cannot accept calls right now. Please try again later.",
             )
             resp_user.hangup()
             return Response(content=str(resp_user), media_type="text/xml")
@@ -2857,12 +2894,14 @@ async def assistant_update_webhook(request: Request):
             assistant_data.get("team_summaries") or [],
             field_name="team_summaries",
         )
-        assistant_event = {
-            **assistant_data,
-            "team_ids": team_ids,
-            "team_summaries": team_summaries,
-            "update_kind": update_kind,
-        }
+        assistant_event = _coerce_assistant_update_event(
+            {
+                **assistant_data,
+                "team_ids": team_ids,
+                "team_summaries": team_summaries,
+                "update_kind": update_kind,
+            },
+        )
         logger.info(
             "Activation dispatch state (legacy flags): is_job_running=%s, job_started=%s",
             context["is_job_running"],
@@ -2953,7 +2992,7 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         google_token = None
         if not is_shared_coordinator_email:
             assistant_data_prefetch = get_assistant(
-                email_address=assistant_email_address
+                email_address=assistant_email_address,
             )
             google_token = (assistant_data_prefetch.get("secrets") or {}).get(
                 "GOOGLE_ACCESS_TOKEN",
@@ -3020,7 +3059,9 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
         else:
             context = build_webhook_context(
-                "email", assistant_email_address, from_email
+                "email",
+                assistant_email_address,
+                from_email,
             )
         assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]

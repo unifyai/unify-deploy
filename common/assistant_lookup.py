@@ -27,6 +27,10 @@ def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:
     return NO_DESKTOP_MODE
 
 
+def _runtime_str(value: object) -> str:
+    return "" if value is None else str(value)
+
+
 def _local_assistant_data() -> dict[str, Any]:
     return {
         "assistant_id": "local-assistant",
@@ -64,30 +68,32 @@ def _local_assistant_data() -> dict[str, Any]:
 
 def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     return {
-        "assistant_id": assistant["agent_id"],
+        "assistant_id": _runtime_str(assistant["agent_id"]),
         "deploy_env": assistant.get("deploy_env"),
-        "user_id": assistant["user_id"],
-        "api_key": assistant["api_key"],
-        "user_first_name": assistant["user_first_name"],
-        "user_surname": assistant["user_last_name"],
-        "assistant_first_name": assistant["first_name"],
-        "assistant_surname": assistant["surname"],
-        "assistant_age": str(assistant.get("age", "")),
-        "assistant_nationality": assistant["nationality"],
-        "assistant_about": assistant["about"],
-        "assistant_job_title": assistant.get("job_title") or "",
-        "assistant_timezone": assistant.get("timezone", "UTC"),
+        "user_id": _runtime_str(assistant["user_id"]),
+        "api_key": _runtime_str(assistant["api_key"]),
+        "user_first_name": _runtime_str(assistant["user_first_name"]),
+        "user_surname": _runtime_str(assistant["user_last_name"]),
+        "assistant_first_name": _runtime_str(assistant["first_name"]),
+        "assistant_surname": _runtime_str(assistant["surname"]),
+        "assistant_age": _runtime_str(assistant.get("age")),
+        "assistant_nationality": _runtime_str(assistant["nationality"]),
+        "assistant_about": _runtime_str(assistant["about"]),
+        "assistant_job_title": _runtime_str(assistant.get("job_title")),
+        "assistant_timezone": _runtime_str(assistant.get("timezone") or "UTC"),
         "assistant_number": assistant["phone"] or "",
         "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number") or "",
-        "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id", ""),
+        "assistant_discord_bot_id": _runtime_str(
+            assistant.get("assistant_discord_bot_id"),
+        ),
         "assistant_email": assistant["email"] or "",
         "assistant_email_provider": assistant.get("email_provider")
         or "google_workspace",
         "user_number": assistant["user_phone"] or "",
         "user_whatsapp_number": assistant.get("user_whatsapp_number") or "",
         "user_email": assistant["user_email"] or "",
-        "voice_provider": assistant["voice_provider"],
-        "voice_id": assistant["voice_id"],
+        "voice_provider": _runtime_str(assistant["voice_provider"]),
+        "voice_id": _runtime_str(assistant["voice_id"]),
         "secrets": assistant.get("secrets", {}),
         "desktop_mode": _resolve_desktop_mode(assistant),
         "user_desktops": assistant.get("user_desktops", []),
@@ -95,8 +101,8 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "is_local": assistant.get("is_local", False),
         "team_ids": assistant.get("team_ids", []),
         "team_summaries": assistant.get("team_summaries", []),
-        "self_contact_id": assistant.get("self_contact_id", 0),
-        "boss_contact_id": assistant.get("boss_contact_id", 1),
+        "self_contact_id": assistant.get("self_contact_id") or 0,
+        "boss_contact_id": assistant.get("boss_contact_id") or 1,
         "is_coordinator": assistant.get("is_coordinator", False),
         "org_id": assistant.get("organization_id"),
     }
