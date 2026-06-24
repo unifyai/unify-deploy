@@ -122,7 +122,6 @@ async function main() {
   });
 
   const browser = await launchBrowser();
-  const errors = [];
 
   try {
     const context = await browser.newContext();
@@ -138,6 +137,25 @@ async function main() {
       },
     ]);
 
+    await context.addInitScript(() => {
+      window.localStorage.setItem('console:self-host:deploy-epoch', 'stale');
+      window.localStorage.setItem(
+        'console:assistants:rightPaneState',
+        JSON.stringify({
+          primary: { tab: 'memory' },
+          secondary: { tab: 'integrations' },
+          splitRatio: 0.37,
+        })
+      );
+      window.localStorage.setItem('console:assistants:info-panel-open', 'true');
+      window.localStorage.setItem(
+        'activePopOutCall',
+        JSON.stringify({ assistantId: 'stale-assistant' })
+      );
+      window.sessionStorage.setItem('desktop-ready-stale-assistant', '{}');
+    });
+
+    const errors = [];
     const page = await context.newPage();
     page.on('pageerror', (error) => {
       errors.push(`pageerror: ${error.stack || error.message}`);
@@ -150,12 +168,12 @@ async function main() {
       }
     });
 
-    await page.goto(`${consoleOrigin}/account`, {
+    await page.goto(`${consoleOrigin}/assistants`, {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
     });
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(2_000);
+    await page.waitForTimeout(3_000);
 
     const currentUrl = new URL(page.url());
     const bodyText = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
@@ -163,7 +181,7 @@ async function main() {
     const visibleText = `${bodyText}\n${htmlText}`;
 
     if (currentUrl.pathname.startsWith('/login')) {
-      errors.push(`authenticated /account redirected to ${currentUrl.pathname}`);
+      errors.push(`authenticated assistants landing redirected to ${currentUrl.pathname}`);
     }
 
     if (
@@ -171,19 +189,20 @@ async function main() {
         visibleText
       )
     ) {
-      errors.push('Next.js runtime overlay is visible on /account');
+      errors.push('Next.js runtime overlay is visible on /assistants');
     }
 
-    if (!/\bProfile\b/.test(visibleText) || !/Contact Info/.test(visibleText)) {
-      errors.push('authenticated /account did not render the profile tabs');
+    if (!/\b(T-W1N|Loading workspace|Onboard)\b/.test(visibleText)) {
+      errors.push('authenticated assistants landing did not render the expected UI');
     }
 
     if (errors.length > 0) {
       const preview = errors.slice(0, 5).join('\n');
-      throw new Error(`Authenticated account browser smoke failed:\n${preview}`);
+      throw new Error(`Authenticated browser smoke failed:\n${preview}`);
     }
 
-    log('OK', `Authenticated account browser smoke passed: ${consoleOrigin}/account`);
+    await context.close();
+    log('OK', `Authenticated browser smoke passed: ${consoleOrigin}/assistants`);
   } finally {
     await browser.close();
   }
