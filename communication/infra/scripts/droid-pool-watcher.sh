@@ -481,12 +481,17 @@ PYSCRIPT
     fi
 
     # Agent Service .env (owned by unityuser so the process can read it)
+    # DROID_LOCAL_ROOT must be set explicitly: the disk is mounted/synced at
+    # /Droid/Local, but unityuser's home is /Unity, so the agent's default of
+    # ~/Droid/Local would resolve to /Unity/Droid/Local and miss every synced
+    # file (attachments, screenshots, downloads).
     cat > /agent-service/.env << EOF
 PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unify_key
 ORCHESTRA_URL=$orchestra_url
 DROID_COMMS_URL=$comms_url
+DROID_LOCAL_ROOT=/Droid/Local
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 DISPLAY=:1
 EOF
