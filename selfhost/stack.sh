@@ -319,27 +319,17 @@ cmd_sync_comms() {
   python3 "$SYNC_COMMS_SCRIPT" "$@"
 }
 
-# Select the LiveKit backend for the runtime. Browser meet can use local
-# `livekit-server --dev`, but phone/WhatsApp calls need LiveKit Cloud SIP, so the
-# cloud creds (from ~/.droid/livekit_cloud.env via self_host_export_livekit_cloud)
-# win over both the dev pair and any droid/.env values, and serve browser meet too.
+# Select the LiveKit backend once for every call surface in this stack run.
 setup_livekit_env() {
+  if declare -F self_host_export_livekit_backend &>/dev/null; then
+    self_host_export_livekit_backend
+  fi
   if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
-    if declare -F self_host_export_livekit_cloud &>/dev/null; then
-      self_host_export_livekit_cloud
-    fi
     if [[ -z "${LIVEKIT_URL:-}" || -z "${LIVEKIT_SIP_URI:-}" ]]; then
       log_warn "Calls enabled but LiveKit Cloud creds/SIP URI missing —"
       log_warn "run the BYOK wizard or populate $(self_host_livekit_cloud_file)"
     fi
-    return 0
   fi
-  # voice.sh runs a local LiveKit server with dev credentials. droid/.env often
-  # also contains cloud LiveKit keys that override the dev pair when sourced,
-  # which breaks browser meet token minting in Console.
-  export LIVEKIT_URL="ws://localhost:7880"
-  export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
-  export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
 }
 
 # Best-effort, non-fatal drift warning used only when calls are explicitly

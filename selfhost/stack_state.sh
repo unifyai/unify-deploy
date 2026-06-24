@@ -79,7 +79,7 @@ data = {
         "PUBSUB_EMULATOR_HOST": env("PUBSUB_EMULATOR_HOST", "localhost:8085"),
         "GCP_PROJECT_ID": env("GCP_PROJECT_ID", "local-test-project"),
         "PUBSUB_TOPIC_SUFFIX": env("PUBSUB_TOPIC_SUFFIX", "-staging"),
-        "LIVEKIT_URL": "ws://localhost:7880",
+        "LIVEKIT_URL": env("LIVEKIT_URL", "ws://localhost:7880"),
         "SELF_HOST_DESKTOP_URL": env("SELF_HOST_DESKTOP_URL", "http://127.0.0.1:8090"),
     },
 }
