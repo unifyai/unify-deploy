@@ -2075,6 +2075,7 @@ async def unify_meet_webhook(request: Request):
 
     room_name = payload.get("room_name", "")
     livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    call_session_id = str(payload.get("call_session_id") or "").strip()
     if not room_name:
         logger.info("room_name is required")
         return Response(status_code=400)
@@ -2137,6 +2138,8 @@ async def unify_meet_webhook(request: Request):
         "livekit_agent_name": livekit_agent_name,
         "timestamp": int(time.time() * 1000),
     }
+    if call_session_id:
+        event_payload["call_session_id"] = call_session_id
     if opening_config is not None:
         event_payload["opening_config"] = opening_config
     try:
