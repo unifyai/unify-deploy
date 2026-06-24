@@ -196,8 +196,8 @@ self_host_stop_comms_bridge() {
 # POSTs the number's voice URL and needs TwiML back in seconds), unlike text,
 # which the comms bridge polls. cloudflared exposes the local CM ingress
 # (127.0.0.1:<port>/local/twilio/*) at a public https URL that the localhost
-# number's voice webhook points at. Opt-in (SELF_HOST_CALLS_ENABLED); no-op
-# otherwise, so the default poll-only stack is unchanged.
+# number's voice webhook points at. Calls are part of the local product path by
+# default; SELF_HOST_CALLS_ENABLED=0 is reserved for emergency local debugging.
 
 self_host_local_comms_port() {
   printf '%s' "${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
@@ -256,7 +256,7 @@ self_host_ensure_tunnel() {
   fi
 
   command -v cloudflared >/dev/null 2>&1 || {
-    echo "[call-tunnel] cloudflared not installed — inbound calls disabled" >&2
+    echo "[call-tunnel] cloudflared not installed — inbound calls unavailable" >&2
     return 1
   }
 
@@ -318,8 +318,8 @@ self_host_stop_tunnel() {
 
 # Re-point the localhost number's Twilio voice webhook at the current tunnel when
 # the tunnel URL changed (e.g. cloudflared restarted with a fresh quick-tunnel
-# host). Called from the runtime supervisor loop. Best-effort; no-op when calls
-# are disabled, no tunnel URL is known, or the URL is unchanged since last sync.
+# host). Called from the runtime supervisor loop. No-op only when explicitly
+# disabled, no tunnel URL is known, or the URL is unchanged since last sync.
 self_host_resync_voice_webhooks_if_changed() {
   self_host_calls_enabled || return 0
   local url marker prev script py
@@ -341,7 +341,8 @@ self_host_resync_voice_webhooks_if_changed() {
 
 # Clear the localhost number's voice webhook back to poll-only. Called when the
 # runtime is going away (service stop / stack down --full) so the shared number
-# never keeps pointing at a dead tunnel. Best-effort; no-op when calls disabled.
+# never keeps pointing at a dead tunnel. Best-effort; no-op only when explicitly
+# disabled.
 self_host_revert_voice_webhooks() {
   self_host_calls_enabled || return 0
   local script py
@@ -691,12 +692,10 @@ self_host_runtime_doctor_line() {
       printf 'comms-bridge: stopped\n'
     fi
   fi
-  if self_host_calls_enabled; then
-    if self_host_tunnel_is_running; then
-      printf 'call-tunnel: running (%s)\n' "$(self_host_tunnel_url 2>/dev/null || echo '?')"
-    else
-      printf 'call-tunnel: stopped\n'
-    fi
+  if self_host_tunnel_is_running; then
+    printf 'call-tunnel: running (%s)\n' "$(self_host_tunnel_url 2>/dev/null || echo '?')"
+  else
+    printf 'call-tunnel: stopped\n'
   fi
 }
 

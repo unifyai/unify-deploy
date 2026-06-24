@@ -23,23 +23,25 @@ SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53G
 #   localhost  http://localhost:3000/                                   +447700900001
 #
 # The localhost identities below are the live defaults used by the self-host
-# stack. They are "poll-only": their Twilio inbound webhooks are cleared so a
-# hosted backend never answers localhost traffic — the comms ingress bridge
-# polls Twilio and forwards inbound to the local CM. Run
-# `selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to enforce this.
+# stack. Text is "poll-only": Twilio messaging webhooks are cleared so a hosted
+# backend never answers localhost traffic — the comms ingress bridge polls
+# Twilio and forwards inbound to the local CM. Calls are synchronous, so the
+# stack always owns the localhost voice webhooks through a live cloudflared
+# tunnel. Run `selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to
+# enforce or inspect this state.
 SELF_HOST_COORDINATOR_EMAIL_ADDRESS="${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:-local-twin@unify.ai}"
 SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
 SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"
 SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
 
-# Inbound/outbound phone & WhatsApp calls are opt-in. Unlike text (which the
-# comms ingress bridge polls), a call is synchronous: Twilio POSTs the number's
-# voice webhook and needs TwiML back in seconds, so calls need a live public
-# webhook (a cloudflared tunnel to the local CM ingress) and a LiveKit Cloud SIP
-# trunk for the media leg (the local `livekit-server --dev` used for browser meet
-# has no SIP service). When disabled (default) the stack stays poll-only and the
-# localhost numbers keep cleared voice webhooks. See selfhost/sync_comms_webhooks.py.
-SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-0}"
+# Inbound/outbound phone & WhatsApp calls are part of the local product path.
+# Unlike text (which the comms ingress bridge polls), a call is synchronous:
+# Twilio POSTs the number's voice webhook and needs TwiML back in seconds, so the
+# stack must keep a live public webhook (cloudflared -> local CM ingress) and a
+# LiveKit Cloud SIP trunk for the media leg. The secrets live outside git in
+# ~/.droid/{comms_twilio.env,livekit_cloud.env}; tracked examples live next to
+# this script.
+SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-1}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in droid-deploy/deploy/selfhost/.
@@ -84,6 +86,7 @@ self_host_export_coordinator_contact_env() {
   export COMMS_BRIDGE_SMS_NUMBER="$DROID_COORDINATOR_PHONE"
 
   export DROID_COORDINATOR_WHATSAPP_NUMBER="$SELF_HOST_COORDINATOR_WHATSAPP_NUMBER"
+  export ORCHESTRA_DROID_WHATSAPP_POOL_NUMBER="${ORCHESTRA_DROID_WHATSAPP_POOL_NUMBER:-$DROID_COORDINATOR_WHATSAPP_NUMBER}"
   export ASSISTANT_WHATSAPP_NUMBER="$DROID_COORDINATOR_WHATSAPP_NUMBER"
   export COMMS_BRIDGE_WHATSAPP_NUMBER="$DROID_COORDINATOR_WHATSAPP_NUMBER"
 }
@@ -168,7 +171,7 @@ self_host_export_comms_twilio() {
   # bridge can poll inbound. Read only from the self-host state dir; never
   # written to a repo. No-op when absent, so the default stack is unchanged.
   local twilio_file
-  twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_twilio.env}"
+  twilio_file="$(self_host_comms_twilio_file)"
   [[ -f "$twilio_file" ]] || return 0
   load_self_host_env_file "$twilio_file"
   # Twilio credentials live in the local state file; Coordinator numbers come
@@ -176,8 +179,14 @@ self_host_export_comms_twilio() {
   self_host_export_coordinator_contact_env
 }
 
+self_host_comms_twilio_file() {
+  printf '%s' \
+    "${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_twilio.env}"
+}
+
 self_host_calls_enabled() {
-  # True when the opt-in phone/WhatsApp call support is turned on.
+  # Calls are enabled by default for local product parity. The override exists
+  # only for emergency local debugging and should not be used by normal stack up.
   case "${SELF_HOST_CALLS_ENABLED:-0}" in
     1 | true | TRUE | yes | YES | on | ON) return 0 ;;
     *) return 1 ;;

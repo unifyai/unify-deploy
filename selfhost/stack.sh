@@ -21,17 +21,15 @@
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
 #   ./scripts/stack.sh sync-comms [--check|--set-voice|--revert-voice]
 #                                   Reconcile localhost Twilio webhooks (text
-#                                   poll-only; voice -> tunnel when calls enabled)
+#                                   poll-only; voice -> local tunnel by default)
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by droid setup)
-#   SELF_HOST_CALLS_ENABLED=1 Opt in to inbound/outbound phone & WhatsApp calls
-#                             (needs LiveKit Cloud SIP creds in
-#                             ~/.droid/livekit_cloud.env + cloudflared). Brings up
-#                             a tunnel + SIP trunk and points the localhost
-#                             number's voice webhook at the local CM.
+#   Phone/WhatsApp calls are enabled by default. They need cloudflared plus
+#   ~/.droid/comms_twilio.env and ~/.droid/livekit_cloud.env (see tracked
+#   examples in selfhost/). `stack up` fails if the call edge cannot be owned.
 #
 set -euo pipefail
 
@@ -250,6 +248,31 @@ cmd_doctor() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     self_host_runtime_doctor_line | sed 's/^/  /'
+    if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
+      if declare -F ensure_cloudflared &>/dev/null; then
+        if ensure_cloudflared >/dev/null 2>&1; then
+          log_success "cloudflared ready (local call tunnel)"
+        else
+          log_error "cloudflared missing — calls require a public local webhook"
+          ok=false
+        fi
+      fi
+      local twilio_file livekit_file
+      twilio_file="$(self_host_comms_twilio_file)"
+      livekit_file="$(self_host_livekit_cloud_file)"
+      if [[ -f "$twilio_file" ]]; then
+        log_success "Twilio call/text credentials found ($twilio_file)"
+      else
+        log_error "Missing $twilio_file — copy selfhost/comms_twilio.env.example"
+        ok=false
+      fi
+      if [[ -f "$livekit_file" ]]; then
+        log_success "LiveKit Cloud SIP credentials found ($livekit_file)"
+      else
+        log_error "Missing $livekit_file — copy selfhost/livekit_cloud.env.example"
+        ok=false
+      fi
+    fi
     echo ""
     log_info "Daily driver: droid stack up / droid stack down"
     log_info "Stop everything: droid stack down --full  (or: droid service disable)"
@@ -283,14 +306,23 @@ cmd_sync_comms() {
       self_host_export_comms_twilio
     fi
   fi
+  if [[ "$#" -eq 0 ]] && declare -F self_host_calls_enabled &>/dev/null \
+    && self_host_calls_enabled; then
+    if declare -F self_host_ensure_tunnel &>/dev/null; then
+      self_host_ensure_tunnel || {
+        log_error "Call tunnel failed to start; cannot sync voice webhooks"
+        return 1
+      }
+    fi
+    set -- --set-voice
+  fi
   python3 "$SYNC_COMMS_SCRIPT" "$@"
 }
 
-# Select the LiveKit backend for the runtime. Browser meet uses the local
-# `livekit-server --dev` (no SIP). Phone/WhatsApp calls need LiveKit Cloud SIP,
-# so when calls are enabled the cloud creds (from ~/.droid/livekit_cloud.env via
-# self_host_export_livekit_cloud) win over both the dev pair and any droid/.env
-# values, and serve browser meet too.
+# Select the LiveKit backend for the runtime. Browser meet can use local
+# `livekit-server --dev`, but phone/WhatsApp calls need LiveKit Cloud SIP, so the
+# cloud creds (from ~/.droid/livekit_cloud.env via self_host_export_livekit_cloud)
+# win over both the dev pair and any droid/.env values, and serve browser meet too.
 setup_livekit_env() {
   if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
     if declare -F self_host_export_livekit_cloud &>/dev/null; then
@@ -310,9 +342,8 @@ setup_livekit_env() {
   export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
 }
 
-# Best-effort, non-fatal drift warning used during `up`. Only runs when WhatsApp
-# creds are present; never blocks or fails startup. Skipped when calls are
-# enabled — cmd_up_calls_setup then sets the voice webhook authoritatively.
+# Best-effort, non-fatal drift warning used only when calls are explicitly
+# disabled. Normal local startup owns the voice webhooks authoritatively.
 warn_if_comms_webhooks_drift() {
   [[ -f "$SYNC_COMMS_SCRIPT" ]] || return 0
   if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
@@ -321,17 +352,19 @@ warn_if_comms_webhooks_drift() {
   [[ -n "${TWILIO_WA_ACCOUNT_SID:-}" && -n "${TWILIO_WA_AUTH_TOKEN:-}" ]] || return 0
   if ! python3 "$SYNC_COMMS_SCRIPT" --check >/dev/null 2>&1; then
     log_warn "A localhost Twilio number still has a hosted inbound webhook —"
-    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms"
+    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms --set-voice"
   fi
 }
 
-# Bring up the inbound-call edge (opt-in): the cloudflared tunnel to the local CM
-# ingress, the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook
-# pointing at the tunnel (text stays poll-only). Best-effort and non-fatal: a
-# failure here never blocks the rest of the stack. No-op when calls are disabled.
+# Bring up the inbound-call edge: the cloudflared tunnel to the local CM ingress,
+# the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook pointing at
+# the tunnel (text stays poll-only). This is a startup requirement because a
+# stale/dead voice webhook makes Twilio play "application error" before Droid can
+# log anything.
 cmd_up_calls_setup() {
   if ! declare -F self_host_calls_enabled &>/dev/null || ! self_host_calls_enabled; then
-    return 0
+    log_error "Local phone/WhatsApp calls are disabled. They are required for the self-host stack."
+    return 1
   fi
   log_info "Enabling phone/WhatsApp calls (LiveKit Cloud SIP + tunnel)..."
 
@@ -340,15 +373,15 @@ cmd_up_calls_setup() {
     source "$ENSURE_PREREQS_SCRIPT"
     if declare -F ensure_cloudflared &>/dev/null; then
       if ! ensure_cloudflared; then
-        log_warn "cloudflared unavailable — inbound calls disabled this session"
-        return 0
+        log_error "cloudflared unavailable — cannot expose local call webhook"
+        return 1
       fi
     fi
   fi
 
   if ! declare -F self_host_ensure_tunnel &>/dev/null || ! self_host_ensure_tunnel; then
-    log_warn "Call tunnel failed to start — inbound calls disabled this session"
-    return 0
+    log_error "Call tunnel failed to start"
+    return 1
   fi
   log_success "Call tunnel: ${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
 
@@ -357,7 +390,10 @@ cmd_up_calls_setup() {
 
   if [[ -f "$SCRIPT_DIR/provision_call_sip.py" ]]; then
     "$py" "$SCRIPT_DIR/provision_call_sip.py" \
-      || log_warn "LiveKit SIP trunk provisioning failed — inbound calls may not route"
+      || {
+        log_error "LiveKit SIP trunk provisioning failed"
+        return 1
+      }
   fi
 
   if [[ -f "$SYNC_COMMS_SCRIPT" ]]; then
@@ -370,7 +406,8 @@ cmd_up_calls_setup() {
           >"$(self_host_voice_synced_url_file)"
       fi
     else
-      log_warn "Voice webhook sync failed — inbound calls may be answered by staging/prod"
+      log_error "Voice webhook sync failed — refusing to leave stale call routing"
+      return 1
     fi
   fi
 }
