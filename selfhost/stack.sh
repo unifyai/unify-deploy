@@ -27,6 +27,7 @@
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by droid setup)
+#   SELF_HOST_BOOTSTRAP_OWNER=1  Create the legacy owner@selfhost.dev account during clean redeploy
 #   Phone/WhatsApp calls are enabled by default. They need cloudflared plus
 #   ~/.droid/comms_twilio.env and ~/.droid/livekit_cloud.env (see tracked
 #   examples in selfhost/). `stack up` fails if the call edge cannot be owned.
@@ -465,6 +466,28 @@ raise SystemExit(1)
 PY
 }
 
+self_host_bootstrap_owner_enabled() {
+  case "${SELF_HOST_BOOTSTRAP_OWNER:-0}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+clear_self_host_owner_state() {
+  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    export_self_host_coordinator_runtime_file
+  fi
+
+  rm -f \
+    "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$SELF_HOST_STATE_DIR/coordinator-runtime.json}" \
+    "$SELF_HOST_STATE_DIR/self-host-owner.json"
+}
+
 cmd_seed_builtins() {
   export SELF_HOST=1
   export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
@@ -548,11 +571,16 @@ wait_for_source_stack_ready() {
   local orchestra_port="${ORCHESTRA_PORT:-8000}"
   local gateway_host="${DROID_GATEWAY_HOST:-127.0.0.1}"
   local gateway_port="${DROID_GATEWAY_PORT:-8001}"
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
 
   wait_for_http "Console" "http://127.0.0.1:${console_port}" 90
   wait_for_http "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features" 90
   wait_for_http "Droid gateway" "http://${gateway_host}:${gateway_port}/health" 90
-  wait_for_coordinator_runtime 90
+  if [[ -n "$runtime_file" && -f "$runtime_file" ]]; then
+    wait_for_coordinator_runtime 90
+  else
+    log_info "Coordinator runtime deferred until a self-host account signs in"
+  fi
 }
 
 check_account_page() {
@@ -600,13 +628,19 @@ cmd_redeploy() {
   cmd_down --full || true
   cmd_purge_orchestra_db
 
-  cmd_resume
-  cmd_reset --yes
-  cmd_seed_builtins
+  if self_host_bootstrap_owner_enabled; then
+    cmd_resume
+    cmd_reset --yes --bootstrap-owner
+    cmd_seed_builtins
 
-  if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
-    DROID_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
-    SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
+    if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+      DROID_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
+      SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
+    fi
+  else
+    clear_self_host_owner_state
+    cmd_resume
+    log_info "Self-host owner bootstrap skipped; create an account at http://localhost:${CONSOLE_PORT:-3000}/"
   fi
 
   wait_for_source_stack_ready
@@ -1139,7 +1173,7 @@ console = f"http://127.0.0.1:{os.environ['CONSOLE_PORT']}"
 orchestra = f"http://127.0.0.1:{os.environ['ORCHESTRA_PORT']}"
 gateway = f"http://{os.environ['DROID_GATEWAY_HOST']}:{os.environ['DROID_GATEWAY_PORT']}"
 
-check("Console", "GET", console, {200})
+check("Console login", "GET", f"{console}/login", {200})
 check("Orchestra features", "GET", f"{orchestra}/v0/features", {200})
 check(
     "Droid gateway",
@@ -1167,9 +1201,7 @@ if runtime_file:
     try:
         credentials = json.loads(Path(runtime_file).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        failures.append("Coordinator runtime file")
-        log("ERROR", f"Coordinator runtime file missing: {runtime_file}")
-        log("INFO", f"Coordinator runtime file recovery: {recovery_cmd}")
+        log("INFO", f"Coordinator checks skipped: no saved login at {runtime_file}")
     except json.JSONDecodeError as exc:
         failures.append("Coordinator runtime file")
         log("ERROR", f"Coordinator runtime file is invalid JSON: {exc}")
@@ -1215,7 +1247,11 @@ if api_key and assistant_id:
     )
 else:
     log("INFO", "Coordinator checks skipped: register or sign in first.")
-    log("INFO", f"To recreate the local owner and Coordinator now: {recovery_cmd}")
+    log(
+        "INFO",
+        "To opt into the legacy local owner bootstrap now: "
+        f"SELF_HOST_BOOTSTRAP_OWNER=1 {recovery_cmd}",
+    )
 
 if failures:
     log("ERROR", "Self-host smoke failed: " + ", ".join(failures))

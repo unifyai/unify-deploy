@@ -12,6 +12,7 @@ SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 
 YES=false
 STOP_RUNTIME=true
+BOOTSTRAP_OWNER=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,16 +24,21 @@ while [[ $# -gt 0 ]]; do
       STOP_RUNTIME=false
       shift
       ;;
+    --bootstrap-owner)
+      BOOTSTRAP_OWNER=true
+      shift
+      ;;
     -h|--help)
       cat <<EOF
-Usage: $(basename "$0") [--yes] [--keep-runtime]
+Usage: $(basename "$0") [--yes] [--keep-runtime] [--bootstrap-owner]
 
 Deletes local self-host user/org/assistant/project history while preserving the
 self-host owner login, API key, platform defaults, and the personal Coordinator.
 
 Options:
-  --yes           Run without an interactive confirmation prompt.
-  --keep-runtime  Leave the current Droid runtime process running.
+  --yes              Run without an interactive confirmation prompt.
+  --keep-runtime     Leave the current Droid runtime process running.
+  --bootstrap-owner  Create the legacy local owner if no real owner exists.
 EOF
       exit 0
       ;;
@@ -60,6 +66,9 @@ fi
 export SELF_HOST=1
 export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
 export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+if [[ "$BOOTSTRAP_OWNER" == "true" ]]; then
+  export SELF_HOST_BOOTSTRAP_OWNER=1
+fi
 
 if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
   # shellcheck disable=SC1090
@@ -143,6 +152,13 @@ engine = create_engine(str(settings.db_url), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 identifier_preparer = engine.dialect.identifier_preparer
 reset_api_key = os.environ.get("SELF_HOST_RESET_API_KEY", "").strip()
+bootstrap_owner = os.environ.get("SELF_HOST_BOOTSTRAP_OWNER", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("DROID_HOME") or Path.home() / ".droid")
 
 
 def quote_identifier(value: str) -> str:
@@ -173,6 +189,37 @@ def owner_display_name(owner: User) -> str | None:
     ]
     display_name = " ".join(str(part).strip() for part in parts if str(part or "").strip())
     return display_name or None
+
+
+def read_json_file(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def resolve_owner_from_api_key(session, api_key: str) -> User | None:
+    if not api_key:
+        return None
+    return session.scalar(
+        select(User)
+        .join(ApiKey, ApiKey.user_id == User.id)
+        .where(ApiKey.key == api_key),
+    )
+
+
+def resolve_owner_from_state(session) -> User | None:
+    owner_payload = read_json_file(state_dir / "self-host-owner.json")
+    owner_email = str(owner_payload.get("email") or "").strip().lower()
+    if owner_email:
+        owner = session.scalar(select(User).where(User.email == owner_email))
+        if owner is not None:
+            return owner
+
+    runtime_payload = read_json_file(state_dir / "coordinator-runtime.json")
+    return resolve_owner_from_api_key(
+        session,
+        str(runtime_payload.get("apiKey") or runtime_payload.get("api_key") or "").strip(),
+    )
 
 
 def delete_matching(session, table_name: str, columns: set[str], values: dict[str, list[Any]]) -> int:
@@ -239,21 +286,27 @@ def reset_coordinator_profile(coordinator: Assistant) -> None:
 
 def resolve_reset_owner(session) -> User:
     if reset_api_key:
-        owner = session.scalar(
-            select(User)
-            .join(ApiKey, ApiKey.user_id == User.id)
-            .where(ApiKey.key == reset_api_key),
-        )
+        owner = resolve_owner_from_api_key(session, reset_api_key)
         if owner is None:
             raise RuntimeError("SELF_HOST_RESET_API_KEY does not match a local user")
         return owner
 
+    owner = resolve_owner_from_state(session)
+    if owner is not None:
+        return owner
+
     owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
-    if owner is None:
+    if owner is not None:
+        return owner
+
+    if bootstrap_owner:
         run_self_host_bootstrap(SessionLocal)
         owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
     if owner is None:
-        raise RuntimeError(f"Self-host owner {SELF_HOST_OWNER_EMAIL} was not bootstrapped")
+        raise RuntimeError(
+            "No local self-host owner exists. Create an account in Console first, "
+            "or rerun with --bootstrap-owner to create the legacy local owner."
+        )
     return owner
 
 
@@ -425,7 +478,6 @@ with SessionLocal() as session:
         "default_tasks": default_tasks,
         "credits": normalize_json(billing_account.credits if billing_account else None),
     }
-    state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("DROID_HOME") or Path.home() / ".droid")
     write_json_file(
         state_dir / "coordinator-runtime.json",
         {
