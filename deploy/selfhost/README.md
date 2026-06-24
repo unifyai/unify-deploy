@@ -261,11 +261,12 @@ Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
 data, E2E tests) and is not the way to run the product locally — `droid stack
 up` invokes it with `--self-host` for you.
 
-### Phone & WhatsApp calls (opt-in, source install)
+### Phone & WhatsApp calls (source install)
 
 Browser/Console voice (Unify Meet) works out of the box via the local dev
-LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are opt-in
-because they need two things the default poll-only stack deliberately avoids:
+LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are enabled
+for local self-host because onboarding exercises them. They need two extra
+runtime pieces:
 
 - A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
   URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
@@ -276,25 +277,25 @@ because they need two things the default poll-only stack deliberately avoids:
   worker connects outbound to the cloud room, so only the HTTP webhook is
   tunneled — no SIP/RTP tunneling.
 
-Enable it:
+Before starting the stack, create the local secret files from the tracked
+templates:
 
 ```bash
-# 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
-# 2. Provide its creds + SIP URI (BYOK wizard, or write ~/.droid/livekit_cloud.env):
-#      LIVEKIT_URL=wss://<project>.livekit.cloud
-#      LIVEKIT_API_KEY=...
-#      LIVEKIT_API_SECRET=...
-#      LIVEKIT_SIP_URI=<project>.sip.livekit.cloud
-# 3. Turn calls on and start the stack:
-export SELF_HOST_CALLS_ENABLED=1
+mkdir -p ~/.droid
+cp selfhost/comms_twilio.env.example ~/.droid/comms_twilio.env
+cp selfhost/livekit_cloud.env.example ~/.droid/livekit_cloud.env
+
+# Fill both files with the localhost Twilio + LiveKit Cloud SIP credentials.
 bash selfhost/stack.sh up
 ```
 
-On `up` (when enabled) the stack: installs `cloudflared`, starts the tunnel,
-ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
+On `up` the stack installs `cloudflared`, starts the tunnel, ensures a LiveKit
+Cloud inbound SIP trunk covers the localhost numbers
 (`selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
-(`selfhost/sync_comms_webhooks.py --set-voice`). `stack.sh down --full` reverts
-the voice webhook and stops the tunnel.
+(`selfhost/sync_comms_webhooks.py --set-voice`). If any call prerequisite cannot
+be established, `stack.sh up` fails rather than leaving Twilio pointed at a stale
+or hosted webhook. `stack.sh down --full` reverts the voice webhook and stops the
+tunnel.
 
 Caveats:
 
@@ -304,7 +305,8 @@ Caveats:
 - cloudflared quick tunnels get a fresh URL each run; the voice webhook is
   re-synced automatically on `up` and whenever the tunnel restarts.
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio
-  account; the voice-app attach is best-effort and logs a warning otherwise.
+  account; otherwise startup fails with the Twilio error so the broken call path
+  is visible immediately.
 
 ## Builtins Artifacts
 

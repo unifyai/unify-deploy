@@ -173,6 +173,60 @@ def test_general_update_publishes_personal_coordinator_shape():
     assert published["event"]["org_id"] is None
 
 
+def test_general_update_publishes_no_null_runtime_strings():
+    """Runtime string fields are env-safe even when source metadata is sparse."""
+
+    publisher = _Publisher()
+    sparse_assistant = {
+        **_assistant(is_coordinator=True),
+        "user_first_name": None,
+        "user_surname": None,
+        "user_number": None,
+        "user_whatsapp_number": "+4915550100009",
+        "assistant_surname": None,
+        "assistant_age": None,
+        "assistant_nationality": None,
+        "assistant_about": None,
+        "assistant_job_title": None,
+        "assistant_timezone": None,
+        "assistant_number": None,
+        "assistant_whatsapp_number": None,
+        "assistant_discord_bot_id": None,
+        "assistant_slack_bot_user_id": None,
+        "voice_provider": None,
+        "voice_id": None,
+        "desktop_mode": None,
+    }
+    response, _ = _post_assistant_update(
+        data={"assistant_id": "assistant-123"},
+        assistant_data=sparse_assistant,
+        publisher=publisher,
+    )
+
+    assert response.status_code == 200
+    event = _published_payload(publisher)["event"]
+    assert event["user_whatsapp_number"] == "+4915550100009"
+    for field in [
+        "user_first_name",
+        "user_surname",
+        "user_number",
+        "assistant_surname",
+        "assistant_age",
+        "assistant_nationality",
+        "assistant_about",
+        "assistant_job_title",
+        "assistant_timezone",
+        "assistant_number",
+        "assistant_whatsapp_number",
+        "assistant_discord_bot_id",
+        "assistant_slack_bot_user_id",
+        "voice_provider",
+        "voice_id",
+        "desktop_mode",
+    ]:
+        assert event[field] == ""
+
+
 def test_invalid_update_kind_returns_400():
     """The update discriminator accepts only the runtime-supported values."""
 

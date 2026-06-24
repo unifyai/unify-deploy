@@ -66,6 +66,17 @@ def _post(path: str, envelope: dict) -> None:
     response.raise_for_status()
 
 
+def _orchestra_base_url() -> str:
+    return _env("ORCHESTRA_URL", "http://127.0.0.1:8000/v0").rstrip("/")
+
+
+def _orchestra_admin_headers() -> dict[str, str] | None:
+    admin_key = _env("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        return None
+    return {"Authorization": f"Bearer {admin_key}"}
+
+
 # --------------------------------------------------------------------------- #
 # Gmail adapter (email)
 # --------------------------------------------------------------------------- #
@@ -376,6 +387,8 @@ class TwilioAdapter:
             sender = self._strip(msg.from_ or "")
             if sender not in self._allowlist:
                 continue
+            if self._wa and self._is_call_permission_response(msg):
+                self._record_call_permission(sender, msg)
             _post("/local/comms/envelope", self._envelope(msg, sender))
             if self._wa:
                 self._touch_inbound_window(sender)
@@ -387,6 +400,44 @@ class TwilioAdapter:
             )
         return delivered
 
+    @staticmethod
+    def _is_call_permission_response(msg) -> bool:
+        return (getattr(msg, "body", "") or "").strip() == "VOICE_CALL_REQUEST"
+
+    @staticmethod
+    def _button_payload(msg) -> str:
+        payload = getattr(msg, "button_payload", "") or getattr(
+            msg,
+            "ButtonPayload",
+            "",
+        )
+        return str(payload or "").strip()
+
+    def _record_call_permission(self, sender: str, msg) -> None:
+        headers = _orchestra_admin_headers()
+        if headers is None:
+            return
+        button_payload = self._button_payload(msg)
+        status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+        try:
+            response = requests.post(
+                f"{_orchestra_base_url()}/admin/whatsapp/call-permission",
+                headers=headers,
+                json={
+                    "pool_number": self._number,
+                    "contact_number": sender,
+                    "status": status,
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            print(
+                f"[bridge] whatsapp call permission {status} from={sender!r}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"[bridge] whatsapp call permission update failed: {exc}", flush=True)
+
     def _touch_inbound_window(self, sender: str) -> None:
         """Tell Orchestra an inbound arrived so the WhatsApp 24h free-form window
         opens for this (pool, sender).
@@ -397,15 +448,14 @@ class TwilioAdapter:
         side-effect. It never blocks ingest — a failed touch only means the next
         reply may fall back to a template.
         """
-        admin_key = _env("ORCHESTRA_ADMIN_KEY")
-        if not admin_key:
+        headers = _orchestra_admin_headers()
+        if headers is None:
             return
-        base = _env("ORCHESTRA_URL", "http://127.0.0.1:8000/v0").rstrip("/")
         try:
             requests.get(
-                f"{base}/admin/whatsapp/resolve",
+                f"{_orchestra_base_url()}/admin/whatsapp/resolve",
                 params={"pool_number": self._number, "sender": sender},
-                headers={"Authorization": f"Bearer {admin_key}"},
+                headers=headers,
                 timeout=10,
             )
         except Exception as exc:  # best-effort: never block inbound forwarding

@@ -115,11 +115,40 @@ WATCHER_PATH="/usr/local/bin/droid-pool-watcher.sh"
 if curl -sf -H "$METADATA_HEADER" "$METADATA_URL/pool-watcher-script" \
     -o "$WATCHER_PATH" 2>/dev/null && [[ -s "$WATCHER_PATH" ]]; then
     chmod +x "$WATCHER_PATH"
-    systemctl restart droid-pool-watcher.service 2>/dev/null || true
     echo "Pool watcher updated from metadata"
 else
     echo "No pool-watcher-script metadata, using baked-in version"
 fi
+
+# Converge the pool-watcher systemd unit on every boot. A pool image baked
+# before the watcher was renamed still ships a legacy unit that runs a stale
+# watcher binary (whose /infra/vm/ready POST predates required fields), which
+# shadows the metadata-supplied script and dead-ends desktop readiness. Make
+# the startup script authoritative: disable any legacy unit and (re)install the
+# current unit pointing at WATCHER_PATH so the VM always runs the live watcher.
+systemctl disable --now unity-pool-watcher.service 2>/dev/null || true
+cat > /etc/systemd/system/droid-pool-watcher.service << 'WATCHERUNIT'
+[Unit]
+Description=Droid Pool Watcher - metadata-driven VM assignment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/droid-pool-watcher.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=droid-pool-watcher
+
+[Install]
+WantedBy=multi-user.target
+WATCHERUNIT
+systemctl daemon-reload
+systemctl enable droid-pool-watcher.service 2>/dev/null || true
+systemctl restart droid-pool-watcher.service 2>/dev/null || true
+echo "Pool watcher service converged (droid-pool-watcher.service)"
 
 # =============================================================================
 # Update Supervisord Config from Metadata

@@ -17,6 +17,11 @@ COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 # acceptance boundary.
 START_INTENT_DISPATCH_TIMEOUT_SECONDS = 0.1
 
+
+def _runtime_str(value) -> str:
+    return "" if value is None else str(value)
+
+
 from common.metrics import (
     BUILD_WEBHOOK_CONTEXT_DURATION,
     JOB_DEMAND_TOTAL,
@@ -243,7 +248,8 @@ def upsert_phone_call_session(payload: dict) -> dict:
 
 
 def get_phone_call_session(
-    provider_call_sid: str, provider: str = "twilio"
+    provider_call_sid: str,
+    provider: str = "twilio",
 ) -> dict | None:
     """Fetch persisted PSTN call routing state by provider CallSid."""
     resp = requests.get(
@@ -281,7 +287,8 @@ def update_phone_call_session(payload: dict) -> dict | None:
 
 
 def get_whatsapp_call_session(
-    provider_call_sid: str, provider: str = "twilio"
+    provider_call_sid: str,
+    provider: str = "twilio",
 ) -> dict | None:
     """Fetch persisted WhatsApp call routing state by provider CallSid."""
     resp = requests.get(
@@ -1068,42 +1075,38 @@ def _build_start_job_request_data(
     is_coordinator = assistant.get("is_coordinator", False)
     demo_id = assistant.get("demo_id", None)
     data = {
-        "api_key": api_key,
-        "medium": medium,
-        "assistant_id": assistant_id,
-        "user_id": assistant["user_id"],
-        "user_first_name": assistant["user_first_name"],
-        "user_surname": assistant["user_surname"],
-        "user_email": assistant["user_email"],
-        "assistant_first_name": assistant["assistant_first_name"],
-        "assistant_surname": assistant["assistant_surname"],
-        "assistant_age": assistant["assistant_age"],
-        "assistant_nationality": assistant["assistant_nationality"],
-        "assistant_about": assistant["assistant_about"],
-        "assistant_job_title": assistant.get("assistant_job_title", ""),
-        "assistant_timezone": assistant["assistant_timezone"],
-        "user_number": assistant["user_number"],
-        "assistant_number": assistant["assistant_number"],
-        "assistant_email": assistant["assistant_email"],
-        "assistant_email_provider": assistant.get(
-            "assistant_email_provider",
-            "google_workspace",
+        "api_key": _runtime_str(api_key),
+        "medium": _runtime_str(medium),
+        "assistant_id": _runtime_str(assistant_id),
+        "user_id": _runtime_str(assistant["user_id"]),
+        "user_first_name": _runtime_str(assistant["user_first_name"]),
+        "user_surname": _runtime_str(assistant["user_surname"]),
+        "user_email": _runtime_str(assistant["user_email"]),
+        "assistant_first_name": _runtime_str(assistant["assistant_first_name"]),
+        "assistant_surname": _runtime_str(assistant["assistant_surname"]),
+        "assistant_age": _runtime_str(assistant["assistant_age"]),
+        "assistant_nationality": _runtime_str(assistant["assistant_nationality"]),
+        "assistant_about": _runtime_str(assistant["assistant_about"]),
+        "assistant_job_title": _runtime_str(assistant.get("assistant_job_title")),
+        "assistant_timezone": _runtime_str(assistant["assistant_timezone"]),
+        "user_number": _runtime_str(assistant["user_number"]),
+        "assistant_number": _runtime_str(assistant["assistant_number"]),
+        "assistant_email": _runtime_str(assistant["assistant_email"]),
+        "assistant_email_provider": _runtime_str(
+            assistant.get("assistant_email_provider") or "google_workspace",
         ),
-        "user_whatsapp_number": assistant["user_whatsapp_number"],
-        "assistant_whatsapp_number": assistant.get(
-            "assistant_whatsapp_number",
-            "",
+        "user_whatsapp_number": _runtime_str(assistant["user_whatsapp_number"]),
+        "assistant_whatsapp_number": _runtime_str(
+            assistant.get("assistant_whatsapp_number"),
         ),
-        "assistant_discord_bot_id": assistant.get(
-            "assistant_discord_bot_id",
-            "",
+        "assistant_discord_bot_id": _runtime_str(
+            assistant.get("assistant_discord_bot_id"),
         ),
-        "assistant_slack_bot_user_id": assistant.get(
-            "assistant_slack_bot_user_id",
-            "",
+        "assistant_slack_bot_user_id": _runtime_str(
+            assistant.get("assistant_slack_bot_user_id"),
         ),
-        "voice_provider": assistant["voice_provider"],
-        "voice_id": assistant["voice_id"],
+        "voice_provider": _runtime_str(assistant["voice_provider"]),
+        "voice_id": _runtime_str(assistant["voice_id"]),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Droid derives demo_mode from demo_id presence.

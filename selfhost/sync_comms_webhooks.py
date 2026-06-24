@@ -15,8 +15,9 @@ stays cleared. Because a number has a single ``VoiceUrl``, voice is
 single-owner-at-a-time across developers; ``stack down`` reverts it.
 
 Modes:
-  * default (no flag): full poll-only — clear both messaging and voice webhooks.
-    Used when calls are disabled.
+  * default (no flag): keep messaging poll-only and, unless
+    ``SELF_HOST_CALLS_ENABLED=0`` is set, point the voice webhook at the local
+    tunnel.
   * ``--set-voice``: keep messaging poll-only, but point the voice webhook at the
     tunnel (``DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL``/``LOCAL_COMMS_PUBLIC_URL``).
   * ``--revert-voice``: clear the voice webhook back to poll-only (messaging was
@@ -36,8 +37,8 @@ Channels:
     (``TWILIO_ACCOUNT_SID`` / ``TWILIO_AUTH_TOKEN``).
 
 Usage:
-  python3 sync_comms_webhooks.py                  # poll-only (clear all webhooks)
-  python3 sync_comms_webhooks.py --set-voice       # voice -> tunnel, text poll-only
+  python3 sync_comms_webhooks.py                  # voice -> tunnel, text poll-only
+  python3 sync_comms_webhooks.py --set-voice       # same, explicit
   python3 sync_comms_webhooks.py --revert-voice    # clear voice back to poll-only
   python3 sync_comms_webhooks.py --check           # report drift, exit 1 if any
 """
@@ -344,6 +345,15 @@ def _public_url(env: dict) -> str:
     return url.rstrip("/")
 
 
+def _calls_enabled(env: dict) -> bool:
+    return (env.get("SELF_HOST_CALLS_ENABLED") or "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _phone_voice_target(public_url: str) -> str:
     return f"{public_url}/local/twilio/call"
 
@@ -459,15 +469,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    env = dict(os.environ)
+    _load_twilio_env_file(env)
+
     if args.set_voice:
         mode = "set-voice"
     elif args.revert_voice:
         mode = "revert-voice"
+    elif _calls_enabled(env):
+        mode = "set-voice"
     else:
         mode = "clear"
-
-    env = dict(os.environ)
-    _load_twilio_env_file(env)
 
     public_url = _public_url(env)
     if mode == "set-voice" and not public_url:
