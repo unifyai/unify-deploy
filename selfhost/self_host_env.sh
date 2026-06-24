@@ -12,6 +12,21 @@ set -euo pipefail
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
 SELF_HOST_COORDINATOR_VOICE_PROVIDER="${SELF_HOST_COORDINATOR_VOICE_PROVIDER:-elevenlabs}"
 SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53GoZ742B}"
+# Shared Coordinator contact identities, dedicated per deployment mode so that
+# staging/production traffic never collides with localhost. Each mode owns a
+# distinct WhatsApp number, SMS/voice number, and email mailbox:
+#
+#   mode       console URL                                              WhatsApp
+#   ---------  ------------------------------------------------------   --------------
+#   production https://console.unify.ai/                                +447700900012
+#   staging    https://internal.example.com +447700900013
+#   localhost  http://localhost:3000/                                   +447700900001
+#
+# The localhost identities below are the live defaults used by the self-host
+# stack. They are "poll-only": their Twilio inbound webhooks are cleared so a
+# hosted backend never answers localhost traffic — the comms ingress bridge
+# polls Twilio and forwards inbound to the local CM. Run
+# `selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to enforce this.
 SELF_HOST_COORDINATOR_EMAIL_ADDRESS="${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:-local-twin@unify.ai}"
 SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
 SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"

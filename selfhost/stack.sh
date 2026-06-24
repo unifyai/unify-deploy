@@ -17,6 +17,7 @@
 #   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
 #   ./scripts/stack.sh reset        Purge local self-host onboarding/chat history
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
+#   ./scripts/stack.sh sync-comms [--check]  Make localhost Twilio numbers poll-only
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
@@ -258,6 +259,35 @@ cmd_doctor() {
   return 1
 }
 
+SYNC_COMMS_SCRIPT="$SCRIPT_DIR/sync_comms_webhooks.py"
+
+# Enforce that the localhost Twilio numbers are "poll-only" (no hosted inbound
+# webhook), so a hosted backend never answers localhost traffic. Reads the
+# localhost numbers from self_host_env.sh and Twilio creds from the env /
+# ~/.droid/comms_twilio.env. No-op when the script or creds are absent.
+cmd_sync_comms() {
+  [[ -f "$SYNC_COMMS_SCRIPT" ]] || { log_warn "Missing $SYNC_COMMS_SCRIPT"; return 0; }
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    if declare -F self_host_export_comms_twilio &>/dev/null; then
+      self_host_export_comms_twilio
+    fi
+  fi
+  python3 "$SYNC_COMMS_SCRIPT" "$@"
+}
+
+# Best-effort, non-fatal drift warning used during `up`. Only runs when WhatsApp
+# creds are present; never blocks or fails startup.
+warn_if_comms_webhooks_drift() {
+  [[ -f "$SYNC_COMMS_SCRIPT" ]] || return 0
+  [[ -n "${TWILIO_WA_ACCOUNT_SID:-}" && -n "${TWILIO_WA_AUTH_TOKEN:-}" ]] || return 0
+  if ! python3 "$SYNC_COMMS_SCRIPT" --check >/dev/null 2>&1; then
+    log_warn "A localhost Twilio number still has a hosted inbound webhook —"
+    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms"
+  fi
+}
+
 cmd_up() {
   echo ""
   echo "=============================================="
@@ -317,6 +347,9 @@ cmd_up() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
+
+  # Warn (don't mutate) if a localhost number drifted back to a hosted webhook.
+  warn_if_comms_webhooks_drift
 
   # Self-host always runs with Console, so the Coordinator onboarding flow
   # (narration + reference quiz) must stay active even though the public droid
@@ -803,6 +836,7 @@ main() {
     repair-console|restart-console) cmd_repair_console "$@" ;;
     reset|reset-db) cmd_reset "$@" ;;
     dev-env|print-console-env) cmd_dev_env "$@" ;;
+    sync-comms) cmd_sync_comms "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
