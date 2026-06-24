@@ -219,3 +219,85 @@ def test_twilio_poll_skips_outbound_messages(monkeypatch) -> None:
     assert adapter.poll(1_000_000, set()) == 1
     assert len(forwarded) == 1
     assert forwarded[0]["event"]["body"] == "hello"
+
+
+def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> None:
+    sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
+    adapter = bridge.TwilioAdapter("whatsapp", "+447700900001", {"+4915550100009"})
+    adapter._client = SimpleNamespace(
+        messages=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(
+                    sid="wa-permission",
+                    direction="inbound",
+                    date_sent=sent,
+                    date_created=sent,
+                    from_="whatsapp:+4915550100009",
+                    to="whatsapp:+447700900001",
+                    body="VOICE_CALL_REQUEST",
+                    button_payload="ACCEPTED",
+                ),
+            ],
+        ),
+    )
+    forwarded = []
+    posts = []
+    gets = []
+
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setattr(
+        bridge,
+        "_post",
+        lambda path, envelope: forwarded.append((path, envelope)),
+    )
+
+    def fake_post(url, **kwargs):
+        posts.append((url, kwargs))
+        return SimpleNamespace(raise_for_status=lambda: None)
+
+    def fake_get(url, **kwargs):
+        gets.append((url, kwargs))
+        return SimpleNamespace(raise_for_status=lambda: None)
+
+    monkeypatch.setattr(bridge.requests, "post", fake_post)
+    monkeypatch.setattr(bridge.requests, "get", fake_get)
+
+    assert adapter.poll(1_000_000, set()) == 1
+
+    assert posts == [
+        (
+            "http://orchestra.test/v0/admin/whatsapp/call-permission",
+            {
+                "headers": {"Authorization": "Bearer admin-key"},
+                "json": {
+                    "pool_number": "+447700900001",
+                    "contact_number": "+4915550100009",
+                    "status": "accepted",
+                },
+                "timeout": 10,
+            },
+        ),
+    ]
+    assert forwarded[0][1]["event"]["body"] == "VOICE_CALL_REQUEST"
+    assert gets[0][0] == "http://orchestra.test/v0/admin/whatsapp/resolve"
+
+
+def test_twilio_whatsapp_permission_rejection_updates_orchestra(monkeypatch) -> None:
+    adapter = bridge.TwilioAdapter("whatsapp", "+447700900001", {"+4915550100009"})
+    posts = []
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setattr(
+        bridge.requests,
+        "post",
+        lambda url, **kwargs: posts.append((url, kwargs))
+        or SimpleNamespace(raise_for_status=lambda: None),
+    )
+
+    adapter._record_call_permission(
+        "+4915550100009",
+        SimpleNamespace(body="VOICE_CALL_REQUEST", button_payload="REJECTED"),
+    )
+
+    assert posts[0][1]["json"]["status"] == "rejected"
