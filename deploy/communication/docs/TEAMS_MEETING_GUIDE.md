@@ -4,7 +4,7 @@ This document covers the two Teams-meeting capabilities in the
 communication service:
 
 1. **Creation** — `POST /teams/create_meeting` (instant or scheduled).
-2. **Join** — driven by Droid's agent service via browser automation
+2. **Join** — driven by Unity's agent service via browser automation
    (out of scope here; this service exposes only the join URL).
 
 > The legacy PSTN dial-in bridge (`/teams/join_meeting` over Twilio +
@@ -106,7 +106,7 @@ deep link to the calendar entry):
 ### Pub/Sub event
 
 On success, the endpoint publishes `thread: "teams_meet_created"` to the
-assistant's Pub/Sub topic with the meeting metadata. Droid's
+assistant's Pub/Sub topic with the meeting metadata. Unity's
 `ConversationManager` listens for this thread to record the join URL
 against the assistant's task graph.
 
@@ -123,10 +123,10 @@ against the assistant's task graph.
 
 ## Joining a meeting
 
-Joining is handled by Droid's **agent service** (Playwright + virtual
+Joining is handled by Unity's **agent service** (Playwright + virtual
 display + virtual audio devices), the same stack that joins Google Meet.
 This service does **not** expose a `/teams/join_meeting` endpoint:
-Droid reads the `join_web_url` (either from this endpoint's response or
+Unity reads the `join_web_url` (either from this endpoint's response or
 from a parsed invite) and drives a browser into the meeting.
 
 What the browser flow gets us that PSTN dial-in could not:
@@ -138,7 +138,7 @@ What the browser flow gets us that PSTN dial-in could not:
 - **Compatibility with external/BYOD mailboxes** — no tenant-wide
   admin consent required (calling-bots would have).
 
-See Droid's `agent-service` documentation for the join API and the
+See Unity's `agent-service` documentation for the join API and the
 shared browser-automation primitives.
 
 ---

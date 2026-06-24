@@ -124,7 +124,7 @@ spec:
       serviceAccountName: assistant-session-controller
       containers:
       - name: assistant-session-controller
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/droid-comms-app-repo/assistant-session-controller:latest
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity-comms-app-repo/assistant-session-controller:latest
         command:
         - kopf
         - run
@@ -146,18 +146,18 @@ spec:
         - name: GCP_PROJECT_ID
           valueFrom:
             configMapKeyRef:
-              name: droid-config
+              name: unity-config
               key: GCP_PROJECT_ID
-        - name: DROID_COMMS_URL
+        - name: UNITY_COMMS_URL
           value: "https://service.a.run.app"
-        - name: DROID_ADAPTERS_URL
+        - name: UNITY_ADAPTERS_URL
           value: "https://service.a.run.app"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
         resources:
           requests:
@@ -211,7 +211,7 @@ spec:
       serviceAccountName: assistant-session-controller
       containers:
       - name: assistant-session-pool-controller
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/droid-comms-app-repo/assistant-session-controller:latest
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity-comms-app-repo/assistant-session-controller:latest
         command:
         - python
         - -m
@@ -226,18 +226,18 @@ spec:
         - name: GCP_PROJECT_ID
           valueFrom:
             configMapKeyRef:
-              name: droid-config
+              name: unity-config
               key: GCP_PROJECT_ID
-        - name: DROID_COMMS_URL
+        - name: UNITY_COMMS_URL
           value: "https://service.a.run.app"
-        - name: DROID_ADAPTERS_URL
+        - name: UNITY_ADAPTERS_URL
           value: "https://service.a.run.app"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
         - name: POOL_CONTROLLER_INTERVAL_SECONDS
           value: "10"

@@ -1,6 +1,6 @@
-# Droid GKE Job Logs
+# Unity GKE Job Logs
 
-View logs from Droid assistant jobs running on Google Kubernetes Engine.
+View logs from Unity assistant jobs running on Google Kubernetes Engine.
 
 ## Quick Start
 
@@ -12,7 +12,7 @@ bash scripts/job_logs/setup_auth.sh
 uv run scripts/dev/job_logs/stream_logs.py --job <job_name>
 
 # Example (staging is the default)
-uv run scripts/dev/job_logs/stream_logs.py --job droid-2026-02-10-17-30-53-staging
+uv run scripts/dev/job_logs/stream_logs.py --job unity-2026-02-10-17-30-53-staging
 ```
 
 That's it. The script figures out whether to stream or fetch based on the job's status.
@@ -55,7 +55,7 @@ This walks you through:
 1. Checking that `gcloud` and `kubectl` are installed
 2. Authenticating your Google account (`gcloud auth login`)
 3. Setting the active GCP project (`gcp-project-runtime`)
-4. Fetching GKE cluster credentials for the `droid` cluster
+4. Fetching GKE cluster credentials for the `unity` cluster
 5. Verifying cluster connectivity
 6. Checking that `SHARED_UNIFY_KEY` is set
 
@@ -75,7 +75,7 @@ Job names are tracked in the **AssistantJobs** project on the [Unify Console](ht
 1. Open the **AssistantJobs** project
 2. Go to the **startup_events** context
 3. Filter by `assistant_id`, `user_name`, or timestamp
-4. Copy the `job_name` field (e.g. `droid-2026-02-10-17-30-53-staging`)
+4. Copy the `job_name` field (e.g. `unity-2026-02-10-17-30-53-staging`)
 5. Note the namespace the job runs in (e.g. `staging`, `production`)
 
 ## GCP Infrastructure Reference
@@ -83,7 +83,7 @@ Job names are tracked in the **AssistantJobs** project on the [Unify Console](ht
 | Setting | Value |
 |---------|-------|
 | GCP Project | `gcp-project-runtime` |
-| GKE Cluster | `droid` |
+| GKE Cluster | `unity` |
 | Region | `us-central1` |
 | Namespaces | `staging`, `production`, etc. |
 

@@ -15,7 +15,7 @@ from kubernetes.client.rest import ApiException
 from common.settings import SETTINGS
 from communication.infra.helpers import (
     acquire_assignment_lease,
-    create_droid_job,
+    create_unity_job,
     release_assignment_lease,
 )
 from communication.infra.observability import (
@@ -133,11 +133,11 @@ JobClaimTransitionResult = Literal[
 
 
 def _get_current_image_hash() -> str | None:
-    """Return the latest Droid image commit hash from GCS, cached for TTL seconds.
+    """Return the latest Unity image commit hash from GCS, cached for TTL seconds.
 
-    The controller only claims idle Jobs whose ``droid-image-hash`` label
+    The controller only claims idle Jobs whose ``unity-image-hash`` label
     matches this value, preventing stale-image containers from being
-    assigned to users after a Droid image deployment.
+    assigned to users after a Unity image deployment.
 
     Returns ``None`` (disabling the filter) if GCS is unreachable and no
     cached value is available.
@@ -192,7 +192,7 @@ def _vm_readiness_deadline_seconds() -> float:
 
 def _job_terminal_phase(job) -> str | None:
     labels = job.metadata.labels or {}
-    if labels.get("droid-status") == "done":
+    if labels.get("unity-status") == "done":
         return "Succeeded"
     for condition in job.status.conditions or []:
         if condition.type == "Failed" and condition.status == "True":
@@ -203,7 +203,7 @@ def _job_terminal_phase(job) -> str | None:
 
 
 def _binding_owned_job_image(job) -> str | None:
-    """Return the Droid container image pinned on a binding-owned Job."""
+    """Return the Unity container image pinned on a binding-owned Job."""
 
     try:
         containers = job.spec.template.spec.containers or []
@@ -575,7 +575,7 @@ def _active_jobs_for_assistant(assistant_id: str) -> list:
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
     jobs = _batch_api.list_namespaced_job(
         namespace=WATCH_NAMESPACE,
-        label_selector=f"app=droid,assistant-id={sanitized_assistant_id}",
+        label_selector=f"app=unity,assistant-id={sanitized_assistant_id}",
     )
     return [
         job
@@ -630,10 +630,10 @@ def _spawn_fresh_job_for_binding(
     image: str,
     runtime_service_env: dict[str, str] | None = None,
 ):
-    """Create a Droid Job pinned to ``image`` and pre-claimed for this binding.
+    """Create a Unity Job pinned to ``image`` and pre-claimed for this binding.
 
     Used when an AssistantSession carries ``spec.imageOverride``: the idle
-    pool is built from the canonical Droid image and would silently override
+    pool is built from the canonical Unity image and would silently override
     the pinned container, so the controller bypasses the pool and synthesizes
     a fresh Job whose metadata mirrors a newly-claimed idle Job.
     """
@@ -642,7 +642,7 @@ def _spawn_fresh_job_for_binding(
     current_binding_id = binding_id_from_status(binding)
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
     job_name = (
-        f"droid-override-{sanitized_assistant_id[:32]}"
+        f"unity-override-{sanitized_assistant_id[:32]}"
         f"-{uuid.uuid4().hex[:6]}{SETTINGS.env_suffix}"
     )
     extra_labels = {
@@ -666,14 +666,14 @@ def _spawn_fresh_job_for_binding(
         source="controller.reconcile",
         image_override=image,
     )
-    job = create_droid_job(
+    job = create_unity_job(
         _batch_api,
         job_name=job_name,
         namespace=WATCH_NAMESPACE,
         image=image,
         deploy_env=SETTINGS.deploy_env,
-        droid_status="running",
-        priority_class_name="droid-idle",
+        unity_status="running",
+        priority_class_name="unity-idle",
         extra_labels=extra_labels,
         extra_annotations=extra_annotations,
         extra_env=runtime_service_env,
@@ -726,7 +726,7 @@ def _claim_idle_job_for_binding(
     When ``image_override`` is set the controller skips the shared idle pool
     entirely and spawns a fresh Job pinned to that image.  Without an
     override (the canonical staging/production path), it claims a single
-    idle Job whose ``droid-image-hash`` label matches the active staging
+    idle Job whose ``unity-image-hash`` label matches the active staging
     image hash.
     """
 
@@ -800,9 +800,9 @@ def _claim_idle_job_for_binding(
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
     current_hash = _get_current_image_hash()
 
-    label_selector = "app=droid,droid-status=idle"
+    label_selector = "app=unity,unity-status=idle"
     if current_hash:
-        label_selector += f",droid-image-hash={current_hash}"
+        label_selector += f",unity-image-hash={current_hash}"
 
     jobs = _batch_api.list_namespaced_job(
         namespace=WATCH_NAMESPACE,
@@ -834,7 +834,7 @@ def _claim_idle_job_for_binding(
     for job in idle_jobs:
         labels = dict(job.metadata.labels or {})
         labels["assistant-id"] = sanitized_assistant_id
-        labels["droid-status"] = "running"
+        labels["unity-status"] = "running"
         labels[SESSION_REF_LABEL] = session_name
         labels[BINDING_ID_LABEL] = current_binding_id
         annotations = dict(job.metadata.annotations or {})
@@ -1020,7 +1020,7 @@ def _claim_and_bind_pending_job(
                     vm_assigned=False,
                     desktop_ready=False,
                     reason="WaitingForUnity",
-                    message="Waiting for Droid container bootstrap",
+                    message="Waiting for Unity container bootstrap",
                 ),
             )
             _emit_binding_stage_event(
@@ -1158,7 +1158,7 @@ def _suspend_bound_job(
         source_reason=source_reason,
     )
     labels = dict(job.metadata.labels or {})
-    labels["droid-status"] = "done"
+    labels["unity-status"] = "done"
     body = {
         "metadata": {
             "labels": labels,
@@ -2409,7 +2409,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     vm_assigned=False,
                     desktop_ready=False,
                     reason="BindingCreated",
-                    message="Waiting to claim an idle Droid container",
+                    message="Waiting to claim an idle Unity container",
                 ),
             )
         return
@@ -2547,7 +2547,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     vm_assigned=False,
                     desktop_ready=False,
                     reason="WaitingForCapacity",
-                    message="Waiting for idle Droid container capacity",
+                    message="Waiting for idle Unity container capacity",
                 ),
             )
             return
@@ -2715,7 +2715,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     vm_assigned=False,
                     desktop_ready=False,
                     reason="WaitingForPodStart",
-                    message="Waiting for bound Droid pod to enter Running state",
+                    message="Waiting for bound Unity pod to enter Running state",
                 ),
             )
             return
@@ -2822,7 +2822,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 vm_assigned=False,
                 desktop_ready=False,
                 reason="WaitingForUnity",
-                message="Droid has not yet signaled container-ready",
+                message="Unity has not yet signaled container-ready",
             ),
         )
         return

@@ -95,7 +95,7 @@ def _job_exists(batch_api, job_name: str) -> bool:
 def _inject_stale_done_job(batch_api, job_name: str, assistant_id: str):
     """Create a suspended done-labeled K8s Job to simulate a stale leftover.
 
-    Uses today's ``droid-date`` so the ``/infra/jobs`` listing includes it.
+    Uses today's ``unity-date`` so the ``/infra/jobs`` listing includes it.
     The Job is created ``suspend=True`` so no pod is scheduled.
     """
     from kubernetes import client as k8s_client
@@ -107,10 +107,10 @@ def _inject_stale_done_job(batch_api, job_name: str, assistant_id: str):
             name=job_name,
             namespace=NAMESPACE,
             labels={
-                "app": "droid",
-                "droid-status": "done",
+                "app": "unity",
+                "unity-status": "done",
                 "assistant-id": sanitized,
-                "droid-date": today,
+                "unity-date": today,
             },
         ),
         spec=k8s_client.V1JobSpec(
@@ -180,7 +180,7 @@ def test_maintenance_does_not_kill_active_container_with_stale_done_jobs(
     """
     assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
     agent_id = str(assistant["assistant_id"])
-    stale_job_name = f"droid-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-ustale-{NAMESPACE}"
+    stale_job_name = f"unity-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-ustale-{NAMESPACE}"
 
     try:
         start_real_job(comms, assistant)
@@ -297,7 +297,7 @@ def test_maintenance_sweep_preserves_fresh_container(
         live_running = [
             j
             for j in live_jobs_after
-            if (j.metadata.labels or {}).get("droid-status") == "running"
+            if (j.metadata.labels or {}).get("unity-status") == "running"
             and j.status.active
             and j.status.active > 0
         ]
@@ -335,8 +335,8 @@ def test_maintenance_deletes_stale_done_jobs(
     are gone from the K8s API server.
     """
     stale_names = [
-        f"droid-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-uold1-{NAMESPACE}",
-        f"droid-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-uold2-{NAMESPACE}",
+        f"unity-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-uold1-{NAMESPACE}",
+        f"unity-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H-%M-%S')}-uold2-{NAMESPACE}",
     ]
 
     try:

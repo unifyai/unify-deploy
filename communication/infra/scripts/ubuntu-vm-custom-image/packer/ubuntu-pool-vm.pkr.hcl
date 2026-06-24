@@ -1,10 +1,10 @@
-# ubuntu-pool-vm.pkr.hcl - Packer template for Droid Pool Ubuntu VM image
+# ubuntu-pool-vm.pkr.hcl - Packer template for Unity Pool Ubuntu VM image
 #
 # Extends the base Ubuntu VM image with pool-specific components:
 # - unityuser (SFTP file sync on port 2222)
-# - Droid Pool Watcher (systemd service)
+# - Unity Pool Watcher (systemd service)
 #
-# Outputs to image family "droid-pool-ubuntu-vm" (separate from legacy "droid-ubuntu-vm")
+# Outputs to image family "unity-pool-ubuntu-vm" (separate from legacy "unity-ubuntu-vm")
 #
 # Usage:
 #   packer init .
@@ -54,7 +54,7 @@ variable "disk_size" {
 
 variable "image_family" {
   type        = string
-  default     = "droid-pool-ubuntu-vm"
+  default     = "unity-pool-ubuntu-vm"
   description = "Image family name for the output image"
 }
 
@@ -85,10 +85,10 @@ source "googlecompute" "ubuntu-pool-vm" {
 
   image_name        = "${var.image_family}-{{timestamp}}"
   image_family      = var.image_family
-  image_description = "Droid Pool Ubuntu VM with XFCE4, TigerVNC, noVNC, Node.js, Playwright, Caddy, pool watcher."
+  image_description = "Unity Pool Ubuntu VM with XFCE4, TigerVNC, noVNC, Node.js, Playwright, Caddy, pool watcher."
   image_labels = {
     "managed-by" = "packer"
-    "purpose"    = "droid-pool-ubuntu-vm"
+    "purpose"    = "unity-pool-ubuntu-vm"
   }
 
   disk_size = var.disk_size
@@ -140,8 +140,8 @@ build {
 
   # Upload pool watcher script
   provisioner "file" {
-    source      = "../../droid-pool-watcher.sh"
-    destination = "/tmp/droid-pool-watcher.sh"
+    source      = "../../unity-pool-watcher.sh"
+    destination = "/tmp/unity-pool-watcher.sh"
   }
 
   # Run the base installation script
@@ -183,7 +183,7 @@ build {
       "echo 'Base + Pool overlay:'",
       "echo '  - XFCE4, TigerVNC, noVNC, Node.js, Caddy, supervisord'",
       "echo '  - Pool user: unityuser (SFTP on port 2222)'",
-      "echo '  - Pool watcher: droid-pool-watcher.service'",
+      "echo '  - Pool watcher: unity-pool-watcher.service'",
     ]
   }
 }

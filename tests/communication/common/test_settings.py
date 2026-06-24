@@ -1,7 +1,7 @@
 """Settings derivation rules that downstream services depend on.
 
 The Comms App, Adapters, and the AssistantSession controller all read
-``SETTINGS.image_hash_blob`` to decide which Droid image hash to pull from
+``SETTINGS.image_hash_blob`` to decide which Unity image hash to pull from
 GCS.  These tests pin the naming convention so a typo there cannot
 silently route staging traffic onto the production image (or vice versa).
 """

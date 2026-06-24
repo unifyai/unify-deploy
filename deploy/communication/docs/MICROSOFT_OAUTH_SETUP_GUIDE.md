@@ -299,7 +299,7 @@ Or if no redirect_after:
 
 ```bash
 # Adapters URL (callback URL must match Azure AD app registration)
-DROID_ADAPTERS_URL=https://adapters.unify.ai
+UNITY_ADAPTERS_URL=https://adapters.unify.ai
 
 # Orchestra API URL
 ORCHESTRA_URL=https://api.unify.ai/v0

@@ -8,12 +8,12 @@ import types
 
 import pytest
 
-from droid_deploy.infra.workers import worker_utils
-from droid_deploy.infra.workers.worker_utils import (
+from unity_deploy.infra.workers import worker_utils
+from unity_deploy.infra.workers.worker_utils import (
     activate_unify_context,
     initialize_worker_environment,
 )
-from droid_deploy.utils.load_repo_env import droid_deploy_repo_root
+from unity_deploy.utils.load_repo_env import unity_deploy_repo_root
 
 
 @pytest.fixture
@@ -46,13 +46,13 @@ def test_initialize_worker_environment_skips_offline_ingest_initializer(
     fake_module = types.SimpleNamespace(initialize_environment=_boom)
     monkeypatch.setitem(
         sys.modules,
-        "droid_deploy.assistant_deployments.scripts.ingest_utils",
+        "unity_deploy.assistant_deployments.scripts.ingest_utils",
         fake_module,
     )
 
     project_root = initialize_worker_environment(debug=True)
 
-    assert project_root == droid_deploy_repo_root()
+    assert project_root == unity_deploy_repo_root()
 
 
 def test_worker_bootstrap_imports_storage_client_symbol() -> None:

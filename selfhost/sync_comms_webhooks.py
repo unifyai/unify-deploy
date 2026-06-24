@@ -19,7 +19,7 @@ Modes:
     ``SELF_HOST_CALLS_ENABLED=0`` is set, point the voice webhook at the local
     tunnel.
   * ``--set-voice``: keep messaging poll-only, but point the voice webhook at the
-    tunnel (``DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL``/``LOCAL_COMMS_PUBLIC_URL``).
+    tunnel (``UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL``/``LOCAL_COMMS_PUBLIC_URL``).
   * ``--revert-voice``: clear the voice webhook back to poll-only (messaging was
     already cleared). Used by ``stack down``.
   * ``--check``: report drift without mutating; exit 1 on drift. Honors
@@ -28,7 +28,7 @@ Modes:
 The numbers are the git-tracked source of truth in ``self_host_env.sh`` and are
 read from the environment (source that file, or run via ``stack.sh sync-comms``).
 Twilio credentials are read from the environment or, as a convenience, from
-``~/.droid/comms_twilio.env`` (secrets, never committed).
+``~/.unity/comms_twilio.env`` (secrets, never committed).
 
 Channels:
   * WhatsApp — Twilio Senders v2 API, WhatsApp sub-account
@@ -58,7 +58,7 @@ from pathlib import Path
 _TWILIO_ENV_FILE = Path(
     os.environ.get(
         "SELF_HOST_COMMS_TWILIO_FILE",
-        Path(os.environ.get("DROID_HOME", str(Path.home() / ".droid")))
+        Path(os.environ.get("UNITY_HOME", str(Path.home() / ".unity")))
         / "comms_twilio.env",
     ),
 )
@@ -168,7 +168,7 @@ def reconcile_whatsapp(
 # WhatsApp Business Calling (TwiML Voice Application attached to the Sender)
 # --------------------------------------------------------------------------
 
-_WA_VOICE_APP_FRIENDLY_NAME = "Droid Self-Host WhatsApp Calls"
+_WA_VOICE_APP_FRIENDLY_NAME = "Unity Self-Host WhatsApp Calls"
 
 
 def _wa_voice_target(public_url: str) -> str:
@@ -338,7 +338,7 @@ def _phone_is_poll_only(record: dict) -> bool:
 
 def _public_url(env: dict) -> str:
     url = (
-        env.get("DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL")
+        env.get("UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL")
         or env.get("LOCAL_COMMS_PUBLIC_URL")
         or ""
     ).strip()
@@ -484,7 +484,7 @@ def main() -> int:
     public_url = _public_url(env)
     if mode == "set-voice" and not public_url:
         print(
-            "ERROR: --set-voice needs DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
+            "ERROR: --set-voice needs UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
             "(the cloudflared tunnel URL). Is the call tunnel up?",
             file=sys.stderr,
         )
@@ -492,13 +492,13 @@ def main() -> int:
 
     whatsapp_number = (
         env.get("COMMS_BRIDGE_WHATSAPP_NUMBER")
-        or env.get("DROID_COORDINATOR_WHATSAPP_NUMBER")
+        or env.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
         or ""
     ).strip()
     phone_number = (
         env.get("COMMS_BRIDGE_SMS_NUMBER")
-        or env.get("DROID_COORDINATOR_PHONE")
-        or env.get("DROID_COORDINATOR_PHONE_US")
+        or env.get("UNITY_COORDINATOR_PHONE")
+        or env.get("UNITY_COORDINATOR_PHONE_US")
         or ""
     ).strip()
 

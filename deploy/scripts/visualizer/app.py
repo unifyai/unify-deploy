@@ -1,8 +1,8 @@
 """
-FastAPI backend for the Droid session visualizer.
+FastAPI backend for the Unity session visualizer.
 
 Usage:
-    cd droid/
+    cd unity/
     uv run python -m scripts.visualizer --data-dir clientdelta_data
     uv run python -m scripts.visualizer --data-dir vantage_data
 """
@@ -30,7 +30,7 @@ from .parsers import (
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
-app = FastAPI(title="Droid Session Visualizer")
+app = FastAPI(title="Unity Session Visualizer")
 
 # Set at startup via CLI arg
 _data_dir: Path = Path(".")
@@ -326,7 +326,7 @@ def get_framework_log(
 ):
     sd = _session_dir(job_name)
     return parse_framework_log(
-        sd / "pod_logs" / "droid" / "droid.log",
+        sd / "pod_logs" / "unity" / "unity.log",
         level=level,
         component=component,
         offset=offset,
@@ -353,7 +353,7 @@ def refresh_data():
 def main():
     global _data_dir
 
-    parser = argparse.ArgumentParser(description="Droid Session Visualizer")
+    parser = argparse.ArgumentParser(description="Unity Session Visualizer")
     parser.add_argument(
         "--data-dir",
         default="clientdelta_data",
@@ -374,7 +374,7 @@ def main():
 
     print()
     print("=" * 50)
-    print(f"  Droid Session Visualizer")
+    print(f"  Unity Session Visualizer")
     print(f"  Org:  {org_info.get('org_name', args.data_dir)}")
     print(f"  Data: {_data_dir}")
     print(f"  URL:  http://localhost:{args.port}")

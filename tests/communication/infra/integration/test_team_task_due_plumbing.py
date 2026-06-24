@@ -153,7 +153,7 @@ def test_team_task_due_publishes_authorized_destination(
         message = pull_pubsub_message(
             local_stack_pubsub_subscriber,
             subscription_path,
-            thread="droid_system_event",
+            thread="unity_system_event",
         )
         event = message["event"]
         assert event["assistant_id"] == assistant_id

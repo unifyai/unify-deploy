@@ -1,10 +1,10 @@
 """Comms-app FastAPI entrypoint.
 
 Thin shell that composes communication's private SaaS routers and
-startup hooks on top of the droid.gateway aggregator. The 10
+startup hooks on top of the unity.gateway aggregator. The 10
 external-channel routers (social, phone, gmail, outlook, email,
 whatsapp, teams, sharepoint, unillm, discord) are mounted by
-``droid.gateway.app.create_app()`` from ``droid.gateway.channels.*``;
+``unity.gateway.app.create_app()`` from ``unity.gateway.channels.*``;
 this module only adds:
 
 * The /infra/* routers (K8s Job control + SSH tunnel + VM-self
@@ -16,8 +16,8 @@ this module only adds:
   ``common.metrics.setup_metrics`` (unchanged).
 
 The Discord bot-pool sync + health-check loop is owned by
-droid.gateway's built-in lifespan
-(``droid.gateway.channels.discord.bot_manager``); no
+unity.gateway's built-in lifespan
+(``unity.gateway.channels.discord.bot_manager``); no
 communication-side bot_manager exists anymore.
 
 Auth wiring:
@@ -28,7 +28,7 @@ Auth wiring:
 * /infra/* tunnel and vm-self routers: per-route deps (e.g.
   ``authenticate_vm_identity``), declared inside the route handlers
   themselves -- no router-level dep needed.
-* All 10 channel routers: droid's ``admin_auth_dependency`` (the
+* All 10 channel routers: unity's ``admin_auth_dependency`` (the
   SecretStr-shaped equivalent reading ``SETTINGS.ORCHESTRA_ADMIN_KEY``
   from the same env var). Both auth functions resolve to the same
   underlying admin key value at runtime.
@@ -53,17 +53,17 @@ from communication.infra.views import (
     tunnel_router,
     vm_self_router,
 )
-from droid.gateway.app import ExtraRouter, create_app
-from droid.gateway.context import GatewayContext, default_public_url_provider
-from droid.gateway.credentials import EnvCredentialStore
-from droid.gateway.envelope_sink import (
+from unity.gateway.app import ExtraRouter, create_app
+from unity.gateway.context import GatewayContext, default_public_url_provider
+from unity.gateway.credentials import EnvCredentialStore
+from unity.gateway.envelope_sink import (
     OutboundTransportEnvelopeSink,
     default_topic_suffix,
 )
-from droid.gateway.outbound_pubsub import PubSubOutboundTransport
-from droid.gateway.runtime import RuntimeActivation
-from droid.gateway.scheduler import LocalScheduler
-from droid.gateway.storage import LocalDiskStorage
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
+from unity.gateway.runtime import RuntimeActivation
+from unity.gateway.scheduler import LocalScheduler
+from unity.gateway.storage import LocalDiskStorage
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)

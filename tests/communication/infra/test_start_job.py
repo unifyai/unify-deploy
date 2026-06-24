@@ -609,7 +609,7 @@ def test_start_job_reuses_activation_while_release_is_draining(client):
         binding={
             "id": "binding-1",
             "vmRef": {
-                "name": "droid-pool-ubuntu-1",
+                "name": "unity-pool-ubuntu-1",
                 "hostname": "vm-1.vm.unify.ai",
             },
         },

@@ -8,7 +8,7 @@
 #   2. Adapters FastAPI server (webhook handlers)
 #   3. Communication FastAPI server (optional, for outbound APIs)
 #
-# This enables local Droid integration tests without requiring cloud Pub/Sub.
+# This enables local Unity integration tests without requiring cloud Pub/Sub.
 #
 # Usage:
 #   ./local.sh start              # Start with Pub/Sub emulator
@@ -20,7 +20,7 @@
 #   ./local.sh create-topics      # Create test topics in emulator
 #
 # Environment:
-#   COMMS_REPO_PATH          Path to droid-deploy hosted repo (default: auto-detect)
+#   COMMS_REPO_PATH          Path to unity-deploy hosted repo (default: auto-detect)
 #   ADAPTERS_PORT            Adapters service port (default: 8081)
 #   COMMS_PORT               Communication service port (default: 8082)
 #   PUBSUB_EMULATOR_PORT     Pub/Sub emulator port (default: 8085)
@@ -32,8 +32,8 @@
 #   Set TEST_ASSISTANT_ID to use a different assistant ID.
 #
 # On success, exports:
-#   DROID_ADAPTERS_URL=http://127.0.0.1:8081
-#   DROID_COMMS_URL=http://127.0.0.1:8082  (if communication service started)
+#   UNITY_ADAPTERS_URL=http://127.0.0.1:8081
+#   UNITY_COMMS_URL=http://127.0.0.1:8082  (if communication service started)
 #   PUBSUB_EMULATOR_HOST=localhost:8085    (if emulator started)
 #
 set -euo pipefail
@@ -201,13 +201,13 @@ get_python() {
   fi
 }
 
-resolve_droid_repo_path() {
-  if [[ -n "${DROID_REPO_PATH:-}" && -d "$DROID_REPO_PATH" ]]; then
-    echo "$DROID_REPO_PATH"
+resolve_unity_repo_path() {
+  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
+    echo "$UNITY_REPO_PATH"
     return 0
   fi
   local candidate
-  candidate="$(cd "$COMMS_REPO_PATH/../droid" 2>/dev/null && pwd -P || echo "")"
+  candidate="$(cd "$COMMS_REPO_PATH/../unity" 2>/dev/null && pwd -P || echo "")"
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     echo "$candidate"
     return 0
@@ -215,9 +215,9 @@ resolve_droid_repo_path() {
   return 1
 }
 
-can_import_comms_droid_contract() {
+can_import_comms_unity_contract() {
   local python_cmd="$1"
-  "$python_cmd" -c "from droid.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null
+  "$python_cmd" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null
 }
 
 pip_install_for_comms() {
@@ -230,21 +230,21 @@ pip_install_for_comms() {
   fi
 }
 
-ensure_comms_droid_deps() {
-  local python_cmd droid_repo unify_repo unillm_repo
+ensure_comms_unity_deps() {
+  local python_cmd unity_repo unify_repo unillm_repo
   python_cmd="$(get_python)"
 
-  if can_import_comms_droid_contract "$python_cmd"; then
+  if can_import_comms_unity_contract "$python_cmd"; then
     return 0
   fi
 
-  if ! droid_repo="$(resolve_droid_repo_path)"; then
-    log_error "Comms App imports droid.task_scheduler.offline_runner_contract but droid is unavailable"
-    log_info "Clone droid as a sibling of droid-deploy (../droid) or set DROID_REPO_PATH"
+  if ! unity_repo="$(resolve_unity_repo_path)"; then
+    log_error "Comms App imports unity.task_scheduler.offline_runner_contract but unity is unavailable"
+    log_info "Clone unity as a sibling of unity-deploy (../unity) or set UNITY_REPO_PATH"
     return 1
   fi
 
-  log_info "Installing slim droid runtime for Comms App (matches Dockerfile-comms)..."
+  log_info "Installing slim unity runtime for Comms App (matches Dockerfile-comms)..."
 
   unify_repo="$(cd "$COMMS_REPO_PATH/../unify" 2>/dev/null && pwd -P || echo "")"
   unillm_repo="$(cd "$COMMS_REPO_PATH/../unillm" 2>/dev/null && pwd -P || echo "")"
@@ -262,22 +262,22 @@ ensure_comms_droid_deps() {
     }
   fi
 
-  pip_install_for_comms "$python_cmd" --no-deps -e "$droid_repo" || {
-    log_error "Failed to install droid package from $droid_repo"
+  pip_install_for_comms "$python_cmd" --no-deps -e "$unity_repo" || {
+    log_error "Failed to install unity package from $unity_repo"
     return 1
   }
-  pip_install_for_comms "$python_cmd" -r "$droid_repo/requirements-gateway.txt" || {
-    log_error "Failed to install droid gateway requirements from $droid_repo"
+  pip_install_for_comms "$python_cmd" -r "$unity_repo/requirements-gateway.txt" || {
+    log_error "Failed to install unity gateway requirements from $unity_repo"
     return 1
   }
 
-  if ! can_import_comms_droid_contract "$python_cmd"; then
-    log_error "droid is installed but Comms App still cannot import offline_runner_contract"
-    log_info "Ensure unify and unillm siblings exist under the same parent as droid-deploy"
+  if ! can_import_comms_unity_contract "$python_cmd"; then
+    log_error "unity is installed but Comms App still cannot import offline_runner_contract"
+    log_info "Ensure unify and unillm siblings exist under the same parent as unity-deploy"
     return 1
   fi
 
-  log_success "droid runtime ready for Comms App"
+  log_success "unity runtime ready for Comms App"
   return 0
 }
 
@@ -296,29 +296,29 @@ ensure_comms_runtime_deps() {
   python_cmd="$(get_python)"
 
   if can_import_adapters_app "$python_cmd" && can_import_comms_app "$python_cmd"; then
-    ensure_comms_droid_deps || return 1
+    ensure_comms_unity_deps || return 1
     return 0
   fi
 
-  log_info "Installing droid-deploy runtime for Adapters/Comms..."
+  log_info "Installing unity-deploy runtime for Adapters/Comms..."
   local req_file="$COMMS_REPO_PATH/scripts/requirements-local-runtime.txt"
   if [[ -f "$req_file" ]]; then
     pip_install_for_comms "$python_cmd" -r "$req_file" || {
-      log_error "Failed to install droid-deploy runtime requirements"
+      log_error "Failed to install unity-deploy runtime requirements"
       return 1
     }
     pip_install_for_comms "$python_cmd" --no-deps -e "$COMMS_REPO_PATH" || {
-      log_error "Failed to install droid-deploy package from $COMMS_REPO_PATH"
+      log_error "Failed to install unity-deploy package from $COMMS_REPO_PATH"
       return 1
     }
   else
     pip_install_for_comms "$python_cmd" -e "$COMMS_REPO_PATH" || {
-      log_error "Failed to install droid-deploy from $COMMS_REPO_PATH"
+      log_error "Failed to install unity-deploy from $COMMS_REPO_PATH"
       return 1
     }
   fi
 
-  ensure_comms_droid_deps || return 1
+  ensure_comms_unity_deps || return 1
   return 0
 }
 
@@ -406,11 +406,11 @@ create_pubsub_topics() {
 
   log_info "Creating Pub/Sub topics for test assistant: $TEST_ASSISTANT_ID"
 
-  # Topics to create (droid-startup is deprecated; assignment uses Lease + CAS now)
-  local assistant_topic="droid-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
+  # Topics to create (unity-startup is deprecated; assignment uses Lease + CAS now)
+  local assistant_topic="unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
   local topics=(
     "$assistant_topic"
-    "droid-pending-startups${TOPIC_SUFFIX}"
+    "unity-pending-startups${TOPIC_SUFFIX}"
   )
 
   for topic in "${topics[@]}"; do
@@ -504,7 +504,7 @@ start_adapters_service() {
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
-    "DROID_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
+    "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
   )
 
   # Add PUBSUB_EMULATOR_HOST if emulator is running
@@ -618,7 +618,7 @@ start_comms_service() {
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
-    "DROID_COMMS_URL=$LOCAL_COMMS_URL"
+    "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
   )
 
   # Add ORCHESTRA_ADMIN_KEY if set
@@ -759,14 +759,14 @@ cmd_start() {
   # Write config file for external tools
   {
     echo "ADAPTERS_PORT=$ADAPTERS_PORT"
-    echo "DROID_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
+    echo "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
     if [[ "$use_emulator" == "true" ]]; then
       echo "PUBSUB_EMULATOR_HOST=$LOCAL_PUBSUB_HOST"
       echo "PUBSUB_EMULATOR_PORT=$PUBSUB_EMULATOR_PORT"
     fi
     if [[ "$start_comms" == "true" ]]; then
       echo "COMMS_PORT=$COMMS_PORT"
-      echo "DROID_COMMS_URL=$LOCAL_COMMS_URL"
+      echo "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
     fi
     echo "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     echo "TEST_ASSISTANT_ID=$TEST_ASSISTANT_ID"
@@ -786,26 +786,26 @@ cmd_start() {
   fi
   echo ""
   echo "To use in your shell:"
-  echo "  export DROID_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
+  echo "  export UNITY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
   if [[ "$use_emulator" == "true" ]]; then
     echo "  export PUBSUB_EMULATOR_HOST='$LOCAL_PUBSUB_HOST'"
   fi
   if [[ "$start_comms" == "true" ]]; then
-    echo "  export DROID_COMMS_URL='$LOCAL_COMMS_URL'"
+    echo "  export UNITY_COMMS_URL='$LOCAL_COMMS_URL'"
   fi
   echo ""
   echo "Test assistant topics created:"
-  echo "  droid-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
-  echo "  droid-pending-startups${TOPIC_SUFFIX}"
+  echo "  unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
+  echo "  unity-pending-startups${TOPIC_SUFFIX}"
   echo ""
 
   # Output for eval
-  echo "export DROID_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
+  echo "export UNITY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
   if [[ "$use_emulator" == "true" ]]; then
     echo "export PUBSUB_EMULATOR_HOST='$LOCAL_PUBSUB_HOST'"
   fi
   if [[ "$start_comms" == "true" ]]; then
-    echo "export DROID_COMMS_URL='$LOCAL_COMMS_URL'"
+    echo "export UNITY_COMMS_URL='$LOCAL_COMMS_URL'"
   fi
 
   return 0
@@ -911,7 +911,7 @@ cmd_help() {
   echo "  --with-comms       Also start Communication service (for outbound)"
   echo ""
   echo "Environment Variables:"
-  echo "  COMMS_REPO_PATH        Path to droid-deploy hosted repo (default: auto-detect)"
+  echo "  COMMS_REPO_PATH        Path to unity-deploy hosted repo (default: auto-detect)"
   echo "  ADAPTERS_PORT          Adapters service port (default: 8081)"
   echo "  COMMS_PORT             Communication service port (default: 8082)"
   echo "  PUBSUB_EMULATOR_PORT   Pub/Sub emulator port (default: 8085)"

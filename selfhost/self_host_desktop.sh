@@ -7,7 +7,7 @@
 #   desktop_url = http://127.0.0.1:8090
 #     /desktop/custom.html  -> noVNC (host :6080)
 #     /api/*                -> agent-service (host :13000, container :3000)
-#   SFTP unityuser@127.0.0.1:2222 -> /Droid/Local in container volume
+#   SFTP unityuser@127.0.0.1:2222 -> /Unity/Local in container volume
 #
 # Usage:
 #   ensure_self_host_desktop <agent_id> <unify_key>
@@ -16,17 +16,17 @@
 #
 set -euo pipefail
 
-# This script lives in droid-deploy/selfhost/; the desktop image and droid venv
-# come from the sibling droid checkout under UNIFY_STACK_ROOT.
+# This script lives in unity-deploy/selfhost/; the desktop image and unity venv
+# come from the sibling unity checkout under UNIFY_STACK_ROOT.
 SELF_HOST_DESKTOP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _DEPLOY_REPO_PATH="$(cd "$SELF_HOST_DESKTOP_SCRIPT_DIR/.." && pwd)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$_DEPLOY_REPO_PATH/.." && pwd)}"
-DROID_REPO="${DROID_REPO:-${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}}"
+UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}}"
 
-SELF_HOST_DESKTOP_IMAGE="${SELF_HOST_DESKTOP_IMAGE:-droid-desktop}"
-SELF_HOST_DESKTOP_CONTAINER="${SELF_HOST_DESKTOP_CONTAINER:-droid-desktop-selfhost}"
-SELF_HOST_DESKTOP_PROXY_CONTAINER="${SELF_HOST_DESKTOP_PROXY_CONTAINER:-droid-desktop-proxy}"
-SELF_HOST_DESKTOP_VOLUME="${SELF_HOST_DESKTOP_VOLUME:-droid-desktop-local}"
+SELF_HOST_DESKTOP_IMAGE="${SELF_HOST_DESKTOP_IMAGE:-unity-desktop}"
+SELF_HOST_DESKTOP_CONTAINER="${SELF_HOST_DESKTOP_CONTAINER:-unity-desktop-selfhost}"
+SELF_HOST_DESKTOP_PROXY_CONTAINER="${SELF_HOST_DESKTOP_PROXY_CONTAINER:-unity-desktop-proxy}"
+SELF_HOST_DESKTOP_VOLUME="${SELF_HOST_DESKTOP_VOLUME:-unity-desktop-local}"
 SELF_HOST_DESKTOP_URL="${SELF_HOST_DESKTOP_URL:-http://127.0.0.1:8090}"
 SELF_HOST_DESKTOP_PROXY_PORT="${SELF_HOST_DESKTOP_PROXY_PORT:-8090}"
 # Host port for agent-service (container listens on 3000). Avoid 3000 — Console uses it.
@@ -55,13 +55,13 @@ _desktop_image_exists() {
 }
 
 _build_desktop_image() {
-  local dockerfile="$DROID_REPO/deploy/desktop/Dockerfile"
+  local dockerfile="$UNITY_REPO/deploy/desktop/Dockerfile"
   if [[ ! -f "$dockerfile" ]]; then
     _self_host_desktop_log_warn "Missing Dockerfile at $dockerfile"
     return 1
   fi
   _self_host_desktop_log "Building Docker image '$SELF_HOST_DESKTOP_IMAGE' (first run may take several minutes)..."
-  docker build -t "$SELF_HOST_DESKTOP_IMAGE" -f "$dockerfile" "$DROID_REPO"
+  docker build -t "$SELF_HOST_DESKTOP_IMAGE" -f "$dockerfile" "$UNITY_REPO"
   _self_host_desktop_log_ok "Image '$SELF_HOST_DESKTOP_IMAGE' built"
 }
 
@@ -93,7 +93,7 @@ _ensure_desktop_ssh_public_key() {
     _self_host_desktop_log_warn "ORCHESTRA_ADMIN_KEY is not set — cannot provision SFTP key"
     return 1
   fi
-  local py="${DROID_REPO}/.venv/bin/python"
+  local py="${UNITY_REPO}/.venv/bin/python"
   if [[ ! -x "$py" ]]; then
     py="python3"
   fi
@@ -105,7 +105,7 @@ _ensure_desktop_ssh_public_key() {
 }
 
 _sync_novnc_custom_html() {
-  local custom_html="$DROID_REPO/deploy/desktop/novnc/custom.html"
+  local custom_html="$UNITY_REPO/deploy/desktop/novnc/custom.html"
   if [[ ! -f "$custom_html" ]]; then
     return 0
   fi
@@ -155,7 +155,7 @@ _start_desktop_container() {
 
   docker volume create "$SELF_HOST_DESKTOP_VOLUME" >/dev/null
 
-  local env_file="$DROID_REPO/.env"
+  local env_file="$UNITY_REPO/.env"
   local orchestra_url="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
   if [[ "$orchestra_url" == *127.0.0.1* || "$orchestra_url" == *localhost* ]]; then
     orchestra_url="${orchestra_url//127.0.0.1/host.docker.internal}"
@@ -167,10 +167,10 @@ _start_desktop_container() {
     -p "${SELF_HOST_DESKTOP_NOVNC_PORT}:6080"
     -p "${SELF_HOST_DESKTOP_AGENT_PORT}:3000"
     -p "${SELF_HOST_DESKTOP_SFTP_PORT}:2222"
-    -v "${SELF_HOST_DESKTOP_VOLUME}:/Droid/Local"
-    -e "DROID_SSH_PUBLIC_KEY=${ssh_public_key}"
+    -v "${SELF_HOST_DESKTOP_VOLUME}:/Unity/Local"
+    -e "UNITY_SSH_PUBLIC_KEY=${ssh_public_key}"
     -e "UNIFY_KEY=${unify_key}"
-    -e "DROID_LOCAL_ROOT=/Droid/Local"
+    -e "UNITY_LOCAL_ROOT=/Unity/Local"
     -e "ORCHESTRA_URL=${orchestra_url}"
     --add-host=host.docker.internal:host-gateway
   )
@@ -210,7 +210,7 @@ EOF
 }
 
 _start_desktop_proxy() {
-  local caddy_dir="${DROID_REPO}/.droid/self-host-desktop-caddy"
+  local caddy_dir="${UNITY_REPO}/.unity/self-host-desktop-caddy"
   mkdir -p "$caddy_dir"
   _write_desktop_proxy_caddyfile "${caddy_dir}/Caddyfile"
 
@@ -289,7 +289,7 @@ publish_self_host_desktop_ready() {
     _self_host_desktop_log_warn "agent_id is required"
     return 1
   fi
-  local py="${DROID_REPO}/.venv/bin/python"
+  local py="${UNITY_REPO}/.venv/bin/python"
   if [[ ! -x "$py" ]]; then
     py="python3"
   fi

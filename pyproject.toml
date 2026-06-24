@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "droid-deploy"
+name = "unity-deploy"
 version = "0.0.0"
-description = "Hosted deployment and communication infrastructure for Droid"
+description = "Hosted deployment and communication infrastructure for Unity"
 requires-python = ">=3.12,<4.0"
 dependencies = [
     "acme>=5.0.0",
@@ -63,11 +63,11 @@ adapters = [
     "uvicorn[standard]>=0.24.0",
 ]
 
-[project.entry-points."droid_deploy.init"]
-enterprise = "droid_deploy.hook:startup_hook"
+[project.entry-points."unity_deploy.init"]
+enterprise = "unity_deploy.hook:startup_hook"
 
-[project.entry-points."droid.deploy_runtime"]
-enterprise = "droid_deploy.runtime:register_runtime_backends"
+[project.entry-points."unity.deploy_runtime"]
+enterprise = "unity_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
 # Formatters are the single source of truth for the pinned versions CI and
@@ -78,7 +78,7 @@ lint = [
     "autoflake>=2.3.1",
 ]
 dev = [
-    "droid",
+    "unity",
     "unify",
     "unillm",
     "pre-commit>=4.0.1",
@@ -89,27 +89,27 @@ dev = [
 ]
 
 [tool.uv.sources]
-droid = { path = "../droid", editable = true }
+unity = { path = "../unity", editable = true }
 unify = { path = "../unify", editable = true }
 unillm = { path = "../unillm", editable = true }
 
 [tool.pyright]
-extraPaths = ["../droid", "../unify", "../unillm", "."]
+extraPaths = ["../unity", "../unify", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.basedpyright]
-extraPaths = ["../droid", "../unify", "../unillm", "."]
+extraPaths = ["../unity", "../unify", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.setuptools.packages.find]
-include = ["droid_deploy*", "communication*", "adapters*", "common*"]
+include = ["unity_deploy*", "communication*", "adapters*", "common*"]
 
 [tool.setuptools.package-data]
-"droid_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
+"unity_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
 "*" = ["*.json", "*.md", "*.yaml", "*.yml", "data/*.json", "data/*.md", "data/*.yaml", "data/*.yml"]
 "communication" = ["**/*.md", "**/*.ps1", "**/*.sh", "**/*.html", "**/*.conf", "**/*.hcl"]
 

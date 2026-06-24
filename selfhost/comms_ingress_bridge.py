@@ -10,15 +10,15 @@ send still flows through the gateway.
 
 Channels are pluggable adapters; each is active only when its credentials are
 configured, so the default fully-local stack is unaffected. Nothing here is
-open-source ``droid`` code: it lives in the private ``droid-deploy`` repo and
-reads all credentials from the environment / local files under ``~/.droid``, so
+open-source ``unity`` code: it lives in the private ``unity-deploy`` repo and
+reads all credentials from the environment / local files under ``~/.unity``, so
 no secret or internal address is ever committed.
 
 Adapters & env:
   Gmail (email)
     GMAIL_BRIDGE_MAILBOX      Mailbox to impersonate/poll.
     GMAIL_BRIDGE_SA_FILE      SA JSON with Gmail domain-wide delegation
-                              (default ``~/.droid/comms_sa.json``).
+                              (default ``~/.unity/comms_sa.json``).
   Twilio (sms, whatsapp)
     TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN
     COMMS_BRIDGE_SMS_NUMBER       Coordinator SMS number (E.164).
@@ -88,7 +88,7 @@ class GmailAdapter:
     def __init__(self) -> None:
         self._mailbox = _env("GMAIL_BRIDGE_MAILBOX")
         self._sa_file = _env("GMAIL_BRIDGE_SA_FILE") or str(
-            Path.home() / ".droid" / "comms_sa.json",
+            Path.home() / ".unity" / "comms_sa.json",
         )
         self._service = None
         self._history_id: str | None = None

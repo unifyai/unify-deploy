@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build-windows.sh - Build Droid Pool Windows VM image via Packer
+# build-windows.sh - Build Unity Pool Windows VM image via Packer
 # =============================================================================
 #
 # Builds the pool Windows image (base + pool overlay) into the
-# "droid-pool-windows-vm" image family.
+# "unity-pool-windows-vm" image family.
 #
 # Usage:
 #   ./build-windows.sh --project PROJECT_ID [--credentials-file PATH]
@@ -97,5 +97,5 @@ echo "=========================================="
 echo "  Pool Windows image build complete!"
 echo "=========================================="
 echo ""
-echo "The image is now the latest in family: droid-pool-windows-vm"
+echo "The image is now the latest in family: unity-pool-windows-vm"
 echo "New pool VMs will automatically use this image."

@@ -65,7 +65,7 @@ def test_run_vm_assignment_persists_assigned_result(monkeypatch):
         workers,
         "assign_pool_vm",
         lambda **_kwargs: {
-            "vm_name": "droid-pool-ubuntu-1-staging",
+            "vm_name": "unity-pool-ubuntu-1-staging",
             "hostname": "vm-1.vm.unify.ai",
             "desktop_url": "https://vm-1.vm.unify.ai",
         },
@@ -92,7 +92,7 @@ def test_run_vm_assignment_persists_assigned_result(monkeypatch):
     assert persist_result.call_args.kwargs["attempt_id"] == "attempt-1"
     assert persist_result.call_args.kwargs["state"] == "assigned"
     assert persist_result.call_args.kwargs["vm_ref"] == {
-        "name": "droid-pool-ubuntu-1-staging",
+        "name": "unity-pool-ubuntu-1-staging",
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
@@ -117,7 +117,7 @@ def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
         workers,
         "assign_pool_vm",
         lambda **_kwargs: {
-            "vm_name": "droid-pool-ubuntu-1-staging",
+            "vm_name": "unity-pool-ubuntu-1-staging",
             "hostname": "vm-1.vm.unify.ai",
             "desktop_url": "https://vm-1.vm.unify.ai",
         },
@@ -143,7 +143,7 @@ def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
     release_pool_vm.assert_called_once_with(
         "1207",
         "binding-1",
-        vm_name="droid-pool-ubuntu-1-staging",
+        vm_name="unity-pool-ubuntu-1-staging",
     )
 
 
@@ -193,7 +193,7 @@ def test_run_vm_assignment_persists_capacity_result(monkeypatch):
 
 def test_run_guest_health_probe_records_ready_signal(monkeypatch):
     record_signal = MagicMock()
-    vm_ref = {"name": "droid-pool-ubuntu-1-staging", "hostname": "vm-1.vm.unify.ai"}
+    vm_ref = {"name": "unity-pool-ubuntu-1-staging", "hostname": "vm-1.vm.unify.ai"}
 
     monkeypatch.setattr(
         workers,
@@ -242,7 +242,7 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
         namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="droid-pool-ubuntu-1-staging",
+        vm_name="unity-pool-ubuntu-1-staging",
         release_generation=1,
     )
 
@@ -253,7 +253,7 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
     assert record_signal.call_args.kwargs["payload"]["state"] == "requested"
     assert (
         record_signal.call_args.kwargs["payload"]["vmName"]
-        == "droid-pool-ubuntu-1-staging"
+        == "unity-pool-ubuntu-1-staging"
     )
     assert record_signal.call_args.kwargs["payload"]["releaseGeneration"] == 1
 
@@ -273,7 +273,7 @@ def test_run_vm_release_request_skips_stale_binding(monkeypatch):
         namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="droid-pool-ubuntu-1-staging",
+        vm_name="unity-pool-ubuntu-1-staging",
         release_generation=1,
     )
 

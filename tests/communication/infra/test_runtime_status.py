@@ -13,7 +13,7 @@ def _job(name: str, *, assistant_id: str, binding_id: str):
         metadata=SimpleNamespace(
             name=name,
             labels={
-                "app": "droid",
+                "app": "unity",
                 "assistant-id": assistant_id,
                 "assistantsession.unify.ai/name": f"assistant-session-{assistant_id}",
                 "assistantsession.unify.ai/binding-id": binding_id,
@@ -81,7 +81,7 @@ def test_stop_session_returns_current_binding_id(client):
 def test_stop_job_records_session_stop_for_owned_job(client):
     batch_api = MagicMock()
     batch_api.read_namespaced_job.return_value = _job(
-        "droid-job-1",
+        "unity-job-1",
         assistant_id="1207",
         binding_id="binding-123",
     )
@@ -90,7 +90,7 @@ def test_stop_job_records_session_stop_for_owned_job(client):
         "status": {
             "binding": build_binding(
                 binding_id="binding-123",
-                job_ref={"name": "droid-job-1", "namespace": "staging"},
+                job_ref={"name": "unity-job-1", "namespace": "staging"},
             ),
         },
     }
@@ -127,13 +127,13 @@ def test_stop_job_records_session_stop_for_owned_job(client):
     ):
         response = client.post(
             "/infra/job/stop",
-            data={"job_name": "droid-job-1"},
+            data={"job_name": "unity-job-1"},
         )
 
     assert response.status_code == 200
     assert response.json() == {
         "success": True,
-        "message": "Job suspended successfully: droid-job-1",
+        "message": "Job suspended successfully: unity-job-1",
         "assistant_id": "1207",
         "binding_id": "binding-123",
         "session_stop_requested": True,
@@ -148,8 +148,8 @@ def test_stop_job_keeps_raw_suspend_for_unowned_job(client):
     batch_api = MagicMock()
     batch_api.read_namespaced_job.return_value = SimpleNamespace(
         metadata=SimpleNamespace(
-            name="droid-job-1",
-            labels={"app": "droid", "assistant-id": "1207"},
+            name="unity-job-1",
+            labels={"app": "unity", "assistant-id": "1207"},
             annotations={},
             deletion_timestamp=None,
         ),
@@ -177,13 +177,13 @@ def test_stop_job_keeps_raw_suspend_for_unowned_job(client):
     ):
         response = client.post(
             "/infra/job/stop",
-            data={"job_name": "droid-job-1"},
+            data={"job_name": "unity-job-1"},
         )
 
     assert response.status_code == 200
     assert response.json() == {
         "success": True,
-        "message": "Job suspended successfully: droid-job-1",
+        "message": "Job suspended successfully: unity-job-1",
         "assistant_id": None,
         "binding_id": None,
         "session_stop_requested": False,
@@ -216,7 +216,7 @@ def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_
         "assistant_id": "1207",
         "binding_id": "binding-new",
         "pool_role": "assigned",
-        "vm_name": "droid-pool-ubuntu-9-staging",
+        "vm_name": "unity-pool-ubuntu-9-staging",
     }
 
     def _list_jobs(*_args, **kwargs):
@@ -225,7 +225,7 @@ def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_
             return SimpleNamespace(items=[])
         return SimpleNamespace(
             items=[
-                _job("droid-job-new", assistant_id="1207", binding_id="binding-new"),
+                _job("unity-job-new", assistant_id="1207", binding_id="binding-new"),
             ],
         )
 
@@ -258,7 +258,7 @@ def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_
         ),
         patch(
             "communication.infra.views.find_vm_with_disk",
-            return_value="droid-pool-ubuntu-9-staging",
+            return_value="unity-pool-ubuntu-9-staging",
         ),
     ):
         response = client.get(

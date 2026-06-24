@@ -23,11 +23,11 @@ from adapters.helpers import (
     expire_all_stale_jobs,
     get_default_contacts,
     get_assistant,
-    get_droid_jobs_inventory,
+    get_unity_jobs_inventory,
     check_contact_details,
-    dispatch_droid_start_intent,
+    dispatch_unity_start_intent,
     replenish_idle_pool,
-    start_droid_job,
+    start_unity_job,
 )
 from common.settings import SETTINGS
 
@@ -240,7 +240,7 @@ def test_check_valid_contact_uses_resolved_boss_contact_id(mock_get_contacts):
     assert [contact["contact_id"] for contact in contacts] == [42, 43]
 
 
-# --- start_droid_job demo mode tests ---
+# --- start_unity_job demo mode tests ---
 
 
 def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
@@ -361,7 +361,7 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_passes_demo_id_for_demo_assistant(mock_post):
+def test_start_unity_job_passes_demo_id_for_demo_assistant(mock_post):
     """Verify demo_id is passed as string when assistant has demo_id."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -369,7 +369,7 @@ def test_start_droid_job_passes_demo_id_for_demo_assistant(mock_post):
 
     assistant_data = _create_mock_assistant_data(demo_id=42)
 
-    start_droid_job(assistant_data, "phone")
+    start_unity_job(assistant_data, "phone")
 
     # Check that requests.post was called
     mock_post.assert_called_once()
@@ -386,7 +386,7 @@ def test_start_droid_job_passes_demo_id_for_demo_assistant(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_passes_empty_demo_id_for_regular_assistant(mock_post):
+def test_start_unity_job_passes_empty_demo_id_for_regular_assistant(mock_post):
     """Verify demo_id is empty string when assistant has no demo_id."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -394,7 +394,7 @@ def test_start_droid_job_passes_empty_demo_id_for_regular_assistant(mock_post):
 
     assistant_data = _create_mock_assistant_data(demo_id=None)
 
-    start_droid_job(assistant_data, "phone")
+    start_unity_job(assistant_data, "phone")
 
     # Check that requests.post was called
     mock_post.assert_called_once()
@@ -411,7 +411,7 @@ def test_start_droid_job_passes_empty_demo_id_for_regular_assistant(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_passes_empty_demo_id_when_key_missing(mock_post):
+def test_start_unity_job_passes_empty_demo_id_when_key_missing(mock_post):
     """Verify demo_id is empty string when demo_id key is missing from assistant data."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -421,7 +421,7 @@ def test_start_droid_job_passes_empty_demo_id_when_key_missing(mock_post):
     assistant_data = _create_mock_assistant_data(demo_id=None)
     del assistant_data["demo_id"]
 
-    start_droid_job(assistant_data, "phone")
+    start_unity_job(assistant_data, "phone")
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
@@ -435,7 +435,7 @@ def test_start_droid_job_passes_empty_demo_id_when_key_missing(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_demo_id_with_different_mediums(mock_post):
+def test_start_unity_job_demo_id_with_different_mediums(mock_post):
     """Verify demo_id is passed correctly for different communication mediums."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -445,7 +445,7 @@ def test_start_droid_job_demo_id_with_different_mediums(mock_post):
 
     for medium in ["phone", "email", "whatsapp", "msg"]:
         mock_post.reset_mock()
-        start_droid_job(assistant_data, medium)
+        start_unity_job(assistant_data, medium)
 
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
@@ -457,7 +457,7 @@ def test_start_droid_job_demo_id_with_different_mediums(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_dispatch_droid_start_intent_includes_wake_reasons(mock_post):
+def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     """Wake reasons should be serialized onto the start-intent form payload."""
 
     mock_response = MagicMock()
@@ -468,7 +468,7 @@ def test_dispatch_droid_start_intent_includes_wake_reasons(mock_post):
     assistant_data["is_coordinator"] = True
     wake_reasons = [{"type": "task_due", "task_id": 101}]
 
-    response = dispatch_droid_start_intent(
+    response = dispatch_unity_start_intent(
         assistant_data,
         "api_message",
         wake_reasons=wake_reasons,
@@ -486,7 +486,7 @@ def test_dispatch_droid_start_intent_includes_wake_reasons(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_dispatch_droid_start_intent_encodes_team_ids_for_form(mock_post):
+def test_dispatch_unity_start_intent_encodes_team_ids_for_form(mock_post):
     """Start-intent form payloads carry memberships as JSON strings."""
 
     mock_response = MagicMock()
@@ -494,7 +494,7 @@ def test_dispatch_droid_start_intent_encodes_team_ids_for_form(mock_post):
     mock_post.return_value = mock_response
     assistant_data = _create_mock_assistant_data()
 
-    response = dispatch_droid_start_intent(assistant_data, "api_message")
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
 
     assert response is mock_response
     data = mock_post.call_args.kwargs["data"]
@@ -512,13 +512,13 @@ def test_dispatch_droid_start_intent_encodes_team_ids_for_form(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_dispatch_droid_start_intent_returns_none_without_api_key(mock_post):
+def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
     """Assistants without API keys should not dispatch start intent requests."""
 
     assistant_data = _create_mock_assistant_data()
     assistant_data["api_key"] = ""
 
-    response = dispatch_droid_start_intent(assistant_data, "api_message")
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
 
     assert response is None
     mock_post.assert_not_called()
@@ -593,31 +593,31 @@ def test_get_assistant_preserves_team_ids(mock_get):
 
 
 @patch("adapters.helpers._fetch_infra_jobs")
-def test_get_droid_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
+def test_get_unity_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
     mock_response = MagicMock()
     mock_response.json.return_value = {"jobs": []}
     mock_fetch_infra_jobs.return_value = mock_response
 
-    inventory = get_droid_jobs_inventory()
+    inventory = get_unity_jobs_inventory()
 
     assert inventory == {"running": [], "idle": []}
     mock_fetch_infra_jobs.assert_called_once()
     params = mock_fetch_infra_jobs.call_args.args[0]
     assert params["hours"] == SETTINGS.job_inventory_lookback_hours
-    assert params["label_selector"] == "app=droid,droid-status!=done"
+    assert params["label_selector"] == "app=unity,unity-status!=done"
 
 
 @patch("adapters.helpers.requests.post")
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.get_target_idle_count")
-@patch("adapters.helpers.get_droid_jobs_inventory")
+@patch("adapters.helpers.get_unity_jobs_inventory")
 def test_replenish_idle_pool_honors_extra_demand(
-    mock_get_droid_jobs_inventory,
+    mock_get_unity_jobs_inventory,
     mock_get_target_idle_count,
     mock_requests_get,
     mock_requests_post,
 ):
-    mock_get_droid_jobs_inventory.return_value = {
+    mock_get_unity_jobs_inventory.return_value = {
         "running": [{"job_name": "running-1"}],
         "idle": [{"job_name": "idle-1"}],
     }
@@ -643,13 +643,13 @@ def test_replenish_idle_pool_honors_extra_demand(
 
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.get_target_idle_count")
-@patch("adapters.helpers.get_droid_jobs_inventory")
+@patch("adapters.helpers.get_unity_jobs_inventory")
 def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
-    mock_get_droid_jobs_inventory,
+    mock_get_unity_jobs_inventory,
     mock_get_target_idle_count,
     mock_requests_get,
 ):
-    mock_get_droid_jobs_inventory.return_value = {"running": [], "idle": []}
+    mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
     mock_get_target_idle_count.return_value = SimpleNamespace(target=0)
     mock_response = MagicMock()
     mock_response.json.return_value = {"jobs": []}
@@ -668,12 +668,12 @@ def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_passes_whatsapp_numbers(mock_post):
+def test_start_unity_job_passes_whatsapp_numbers(mock_post):
     """Both user_whatsapp_number and assistant_whatsapp_number are forwarded."""
     mock_post.return_value = MagicMock(status_code=200)
 
     assistant_data = _create_mock_assistant_data()
-    start_droid_job(assistant_data, "whatsapp")
+    start_unity_job(assistant_data, "whatsapp")
 
     data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
     assert data["user_whatsapp_number"] == "+1234567890"
@@ -682,13 +682,13 @@ def test_start_droid_job_passes_whatsapp_numbers(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_defaults_missing_assistant_whatsapp(mock_post):
+def test_start_unity_job_defaults_missing_assistant_whatsapp(mock_post):
     """assistant_whatsapp_number defaults to empty when absent from assistant data."""
     mock_post.return_value = MagicMock(status_code=200)
 
     assistant_data = _create_mock_assistant_data()
     del assistant_data["assistant_whatsapp_number"]
-    start_droid_job(assistant_data, "phone")
+    start_unity_job(assistant_data, "phone")
 
     data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
     assert data["assistant_whatsapp_number"] == ""
@@ -697,7 +697,7 @@ def test_start_droid_job_defaults_missing_assistant_whatsapp(mock_post):
 @patch("adapters.helpers.logger.info")
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_droid_job_timeout_is_best_effort_dispatch_only(
+def test_start_unity_job_timeout_is_best_effort_dispatch_only(
     mock_post,
     mock_logger_info,
 ):
@@ -706,7 +706,7 @@ def test_start_droid_job_timeout_is_best_effort_dispatch_only(
     mock_post.side_effect = requests.exceptions.Timeout
 
     assistant_data = _create_mock_assistant_data()
-    start_droid_job(assistant_data, "phone")
+    start_unity_job(assistant_data, "phone")
 
     assert (
         mock_post.call_args.kwargs["timeout"] == START_INTENT_DISPATCH_TIMEOUT_SECONDS
@@ -758,7 +758,7 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
 ):
     """Legacy flags only mean the async dispatch was scheduled.
 
-    The adapter schedules ``start_droid_job`` on the webhook pool, then returns
+    The adapter schedules ``start_unity_job`` on the webhook pool, then returns
     legacy compatibility flags immediately. Comms acceptance remains async.
     """
     assistant_data = _create_mock_assistant_data()
@@ -768,7 +768,7 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_submit.assert_called_once_with(start_droid_job, assistant_data, "whatsapp")
+    mock_submit.assert_called_once_with(start_unity_job, assistant_data, "whatsapp")
     assert ctx["job_started"] is True
     assert ctx["is_job_running"] is True
 
@@ -792,7 +792,7 @@ def _stale_job(*, job_name: str, assistant_id: str, status: str = "running") -> 
     return {
         "job_name": job_name,
         "assistant_id": assistant_id,
-        "labels": {"droid-status": status},
+        "labels": {"unity-status": status},
         "creation_timestamp": created_at,
     }
 
@@ -814,8 +814,8 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
                 200,
                 {
                     "jobs": [
-                        _stale_job(job_name="droid-job-bound", assistant_id="aid-1"),
-                        _stale_job(job_name="droid-job-orphan", assistant_id="aid-2"),
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
+                        _stale_job(job_name="unity-job-orphan", assistant_id="aid-2"),
                     ],
                 },
             )
@@ -826,7 +826,7 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
                     "spec": {"desiredState": "Running"},
                     "status": {
                         "phase": "Active",
-                        "binding": {"jobRef": {"name": "droid-job-bound"}},
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
                     },
                 },
             )
@@ -849,12 +849,12 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
     result = expire_all_stale_jobs()
 
     assert result["stopped_assistants"] == ["aid-1"]
-    assert result["cleaned_jobs"] == ["droid-job-orphan"]
-    assert result["deferred_jobs"] == ["droid-job-bound"]
-    assert ("delete", "droid-job-bound") not in events
+    assert result["cleaned_jobs"] == ["unity-job-orphan"]
+    assert result["deferred_jobs"] == ["unity-job-bound"]
+    assert ("delete", "unity-job-bound") not in events
     assert events == [
         ("stop", "http://comms.test/infra/session/aid-1/stop"),
-        ("delete", "droid-job-orphan"),
+        ("delete", "unity-job-orphan"),
     ]
 
 
@@ -873,7 +873,7 @@ def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
                 200,
                 {
                     "jobs": [
-                        _stale_job(job_name="droid-job-bound", assistant_id="aid-1"),
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
                     ],
                 },
             )
@@ -884,7 +884,7 @@ def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
                     "spec": {"desiredState": "Stopped"},
                     "status": {
                         "phase": "Releasing",
-                        "binding": {"jobRef": {"name": "droid-job-bound"}},
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
                     },
                 },
             )
@@ -896,6 +896,6 @@ def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
 
     assert result["stopped_assistants"] == []
     assert result["cleaned_jobs"] == []
-    assert result["deferred_jobs"] == ["droid-job-bound"]
+    assert result["deferred_jobs"] == ["unity-job-bound"]
     mock_post.assert_not_called()
     mock_delete.assert_not_called()

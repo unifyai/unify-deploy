@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 
-from droid_deploy.assistant_deployments.seed_sync import (
+from unity_deploy.assistant_deployments.seed_sync import (
     _aggregate_hash,
     _manager_api,
     _record_hash,
@@ -13,8 +13,8 @@ from droid_deploy.assistant_deployments.seed_sync import (
     _sync_guidance,
     sync_seed_data,
 )
-from droid.guidance_manager.types.guidance import Guidance
-from droid_deploy.assistant_deployments.secrets_file import load_secrets
+from unity.guidance_manager.types.guidance import Guidance
+from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
 # Hash helpers
@@ -239,7 +239,7 @@ class TestSyncSeedData:
                 raise AssertionError("delete_guidance should not be called")
 
         fake = FakeGuidanceManager()
-        from droid.manager_registry import ManagerRegistry
+        from unity.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,
@@ -306,7 +306,7 @@ class TestSyncSeedData:
                 raise AssertionError("builtins must not be deleted")
 
         fake = FakeGuidanceManager()
-        from droid.manager_registry import ManagerRegistry
+        from unity.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,
@@ -343,7 +343,7 @@ class TestSyncSeedData:
                 raise AssertionError("update_contact should not be called")
 
         fake = FakeContactManager()
-        from droid.manager_registry import ManagerRegistry
+        from unity.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,

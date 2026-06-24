@@ -15,7 +15,7 @@ Usage:
     python scripts/setup_gmp_sidecar.py
 
     # Specific services only
-    python scripts/setup_gmp_sidecar.py droid-adapters-staging droid-comms-app-staging
+    python scripts/setup_gmp_sidecar.py unity-adapters-staging unity-comms-app-staging
 
     # Dry run (prints the modified JSON without applying)
     python scripts/setup_gmp_sidecar.py --dry-run
@@ -35,10 +35,10 @@ SIDECAR_IMAGE = (
 )
 
 SERVICES = [
-    "droid-adapters-staging",
-    "droid-adapters",
-    "droid-comms-app-staging",
-    "droid-comms-app",
+    "unity-adapters-staging",
+    "unity-adapters",
+    "unity-comms-app-staging",
+    "unity-comms-app",
 ]
 
 # Metadata fields that are read-only and must be stripped for replace

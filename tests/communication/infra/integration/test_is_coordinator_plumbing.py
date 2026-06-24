@@ -216,7 +216,7 @@ def _post_assistant_update(adapters, assistant_id: str) -> None:
 
 
 def _ensure_pubsub_topic_exists(assistant_id: str) -> None:
-    topic_name = f"droid-{assistant_id}{_pubsub_suffix()}"
+    topic_name = f"unity-{assistant_id}{_pubsub_suffix()}"
     response = requests.post(
         f"{COMMS_APP_URL}/infra/pubsub/topic",
         data={"topic_name": topic_name},
@@ -260,7 +260,7 @@ def _read_startup_payload(comms, core_api, assistant_id: str) -> dict:
 
 
 def _temporary_inbound_subscription(pubsub_subscriber, assistant_id: str):
-    topic_name = f"droid-{assistant_id}{_pubsub_suffix()}"
+    topic_name = f"unity-{assistant_id}{_pubsub_suffix()}"
     topic_path = pubsub_subscriber.topic_path(GCP_PROJECT_ID, topic_name)
     subscription_name = f"{topic_name}-is-coordinator-{uuid.uuid4().hex[:12]}"
     subscription_path = pubsub_subscriber.subscription_path(

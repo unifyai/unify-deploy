@@ -16,14 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from droid_deploy.assistant_deployments.types.pipeline_config import (
+from unity_deploy.assistant_deployments.types.pipeline_config import (
     PipelineConfig,
     PipelineExecutionConfig,
     SourceFileSpec,
     SourceTableSpec,
     build_table_config_for_source_file,
 )
-from droid.data_manager.types.ingest import (
+from unity.data_manager.types.ingest import (
     AutoDerivedColumn,
     ExplicitDerivedColumn,
     PostIngestConfig,
@@ -423,7 +423,7 @@ class TestRealConfig:
         """Ensure the actual pipeline_config.json passes schema validation."""
         config_path = (
             Path(__file__).resolve().parents[2]
-            / "droid_deploy"
+            / "unity_deploy"
             / "assistant_deployments"
             / "clients"
             / "client_alpha"

@@ -14,7 +14,7 @@ set -euo pipefail
 #     --env staging \
 #     --mode dm \
 #     --config path/to/pipeline_config.json \
-#     --project-root ~/droid-deploy \
+#     --project-root ~/unity-deploy \
 #     --user-id UUID --assistant-id 1823 \
 #     [--destination personal|team:<id>] \
 #     [--limit 5] [extra dispatch_pipeline.py flags...]
@@ -122,7 +122,7 @@ cleanup() {
       echo "Final dispatch status JSON:"
       (
         cd "$REPO_ROOT"
-        uv run python -m droid_deploy.infra.cli.pipeline_control status \
+        uv run python -m unity_deploy.infra.cli.pipeline_control status \
           --env "$PIPELINE_ENV" \
           --dispatch-id "$DISPATCH_ID" \
           --json > "$LOG_DIR/summary.json"
@@ -149,12 +149,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Source .env for DROID_GCS_ARTIFACT_BUCKET, DROID_PUBSUB_PROJECT_ID etc.
-PRESET_WORKER_NS="${DROID_WORKER_NS:-}"
-PRESET_PARSE_SUB="${DROID_PARSE_SUB:-}"
-PRESET_INGEST_SUB="${DROID_INGEST_SUB:-}"
-PRESET_DLQ_SUB="${DROID_DLQ_SUB:-}"
-PRESET_ARTIFACT_BUCKET="${DROID_GCS_ARTIFACT_BUCKET:-}"
+# Source .env for UNITY_GCS_ARTIFACT_BUCKET, UNITY_PUBSUB_PROJECT_ID etc.
+PRESET_WORKER_NS="${UNITY_WORKER_NS:-}"
+PRESET_PARSE_SUB="${UNITY_PARSE_SUB:-}"
+PRESET_INGEST_SUB="${UNITY_INGEST_SUB:-}"
+PRESET_DLQ_SUB="${UNITY_DLQ_SUB:-}"
+PRESET_ARTIFACT_BUCKET="${UNITY_GCS_ARTIFACT_BUCKET:-}"
 _ENV_FILE="$REPO_ROOT/.env"
 if [ -f "$_ENV_FILE" ]; then
   set -a; . "$_ENV_FILE"; set +a
@@ -163,7 +163,7 @@ fi
 if [[ -n "$PIPELINE_ENV_ARG" ]]; then
   PIPELINE_ENV="$PIPELINE_ENV_ARG"
 else
-  PIPELINE_ENV="${DROID_GCP_PIPELINE_ENVIRONMENT:-staging}"
+  PIPELINE_ENV="${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}"
 fi
 
 case "$PIPELINE_ENV" in
@@ -175,22 +175,22 @@ case "$PIPELINE_ENV" in
     ;;
 esac
 
-PUBSUB_PROJECT="${DROID_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
+PUBSUB_PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 if [[ -n "$PIPELINE_ENV_ARG" ]]; then
   WORKER_NS="${PRESET_WORKER_NS:-$PIPELINE_ENV}"
-  PARSE_SUB="${PRESET_PARSE_SUB:-droid-parse-sub${ENV_SUFFIX}}"
-  INGEST_SUB="${PRESET_INGEST_SUB:-droid-ingest-sub${ENV_SUFFIX}}"
-  DLQ_SUB="${PRESET_DLQ_SUB:-droid-dead-letter-sub${ENV_SUFFIX}}"
-  ARTIFACT_BUCKET="${PRESET_ARTIFACT_BUCKET:-droid-pipeline-artifacts${ENV_SUFFIX}}"
+  PARSE_SUB="${PRESET_PARSE_SUB:-unity-parse-sub${ENV_SUFFIX}}"
+  INGEST_SUB="${PRESET_INGEST_SUB:-unity-ingest-sub${ENV_SUFFIX}}"
+  DLQ_SUB="${PRESET_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}"
+  ARTIFACT_BUCKET="${PRESET_ARTIFACT_BUCKET:-unity-pipeline-artifacts${ENV_SUFFIX}}"
 else
-  WORKER_NS="${DROID_WORKER_NS:-$PIPELINE_ENV}"
-  PARSE_SUB="${DROID_PARSE_SUB:-droid-parse-sub${ENV_SUFFIX}}"
-  INGEST_SUB="${DROID_INGEST_SUB:-droid-ingest-sub${ENV_SUFFIX}}"
-  DLQ_SUB="${DROID_DLQ_SUB:-droid-dead-letter-sub${ENV_SUFFIX}}"
-  ARTIFACT_BUCKET="${DROID_GCS_ARTIFACT_BUCKET:-droid-pipeline-artifacts${ENV_SUFFIX}}"
+  WORKER_NS="${UNITY_WORKER_NS:-$PIPELINE_ENV}"
+  PARSE_SUB="${UNITY_PARSE_SUB:-unity-parse-sub${ENV_SUFFIX}}"
+  INGEST_SUB="${UNITY_INGEST_SUB:-unity-ingest-sub${ENV_SUFFIX}}"
+  DLQ_SUB="${UNITY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}"
+  ARTIFACT_BUCKET="${UNITY_GCS_ARTIFACT_BUCKET:-unity-pipeline-artifacts${ENV_SUFFIX}}"
 fi
-export DROID_GCP_PIPELINE_ENVIRONMENT="$PIPELINE_ENV"
-export DROID_GCS_ARTIFACT_BUCKET="$ARTIFACT_BUCKET"
+export UNITY_GCP_PIPELINE_ENVIRONMENT="$PIPELINE_ENV"
+export UNITY_GCS_ARTIFACT_BUCKET="$ARTIFACT_BUCKET"
 
 echo "========================================================================"
 if (( MONITOR_ONLY )); then
@@ -219,7 +219,7 @@ if (( ! MONITOR_ONLY )); then
 
   echo "[1/5] Dispatching pipeline job..."
   cd "$REPO_ROOT"
-  uv run droid_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
+  uv run unity_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
   DISPATCH_EXIT=${PIPESTATUS[0]}
 
   if [ "$DISPATCH_EXIT" -ne 0 ]; then
@@ -254,7 +254,7 @@ echo "[2/5] Starting worker log streams..."
 # so new pods get picked up with minimal delay.
 tmux_cmd new-session -d -s "parse-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=droid-parse-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
   echo '[reconnecting to parse workers in 30s...]'
   sleep 30
 done | awk '!seen[\$0]++' | tee '$LOG_DIR/parse-worker.log'
@@ -263,7 +263,7 @@ echo "  parse-worker.log  (streaming, reconnects every 30s)"
 
 tmux_cmd new-session -d -s "ingest-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=droid-ingest-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
   echo '[reconnecting to ingest workers in 30s...]'
   sleep 30
 done | awk '!seen[\$0]++' | tee '$LOG_DIR/ingest-worker.log'
@@ -319,9 +319,9 @@ while true; do
   ingest_undeliv=\$(metric_value '$INGEST_SUB' 'num_undelivered_messages')
   parse_oldest=\$(metric_value '$PARSE_SUB' 'oldest_unacked_message_age')
   ingest_oldest=\$(metric_value '$INGEST_SUB' 'oldest_unacked_message_age')
-  parse_replicas=\$(kubectl get hpa droid-parse-worker-hpa -n $WORKER_NS \
+  parse_replicas=\$(kubectl get hpa unity-parse-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentReplicas}/{.status.desiredReplicas}' 2>/dev/null || echo '?')
-  ingest_replicas=\$(kubectl get hpa droid-ingest-worker-hpa -n $WORKER_NS \
+  ingest_replicas=\$(kubectl get hpa unity-ingest-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentReplicas}/{.status.desiredReplicas}' 2>/dev/null || echo '?')
   printf '%s  parse: undeliv=%s oldest=%ss replicas=%s  |  ingest: undeliv=%s oldest=%ss replicas=%s\n' \
     \"\$ts\" \"\$parse_undeliv\" \"\$parse_oldest\" \"\$parse_replicas\" \"\$ingest_undeliv\" \"\$ingest_oldest\" \"\$ingest_replicas\"
@@ -358,14 +358,14 @@ if [[ -n "$DISPATCH_ID" ]]; then
 while true; do
   cd '$REPO_ROOT'
   echo \"--- \$(date +%H:%M:%S) dispatch=$DISPATCH_ID ---\"
-  uv run python -m droid_deploy.infra.cli.pipeline_control status \
+  uv run python -m unity_deploy.infra.cli.pipeline_control status \
     --env '$PIPELINE_ENV' \
     --dispatch-id '$DISPATCH_ID' \
     --show-checkpoints \
     --show-dlq \
     --show-retry-plan 2>&1
   echo
-  uv run python -m droid_deploy.infra.cli.pipeline_control status \
+  uv run python -m unity_deploy.infra.cli.pipeline_control status \
     --env '$PIPELINE_ENV' \
     --dispatch-id '$DISPATCH_ID' \
     --json > '$LOG_DIR/summary.json' 2>/dev/null || true

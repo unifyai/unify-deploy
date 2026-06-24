@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# update-metadata.sh - Update metadata on all Droid pool VMs
+# update-metadata.sh - Update metadata on all Unity pool VMs
 # =============================================================================
 #
-# Discovers all pool VMs (droid-pool-ubuntu-*, droid-pool-windows-*) and
+# Discovers all pool VMs (unity-pool-ubuntu-*, unity-pool-windows-*) and
 # updates their metadata. Automatically applies the correct startup script
 # based on VM type.
 #
@@ -59,8 +59,8 @@ UBUNTU_STARTUP_SCRIPT="$REPO_ROOT/communication/infra/scripts/ubuntu-vm-startup.
 WINDOWS_STARTUP_SCRIPT="$REPO_ROOT/communication/infra/scripts/windows-vm-startup.ps1"
 
 # Pool watcher script paths (local files)
-UBUNTU_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/droid-pool-watcher.sh"
-WINDOWS_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/droid-pool-watcher.ps1"
+UBUNTU_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.sh"
+WINDOWS_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.ps1"
 
 # Supervisord config path (Ubuntu only)
 UBUNTU_SUPERVISORD_CONF="$REPO_ROOT/communication/infra/scripts/ubuntu-vm-custom-image/packer/files/supervisord.conf"
@@ -89,9 +89,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 get_vm_type() {
     local name="$1"
-    if [[ "$name" == droid-pool-ubuntu-* ]]; then
+    if [[ "$name" == unity-pool-ubuntu-* ]]; then
         echo "ubuntu"
-    elif [[ "$name" == droid-pool-windows-* ]]; then
+    elif [[ "$name" == unity-pool-windows-* ]]; then
         echo "windows"
     else
         echo "unknown"
@@ -173,23 +173,23 @@ if [[ -n "$VM_NUMBER" ]]; then
     ENV_SUFFIX=""
     [[ "$TARGET_ENV" == "staging" ]] && ENV_SUFFIX="-staging"
     if [[ "$ONLY_UBUNTU" == true ]]; then
-        VM_NAME_FILTER="name=droid-pool-ubuntu-${VM_NUMBER}${ENV_SUFFIX}"
+        VM_NAME_FILTER="name=unity-pool-ubuntu-${VM_NUMBER}${ENV_SUFFIX}"
         VM_TYPE_LABEL="ubuntu #${VM_NUMBER}"
     elif [[ "$ONLY_WINDOWS" == true ]]; then
-        VM_NAME_FILTER="name=droid-pool-windows-${VM_NUMBER}${ENV_SUFFIX}"
+        VM_NAME_FILTER="name=unity-pool-windows-${VM_NUMBER}${ENV_SUFFIX}"
         VM_TYPE_LABEL="windows #${VM_NUMBER}"
     else
-        VM_NAME_FILTER="name~'^droid-pool-(ubuntu|windows)-${VM_NUMBER}${ENV_SUFFIX}$'"
+        VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-${VM_NUMBER}${ENV_SUFFIX}$'"
         VM_TYPE_LABEL="#${VM_NUMBER} (any type)"
     fi
 elif [[ "$ONLY_UBUNTU" == true ]]; then
     VM_TYPE_LABEL="ubuntu only"
-    VM_NAME_FILTER="name~'^droid-pool-ubuntu-'"
+    VM_NAME_FILTER="name~'^unity-pool-ubuntu-'"
 elif [[ "$ONLY_WINDOWS" == true ]]; then
     VM_TYPE_LABEL="windows only"
-    VM_NAME_FILTER="name~'^droid-pool-windows-'"
+    VM_NAME_FILTER="name~'^unity-pool-windows-'"
 else
-    VM_NAME_FILTER="name~'^droid-pool-(ubuntu|windows)-'"
+    VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-'"
 fi
 
 echo "  Project:  $PROJECT"

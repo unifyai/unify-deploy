@@ -4,14 +4,14 @@ import pytest
 from pathlib import Path
 
 
-from droid_deploy.assistant_deployments.integrations.types import (
+from unity_deploy.assistant_deployments.integrations.types import (
     Capability,
     DemoSiteConfig,
     IntegrationManifest,
     MCPServerConfig,
     SecretSchema,
 )
-from droid_deploy.assistant_deployments.integrations.validation import (
+from unity_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
 

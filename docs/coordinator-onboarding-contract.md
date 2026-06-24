@@ -14,12 +14,12 @@ product graph, UI behavior, and agent prompt behavior from drifting.
 - `console` owns rendering and local UI actions only: picker state, checklist
   rows, opening tabs/dialogs, and calling Orchestra endpoints when the user
   clicks a graph-owned event row.
-- `droid` owns conversational policy: how Twin speaks the current contract over
+- `unity` owns conversational policy: how Twin speaks the current contract over
   chat or voice, how long each turn class may be, and how live call text is
   shaped for TTS.
-- `droid-deploy` owns this private full-local-stack contract documentation.
+- `unity-deploy` owns this private full-local-stack contract documentation.
   Do not move full Console/Orchestra onboarding instructions into public
-  `droid` docs.
+  `unity` docs.
 
 ## Section-Wide vs Step-Specific Copy
 
@@ -41,13 +41,13 @@ Examples:
 - `email-reply`: wait for the user's guess by email.
 - `workspace`: open the OAuth dialog.
 
-Droid should not hardcode section game design, clue content, step ordering, or
+Unity should not hardcode section game design, clue content, step ordering, or
 Console click paths when Orchestra can provide them in the render.
 
 ## Event Contract
 
 All graph-owned onboarding events must be emitted through Orchestra, not posted
-directly from Console to Droid. The event payload must include:
+directly from Console to Unity. The event payload must include:
 
 - `event_type: coordinator_onboarding_event`
 - stable `subtype`
@@ -56,13 +56,13 @@ directly from Console to Droid. The event payload must include:
 - section fields such as `phase_id`, `phase`, and `phase_framing`
 - the current `onboarding` render attached under `details.onboarding`
 
-The attached render is what makes Droid's prompt state current immediately after
+The attached render is what makes Unity's prompt state current immediately after
 the click. Without it, the agent can speak from stale progress and skip the
 section framing that explains why the step exists.
 
 ## Prompt Precedence
 
-Droid has three turn classes:
+Unity has three turn classes:
 
 - `session_open`: may be a longer orientation. It introduces Twin, explains the
   onboarding walkthrough, names the active section's purpose, and proposes the
@@ -83,6 +83,6 @@ rules. A call with valid onboarding `next_targets` must not start with only
 3. Add or extend Orchestra tests for catalog, render, and event payloads.
 4. Add Console row-action handling only if the step opens a UI surface or
    dispatches a graph-owned event endpoint.
-5. Add Droid tests for how the new section is spoken, but do not duplicate the
-   graph copy in Droid prompts.
-6. Verify the flow through the full local stack in `droid-deploy/selfhost`.
+5. Add Unity tests for how the new section is spoken, but do not duplicate the
+   graph copy in Unity prompts.
+6. Verify the flow through the full local stack in `unity-deploy/selfhost`.

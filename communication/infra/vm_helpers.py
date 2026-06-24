@@ -721,11 +721,11 @@ def get_secret(secret_name: str, project_id: str = None) -> Optional[str]:
 def get_dns_hostname(assistant_id: str) -> str:
     """Generate consistent DNS hostname from assistant ID.
 
-    Format: droid-assistant-{id}{-staging}.vm.unify.ai
+    Format: unity-assistant-{id}{-staging}.vm.unify.ai
 
     NOTE: Same for both Windows and Ubuntu - only one VM per assistant.
     """
-    return f"droid-assistant-{assistant_id}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
+    return f"unity-assistant-{assistant_id}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
 
 
 # =============================================================================
@@ -801,7 +801,7 @@ def generate_ssh_keypair() -> Tuple[str, str]:
     ).decode("utf-8")
 
     # Add comment to public key
-    public_key_openssh = f"{public_key_openssh} droid-file-sync"
+    public_key_openssh = f"{public_key_openssh} unity-file-sync"
 
     return private_key_pem, public_key_openssh
 
@@ -882,7 +882,7 @@ def _derive_public_key(private_key_pem: str) -> str:
         )
         .decode("utf-8")
     )
-    return f"{public_key_openssh} droid-file-sync"
+    return f"{public_key_openssh} unity-file-sync"
 
 
 # =============================================================================
@@ -893,7 +893,7 @@ def _derive_public_key(private_key_pem: str) -> str:
 def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
     """Return type-specific configuration for pool VMs.
 
-    Uses dedicated pool image families (droid-pool-ubuntu-vm / droid-pool-windows-vm)
+    Uses dedicated pool image families (unity-pool-ubuntu-vm / unity-pool-windows-vm)
     so pool images don't affect existing legacy VMs.
     """
     if vm_type == "windows":
@@ -985,7 +985,7 @@ def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Option
 
 def _assistant_disk_name(assistant_id: str) -> str:
     sanitized = assistant_id.lower().replace("_", "-")
-    return f"droid-disk-{sanitized}{SETTINGS.env_suffix}"
+    return f"unity-disk-{sanitized}{SETTINGS.env_suffix}"
 
 
 def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, str]:
@@ -996,7 +996,7 @@ def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, st
         "hostname": _pool_vm_hostname(vm_name, vm_type),
         "orchestra-url": SETTINGS.orchestra_url,
         "comms-url": SETTINGS.comms_url,
-        "droid-environment": SETTINGS.deploy_env,
+        "unity-environment": SETTINGS.deploy_env,
         POOL_CONTRACT_GENERATION_LABEL: POOL_VM_CONTRACT_GENERATION,
     }
 
@@ -1392,7 +1392,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     instance_kwargs = dict(
         name=vm_name,
         machine_type=f"zones/{SETTINGS.vm_zone}/machineTypes/{cfg['machine_type']}",
-        description=f"Droid pool VM ({vm_type}) #{n}",
+        description=f"Unity pool VM ({vm_type}) #{n}",
         labels=labels,
         tags=compute_v1.Tags(items=cfg["tags"]),
         disks=[
@@ -1902,7 +1902,7 @@ def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
         disk
         for disk in vm.disks or []
         if not getattr(disk, "boot", False)
-        and "/disks/droid-disk-" in (getattr(disk, "source", "") or "")
+        and "/disks/unity-disk-" in (getattr(disk, "source", "") or "")
     ]
     if not attached_disks:
         return False, None
@@ -2426,7 +2426,7 @@ def _is_job_non_terminal(job) -> bool:
     if job.metadata.deletion_timestamp:
         return False
     labels = job.metadata.labels or {}
-    if labels.get("droid-status") == "done":
+    if labels.get("unity-status") == "done":
         return False
     for condition in job.status.conditions or []:
         if condition.type == "Failed" and condition.status == "True":
@@ -2478,7 +2478,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
         try:
             jobs = batch_api.list_namespaced_job(
                 namespace=SETTINGS.default_namespace,
-                label_selector=f"app=droid,assistant-id={aid}",
+                label_selector=f"app=unity,assistant-id={aid}",
             )
             live_jobs = [j for j in jobs.items if _is_job_non_terminal(j)]
         except Exception as e:
@@ -4096,7 +4096,7 @@ def reconcile_orphaned_disks(
     idle_hours: int = POOL_ASSISTANT_DISK_IDLE_HOURS,
     hard_cap_hours: int = POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
 ) -> Dict[str, Any]:
-    """Garbage-collect unattached ``droid-disk-*`` pd-standard disks.
+    """Garbage-collect unattached ``unity-disk-*`` pd-standard disks.
 
     Workspace files are archived to GCS on session release, so the PD is
     no longer the sole durable copy. Three deletion branches cover the
@@ -4109,7 +4109,7 @@ def reconcile_orphaned_disks(
       whose ``updated`` timestamp is at least as recent as the disk's
       ``last_detach_timestamp`` (modulo a small skew). A fresh PD is
       recreated transparently on the next assignment and the guest
-      restore path repopulates ``/Droid/Local`` from GCS.
+      restore path repopulates ``/Unity/Local`` from GCS.
     - **C — hard cap (opt-in, default off):** covers the above cases
       when the archive is missing or stale but the disk has been
       detached longer than *hard_cap_hours*. Accepts data loss; emits a
@@ -4166,7 +4166,7 @@ def reconcile_orphaned_disks(
             errors.append({"disk": disk_name, "reason": reason, "error": str(e)})
 
     for disk in client.list(request=request):
-        if not disk.name.startswith("droid-disk-"):
+        if not disk.name.startswith("unity-disk-"):
             continue
         if disk.type_ and "pd-standard" not in disk.type_:
             continue
@@ -4174,8 +4174,8 @@ def reconcile_orphaned_disks(
             continue
 
         # Extract assistant_id from disk name:
-        #   droid-disk-{sanitized_id}{env_suffix}
-        raw = disk.name[len("droid-disk-") :]
+        #   unity-disk-{sanitized_id}{env_suffix}
+        raw = disk.name[len("unity-disk-") :]
         if env_suffix and raw.endswith(env_suffix):
             raw = raw[: -len(env_suffix)]
         assistant_id = raw

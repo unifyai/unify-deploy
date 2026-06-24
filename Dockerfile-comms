@@ -22,41 +22,41 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
-# Cache-buster for the droid clone+install layer below. The Cloud
-# Build pipeline resolves the current head SHA of unifyai/droid at
+# Cache-buster for the unity clone+install layer below. The Cloud
+# Build pipeline resolves the current head SHA of unifyai/unity at
 # the matching branch (main or staging) and passes it as a
 # --build-arg. Without referencing this ARG inside the RUN body,
 # Docker's layer cache would reuse a prior `git clone` snapshot of
-# droid even after upstream commits land (the RUN instruction text
-# stays identical), and downstream `from droid.X import Y` calls
+# unity even after upstream commits land (the RUN instruction text
+# stays identical), and downstream `from unity.X import Y` calls
 # would silently miss newly-added modules.
-ARG DROID_SHA=unknown
+ARG UNITY_SHA=unknown
 
-# Clone droid and install just the gateway-runtime deps. Phase C.2:
-# provides the droid.gateway channels + droid.gateway.app.create_app()
+# Clone unity and install just the gateway-runtime deps. Phase C.2:
+# provides the unity.gateway channels + unity.gateway.app.create_app()
 # factory that communication/main.py composes on top of in Phase C.3.
 #
 # Two-step install:
-#   1. `--no-deps` install of the droid package itself, so we don't
+#   1. `--no-deps` install of the unity package itself, so we don't
 #      pull in the heavy assistant-runtime deps (pyaudio needs
 #      portaudio + gcc, browser-use needs playwright + chrome,
 #      spacy needs URL-sourced wheels, livekit-agents pulls dozens
 #      of voice extras, etc.).
 #   2. `-r requirements-gateway.txt` -- the slim dep set that
-#      `python -m droid.gateway` actually needs at runtime. Lives
-#      inside the droid repo so the dep list and the gateway code
+#      `python -m unity.gateway` actually needs at runtime. Lives
+#      inside the unity repo so the dep list and the gateway code
 #      that needs it are versioned together.
 #
 # `pip check` complaints about uninstalled assistant-runtime deps
 # (textual-dev, websockify, etc.) are expected: they're declared in
-# droid's base deps but not needed by the gateway. Suppress them by
+# unity's base deps but not needed by the gateway. Suppress them by
 # not running pip check; they're harmless because nothing the
 # gateway imports actually requires them.
-RUN echo "DROID_SHA=${DROID_SHA}" && \
+RUN echo "UNITY_SHA=${UNITY_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/droid.git /tmp/droid && \
-    pip install --no-cache-dir --no-deps /tmp/droid && \
-    pip install --no-cache-dir -r /tmp/droid/requirements-gateway.txt
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
+    pip install --no-cache-dir --no-deps /tmp/unity && \
+    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
 
 # Copy package metadata and source before install so the runtime package in
 # site-packages matches the application code and bundled script assets.

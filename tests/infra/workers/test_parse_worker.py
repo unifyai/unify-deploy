@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from droid.common.pipeline.types import FileParseResult, IngestPlan, TableMeta
-from droid.common.pipeline.work_queue import ReceivedWorkItem
-from droid_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
-from droid_deploy.infra.workers import parse_worker
-from droid_deploy.infra.workers.parse_worker import _merge_table_config
-from droid_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+from unity.common.pipeline.types import FileParseResult, IngestPlan, TableMeta
+from unity.common.pipeline.work_queue import ReceivedWorkItem
+from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from unity_deploy.infra.workers import parse_worker
+from unity_deploy.infra.workers.parse_worker import _merge_table_config
+from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
 def _plan_with_tables(*tables: TableMeta) -> IngestPlan:

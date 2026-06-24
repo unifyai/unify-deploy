@@ -1,8 +1,8 @@
 # Full Local Stack Inner Loop
 
-This runbook is for internal development across the sibling `droid`, `console`,
-and `orchestra` checkouts. Public `droid` users do not have this private repo;
-the public README correctly describes running `droid` against the hosted
+This runbook is for internal development across the sibling `unity`, `console`,
+and `orchestra` checkouts. Public `unity` users do not have this private repo;
+the public README correctly describes running `unity` against the hosted
 Orchestra backend.
 
 ## Default Workflow
@@ -10,30 +10,30 @@ Orchestra backend.
 Start the full source stack once:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh up
+bash /Users/djl11/unity-deploy/selfhost/stack.sh up
 ```
 
 Then make code changes in the sibling repos. Console changes hot reload through
-the stack-owned Next dev server; Droid and Orchestra changes should be exercised
+the stack-owned Next dev server; Unity and Orchestra changes should be exercised
 through the already-running local services unless the specific code path needs a
 process restart.
 
 Check what is running before changing local services:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh status
+bash /Users/djl11/unity-deploy/selfhost/stack.sh status
 ```
 
 Repair only Console when Next chunks or environment get out of sync:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh repair-console
+bash /Users/djl11/unity-deploy/selfhost/stack.sh repair-console
 ```
 
 Run a product smoke check:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh smoke
+bash /Users/djl11/unity-deploy/selfhost/stack.sh smoke
 ```
 
 ## Cursor Agent Startup
@@ -42,12 +42,12 @@ When a Cursor agent starts the full source stack for someone else to use, it mus
 use the durable launcher:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh up --durable
+bash /Users/djl11/unity-deploy/selfhost/stack.sh up --durable
 ```
 
-The durable launcher owns a `tmux` session named `droid-stack`, waits for the
+The durable launcher owns a `tmux` session named `unity-stack`, waits for the
 stack-ready marker, verifies Console over HTTP, and prints attach/stop commands.
-This keeps Console, Orchestra, LiveKit, the Droid gateway, and the Coordinator
+This keeps Console, Orchestra, LiveKit, the Unity gateway, and the Coordinator
 runtime out of the Cursor shell job's process group, so they keep running after
 the agent command exits. A plain `stack.sh up` is fine from a long-lived human
 terminal, but agents should not emulate persistence with `nohup`, backgrounded
@@ -75,8 +75,8 @@ isolated mode:
 - `npm run dev`, `next dev`, `npm run build`, or `npm run ci` in `console`
 - `console/scripts/local.sh start` without `--self-host`
 - `orchestra/scripts/local.sh start`, `restart`, or `purge`
-- `droid/scripts/local.sh start` or `start-gateway`
-- Compose `droid up` while the source stack is running, or source `stack.sh up`
+- `unity/scripts/local.sh start` or `start-gateway`
+- Compose `unity up` while the source stack is running, or source `stack.sh up`
   while Compose self-host is running
 
 The guardrails should explain the relevant override variable when isolated mode
@@ -87,7 +87,7 @@ is really needed.
 Print the non-secret Console environment expected by the full stack:
 
 ```bash
-bash /Users/djl11/droid-deploy/selfhost/stack.sh dev-env
+bash /Users/djl11/unity-deploy/selfhost/stack.sh dev-env
 ```
 
 The important invariant is that Console is started by the harness with the same

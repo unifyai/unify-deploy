@@ -90,7 +90,7 @@ ORCHESTRA_GET_ASSISTANT_DURATION = Histogram(
 BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     "build_webhook_context_duration_seconds",
     "Total time from inbound adapter request to webhook context built. "
-    "job_started='true' includes start_droid_job + replenish_idle_pool; "
+    "job_started='true' includes start_unity_job + replenish_idle_pool; "
     "job_started='false' is just get_assistant + contact validation. "
     "Use status='success' to filter to healthy requests only.",
     labelnames=[
@@ -102,17 +102,17 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
-DROID_JOBS_RUNNING = Gauge(
-    "droid_jobs_running",
-    "Number of Droid K8s jobs with droid-status=running, "
+UNITY_JOBS_RUNNING = Gauge(
+    "unity_jobs_running",
+    "Number of Unity K8s jobs with unity-status=running, "
     "sampled on every inventory call (webhook + scheduled).",
     registry=REGISTRY,
     multiprocess_mode="livemax",
 )
 
-DROID_JOBS_IDLE = Gauge(
-    "droid_jobs_idle",
-    "Number of Droid K8s jobs with droid-status=idle, "
+UNITY_JOBS_IDLE = Gauge(
+    "unity_jobs_idle",
+    "Number of Unity K8s jobs with unity-status=idle, "
     "sampled on every inventory call (webhook + scheduled).",
     registry=REGISTRY,
     multiprocess_mode="livemax",

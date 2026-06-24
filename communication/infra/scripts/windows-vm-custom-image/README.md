@@ -44,7 +44,7 @@ packer build \
 gcloud compute instances create my-windows-vm \
   --zone=us-central1-a \
   --machine-type=n2-standard-4 \
-  --image-family=droid-windows-vm \
+  --image-family=unity-windows-vm \
   --image-project=YOUR_PROJECT_ID \
   --boot-disk-size=100GB \
   --boot-disk-type=pd-ssd \

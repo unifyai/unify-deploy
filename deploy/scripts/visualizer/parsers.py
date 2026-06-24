@@ -1,10 +1,10 @@
 """
-Log parsers for Droid session data.
+Log parsers for Unity session data.
 
 Handles four log formats:
   - unillm:  LLM request/response text files
   - unify:   Orchestra API call JSON files
-  - droid:   Framework debug log (droid.log)
+  - unity:   Framework debug log (unity.log)
   - cloud:   Cloud Logging plain text
 """
 
@@ -375,10 +375,10 @@ def parse_cloud_log(cloud_log_path: Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Framework log parsing (droid.log)
+# Framework log parsing (unity.log)
 # ---------------------------------------------------------------------------
 
-_DROID_LOG_RE = re.compile(
+_UNITY_LOG_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+" r"(\w+)\s+" r"(.*?)$",
     re.MULTILINE,
 )
@@ -386,21 +386,21 @@ _MEMORY_RE = re.compile(r"\[(\d+/\d+ MiB \(\d+%\))\]")
 
 
 def parse_framework_log(
-    droid_log_path: Path,
+    unity_log_path: Path,
     *,
     level: str | None = None,
     component: str | None = None,
     offset: int = 0,
     limit: int = 200,
 ) -> dict[str, Any]:
-    """Parse droid.log with optional filtering and pagination."""
-    if not droid_log_path.exists():
+    """Parse unity.log with optional filtering and pagination."""
+    if not unity_log_path.exists():
         return {"entries": [], "total": 0, "offset": offset, "limit": limit}
 
-    text = droid_log_path.read_text(encoding="utf-8", errors="replace")
+    text = unity_log_path.read_text(encoding="utf-8", errors="replace")
     all_entries: list[dict] = []
 
-    for m in _DROID_LOG_RE.finditer(text):
+    for m in _UNITY_LOG_RE.finditer(text):
         ts, lvl, msg = m.group(1), m.group(2), m.group(3).strip()
         comp = ""
         comp_match = re.search(r"\[(\w+)\]", msg)

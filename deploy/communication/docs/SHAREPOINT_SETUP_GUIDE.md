@@ -618,14 +618,14 @@ upload_url = session.upload_url
 
 ## Full Example: SharePoint Views
 
-The SharePoint channel lives in the open-source **droid** repository
+The SharePoint channel lives in the open-source **unity** repository
 (Phase B+C migration). See
-[`droid/gateway/channels/sharepoint/views.py`](https://github.com/unifyai/droid/blob/main/droid/gateway/channels/sharepoint/views.py)
+[`unity/gateway/channels/sharepoint/views.py`](https://github.com/unifyai/unity/blob/main/unity/gateway/channels/sharepoint/views.py)
 for the actual implementation. The example below is illustrative
-only; consult the droid source for the canonical code.
+only; consult the unity source for the canonical code.
 
 ```python
-# droid/gateway/channels/sharepoint/views.py (illustrative)
+# unity/gateway/channels/sharepoint/views.py (illustrative)
 
 import logging
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -634,7 +634,7 @@ from typing import Optional
 from msgraph.generated.models.drive_item import DriveItem
 from msgraph.generated.models.folder import Folder
 
-from droid.gateway.common.graph import get_graph_client  # Uses delegated tokens
+from unity.gateway.common.graph import get_graph_client  # Uses delegated tokens
 
 router = APIRouter()
 

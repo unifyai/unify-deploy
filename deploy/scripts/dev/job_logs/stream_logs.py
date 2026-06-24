@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-stream_logs.py — View logs for a Droid GKE job.
+stream_logs.py — View logs for a Unity GKE job.
 
 Usage:
     python stream_logs.py                       # auto-detect latest staging job
@@ -68,12 +68,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import unify
 
-from droid.syntax_highlight import highlight_code_blocks
+from unity.syntax_highlight import highlight_code_blocks
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 GCP_PROJECT = "gcp-project-runtime"
-GKE_CLUSTER = os.environ.get("DROID_GKE_CLUSTER_NAME", "unity")
+GKE_CLUSTER = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
 GKE_REGION = "us-central1"
 SHARED_UNIFY_KEY = os.environ["SHARED_UNIFY_KEY"]
 
@@ -92,7 +92,7 @@ class Keepalive:
     """Background thread that publishes Pub/Sub pings to prevent pod eviction."""
 
     def __init__(self, assistant_id: str, namespace: str):
-        topic = f"droid-{assistant_id}"
+        topic = f"unity-{assistant_id}"
         if namespace != "production":
             topic += f"-{namespace}"
         self._topic = topic
@@ -272,7 +272,7 @@ def resolve_pod_name(job_name: str, namespace: str) -> str | None:
 
 # ─── Log mirroring ────────────────────────────────────────────────────────────
 
-_CONTAINER_LOG_PATH_RE = re.compile(r"/var/log/(unillm|unify|droid|magnitude)/\S+")
+_CONTAINER_LOG_PATH_RE = re.compile(r"/var/log/(unillm|unify|unity|magnitude)/\S+")
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 MIRROR_BASE = WORKSPACE_ROOT / "logs" / "prod_logs"
@@ -306,7 +306,7 @@ def _fetch_file(
 _CONTAINER_LOG_DIRS = (
     "/var/log/unillm",
     "/var/log/unify",
-    "/var/log/droid",
+    "/var/log/unity",
     "/var/log/magnitude",
 )
 
@@ -320,7 +320,7 @@ def _sync_all_logs(pod_name: str, namespace: str, mirror_root: Path) -> None:
     """
     info("Syncing all container logs...")
     for container_dir in _CONTAINER_LOG_DIRS:
-        subdir = container_dir.split("/")[-1]  # unillm, unify, droid
+        subdir = container_dir.split("/")[-1]  # unillm, unify, unity
         local_dir = mirror_root / subdir
         local_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -582,7 +582,7 @@ def fetch_historical_logs(job_name: str, namespace: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="View logs for a Droid GKE job.",
+        description="View logs for a Unity GKE job.",
         epilog=(
             "When --job is omitted, the script auto-detects the latest job\n"
             "by resolving your identity from UNIFY_KEY and searching\n"
@@ -591,7 +591,7 @@ def main():
             "Examples:\n"
             "  python stream_logs.py                          # latest staging job\n"
             "  python stream_logs.py --env production         # latest production job\n"
-            "  python stream_logs.py --job droid-2026-02-10-17-30-53-staging"
+            "  python stream_logs.py --job unity-2026-02-10-17-30-53-staging"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -653,7 +653,7 @@ def main():
 
     print()
     print(f"{BOLD}{'═' * 56}{NC}")
-    print(f"{BOLD}  Droid GKE Job Logs{NC}")
+    print(f"{BOLD}  Unity GKE Job Logs{NC}")
     print(f"  Job:       {CYAN}{job_name}{NC}")
     print(f"  Namespace: {CYAN}{namespace}{NC}")
     print(f"{BOLD}{'═' * 56}{NC}")

@@ -162,8 +162,8 @@ jobs:
         LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
         LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        DROID_COMMS_URL: ${{ secrets.DROID_COMMS_URL }}
-        DROID_ADAPTERS_URL: ${{ secrets.DROID_ADAPTERS_URL }}
+        UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+        UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
         DEPLOY_ENV: staging
         GCP_PROJECT_ID: gcp-project-runtime
 
@@ -215,7 +215,7 @@ jobs:
         LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
         LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        DROID_COMMS_URL: ${{ secrets.DROID_COMMS_URL }}
-        DROID_ADAPTERS_URL: ${{ secrets.DROID_ADAPTERS_URL }}
+        UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+        UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
         DEPLOY_ENV: staging
         GCP_PROJECT_ID: gcp-project-runtime

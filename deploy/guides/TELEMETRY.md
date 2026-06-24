@@ -1,7 +1,7 @@
 # Telemetry Reference
 
 Everything currently being recorded to Prometheus / GCP Cloud Monitoring across
-the **adapters**, **communication app**, and **Droid** services.
+the **adapters**, **communication app**, and **Unity** services.
 
 This document is the single source of truth for the metrics pipeline. Update it
 whenever metrics are added, modified, or removed.
@@ -41,7 +41,7 @@ whenever metrics are added, modified, or removed.
 └────────────────────────┘
 
 ┌────────────────────────────┐
-│  Droid  (GKE Jobs)         │
+│  Unity  (GKE Jobs)         │
 │  OpenTelemetry SDK         │
 │  → GCP Monitoring exporter │
 │    (HTTPS push, 5s)        │
@@ -54,9 +54,9 @@ whenever metrics are added, modified, or removed.
 |---------|---------|--------------|----------|
 | **Adapters** (Cloud Run) | `prometheus_client` | GMP sidecar scrapes `/metrics` | ~30 s |
 | **Comms App** (Cloud Run) | `prometheus_client` | GMP sidecar scrapes `/metrics` | ~30 s |
-| **Droid** (GKE Jobs) | `opentelemetry-sdk` + `opentelemetry-exporter-gcp-monitoring` | HTTPS push to GCP Monitoring API | 5 s |
+| **Unity** (GKE Jobs) | `opentelemetry-sdk` + `opentelemetry-exporter-gcp-monitoring` | HTTPS push to GCP Monitoring API | 5 s |
 
-Droid uses push-based export (not a sidecar) because its containers are
+Unity uses push-based export (not a sidecar) because its containers are
 ephemeral GKE Jobs that may terminate before a scrape cycle completes.
 
 ### Grafana
@@ -64,7 +64,7 @@ ephemeral GKE Jobs that may terminate before a scrape cycle completes.
 Deployed on GKE (`staging` namespace) with a Google Cloud Monitoring data source.
 Accessible at `https://internal.example.com`.
 
-Deployment manifests: `droid/scripts/grafana/`
+Deployment manifests: `unity/scripts/grafana/`
 
 ### GMP Sidecar (Cloud Run)
 
@@ -129,7 +129,7 @@ Source: `communication/common/metrics.py`, `communication/adapters/helpers.py`, 
 | **Type** | Histogram |
 | **Labels** | `channel` (phone / msg / whatsapp / email / teams / unify_message / etc.), `job_started` (`true` / `false`), `status` (`success` / `error`) |
 | **Buckets** | 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60 |
-| **Description** | Total time from inbound request to webhook context built. `job_started=true` includes the full path (mark_job_running + start_droid_job + create_job); `job_started=false` is just get_assistant + contact validation. |
+| **Description** | Total time from inbound request to webhook context built. `job_started=true` includes the full path (mark_job_running + start_unity_job + create_job); `job_started=false` is just get_assistant + contact validation. |
 | **Recorded by** | `adapters/helpers.py` → `build_webhook_context()` |
 
 ### Metrics Endpoint
@@ -175,17 +175,17 @@ Same shared registry and middleware as adapters.
 
 ---
 
-## 3. Droid — Custom Metrics
+## 3. Unity — Custom Metrics
 
-Source: `droid/conversation_manager/metrics.py`, `droid/conversation_manager/metrics_push.py`,
-`droid/conversation_manager/assistant_jobs.py`, `droid/conversation_manager/domains/managers_utils.py`,
-`droid/conversation_manager/main.py`, `entrypoint.sh`
+Source: `unity/conversation_manager/metrics.py`, `unity/conversation_manager/metrics_push.py`,
+`unity/conversation_manager/assistant_jobs.py`, `unity/conversation_manager/domains/managers_utils.py`,
+`unity/conversation_manager/main.py`, `entrypoint.sh`
 
 ### 3.1 Container Spin-Up Time (U1)
 
 | | |
 |---|---|
-| **OTel name** | `droid_container_spinup_seconds` |
+| **OTel name** | `unity_container_spinup_seconds` |
 | **Type** | Histogram |
 | **Unit** | seconds |
 | **Labels** | — |
@@ -200,7 +200,7 @@ Source: `droid/conversation_manager/metrics.py`, `droid/conversation_manager/met
 
 | | |
 |---|---|
-| **OTel name** | `droid_manager_init_seconds` |
+| **OTel name** | `unity_manager_init_seconds` |
 | **Type** | Histogram |
 | **Unit** | seconds |
 | **Labels** | — |
@@ -211,7 +211,7 @@ Source: `droid/conversation_manager/metrics.py`, `droid/conversation_manager/met
 
 | | |
 |---|---|
-| **OTel name** | `droid_per_manager_init_seconds` |
+| **OTel name** | `unity_per_manager_init_seconds` |
 | **Type** | Histogram |
 | **Unit** | seconds |
 | **Labels** | `manager` |
@@ -222,7 +222,7 @@ Label values (7 steps):
 
 | `manager` value | What it measures |
 |---|---|
-| `droid` | `droid.init()` call |
+| `unity` | `unity.init()` call |
 | `event_bus` | EventBus configuration |
 | `contact_manager` | ContactManager initialization |
 | `transcript_manager` | TranscriptManager initialization |
@@ -234,7 +234,7 @@ Label values (7 steps):
 
 | | |
 |---|---|
-| **OTel name** | `droid_session_duration_seconds` |
+| **OTel name** | `unity_session_duration_seconds` |
 | **Type** | Histogram |
 | **Unit** | seconds |
 | **Labels** | — |
@@ -245,7 +245,7 @@ Label values (7 steps):
 
 | | |
 |---|---|
-| **OTel name** | `droid_running_job_count` |
+| **OTel name** | `unity_running_job_count` |
 | **Type** | Gauge |
 | **Labels** | — |
 | **Description** | Cluster-wide count of assistant jobs with `running==True` at the moment the metric is sampled. |
@@ -287,9 +287,9 @@ changes are needed. They appear in Grafana via the Google Cloud Monitoring data 
 | `run.googleapis.com/container/network/received_bytes_count` | Inbound network traffic |
 | `run.googleapis.com/container/billable_instance_time` | Billable seconds consumed |
 
-Filter by `service_name`: `droid-adapters` or `droid-comms-app`.
+Filter by `service_name`: `unity-adapters` or `unity-comms-app`.
 
-### 4.2 GKE (Droid Containers)
+### 4.2 GKE (Unity Containers)
 
 | GCP Metric | What It Shows |
 |---|---|
@@ -297,7 +297,7 @@ Filter by `service_name`: `droid-adapters` or `droid-comms-app`.
 | `kubernetes.io/container/memory/used_bytes` | Memory used per pod |
 | `kubernetes.io/container/restart_count` | Container restarts (crash detection) |
 
-Filter by `namespace_name` and pod name pattern `droid-*`.
+Filter by `namespace_name` and pod name pattern `unity-*`.
 
 ### 4.3 Pub/Sub
 
@@ -346,24 +346,24 @@ histogram_quantile(0.95,
 )
 ```
 
-### Droid
+### Unity
 
-Droid metrics land in GCP Cloud Monitoring as `custom.googleapis.com/opencensus/droid_*`
-or `workload.googleapis.com/droid_*` (depending on the exporter version). Query via
+Unity metrics land in GCP Cloud Monitoring as `custom.googleapis.com/opencensus/unity_*`
+or `workload.googleapis.com/unity_*` (depending on the exporter version). Query via
 the Google Cloud Monitoring data source in Grafana or via Metrics Explorer PromQL mode.
 
 ```promql
 # Container spin-up time distribution
-droid_container_spinup_seconds
+unity_container_spinup_seconds
 
 # Per-manager init time
-droid_per_manager_init_seconds{manager="actor"}
+unity_per_manager_init_seconds{manager="actor"}
 
 # Current running job count
-droid_running_job_count
+unity_running_job_count
 
 # Session duration distribution
-droid_session_duration_seconds
+unity_session_duration_seconds
 ```
 
 ---
@@ -380,14 +380,14 @@ droid_session_duration_seconds
 | `communication/main.py` | Calls `setup_metrics(app, "comms")` |
 | `scripts/setup_gmp_sidecar.py` | Adds GMP sidecar to Cloud Run deployments |
 
-### Droid Repository
+### Unity Repository
 
 | File | Role |
 |---|---|
 | `entrypoint.sh` | Exports `CONTAINER_START_TIME_MS` |
-| `droid/conversation_manager/metrics.py` | OTel metric instrument definitions (5 metrics) |
-| `droid/conversation_manager/metrics_push.py` | `init_metrics()` / `flush_metrics()` / `shutdown_metrics()` lifecycle |
-| `droid/conversation_manager/main.py` | Initializes metrics, records U1, calls flush/shutdown on exit |
-| `droid/conversation_manager/domains/managers_utils.py` | Records U2 (total init) and U3 (per-manager init, 7 steps) |
-| `droid/conversation_manager/assistant_jobs.py` | Records U9 (session duration) and X1 (running job count) |
+| `unity/conversation_manager/metrics.py` | OTel metric instrument definitions (5 metrics) |
+| `unity/conversation_manager/metrics_push.py` | `init_metrics()` / `flush_metrics()` / `shutdown_metrics()` lifecycle |
+| `unity/conversation_manager/main.py` | Initializes metrics, records U1, calls flush/shutdown on exit |
+| `unity/conversation_manager/domains/managers_utils.py` | Records U2 (total init) and U3 (per-manager init, 7 steps) |
+| `unity/conversation_manager/assistant_jobs.py` | Records U9 (session duration) and X1 (running job count) |
 | `scripts/grafana/` | Grafana deployment manifests (deployment, service, ingress, cert, datasource) |

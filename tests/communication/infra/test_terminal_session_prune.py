@@ -72,7 +72,7 @@ def _session(
     }
 
 
-def _active_job(name: str = "droid-job-live"):
+def _active_job(name: str = "unity-job-live"):
     job = MagicMock()
     job.metadata.name = name
     job.metadata.deletion_timestamp = None

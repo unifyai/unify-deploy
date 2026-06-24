@@ -3,55 +3,55 @@
 # prompt_byok_keys.sh — Interactive BYOK wizard for local / self-host installs
 # =============================================================================
 #
-# Prompts for keys missing from droid/.env. Idempotent: skips keys already set.
+# Prompts for keys missing from unity/.env. Idempotent: skips keys already set.
 # Voice keys (Deepgram + Cartesia) are prompted by default — voice is core.
 #
 # Usage:
-#   DROID_REPO=/path/to/droid ./scripts/prompt_byok_keys.sh
+#   UNITY_REPO=/path/to/unity ./scripts/prompt_byok_keys.sh
 #   ./scripts/prompt_byok_keys.sh --non-interactive   # skip prompts (CI)
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-_looks_like_droid_repo() {
+_looks_like_unity_repo() {
   local dir="$1"
-  [[ -d "$dir" && -f "$dir/pyproject.toml" && -d "$dir/droid" ]]
+  [[ -d "$dir" && -f "$dir/pyproject.toml" && -d "$dir/unity" ]]
 }
 
-resolve_droid_repo() {
+resolve_unity_repo() {
   local candidate=""
-  if [[ -n "${DROID_REPO:-}" && -d "$DROID_REPO" ]]; then
-    printf '%s' "$DROID_REPO"
+  if [[ -n "${UNITY_REPO:-}" && -d "$UNITY_REPO" ]]; then
+    printf '%s' "$UNITY_REPO"
     return 0
   fi
-  if [[ -n "${DROID_REPO_PATH:-}" && -d "$DROID_REPO_PATH" ]]; then
-    printf '%s' "$DROID_REPO_PATH"
+  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
+    printf '%s' "$UNITY_REPO_PATH"
     return 0
   fi
   candidate="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-  if _looks_like_droid_repo "$candidate"; then
+  if _looks_like_unity_repo "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
   candidate="$(pwd -P)"
-  if _looks_like_droid_repo "$candidate"; then
+  if _looks_like_unity_repo "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
-  if [[ -n "${UNIFY_STACK_ROOT:-}" && -d "$UNIFY_STACK_ROOT/droid" ]]; then
-    printf '%s' "$UNIFY_STACK_ROOT/droid"
+  if [[ -n "${UNIFY_STACK_ROOT:-}" && -d "$UNIFY_STACK_ROOT/unity" ]]; then
+    printf '%s' "$UNIFY_STACK_ROOT/unity"
     return 0
   fi
-  printf '%s' "${DROID_HOME:-$HOME/.droid}/droid"
+  printf '%s' "${UNITY_HOME:-$HOME/.unity}/unity"
 }
 
-DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-DROID_REPO="$(resolve_droid_repo)"
-if _looks_like_droid_repo "$DROID_REPO"; then
-  DROID_HOME="$(cd "$DROID_REPO/.." && pwd -P)"
+UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+UNITY_REPO="$(resolve_unity_repo)"
+if _looks_like_unity_repo "$UNITY_REPO"; then
+  UNITY_HOME="$(cd "$UNITY_REPO/.." && pwd -P)"
 fi
-ENV_FILE="${DROID_ENV_FILE:-$DROID_REPO/.env}"
+ENV_FILE="${UNITY_ENV_FILE:-$UNITY_REPO/.env}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -211,7 +211,7 @@ ensure_default_chat_model() {
     return 0
   fi
   # Compose passes UNIFY_MODEL through to the runtime even when blank, which
-  # would override Droid's built-in default — so pin a model that matches the
+  # would override Unity's built-in default — so pin a model that matches the
   # chat key the user actually provided.
   local model=""
   if has_env_value DEEPSEEK_API_KEY; then
@@ -231,8 +231,8 @@ sync_anticaptcha_keys() {
   local key=""
   if has_env_value ANTICAPTCHA_KEY; then
     key="$(read_env_value ANTICAPTCHA_KEY)"
-  elif has_env_value DROID_ACTOR_ANTICAPTCHA_KEY; then
-    key="$(read_env_value DROID_ACTOR_ANTICAPTCHA_KEY)"
+  elif has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    key="$(read_env_value UNITY_ACTOR_ANTICAPTCHA_KEY)"
   fi
   if [[ -z "$key" ]]; then
     return 0
@@ -241,15 +241,15 @@ sync_anticaptcha_keys() {
     upsert_env "ANTICAPTCHA_KEY" "$key"
     log_success "Mirrored ANTICAPTCHA_KEY for agent-service"
   fi
-  if ! has_env_value DROID_ACTOR_ANTICAPTCHA_KEY; then
-    upsert_env "DROID_ACTOR_ANTICAPTCHA_KEY" "$key"
-    log_success "Mirrored DROID_ACTOR_ANTICAPTCHA_KEY for Droid CM"
+  if ! has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
+    upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$key"
+    log_success "Mirrored UNITY_ACTOR_ANTICAPTCHA_KEY for Unity CM"
   fi
 }
 
 prompt_anticaptcha_key() {
   sync_anticaptcha_keys
-  if has_env_value ANTICAPTCHA_KEY || has_env_value DROID_ACTOR_ANTICAPTCHA_KEY; then
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha key already set"
     sync_anticaptcha_keys
     return 0
@@ -278,8 +278,8 @@ prompt_anticaptcha_key() {
   fi
 
   upsert_env "ANTICAPTCHA_KEY" "$value"
-  upsert_env "DROID_ACTOR_ANTICAPTCHA_KEY" "$value"
-  log_success "Wrote ANTICAPTCHA_KEY + DROID_ACTOR_ANTICAPTCHA_KEY to $ENV_FILE"
+  upsert_env "UNITY_ACTOR_ANTICAPTCHA_KEY" "$value"
+  log_success "Wrote ANTICAPTCHA_KEY + UNITY_ACTOR_ANTICAPTCHA_KEY to $ENV_FILE"
 }
 
 prompt_research_and_computer() {
@@ -291,25 +291,25 @@ prompt_research_and_computer() {
 
   prompt_secret \
     "Web search — Tavily API key" \
-    "DROID_WEB_TAVILY_API_KEY" \
+    "UNITY_WEB_TAVILY_API_KEY" \
     "Lets Twin search the web while researching. Free tier: https://tavily.com"
 
-  if has_env_value DROID_WEB_TAVILY_API_KEY && ! has_env_value DROID_WEB_ENABLED; then
-    upsert_env "DROID_WEB_ENABLED" "true"
-    log_success "Set DROID_WEB_ENABLED=true (web search on)"
-  elif has_env_value DROID_WEB_TAVILY_API_KEY; then
-    log_success "DROID_WEB_ENABLED already set"
+  if has_env_value UNITY_WEB_TAVILY_API_KEY && ! has_env_value UNITY_WEB_ENABLED; then
+    upsert_env "UNITY_WEB_ENABLED" "true"
+    log_success "Set UNITY_WEB_ENABLED=true (web search on)"
+  elif has_env_value UNITY_WEB_TAVILY_API_KEY; then
+    log_success "UNITY_WEB_ENABLED already set"
   fi
 
   prompt_anticaptcha_key
 
   echo ""
-  if has_env_value DROID_WEB_TAVILY_API_KEY; then
+  if has_env_value UNITY_WEB_TAVILY_API_KEY; then
     log_success "Web search (Tavily) configured"
   else
     log_warn "Web search skipped — Coordinator research tools stay disabled"
   fi
-  if has_env_value ANTICAPTCHA_KEY || has_env_value DROID_ACTOR_ANTICAPTCHA_KEY; then
+  if has_env_value ANTICAPTCHA_KEY || has_env_value UNITY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha configured for computer automation"
   else
     log_info "AntiCaptcha not set (optional until computer use)"
@@ -391,7 +391,7 @@ _calls_enabled() {
 }
 
 livekit_cloud_file() {
-  printf '%s' "${SELF_HOST_LIVEKIT_CLOUD_FILE:-$DROID_HOME/livekit_cloud.env}"
+  printf '%s' "${SELF_HOST_LIVEKIT_CLOUD_FILE:-$UNITY_HOME/livekit_cloud.env}"
 }
 
 file_has_key() {
@@ -455,16 +455,16 @@ prompt_to_file() {
 }
 
 prompt_call_support() {
-  # Phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go to the
-  # self-host state dir (never droid/.env) and are loaded only when local call
-  # support is enabled.
+  # Opt-in: phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go
+  # to the self-host state dir (never unity/.env), so they are loaded only when
+  # SELF_HOST_CALLS_ENABLED is set. No-op otherwise.
   _calls_enabled || return 0
   local file
   file="$(livekit_cloud_file)"
   echo ""
-  echo -e "${BOLD}Phone & WhatsApp calls — LiveKit Cloud SIP${NC}"
-  echo "  Inbound calls bridge Twilio -> LiveKit Cloud SIP (the browser-only local"
-  echo "  dev LiveKit server has no SIP). Create a LiveKit Cloud project at"
+  echo -e "${BOLD}Phone & WhatsApp calls (opt-in) — LiveKit Cloud SIP${NC}"
+  echo "  Inbound calls bridge Twilio -> LiveKit Cloud SIP (the local dev LiveKit"
+  echo "  used for browser meet has no SIP). Create a LiveKit Cloud project at"
   echo "  https://cloud.livekit.io, enable SIP, and paste its credentials."
   echo "  Stored in $file (chmod 600, never committed)."
   prompt_to_file "LiveKit Cloud URL" "LIVEKIT_URL" \
@@ -482,7 +482,7 @@ import_shell_env_keys() {
   local key val
   for key in OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY DEEPGRAM_API_KEY \
     CARTESIA_API_KEY ELEVEN_API_KEY VOICE_PROVIDER UNIFY_MODEL \
-    DROID_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY COMPOSIO_API_KEY; do
+    UNITY_WEB_TAVILY_API_KEY ANTICAPTCHA_KEY COMPOSIO_API_KEY; do
     val="${!key:-}"
     [[ -z "$val" ]] && continue
     if ! has_env_value "$key"; then
@@ -493,7 +493,7 @@ import_shell_env_keys() {
 }
 
 mark_byok_configured() {
-  upsert_env "DROID_BYOK_CONFIGURED" "1"
+  upsert_env "UNITY_BYOK_CONFIGURED" "1"
 }
 
 run_non_interactive_byok() {
@@ -512,15 +512,15 @@ run_non_interactive_byok() {
 }
 
 compose_install_mode() {
-  [[ "${DROID_COMPOSE_INSTALL:-0}" == "1" && -f "$ENV_FILE" ]]
+  [[ "${UNITY_COMPOSE_INSTALL:-0}" == "1" && -f "$ENV_FILE" ]]
 }
 
 main() {
-  if ! _looks_like_droid_repo "$DROID_REPO"; then
+  if ! _looks_like_unity_repo "$UNITY_REPO"; then
     if compose_install_mode; then
       log_info "Compose install — configuring $ENV_FILE"
     else
-      log_warn "Droid repo not found at $DROID_REPO — skipping BYOK prompts"
+      log_warn "Unity repo not found at $UNITY_REPO — skipping BYOK prompts"
       exit 0
     fi
   fi
@@ -530,12 +530,12 @@ main() {
     exit 0
   fi
 
-  if [[ "${DROID_BYOK_FORCE:-0}" != "1" ]] && has_env_value DROID_BYOK_CONFIGURED; then
+  if [[ "${UNITY_BYOK_FORCE:-0}" != "1" ]] && has_env_value UNITY_BYOK_CONFIGURED; then
     import_shell_env_keys
     ensure_default_chat_model
     sync_anticaptcha_keys
     log_success "BYOK already configured in $ENV_FILE — skipping wizard"
-    log_info "Set DROID_BYOK_FORCE=1 to run the wizard again"
+    log_info "Set UNITY_BYOK_FORCE=1 to run the wizard again"
     exit 0
   fi
 

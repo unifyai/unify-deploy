@@ -11,7 +11,7 @@ def _repo_root() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / "pyproject.toml").is_file():
             return parent
-    raise FileNotFoundError("Could not locate droid-deploy repo root")
+    raise FileNotFoundError("Could not locate unity-deploy repo root")
 
 
 SCRIPT_PATH = (
@@ -50,7 +50,7 @@ def test_cleanup_jobs_requests_binding_scoped_release(monkeypatch):
     module.cleanup_jobs(
         [
             {
-                "job_name": "droid-job-1",
+                "job_name": "unity-job-1",
                 "assistant_id": "assistant-123",
                 "labels": {module.BINDING_ID_LABEL: "binding-123"},
             },
@@ -63,7 +63,7 @@ def test_cleanup_jobs_requests_binding_scoped_release(monkeypatch):
     assert calls[1][1]["json"] == {
         "assistant_id": "assistant-123",
         "binding_id": "binding-123",
-        "job_name": "droid-job-1",
+        "job_name": "unity-job-1",
     }
 
 
@@ -87,7 +87,7 @@ def test_cleanup_jobs_skips_release_without_binding_id(monkeypatch):
     module.cleanup_jobs(
         [
             {
-                "job_name": "droid-job-1",
+                "job_name": "unity-job-1",
                 "assistant_id": "assistant-123",
                 "labels": {},
             },

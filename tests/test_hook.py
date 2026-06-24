@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-from droid_deploy import hook
-from droid_deploy import startup_config
-from droid_deploy.runtime_reconcile import runner as runtime_runner
-from droid_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
-from droid_deploy.utils.orchestra_client import OrchestraClientError
+from unity_deploy import hook
+from unity_deploy import startup_config
+from unity_deploy.runtime_reconcile import runner as runtime_runner
+from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+from unity_deploy.utils.orchestra_client import OrchestraClientError
 
 
 def test_sync_console_config_repairs_assistant_console_config(monkeypatch):
@@ -116,7 +116,7 @@ def test_startup_hook_runs_blocking_runtime_reconcile_when_explicitly_enabled(
     resolved = _resolved_startup_spec()
     calls: list[str] = []
 
-    monkeypatch.setenv("DROID_DEPLOY_RUNTIME_RECONCILE_MODE", "blocking")
+    monkeypatch.setenv("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "blocking")
     monkeypatch.setattr(
         startup_config,
         "resolve_startup_spec",

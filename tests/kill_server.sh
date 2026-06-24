@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   kill_server.sh                   # Kill THIS terminal's tmux server + orphans
-#   kill_server.sh --all             # Kill ALL droid* tmux servers + orphans
+#   kill_server.sh --all             # Kill ALL unity* tmux servers + orphans
 #   kill_server.sh --global          # Kill ALL tmux servers for this user + orphans
 #   kill_server.sh --socket <name>   # Kill a specific socket's server + orphans
 #   kill_server.sh --no-purge        # Skip orphan cleanup (not recommended)
@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-TMUX_SOCKET="$DROID_TMUX_SOCKET"
+TMUX_SOCKET="$UNITY_TMUX_SOCKET"
 
 KILL_ALL=0
 KILL_GLOBAL=0
@@ -55,7 +55,7 @@ while (( "$#" )); do
       echo "Sends SIGTERM to processes before killing tmux for graceful shutdown."
       echo ""
       echo "Options:"
-      echo "  --all              Kill ALL droid* tmux servers across all terminals"
+      echo "  --all              Kill ALL unity* tmux servers across all terminals"
       echo "  --global           Kill ALL tmux servers for this user (any name)"
       echo "  --no-purge         Skip killing orphaned pytest processes"
       echo "  -s, --socket NAME  Kill a specific socket's server"
@@ -63,8 +63,8 @@ while (( "$#" )); do
       echo ""
       echo "Examples:"
       echo "  kill_server.sh                              # Current terminal + orphans"
-      echo "  kill_server.sh --socket droid_dev_ttys042   # Specific socket + orphans"
-      echo "  kill_server.sh --all                        # All droid* servers + orphans"
+      echo "  kill_server.sh --socket unity_dev_ttys042   # Specific socket + orphans"
+      echo "  kill_server.sh --all                        # All unity* servers + orphans"
       echo "  kill_server.sh --global                     # All tmux servers + orphans"
       echo "  kill_server.sh --no-purge                   # Skip orphan cleanup"
       exit 0
@@ -87,8 +87,8 @@ _graceful_kill_socket() {
 
   # Get all pane PIDs from all sessions in this socket
   local pids
-  if [[ -n "$DROID_TIMEOUT_CMD" ]]; then
-    pids=$($DROID_TIMEOUT_CMD tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
+  if [[ -n "$UNITY_TIMEOUT_CMD" ]]; then
+    pids=$($UNITY_TIMEOUT_CMD tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
   else
     pids=$(tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
   fi
@@ -106,8 +106,8 @@ _graceful_kill_socket() {
   fi
 
   # Now kill the tmux server (ignore errors if server doesn't exist)
-  if [[ -n "$DROID_TIMEOUT_CMD" ]]; then
-    $DROID_TIMEOUT_CMD tmux -L "$sock" kill-server 2>/dev/null || true
+  if [[ -n "$UNITY_TIMEOUT_CMD" ]]; then
+    $UNITY_TIMEOUT_CMD tmux -L "$sock" kill-server 2>/dev/null || true
   else
     tmux -L "$sock" kill-server 2>/dev/null || true
   fi
@@ -132,7 +132,7 @@ if (( KILL_GLOBAL )); then
     echo "Killed $count server(s)."
   fi
 elif (( KILL_ALL )); then
-  # Kill all droid* servers
+  # Kill all unity* servers
   count=0
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
@@ -140,9 +140,9 @@ elif (( KILL_ALL )); then
       echo "Killed server: $name"
       ((count++)) || true
     fi
-  done < <(_get_droid_sockets)
+  done < <(_get_unity_sockets)
   if (( count == 0 )); then
-    echo "No droid test servers found."
+    echo "No unity test servers found."
   else
     echo "Killed $count server(s)."
   fi
@@ -163,7 +163,7 @@ fi
 #
 # IMPORTANT: Purge scope matches kill scope:
 # - Single socket (default): only purge processes for THIS socket
-# - --all or --global: purge all droid test processes
+# - --all or --global: purge all unity test processes
 if (( ! SKIP_PURGE )); then
   echo ""
   echo "Purging orphaned test processes..."
@@ -171,12 +171,12 @@ if (( ! SKIP_PURGE )); then
   purge_count=0
 
   if (( KILL_GLOBAL || KILL_ALL )); then
-    # Killing multiple servers - purge all droid test processes
+    # Killing multiple servers - purge all unity test processes
     while IFS= read -r pid; do
       [[ -z "$pid" ]] && continue
       kill -TERM "$pid" 2>/dev/null || true
       ((purge_count++)) || true
-    done < <(pgrep -f "droid-deploy/.venv.*pytest" 2>/dev/null || true)
+    done < <(pgrep -f "unity-deploy/.venv.*pytest" 2>/dev/null || true)
 
     while IFS= read -r pid; do
       [[ -z "$pid" ]] && continue
@@ -186,11 +186,11 @@ if (( ! SKIP_PURGE )); then
         kill -TERM "$pid" 2>/dev/null || true
         ((purge_count++)) || true
       fi
-    done < <(pgrep -f "DROID_TEST_SOCKET|droid_dev_|droid_test_" 2>/dev/null || true)
+    done < <(pgrep -f "UNITY_TEST_SOCKET|unity_dev_|unity_test_" 2>/dev/null || true)
 
     if (( purge_count > 0 )); then
       sleep 1
-      pkill -9 -f "droid-deploy/.venv.*pytest" 2>/dev/null || true
+      pkill -9 -f "unity-deploy/.venv.*pytest" 2>/dev/null || true
     fi
   else
     # Killing single socket - only purge processes for THIS socket

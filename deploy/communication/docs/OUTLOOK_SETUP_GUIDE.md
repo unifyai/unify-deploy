@@ -174,7 +174,7 @@ AZURE_CLIENT_SECRET=your-client-secret-here
 OUTLOOK_WEBHOOK_SECRET=your-random-secret-string
 
 # Your application's public URL (for webhook callbacks)
-DROID_COMMS_URL=https://your-domain.com
+UNITY_COMMS_URL=https://your-domain.com
 ```
 
 ### Where to find each value:

@@ -1,10 +1,10 @@
 """`runtime_cleanup_complete` must wait for in-flight offline Jobs to drain.
 
-Offline task runners (``app=droid-offline``) live outside the AssistantSession
+Offline task runners (``app=unity-offline``) live outside the AssistantSession
 lifecycle but still emit writes against the owning body. The membership-change
 runtime barrier polls ``/infra/runtime/{id}`` and gates on
 ``runtime_cleanup_complete``; that aggregator therefore ANDs "no Running
-``droid-offline`` Jobs for this assistant" into its completion predicate so
+``unity-offline`` Jobs for this assistant" into its completion predicate so
 drain callers naturally wait for offline runs to finish before proceeding.
 """
 
@@ -42,9 +42,9 @@ def _list_jobs_factory(online_items, offline_items):
 
     def _list_jobs(*_args, **kwargs):
         selector = kwargs["label_selector"]
-        if "app=droid-offline" in selector:
+        if "app=unity-offline" in selector:
             return SimpleNamespace(items=offline_items)
-        if "app=droid," in selector or selector.startswith("app=droid,"):
+        if "app=unity," in selector or selector.startswith("app=unity,"):
             return SimpleNamespace(items=online_items)
         return SimpleNamespace(items=[])
 
@@ -85,15 +85,15 @@ def _runtime_status_response(client, *, online_items, offline_items):
 
 
 def test_runtime_cleanup_false_while_offline_job_running(client):
-    """A Running ``droid-offline`` Job must block ``runtime_cleanup_complete``."""
+    """A Running ``unity-offline`` Job must block ``runtime_cleanup_complete``."""
 
     response = _runtime_status_response(
         client,
         online_items=[],
         offline_items=[
             _job(
-                "droid-offline-run-9",
-                app="droid-offline",
+                "unity-offline-run-9",
+                app="unity-offline",
                 assistant_id="1207",
                 active=1,
             ),
@@ -103,20 +103,20 @@ def test_runtime_cleanup_false_while_offline_job_running(client):
     assert response.status_code == 200
     body = response.json()
     assert body["active_job_names"] == []
-    assert body["active_offline_job_names"] == ["droid-offline-run-9"]
+    assert body["active_offline_job_names"] == ["unity-offline-run-9"]
     assert body["runtime_cleanup_complete"] is False
 
 
 def test_runtime_cleanup_true_after_offline_job_succeeds(client):
-    """A succeeded ``droid-offline`` Job (``active=None``) clears the gate."""
+    """A succeeded ``unity-offline`` Job (``active=None``) clears the gate."""
 
     response = _runtime_status_response(
         client,
         online_items=[],
         offline_items=[
             _job(
-                "droid-offline-run-9",
-                app="droid-offline",
+                "unity-offline-run-9",
+                app="unity-offline",
                 assistant_id="1207",
                 active=None,
             ),
@@ -165,5 +165,5 @@ def test_runtime_cleanup_uses_sanitized_assistant_id_for_offline_label(client):
         call.kwargs["label_selector"]
         for call in batch_api.list_namespaced_job.call_args_list
     }
-    assert "app=droid,assistant-id=assistant-1207" in selectors
-    assert "app=droid-offline,assistant-id=assistant-1207" in selectors
+    assert "app=unity,assistant-id=assistant-1207" in selectors
+    assert "app=unity-offline,assistant-id=assistant-1207" in selectors

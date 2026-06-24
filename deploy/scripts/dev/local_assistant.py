@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Create or fetch a local assistant and print the env vars needed to run
-droid locally.
+unity locally.
 
 A "local assistant" is stored in Orchestra with `is_local=True` and runs
 staging Orchestra.
@@ -115,7 +115,7 @@ def _v(val):
 
 
 def _print_env(assistant: dict, user: dict, api_key: str, deploy_env: str):
-    """Print a .env file matching the droid .env structure.
+    """Print a .env file matching the unity .env structure.
 
     Assistant and user fields are populated from the API response.
     Secrets and service keys are left blank for the developer to fill in.
@@ -137,7 +137,7 @@ def _print_env(assistant: dict, user: dict, api_key: str, deploy_env: str):
         "ANTHROPIC_API_KEY=",
         f"USER_ID={_v(assistant.get('user_id'))}",
         f"UNIFY_KEY={api_key}",
-        f"DROID_COMMS_URL={COMMS_URLS[deploy_env]}",
+        f"UNITY_COMMS_URL={COMMS_URLS[deploy_env]}",
         "DEEPGRAM_API_KEY=",
         "CARTESIA_API_KEY=",
         "ELEVEN_API_KEY=",

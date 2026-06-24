@@ -39,7 +39,7 @@ WINDOWS_INIT_SCRIPT_PATH = os.path.join(
 WINDOWS_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "droid-pool-watcher.ps1",
+    "unity-pool-watcher.ps1",
 )
 
 # =============================================================================
@@ -48,7 +48,7 @@ WINDOWS_POOL_WATCHER_PATH = os.path.join(
 UBUNTU_VM_MACHINE_TYPE = "e2-standard-2"  # 2 vCPU, 8GB RAM
 UBUNTU_VM_DISK_SIZE_GB = 50
 UBUNTU_VM_IMAGE_PROJECT = "gcp-project-vms"
-UBUNTU_VM_TAGS = ["droid-ubuntu-vm", "https-server", "allow-2222"]
+UBUNTU_VM_TAGS = ["unity-ubuntu-vm", "https-server", "allow-2222"]
 
 # =============================================================================
 # SSH File Sync Configuration
@@ -64,7 +64,7 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 UBUNTU_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "droid-pool-watcher.sh",
+    "unity-pool-watcher.sh",
 )
 UBUNTU_SUPERVISORD_CONF_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -100,8 +100,8 @@ POOL_VM_CONTRACT_GENERATION = os.getenv(
 )
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
-POOL_VM_NAME_PREFIX = "droid-pool"
-# The Ubuntu pool was migrated to droid-pool-*, but the Windows pool VMs, static
+POOL_VM_NAME_PREFIX = "unity-pool"
+# The Ubuntu pool was migrated to unity-pool-*, but the Windows pool VMs, static
 # IPs, and DNS records are still unity-pool-* (not migrated), so the live name
 # prefix is per OS family.
 WINDOWS_POOL_VM_NAME_PREFIX = "unity-pool"
@@ -115,7 +115,7 @@ def pool_vm_name_prefix(vm_type: str) -> str:
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 # GCS bucket for archiving assistant filesystems between sessions
-POOL_ASSISTANT_ARCHIVE_BUCKET = "droid-assistant-archives"
+POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"
 
 # Idle-disk garbage collection. An unattached per-assistant PD whose
 # assistant still exists in Orchestra is eligible for deletion once
@@ -135,7 +135,7 @@ POOL_ASSISTANT_DISK_HARD_CAP_HOURS = 0
 POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS = 300
 
 # Pool image families (separate from legacy to avoid affecting existing VMs)
-POOL_UBUNTU_VM_IMAGE_FAMILY = "droid-pool-ubuntu-vm"
+POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
 # Windows pool is not yet migrated; live Windows VMs use the unity image family.
 POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
 
@@ -147,7 +147,7 @@ POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
 # env and is therefore not part of this static set.
 POOL_GOVERNANCE_LABELS = {
     "owner": "platform",
-    "project": "droid",
+    "project": "unity",
     "dataclassification": "confidential",
     "application": "assistant-desktop",
 }

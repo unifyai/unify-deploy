@@ -12,14 +12,14 @@ WORKER_MANIFESTS = [
 def test_pipeline_workers_use_workload_identity_service_account() -> None:
     for manifest in WORKER_MANIFESTS:
         text = manifest.read_text()
-        assert "serviceAccountName: droid-pipeline-worker" in text
+        assert "serviceAccountName: unity-pipeline-worker" in text
         assert "GCP_SA_KEY" not in text
 
 
 def test_pipeline_worker_service_account_has_gcp_annotation() -> None:
     text = (ROOT / "deploy/k8s/workers/pipeline-worker-serviceaccount.yaml").read_text()
 
-    assert text.count("name: droid-pipeline-worker") >= 2
+    assert text.count("name: unity-pipeline-worker") >= 2
     assert (
         "iam.gke.io/gcp-service-account: "
         "service-account@example.iam.gserviceaccount.com"
@@ -53,14 +53,14 @@ def test_cloud_build_smoke_tests_dlq_reconciler_cli_and_pins_cron_image() -> Non
             "deploy/k8s/workers/dlq-reconciler-cronjob.yaml "
             f"-l environment={environment}"
         ) in text
-        assert "kubectl set image cronjob/droid-pipeline-dlq-reconciler" in text
+        assert "kubectl set image cronjob/unity-pipeline-dlq-reconciler" in text
 
 
-def test_cloud_build_applies_droid_external_secret_manifests() -> None:
+def test_cloud_build_applies_unity_external_secret_manifests() -> None:
     staging = (ROOT / "deploy/cloudbuild-staging.yaml").read_text()
     production = (ROOT / "deploy/cloudbuild.yaml").read_text()
-    assert "droid-secrets-external-secret_staging.yaml" in staging
-    assert "droid-secrets-external-secret_production.yaml" in production
+    assert "unity-secrets-external-secret_staging.yaml" in staging
+    assert "unity-secrets-external-secret_production.yaml" in production
 
 
 def test_job_watcher_uses_explicit_secret_allowlist() -> None:

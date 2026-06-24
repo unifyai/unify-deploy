@@ -185,7 +185,7 @@ class TestPoolVmWildcardCert:
 
         result = provision_pool_vm("ubuntu", n=99)
 
-        assert result["vm_name"] == "droid-pool-ubuntu-99"
+        assert result["vm_name"] == "unity-pool-ubuntu-99"
         assert result["status"] == "PROVISIONING"
         mock_client_cls.return_value.insert.assert_called_once()
 

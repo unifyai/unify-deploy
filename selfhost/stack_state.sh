@@ -4,7 +4,7 @@
 set -euo pipefail
 
 stack_state_dir() {
-  printf '%s' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 stack_state_file() {
@@ -55,15 +55,15 @@ data = {
     "updated_at": datetime.now(timezone.utc).isoformat(),
     "host": socket.gethostname(),
     "repo_paths": {
-        "droid_deploy": env("DEPLOY_REPO_PATH"),
-        "droid": env("DROID_REPO_PATH"),
+        "unity_deploy": env("DEPLOY_REPO_PATH"),
+        "unity": env("UNITY_REPO_PATH"),
         "console": env("CONSOLE_REPO_PATH"),
         "orchestra": env("ORCHESTRA_REPO_PATH"),
     },
     "ports": {
         "console": env("CONSOLE_PORT", "3000"),
         "orchestra": env("ORCHESTRA_PORT", "8000"),
-        "gateway": env("DROID_GATEWAY_PORT", "8001"),
+        "gateway": env("UNITY_GATEWAY_PORT", "8001"),
         "pubsub": env("PUBSUB_EMULATOR_PORT", "8085"),
         "livekit": "7880",
         "desktop": "8090",
@@ -73,9 +73,9 @@ data = {
         "NEXT_PUBLIC_SELF_HOST": "1",
         "NEXTAUTH_URL": f"http://localhost:{env('CONSOLE_PORT', '3000')}",
         "ORCHESTRA_URL": f"http://127.0.0.1:{env('ORCHESTRA_PORT', '8000')}",
-        "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('DROID_GATEWAY_PORT', '8001')}"),
-        "DROID_ADAPTERS_URL": env("DROID_ADAPTERS_URL", f"http://127.0.0.1:{env('DROID_GATEWAY_PORT', '8001')}"),
-        "COMMUNICATION_URL": env("COMMUNICATION_URL", f"http://127.0.0.1:{env('DROID_GATEWAY_PORT', '8001')}"),
+        "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
+        "UNITY_ADAPTERS_URL": env("UNITY_ADAPTERS_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
+        "COMMUNICATION_URL": env("COMMUNICATION_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
         "PUBSUB_EMULATOR_HOST": env("PUBSUB_EMULATOR_HOST", "localhost:8085"),
         "GCP_PROJECT_ID": env("GCP_PROJECT_ID", "local-test-project"),
         "PUBSUB_TOPIC_SUFFIX": env("PUBSUB_TOPIC_SUFFIX", "-staging"),
@@ -133,34 +133,34 @@ stack_state_source_is_active() {
 
 stack_state_compose_is_active() {
   command -v docker >/dev/null 2>&1 || return 1
-  docker ps --filter "label=com.docker.compose.project=droid-selfhost" --format '{{.Names}}' 2>/dev/null \
+  docker ps --filter "label=com.docker.compose.project=unity-selfhost" --format '{{.Names}}' 2>/dev/null \
     | grep -q .
 }
 
 stack_state_refuse_if_compose_active() {
-  if [[ "${DROID_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
+  if [[ "${UNITY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
     return 0
   fi
   if stack_state_compose_is_active; then
-    echo "[ERROR] Docker Compose self-host is already running (project droid-selfhost)." >&2
-    echo "Use the compose-backed droid CLI, or stop it before starting source mode:" >&2
-    echo "  droid down --full" >&2
+    echo "[ERROR] Docker Compose self-host is already running (project unity-selfhost)." >&2
+    echo "Use the compose-backed unity CLI, or stop it before starting source mode:" >&2
+    echo "  unity down --full" >&2
     echo "Override only if you understand the port/process collision risk:" >&2
-    echo "  DROID_ALLOW_STACK_MODE_MIX=1 $0 up" >&2
+    echo "  UNITY_ALLOW_STACK_MODE_MIX=1 $0 up" >&2
     return 1
   fi
 }
 
 stack_state_refuse_if_source_active() {
-  if [[ "${DROID_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
+  if [[ "${UNITY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
     return 0
   fi
   if stack_state_source_is_active; then
     echo "[ERROR] Source self-host stack appears to be running." >&2
-    echo "Use droid-deploy/selfhost/stack.sh status/repair-console, or stop it first:" >&2
-    echo "  bash /Users/djl11/droid-deploy/selfhost/stack.sh down --full" >&2
+    echo "Use unity-deploy/selfhost/stack.sh status/repair-console, or stop it first:" >&2
+    echo "  bash /Users/djl11/unity-deploy/selfhost/stack.sh down --full" >&2
     echo "Override only if you understand the port/process collision risk:" >&2
-    echo "  DROID_ALLOW_STACK_MODE_MIX=1 droid up" >&2
+    echo "  UNITY_ALLOW_STACK_MODE_MIX=1 unity up" >&2
     return 1
   fi
 }

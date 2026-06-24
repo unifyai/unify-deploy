@@ -24,54 +24,54 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: staging
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: staging
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments"]
-  resourceNames: ["droid-parse-worker", "droid-ingest-worker"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
   verbs: ["get", "patch"]
 - apiGroups: ["apps"]
   resources: ["deployments/status"]
-  resourceNames: ["droid-parse-worker", "droid-ingest-worker"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
   verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: staging
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
 subjects:
 - kind: ServiceAccount
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: staging
 roleRef:
   kind: Role
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: droid-workers-weekly-rollout
+  name: unity-workers-weekly-rollout
   namespace: staging
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
     environment: staging
 spec:
@@ -88,11 +88,11 @@ spec:
       template:
         metadata:
           labels:
-            app: droid-workers-rollout
+            app: unity-workers-rollout
             component: pipeline-maintenance
             environment: staging
         spec:
-          serviceAccountName: droid-workers-rollout
+          serviceAccountName: unity-workers-rollout
           restartPolicy: OnFailure
           containers:
           - name: kubectl
@@ -104,8 +104,8 @@ spec:
               set -eu
               echo "[$(date -u +%FT%TZ)] Triggering staging rollout restart for parse+ingest workers"
               echo "This CronJob is expected to stay suspended unless an operator has verified pipeline worker refresh safety."
-              kubectl rollout restart deployment/droid-parse-worker -n staging
-              kubectl rollout restart deployment/droid-ingest-worker -n staging
+              kubectl rollout restart deployment/unity-parse-worker -n staging
+              kubectl rollout restart deployment/unity-ingest-worker -n staging
               echo "[$(date -u +%FT%TZ)] Staging rollout commands issued; workers drain in <=10m"
             resources:
               requests:
@@ -118,55 +118,55 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: production
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
     environment: production
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: production
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments"]
-  resourceNames: ["droid-parse-worker", "droid-ingest-worker"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
   verbs: ["get", "patch"]
 - apiGroups: ["apps"]
   resources: ["deployments/status"]
-  resourceNames: ["droid-parse-worker", "droid-ingest-worker"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
   verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: production
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
 subjects:
 - kind: ServiceAccount
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   namespace: production
 roleRef:
   kind: Role
-  name: droid-workers-rollout
+  name: unity-workers-rollout
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: droid-workers-weekly-rollout
+  name: unity-workers-weekly-rollout
   namespace: production
   labels:
-    app: droid-workers-rollout
+    app: unity-workers-rollout
     component: pipeline-maintenance
     environment: production
 spec:
@@ -183,11 +183,11 @@ spec:
       template:
         metadata:
           labels:
-            app: droid-workers-rollout
+            app: unity-workers-rollout
             component: pipeline-maintenance
             environment: production
         spec:
-          serviceAccountName: droid-workers-rollout
+          serviceAccountName: unity-workers-rollout
           restartPolicy: OnFailure
           containers:
           - name: kubectl
@@ -199,8 +199,8 @@ spec:
               set -eu
               echo "[$(date -u +%FT%TZ)] Triggering production rollout restart for parse+ingest workers"
               echo "This CronJob is expected to stay suspended unless an operator has verified pipeline worker refresh safety."
-              kubectl rollout restart deployment/droid-parse-worker -n production
-              kubectl rollout restart deployment/droid-ingest-worker -n production
+              kubectl rollout restart deployment/unity-parse-worker -n production
+              kubectl rollout restart deployment/unity-ingest-worker -n production
               echo "[$(date -u +%FT%TZ)] Production rollout commands issued; workers drain in <=10m"
             resources:
               requests:

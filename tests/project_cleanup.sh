@@ -16,12 +16,12 @@ fi
 unset _ENV_FILE _SCRIPT_DIR
 
 # Delete Unify test projects. By default, deletes both:
-#   - The shared "DroidDeployTests" project
-#   - Random projects matching "DroidDeployTests_*"
+#   - The shared "UnityDeployTests" project
+#   - Random projects matching "UnityDeployTests_*"
 # Use --shared-only or --random-only to limit to one category.
 
 API_BASE=""
-PREFIX="DroidDeployTests_"
+PREFIX="UnityDeployTests_"
 ASSUME_YES=0
 DRY_RUN=0
 EXPLICIT_ENV=""
@@ -36,13 +36,13 @@ Usage: project_cleanup.sh [--dry-run] [-y|--yes] [--shared-only|--random-only] [
 Options:
   --dry-run           Show matching projects without deleting
   -y, --yes           Do not prompt for confirmation
-  --shared-only       Only delete the shared "DroidDeployTests" project (not random ones)
-  --random-only       Only delete random "DroidDeployTests_*" projects (not the shared one)
-  --prefix PREFIX     Override prefix for random projects (default: DroidDeployTests_)
+  --shared-only       Only delete the shared "UnityDeployTests" project (not random ones)
+  --random-only       Only delete random "UnityDeployTests_*" projects (not the shared one)
+  --prefix PREFIX     Override prefix for random projects (default: UnityDeployTests_)
   --env ENV           Target environment: production or staging (skips prompt)
   -h, --help          Show this help
 
-By default, both the shared "DroidDeployTests" project and all "DroidDeployTests_*" random
+By default, both the shared "UnityDeployTests" project and all "UnityDeployTests_*" random
 projects are deleted. Use --shared-only or --random-only to limit scope.
 
 Environment:
@@ -149,7 +149,7 @@ matches=()
 tmp_matches="$(mktemp)"
 trap 'rm -f "$tmp_matches"' EXIT
 
-# Include random projects (DroidDeployTests_*) if requested
+# Include random projects (UnityDeployTests_*) if requested
 if (( DELETE_RANDOM )); then
   jq -r --arg pfx "$PREFIX" '
     (if type=="array" then . else (.projects // []) end)
@@ -165,7 +165,7 @@ if (( DELETE_RANDOM )); then
   ' <<<"$resp" >> "$tmp_matches" || true
 fi
 
-# Include the shared DroidDeployTests project (exact name match) if requested
+# Include the shared UnityDeployTests project (exact name match) if requested
 if (( DELETE_SHARED )); then
   jq -r '
     (if type=="array" then . else (.projects // []) end)
@@ -175,7 +175,7 @@ if (( DELETE_SHARED )); then
         end
       )
     | .[]
-    | select(.name? and (.name | type=="string") and (.name == "DroidDeployTests"))
+    | select(.name? and (.name | type=="string") and (.name == "UnityDeployTests"))
     | select(.id != null and (.id | tostring) != "")
     | [.id, .name] | @tsv
   ' <<<"$resp" >> "$tmp_matches" || true
@@ -189,11 +189,11 @@ done < "$tmp_matches"
 # Build description of what we're targeting
 target_desc=""
 if (( DELETE_SHARED && DELETE_RANDOM )); then
-  target_desc="DroidDeployTests and DroidDeployTests_*"
+  target_desc="UnityDeployTests and UnityDeployTests_*"
 elif (( DELETE_SHARED )); then
-  target_desc="DroidDeployTests (shared only)"
+  target_desc="UnityDeployTests (shared only)"
 elif (( DELETE_RANDOM )); then
-  target_desc="DroidDeployTests_* (random only)"
+  target_desc="UnityDeployTests_* (random only)"
 fi
 
 if (( ${#matches[@]} == 0 )); then

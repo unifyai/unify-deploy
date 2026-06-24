@@ -15,14 +15,14 @@ steps:
   args:
   - '-c'
   - |
-    DROID_SHA=$$(git ls-remote https://github.com/unifyai/droid.git refs/heads/staging | awk '{print $$1}')
-    echo "Cache-busting droid layer with DROID_SHA=$$DROID_SHA"
+    UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/staging | awk '{print $$1}')
+    echo "Cache-busting unity layer with UNITY_SHA=$$UNITY_SHA"
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg BRANCH_NAME=staging \
-      --build-arg DROID_SHA=$$DROID_SHA \
+      --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   secretEnv: ['GITHUB_TOKEN']
@@ -196,9 +196,9 @@ steps:
       --cpu=1 \
       --timeout=300 \
       --cpu-boost \
-      --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},DROID_MIN_IDLE_JOBS=3,DROID_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,ORCHESTRA_URL=${_ORCHESTRA_URL},DROID_COMMS_URL=https://${_COMMS_HOST},PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
+      --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,ORCHESTRA_URL=${_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_COMMS_HOST},PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
       --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-      --set-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,SHARED_UNIFY_KEY=SHARED_UNIFY_KEY:latest,GCP_SA_KEY=gcp-sa-key:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,LIVEKIT_SIP_URI=LIVEKIT_SIP_URI:latest,LIVEKIT_URL=LIVEKIT_URL:latest,LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,DROID_ADAPTERS_URL=DROID_ADAPTERS_URL_STAGING:latest,ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME=ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME_STAGING:latest,OUTLOOK_WEBHOOK_SECRET=OUTLOOK_WEBHOOK_SECRET:latest,TEAMS_WEBHOOK_SECRET=TEAMS_WEBHOOK_SECRET:latest,TWILIO_WA_AUTH_TOKEN=TWILIO_WA_AUTH_TOKEN:latest,TWILIO_WA_ACCOUNT_SID=TWILIO_WA_ACCOUNT_SID:latest,OAUTH_STATE_SIGNING_KEY=OAUTH_STATE_SIGNING_KEY:latest,MS365_ADMIN_TENANT_ID=MS365_ADMIN_TENANT_ID:latest,MS365_ADMIN_CLIENT_ID=MS365_ADMIN_CLIENT_ID:latest,MS365_ADMIN_CLIENT_SECRET=MS365_ADMIN_CLIENT_SECRET:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,MS365_BYOD_CLIENT_ID=MS365_BYOD_CLIENT_ID:latest,MS365_BYOD_CLIENT_SECRET=MS365_BYOD_CLIENT_SECRET:latest,SLACK_SIGNING_SECRET=SLACK_SIGNING_SECRET:latest \
+      --set-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,SHARED_UNIFY_KEY=SHARED_UNIFY_KEY:latest,GCP_SA_KEY=gcp-sa-key:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,LIVEKIT_SIP_URI=LIVEKIT_SIP_URI:latest,LIVEKIT_URL=LIVEKIT_URL:latest,LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,UNITY_ADAPTERS_URL=UNITY_ADAPTERS_URL_STAGING:latest,ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME=ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME_STAGING:latest,OUTLOOK_WEBHOOK_SECRET=OUTLOOK_WEBHOOK_SECRET:latest,TEAMS_WEBHOOK_SECRET=TEAMS_WEBHOOK_SECRET:latest,TWILIO_WA_AUTH_TOKEN=TWILIO_WA_AUTH_TOKEN:latest,TWILIO_WA_ACCOUNT_SID=TWILIO_WA_ACCOUNT_SID:latest,OAUTH_STATE_SIGNING_KEY=OAUTH_STATE_SIGNING_KEY:latest,MS365_ADMIN_TENANT_ID=MS365_ADMIN_TENANT_ID:latest,MS365_ADMIN_CLIENT_ID=MS365_ADMIN_CLIENT_ID:latest,MS365_ADMIN_CLIENT_SECRET=MS365_ADMIN_CLIENT_SECRET:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,MS365_BYOD_CLIENT_ID=MS365_BYOD_CLIENT_ID:latest,MS365_BYOD_CLIENT_SECRET=MS365_BYOD_CLIENT_SECRET:latest,SLACK_SIGNING_SECRET=SLACK_SIGNING_SECRET:latest \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}
   waitFor: ['repair-traffic-state']
 
@@ -344,7 +344,7 @@ steps:
   args:
   - '-c'
   - |
-    for topic in droid-pending-startups-staging droid-pending-vm-assignments-staging droid-startup-staging; do
+    for topic in unity-pending-startups-staging unity-pending-vm-assignments-staging unity-startup-staging; do
       gcloud pubsub topics delete "$topic" --project="${PROJECT_ID}" --quiet 2>/dev/null \
         && echo "Deleted legacy topic: $topic" \
         || echo "Legacy topic $topic already removed or not found"
@@ -489,8 +489,8 @@ options:
 # Substitution variables
 substitutions:
   _REGION: 'us-central1'
-  _REPOSITORY: 'droid-adapters-repo'
-  _SERVICE_NAME: 'droid-adapters-staging'
+  _REPOSITORY: 'unity-adapters-repo'
+  _SERVICE_NAME: 'unity-adapters-staging'
   _ORCHESTRA_URL: 'https://internal.example.com/v0'
   _COMMS_HOST: 'service.a.run.app'
 

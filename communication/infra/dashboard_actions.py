@@ -1,7 +1,7 @@
 """Dashboard action dispatch for Communication.
 
 Sibling to :mod:`task_activation` -- reuses the same offline runner
-infrastructure (``offline_runner.py``, ``create_droid_job``,
+infrastructure (``offline_runner.py``, ``create_unity_job``,
 ``_create_or_adopt_task_run``) but with a different trigger source
 (Console tile button click) and a simpler validation path (no
 activation revision, no scheduler dedup).
@@ -24,7 +24,7 @@ from common.int_list_codec import encode_int_list_for_env
 from common.team_summaries_codec import encode_team_summaries_for_env
 from common.settings import SETTINGS
 
-from .helpers import create_droid_job
+from .helpers import create_unity_job
 from .runtime_clients import get_k8s_clients as _get_k8s_clients
 from .task_activation import (
     _create_or_adopt_task_run,
@@ -116,31 +116,31 @@ def _build_dashboard_action_env(
     run_key: str,
     job_name: str,
 ) -> dict[str, str]:
-    """Build env vars for the headless Droid offline runner (dashboard action variant)."""
+    """Build env vars for the headless Unity offline runner (dashboard action variant)."""
 
     team_ids = assistant_data.get("team_ids") or []
     team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     return {
-        "DROID_OFFLINE_TASK_MODE": "function",
-        "DROID_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),
-        "DROID_OFFLINE_TASK_REQUEST": action_metadata.get(
+        "UNITY_OFFLINE_TASK_MODE": "function",
+        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),
+        "UNITY_OFFLINE_TASK_REQUEST": action_metadata.get(
             "request",
             f"Execute dashboard action: {request.action_name}",
         ),
-        "DROID_OFFLINE_TASK_RUN_KEY": run_key,
-        "DROID_OFFLINE_TASK_JOB_NAME": job_name,
-        "DROID_OFFLINE_TASK_ID": "0",
-        "DROID_OFFLINE_TASK_SOURCE_TASK_LOG_ID": "0",
-        "DROID_OFFLINE_TASK_ACTIVATION_REVISION": "",
-        "DROID_OFFLINE_TASK_SOURCE_TYPE": "dashboard_action",
-        "DROID_OFFLINE_TASK_NAME": request.action_name,
-        "DROID_OFFLINE_TASK_DESCRIPTION": f"Dashboard action: {request.action_name}",
-        "DROID_OFFLINE_TASK_SCHEDULED_FOR": "",
-        "DROID_OFFLINE_TASK_SOURCE_REF": "",
-        "DROID_OFFLINE_TASK_SOURCE_MEDIUM": "",
-        "DROID_OFFLINE_TASK_SOURCE_CONTACT_ID": "",
+        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
+        "UNITY_OFFLINE_TASK_ID": "0",
+        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": "0",
+        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": "",
+        "UNITY_OFFLINE_TASK_SOURCE_TYPE": "dashboard_action",
+        "UNITY_OFFLINE_TASK_NAME": request.action_name,
+        "UNITY_OFFLINE_TASK_DESCRIPTION": f"Dashboard action: {request.action_name}",
+        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": "",
+        "UNITY_OFFLINE_TASK_SOURCE_REF": "",
+        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": "",
+        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": "",
         "EVENTBUS_PUBLISHING_ENABLED": "false",
         "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
@@ -190,7 +190,7 @@ def _build_dashboard_action_job_name(run_key: str) -> str:
     """Return the deterministic Kubernetes Job name for one dashboard action run."""
 
     digest = hashlib.sha256(run_key.encode("utf-8")).hexdigest()[:12]
-    base_name = f"droid-dashboard-action-{digest}"
+    base_name = f"unity-dashboard-action-{digest}"
     suffix = SETTINGS.env_suffix.lstrip("-")
     return f"{base_name}-{suffix}" if suffix else base_name
 
@@ -203,21 +203,21 @@ def _launch_dashboard_action_job(
     assistant_data: dict[str, Any],
     run_key: str,
 ) -> tuple[str, bool]:
-    """Create the Kubernetes Job that runs the headless Droid executor for a dashboard action."""
+    """Create the Kubernetes Job that runs the headless Unity executor for a dashboard action."""
 
     job_name = _build_dashboard_action_job_name(run_key)
-    job = create_droid_job(
+    job = create_unity_job(
         batch_api,
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
         ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
         active_deadline_seconds=SETTINGS.offline_task_job_active_deadline_seconds,
-        droid_status="offline",
-        priority_class_name="droid-idle",
-        app_label="droid-dashboard-action",
+        unity_status="offline",
+        priority_class_name="unity-idle",
+        app_label="unity-dashboard-action",
         extra_labels={
             "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
-            "droid-status": "offline",
+            "unity-status": "offline",
             "action-name": _normalize_task_id_component(request.action_name)[:63],
         },
         extra_annotations={

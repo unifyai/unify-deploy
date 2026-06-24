@@ -3,12 +3,12 @@
 # stack.sh — Self-host stack
 # =============================================================================
 #
-# Brings up Orchestra, droid.gateway, Pub/Sub emulator, Console, and
-# the Droid CM for the signed-in user's Coordinator when credentials exist.
+# Brings up Orchestra, unity.gateway, Pub/Sub emulator, Console, and
+# the Unity CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
-#   ./scripts/stack.sh up           Clean redeploy: purge DB, seed, start, smoke
-#   ./scripts/stack.sh up --durable Clean redeploy in a persistent tmux session
+#   ./scripts/stack.sh up           Fresh redeploy: reset, seed, start, smoke
+#   ./scripts/stack.sh up --durable Fresh redeploy in a persistent tmux session
 #   ./scripts/stack.sh resume       Start/resume without resetting local history
 #   ./scripts/stack.sh redeploy     Alias for up
 #   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
@@ -21,22 +21,23 @@
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
 #   ./scripts/stack.sh sync-comms [--check|--set-voice|--revert-voice]
 #                                   Reconcile localhost Twilio webhooks (text
-#                                   poll-only; voice -> local tunnel by default)
+#                                   poll-only; voice -> tunnel when calls enabled)
 #
 # Environment:
-#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
+#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
-#   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by droid setup)
-#   SELF_HOST_BOOTSTRAP_OWNER=1  Create the legacy owner@selfhost.dev account during clean redeploy
-#   Phone/WhatsApp calls are enabled by default. They need cloudflared plus
-#   ~/.droid/comms_twilio.env and ~/.droid/livekit_cloud.env (see tracked
-#   examples in selfhost/). `stack up` fails if the call edge cannot be owned.
+#   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
+#   SELF_HOST_CALLS_ENABLED=1 Opt in to inbound/outbound phone & WhatsApp calls
+#                             (needs LiveKit Cloud SIP creds in
+#                             ~/.unity/livekit_cloud.env + cloudflared). Brings up
+#                             a tunnel + SIP trunk and points the localhost
+#                             number's voice webhook at the local CM.
 #
 set -euo pipefail
 
-# This script lives in droid-deploy/selfhost/. The self-host stack orchestrates
-# the sibling droid, console, and orchestra checkouts located under
-# UNIFY_STACK_ROOT (defaults to the parent of droid-deploy).
+# This script lives in unity-deploy/selfhost/. The self-host stack orchestrates
+# the sibling unity, console, and orchestra checkouts located under
+# UNIFY_STACK_ROOT (defaults to the parent of unity-deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
@@ -45,7 +46,7 @@ STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
+UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
@@ -79,7 +80,7 @@ require_repo() {
 
 _has_env_key() {
   local key="$1"
-  local env_file="$DROID_REPO_PATH/.env"
+  local env_file="$UNITY_REPO_PATH/.env"
   [[ -n "${!key:-}" ]] && return 0
   [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
 }
@@ -122,7 +123,7 @@ cmd_doctor() {
   echo "Self-host doctor"
   echo "================"
   echo ""
-  echo "Stranger path: curl install → droid setup → droid → register → chat"
+  echo "Stranger path: curl install → unity setup → unity → register → chat"
   echo ""
 
   echo "Infrastructure"
@@ -181,16 +182,16 @@ cmd_doctor() {
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
 
-  if [[ -f "$DROID_REPO_PATH/.venv/bin/python" ]]; then
-    local droid_py="$DROID_REPO_PATH/.venv/bin/python"
-    if "$droid_py" -c "import droid.gateway" &>/dev/null; then
-      log_success "Droid venv + droid.gateway OK"
+  if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
+    local unity_py="$UNITY_REPO_PATH/.venv/bin/python"
+    if "$unity_py" -c "import unity.gateway" &>/dev/null; then
+      log_success "Unity venv + unity.gateway OK"
     else
-      log_error "droid.gateway not importable — run: cd $DROID_REPO_PATH && uv sync"
+      log_error "unity.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
       ok=false
     fi
   else
-    log_warn "Droid .venv missing — run: cd $DROID_REPO_PATH && uv sync"
+    log_warn "Unity .venv missing — run: cd $UNITY_REPO_PATH && uv sync"
     ok=false
   fi
 
@@ -202,7 +203,7 @@ cmd_doctor() {
   fi
 
   echo ""
-  echo "BYOK keys (droid/.env)"
+  echo "BYOK keys (unity/.env)"
   echo "----------------------"
   echo "  Required: LLM (OpenAI or Anthropic)"
   echo "  Voice:    Deepgram + Cartesia (browser calls; LiveKit auto-configured on stack up)"
@@ -212,7 +213,7 @@ cmd_doctor() {
   if _has_env_key OPENAI_API_KEY || _has_env_key ANTHROPIC_API_KEY; then
     log_success "LLM provider key configured"
   else
-    log_error "No LLM API key — run: droid setup (or scripts/prompt_byok_keys.sh)"
+    log_error "No LLM API key — run: unity setup (or scripts/prompt_byok_keys.sh)"
     ok=false
   fi
 
@@ -228,13 +229,13 @@ cmd_doctor() {
     log_warn "No TTS key — browser calls need CARTESIA_API_KEY or ELEVEN_API_KEY"
   fi
 
-  if _has_env_key DROID_WEB_TAVILY_API_KEY; then
-    log_success "DROID_WEB_TAVILY_API_KEY set (web search)"
+  if _has_env_key UNITY_WEB_TAVILY_API_KEY; then
+    log_success "UNITY_WEB_TAVILY_API_KEY set (web search)"
   else
     log_info "Web search not configured (optional — Tavily via prompt_byok_keys.sh)"
   fi
 
-  if _has_env_key ANTICAPTCHA_KEY || _has_env_key DROID_ACTOR_ANTICAPTCHA_KEY; then
+  if _has_env_key ANTICAPTCHA_KEY || _has_env_key UNITY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha key set (computer automation)"
   else
     log_info "AntiCaptcha not configured (optional — computer use / CAPTCHA solving)"
@@ -243,41 +244,16 @@ cmd_doctor() {
   echo ""
   echo "Runtime"
   echo "-------"
-  log_info "FileManager workspace: ${DROID_LOCAL_ROOT:-$HOME/Droid/Local}"
+  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/Unity/Local}"
   log_info "Scheduled tasks: LocalActivationScheduler in Coordinator CM"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     self_host_runtime_doctor_line | sed 's/^/  /'
-    if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
-      if declare -F ensure_cloudflared &>/dev/null; then
-        if ensure_cloudflared >/dev/null 2>&1; then
-          log_success "cloudflared ready (local call tunnel)"
-        else
-          log_error "cloudflared missing — calls require a public local webhook"
-          ok=false
-        fi
-      fi
-      local twilio_file livekit_file
-      twilio_file="$(self_host_comms_twilio_file)"
-      livekit_file="$(self_host_livekit_cloud_file)"
-      if [[ -f "$twilio_file" ]]; then
-        log_success "Twilio call/text credentials found ($twilio_file)"
-      else
-        log_error "Missing $twilio_file — copy selfhost/comms_twilio.env.example"
-        ok=false
-      fi
-      if [[ -f "$livekit_file" ]]; then
-        log_success "LiveKit Cloud SIP credentials found ($livekit_file)"
-      else
-        log_error "Missing $livekit_file — copy selfhost/livekit_cloud.env.example"
-        ok=false
-      fi
-    fi
     echo ""
-    log_info "Daily driver: droid stack up / droid stack down"
-    log_info "Stop everything: droid stack down --full  (or: droid service disable)"
-    log_info "Survive reboot without Console: droid setup --boot-runtime"
+    log_info "Daily driver: unity stack up / unity stack down"
+    log_info "Stop everything: unity stack down --full  (or: unity service disable)"
+    log_info "Survive reboot without Console: unity setup --boot-runtime"
   else
     log_info "Stack must stay up for scheduled tasks until self-host runtime is wired"
   fi
@@ -285,10 +261,10 @@ cmd_doctor() {
 
   echo ""
   if [[ "$ok" == "true" ]]; then
-    log_success "Doctor passed — run: droid stack up"
+    log_success "Doctor passed — run: unity stack up"
     return 0
   fi
-  log_error "Doctor found blockers — fix above, then re-run: droid stack doctor"
+  log_error "Doctor found blockers — fix above, then re-run: unity stack doctor"
   return 1
 }
 
@@ -297,7 +273,7 @@ SYNC_COMMS_SCRIPT="$SCRIPT_DIR/sync_comms_webhooks.py"
 # Enforce that the localhost Twilio numbers are "poll-only" (no hosted inbound
 # webhook), so a hosted backend never answers localhost traffic. Reads the
 # localhost numbers from self_host_env.sh and Twilio creds from the env /
-# ~/.droid/comms_twilio.env. No-op when the script or creds are absent.
+# ~/.unity/comms_twilio.env. No-op when the script or creds are absent.
 cmd_sync_comms() {
   [[ -f "$SYNC_COMMS_SCRIPT" ]] || { log_warn "Missing $SYNC_COMMS_SCRIPT"; return 0; }
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
@@ -307,34 +283,36 @@ cmd_sync_comms() {
       self_host_export_comms_twilio
     fi
   fi
-  if [[ "$#" -eq 0 ]] && declare -F self_host_calls_enabled &>/dev/null \
-    && self_host_calls_enabled; then
-    if declare -F self_host_ensure_tunnel &>/dev/null; then
-      self_host_ensure_tunnel || {
-        log_error "Call tunnel failed to start; cannot sync voice webhooks"
-        return 1
-      }
-    fi
-    set -- --set-voice
-  fi
   python3 "$SYNC_COMMS_SCRIPT" "$@"
 }
 
-# Select the LiveKit backend once for every call surface in this stack run.
+# Select the LiveKit backend for the runtime. Browser meet uses the local
+# `livekit-server --dev` (no SIP). Phone/WhatsApp calls need LiveKit Cloud SIP,
+# so when calls are enabled the cloud creds (from ~/.unity/livekit_cloud.env via
+# self_host_export_livekit_cloud) win over both the dev pair and any unity/.env
+# values, and serve browser meet too.
 setup_livekit_env() {
-  if declare -F self_host_export_livekit_backend &>/dev/null; then
-    self_host_export_livekit_backend
-  fi
   if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
+    if declare -F self_host_export_livekit_cloud &>/dev/null; then
+      self_host_export_livekit_cloud
+    fi
     if [[ -z "${LIVEKIT_URL:-}" || -z "${LIVEKIT_SIP_URI:-}" ]]; then
       log_warn "Calls enabled but LiveKit Cloud creds/SIP URI missing —"
       log_warn "run the BYOK wizard or populate $(self_host_livekit_cloud_file)"
     fi
+    return 0
   fi
+  # voice.sh runs a local LiveKit server with dev credentials. unity/.env often
+  # also contains cloud LiveKit keys that override the dev pair when sourced,
+  # which breaks browser meet token minting in Console.
+  export LIVEKIT_URL="ws://localhost:7880"
+  export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
+  export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
 }
 
-# Best-effort, non-fatal drift warning used only when calls are explicitly
-# disabled. Normal local startup owns the voice webhooks authoritatively.
+# Best-effort, non-fatal drift warning used during `up`. Only runs when WhatsApp
+# creds are present; never blocks or fails startup. Skipped when calls are
+# enabled — cmd_up_calls_setup then sets the voice webhook authoritatively.
 warn_if_comms_webhooks_drift() {
   [[ -f "$SYNC_COMMS_SCRIPT" ]] || return 0
   if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
@@ -343,19 +321,17 @@ warn_if_comms_webhooks_drift() {
   [[ -n "${TWILIO_WA_ACCOUNT_SID:-}" && -n "${TWILIO_WA_AUTH_TOKEN:-}" ]] || return 0
   if ! python3 "$SYNC_COMMS_SCRIPT" --check >/dev/null 2>&1; then
     log_warn "A localhost Twilio number still has a hosted inbound webhook —"
-    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms --set-voice"
+    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms"
   fi
 }
 
-# Bring up the inbound-call edge: the cloudflared tunnel to the local CM ingress,
-# the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook pointing at
-# the tunnel (text stays poll-only). This is a startup requirement because a
-# stale/dead voice webhook makes Twilio play "application error" before Droid can
-# log anything.
+# Bring up the inbound-call edge (opt-in): the cloudflared tunnel to the local CM
+# ingress, the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook
+# pointing at the tunnel (text stays poll-only). Best-effort and non-fatal: a
+# failure here never blocks the rest of the stack. No-op when calls are disabled.
 cmd_up_calls_setup() {
   if ! declare -F self_host_calls_enabled &>/dev/null || ! self_host_calls_enabled; then
-    log_error "Local phone/WhatsApp calls are disabled. They are required for the self-host stack."
-    return 1
+    return 0
   fi
   log_info "Enabling phone/WhatsApp calls (LiveKit Cloud SIP + tunnel)..."
 
@@ -364,27 +340,24 @@ cmd_up_calls_setup() {
     source "$ENSURE_PREREQS_SCRIPT"
     if declare -F ensure_cloudflared &>/dev/null; then
       if ! ensure_cloudflared; then
-        log_error "cloudflared unavailable — cannot expose local call webhook"
-        return 1
+        log_warn "cloudflared unavailable — inbound calls disabled this session"
+        return 0
       fi
     fi
   fi
 
   if ! declare -F self_host_ensure_tunnel &>/dev/null || ! self_host_ensure_tunnel; then
-    log_error "Call tunnel failed to start"
-    return 1
+    log_warn "Call tunnel failed to start — inbound calls disabled this session"
+    return 0
   fi
-  log_success "Call tunnel: ${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
+  log_success "Call tunnel: ${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
 
-  local py="$DROID_REPO_PATH/.venv/bin/python"
+  local py="$UNITY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
 
   if [[ -f "$SCRIPT_DIR/provision_call_sip.py" ]]; then
     "$py" "$SCRIPT_DIR/provision_call_sip.py" \
-      || {
-        log_error "LiveKit SIP trunk provisioning failed"
-        return 1
-      }
+      || log_warn "LiveKit SIP trunk provisioning failed — inbound calls may not route"
   fi
 
   if [[ -f "$SYNC_COMMS_SCRIPT" ]]; then
@@ -393,12 +366,11 @@ cmd_up_calls_setup() {
     fi
     if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
       if declare -F self_host_voice_synced_url_file &>/dev/null; then
-        printf '%s' "${DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
           >"$(self_host_voice_synced_url_file)"
       fi
     else
-      log_error "Voice webhook sync failed — refusing to leave stale call routing"
-      return 1
+      log_warn "Voice webhook sync failed — inbound calls may be answered by staging/prod"
     fi
   fi
 }
@@ -409,7 +381,7 @@ current_tmux_session() {
 }
 
 stop_durable_stack_session() {
-  local session="${DROID_STACK_TMUX_SESSION:-droid-stack}"
+  local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
   command -v tmux &>/dev/null || return 0
   tmux has-session -t "=${session}" 2>/dev/null || return 0
 
@@ -466,42 +438,20 @@ raise SystemExit(1)
 PY
 }
 
-self_host_bootstrap_owner_enabled() {
-  case "${SELF_HOST_BOOTSTRAP_OWNER:-0}" in
-    1|true|TRUE|yes|YES|on|ON) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-clear_self_host_owner_state() {
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
-
-  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
-    # shellcheck disable=SC1090
-    source "$SELF_HOST_ENV_SCRIPT"
-    export_self_host_coordinator_runtime_file
-  fi
-
-  rm -f \
-    "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$SELF_HOST_STATE_DIR/coordinator-runtime.json}" \
-    "$SELF_HOST_STATE_DIR/self-host-owner.json"
-}
-
 cmd_seed_builtins() {
   export SELF_HOST=1
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
   export ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$DROID_REPO_PATH/.env"
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
   fi
 
-  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$DROID_HOME/coordinator-runtime.json}"
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$UNITY_HOME/coordinator-runtime.json}"
   local api_key=""
   api_key="$(runtime_json_value "$runtime_file" apiKey api_key 2>/dev/null || true)"
   if [[ -z "$api_key" ]]; then
@@ -509,10 +459,10 @@ cmd_seed_builtins() {
     return 1
   fi
 
-  local py="$DROID_REPO_PATH/.venv/bin/python"
+  local py="$UNITY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
-  if [[ ! -f "$DROID_REPO_PATH/scripts/seed_builtins_catalog.py" ]]; then
-    log_error "Missing $DROID_REPO_PATH/scripts/seed_builtins_catalog.py"
+  if [[ ! -f "$UNITY_REPO_PATH/scripts/seed_builtins_catalog.py" ]]; then
+    log_error "Missing $UNITY_REPO_PATH/scripts/seed_builtins_catalog.py"
     return 1
   fi
 
@@ -520,13 +470,13 @@ cmd_seed_builtins() {
   local manifest="$DEPLOY_REPO_PATH/deploy/selfhost/integration-bootstrap.selfhost.toml"
   if [[ -n "${COMPOSIO_API_KEY:-}" && -f "$manifest" ]]; then
     args+=(--integration-bootstrap-manifest "$manifest")
-    export DROID_INTEGRATION_BOOTSTRAP_EXECUTOR="${DROID_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
+    export UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
     export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-$(console_admin_key)}"
   fi
 
   log_info "Seeding Builtins catalogues..."
   (
-    cd "$DROID_REPO_PATH"
+    cd "$UNITY_REPO_PATH"
     UNIFY_KEY="$api_key" \
       ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0" \
       "$py" scripts/seed_builtins_catalog.py "${args[@]}"
@@ -554,8 +504,8 @@ wait_for_coordinator_runtime() {
   local timeout_seconds="${1:-90}"
   local elapsed=0
   while (( elapsed < timeout_seconds )); do
-    if declare -F droid_cm_instance_count &>/dev/null \
-      && [[ "$(droid_cm_instance_count)" -eq 1 ]]; then
+    if declare -F unity_cm_instance_count &>/dev/null \
+      && [[ "$(unity_cm_instance_count)" -eq 1 ]]; then
       log_success "Coordinator runtime ready"
       return 0
     fi
@@ -569,18 +519,13 @@ wait_for_coordinator_runtime() {
 wait_for_source_stack_ready() {
   local console_port="${CONSOLE_PORT:-3000}"
   local orchestra_port="${ORCHESTRA_PORT:-8000}"
-  local gateway_host="${DROID_GATEWAY_HOST:-127.0.0.1}"
-  local gateway_port="${DROID_GATEWAY_PORT:-8001}"
-  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}"
+  local gateway_host="${UNITY_GATEWAY_HOST:-127.0.0.1}"
+  local gateway_port="${UNITY_GATEWAY_PORT:-8001}"
 
   wait_for_http "Console" "http://127.0.0.1:${console_port}" 90
   wait_for_http "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features" 90
-  wait_for_http "Droid gateway" "http://${gateway_host}:${gateway_port}/health" 90
-  if [[ -n "$runtime_file" && -f "$runtime_file" ]]; then
-    wait_for_coordinator_runtime 90
-  else
-    log_info "Coordinator runtime deferred until a self-host account signs in"
-  fi
+  wait_for_http "Unity gateway" "http://${gateway_host}:${gateway_port}/health" 90
+  wait_for_coordinator_runtime 90
 }
 
 check_account_page() {
@@ -608,15 +553,15 @@ check_account_page() {
 
   CONSOLE_REPO_PATH="$CONSOLE_REPO_PATH" \
     CONSOLE_PORT="$console_port" \
-    DROID_HOME="${DROID_HOME:-$HOME/.droid}" \
-    SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}" \
+    UNITY_HOME="${UNITY_HOME:-$HOME/.unity}" \
+    SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}" \
     "$node_bin" "$browser_smoke_script"
 }
 
 cmd_redeploy() {
   echo ""
   echo "=============================================="
-  echo "  Clean self-host redeploy"
+  echo "  Fresh self-host redeploy"
   echo "=============================================="
   echo ""
 
@@ -626,21 +571,14 @@ cmd_redeploy() {
 
   stop_durable_stack_session
   cmd_down --full || true
-  cmd_purge_orchestra_db
 
-  if self_host_bootstrap_owner_enabled; then
-    cmd_resume
-    cmd_reset --yes --bootstrap-owner
-    cmd_seed_builtins
+  cmd_resume
+  cmd_reset --yes
+  cmd_seed_builtins
 
-    if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
-      DROID_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
-      SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
-    fi
-  else
-    clear_self_host_owner_state
-    cmd_resume
-    log_info "Self-host owner bootstrap skipped; create an account at http://localhost:${CONSOLE_PORT:-3000}/"
+  if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+    UNITY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
+    SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
   fi
 
   wait_for_source_stack_ready
@@ -649,19 +587,6 @@ cmd_redeploy() {
 
   echo ""
   cmd_status
-}
-
-cmd_purge_orchestra_db() {
-  local orchestra_local_script="$ORCHESTRA_REPO_PATH/scripts/local.sh"
-  if [[ ! -f "$orchestra_local_script" ]]; then
-    log_error "Missing $orchestra_local_script"
-    return 1
-  fi
-
-  log_info "Purging local Orchestra database for a clean redeploy..."
-  ORCHESTRA_ALLOW_ISOLATED=1 \
-    ORCHESTRA_DB_PORT="$(default_orchestra_db_port)" \
-    bash "$orchestra_local_script" purge
 }
 
 cmd_resume() {
@@ -682,11 +607,11 @@ cmd_resume() {
     return 1
   fi
 
-  if [[ -x "$DROID_REPO_PATH/scripts/voice.sh" ]]; then
+  if [[ -x "$UNITY_REPO_PATH/scripts/voice.sh" ]]; then
     log_info "Ensuring local LiveKit + voice BYOK keys..."
-    DROID_HOME="${DROID_HOME:-$HOME/.droid}" \
-      DROID_REPO="${DROID_REPO:-$DROID_REPO_PATH}" \
-      bash "$DROID_REPO_PATH/scripts/voice.sh" setup || log_warn "LiveKit setup failed — meet may not work"
+    UNITY_HOME="${UNITY_HOME:-$HOME/.unity}" \
+      UNITY_REPO="${UNITY_REPO:-$UNITY_REPO_PATH}" \
+      bash "$UNITY_REPO_PATH/scripts/voice.sh" setup || log_warn "LiveKit setup failed — meet may not work"
   fi
 
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
@@ -697,24 +622,24 @@ cmd_resume() {
   export SELF_HOST=1
   export DEPLOY_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export DROID_REPO_PATH
+  export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$DROID_REPO_PATH/.env"
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi
   fi
 
   # Internal-dev hosted Coordinator email: load the comms service-account key
-  # (from ~/.droid, never a repo) so the gateway can send Coordinator email via
+  # (from ~/.unity, never a repo) so the gateway can send Coordinator email via
   # the hosted Gmail mailbox. The comms ingress bridge that polls replies is
   # started by the runtime supervisor. No-op when no key is present.
   if declare -F self_host_export_comms_sa &>/dev/null; then
@@ -728,16 +653,16 @@ cmd_resume() {
   warn_if_comms_webhooks_drift
 
   # Self-host always runs with Console, so the Coordinator onboarding flow
-  # (narration + reference quiz) must stay active even though the public droid
-  # default (droid/.env) disables it for headless installs.
-  export DROID_CONSOLE_UI=true
+  # (narration + reference quiz) must stay active even though the public unity
+  # default (unity/.env) disables it for headless installs.
+  export UNITY_CONSOLE_UI=true
 
   # The self-host CM is the personal Coordinator; surface its universal email
   # (and provider) the way the hosted assignment event would, so outbound
   # Coordinator mail + the reference quiz work. No-op until a Coordinator
   # mailbox is configured.
-  if [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
-    export ASSISTANT_EMAIL="${DROID_COORDINATOR_EMAIL_ADDRESS}"
+  if [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+    export ASSISTANT_EMAIL="${UNITY_COORDINATOR_EMAIL_ADDRESS}"
     export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
   fi
 
@@ -765,8 +690,8 @@ cmd_resume() {
 
   if [[ -f "$runtime_file" ]]; then
     local cm_count="0"
-    if declare -F droid_cm_instance_count &>/dev/null; then
-      cm_count="$(droid_cm_instance_count)"
+    if declare -F unity_cm_instance_count &>/dev/null; then
+      cm_count="$(unity_cm_instance_count)"
     fi
     if [[ "$cm_count" -eq 1 ]]; then
       if declare -F self_host_adopt_coordinator_for_service &>/dev/null; then
@@ -777,13 +702,13 @@ cmd_resume() {
       fi
       log_success "Reusing Coordinator runtime"
     elif [[ "$cm_count" -gt 1 ]]; then
-      log_error "Multiple Coordinator runtimes detected — run: droid stack down --full"
+      log_error "Multiple Coordinator runtimes detected — run: unity stack down --full"
     else
       log_info "Starting Coordinator runtime (saved login)..."
       if ! bash "$CONSOLE_LOCAL_SCRIPT" ensure-coordinator-topics; then
         log_warn "Coordinator Pub/Sub setup failed — sign in at Console to refresh credentials"
-      elif declare -F with_droid_runtime_start_lock &>/dev/null; then
-        if ! with_droid_runtime_start_lock 30 bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
+      elif declare -F with_unity_runtime_start_lock &>/dev/null; then
+        if ! with_unity_runtime_start_lock 30 bash "$CONSOLE_LOCAL_SCRIPT" start-coordinator; then
           log_warn "Coordinator start failed — sign in at Console to refresh credentials"
         else
           log_success "Coordinator runtime is ready"
@@ -816,7 +741,7 @@ cmd_resume() {
     elif declare -F self_host_service_is_enabled &>/dev/null \
       && self_host_service_is_enabled; then
       echo "  Background runtime is not healthy — stack down stops scheduled tasks."
-      echo "  Re-run: droid stack up"
+      echo "  Re-run: unity stack up"
     fi
   else
     echo "  First visit: create an account on /login — Coordinator starts automatically."
@@ -825,10 +750,10 @@ cmd_resume() {
 }
 
 cmd_up_durable() {
-  local session="${DROID_STACK_TMUX_SESSION:-droid-stack}"
-  local timeout_seconds="${DROID_STACK_TMUX_READY_TIMEOUT_SECONDS:-420}"
+  local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
+  local timeout_seconds="${UNITY_STACK_TMUX_READY_TIMEOUT_SECONDS:-420}"
   local console_port="${CONSOLE_PORT:-3000}"
-  local bash_bin="${DROID_STACK_BASH:-bash}"
+  local bash_bin="${UNITY_STACK_BASH:-bash}"
 
   if [[ "$(uname -s)" == "Darwin" && -x "/opt/homebrew/bin/bash" ]]; then
     bash_bin="/opt/homebrew/bin/bash"
@@ -858,49 +783,38 @@ cmd_up_durable() {
   local shell_bin="${SHELL:-/bin/bash}"
   # tmux new-session inherits the tmux server's env (not this client's), so opt-in
   # toggles like the call-support gate must be injected into the command itself.
-  local inner="export PATH=\"/opt/homebrew/bin:\$PATH\"; cd \"$DEPLOY_REPO_PATH\"; \"$bash_bin\" \"$SCRIPT_DIR/stack.sh\" up; rc=\$?; echo __DROID_STACK_UP_EXIT_\${rc}__; exec \"$shell_bin\" -l"
+  local inner="export PATH=\"/opt/homebrew/bin:\$PATH\"; cd \"$DEPLOY_REPO_PATH\"; \"$bash_bin\" \"$SCRIPT_DIR/stack.sh\" up; rc=\$?; echo __UNITY_STACK_UP_EXIT_\${rc}__; exec \"$shell_bin\" -l"
   if [[ -n "${SELF_HOST_CALLS_ENABLED:-}" ]]; then
     inner="export SELF_HOST_CALLS_ENABLED=$(printf '%q' "$SELF_HOST_CALLS_ENABLED"); $inner"
   fi
   local stack_command
   printf -v stack_command '%q -lc %q' "$bash_bin" "$inner"
 
-  local recovered_missing_db="false"
+  log_info "Starting durable stack session: $session"
+  tmux new-session -d -s "$session" "$stack_command"
+
+  local elapsed=0
   local pane=""
-  while true; do
-    log_info "Starting durable stack session: $session"
-    tmux new-session -d -s "$session" "$stack_command"
+  while (( elapsed < timeout_seconds )); do
+    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
+      log_success "Durable stack session is ready: $session"
+      break
+    fi
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* && "$pane" != *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
+      log_error "Durable stack startup failed in tmux session: $session"
+      echo "$pane"
+      return 1
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
 
-    local elapsed=0
-    pane=""
-    while (( elapsed < timeout_seconds )); do
-      pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
-      if [[ "$pane" == *"__DROID_STACK_UP_EXIT_0__"* ]]; then
-        log_success "Durable stack session is ready: $session"
-        break 2
-      fi
-      if [[ "$pane" == *"__DROID_STACK_UP_EXIT_"* && "$pane" != *"__DROID_STACK_UP_EXIT_0__"* ]]; then
-        if [[ "$recovered_missing_db" == "false" \
-          && ( "$pane" == *"database \"orchestra\" does not exist"* \
-            || "$pane" == *"database 'orchestra' is missing"* ) ]]; then
-          log_warn "Detected invalid local Orchestra database; purging and retrying once"
-          tmux kill-session -t "=${session}" 2>/dev/null || true
-          cmd_purge_orchestra_db
-          recovered_missing_db="true"
-          continue 2
-        fi
-        log_error "Durable stack startup failed in tmux session: $session"
-        echo "$pane"
-        return 1
-      fi
-      sleep 2
-      elapsed=$((elapsed + 2))
-    done
-
+  if (( elapsed >= timeout_seconds )); then
     log_error "Timed out waiting for durable stack startup"
     log_info "Attach for logs: tmux attach -t $session"
     return 1
-  done
+  fi
 
   if ! curl -fsSI --max-time 10 "http://localhost:${console_port}/" >/dev/null; then
     log_error "Console did not respond at http://localhost:${console_port}"
@@ -921,17 +835,17 @@ cmd_down() {
     case "$1" in
       --full) full_stop="true"; shift ;;
       -h|--help)
-        echo "Usage: droid stack down [--full]"
+        echo "Usage: unity stack down [--full]"
         echo ""
         echo "  Default: stop Console and stack ingress; keep Coordinator + Orchestra for scheduled tasks."
         echo "  --full:  stop everything, including background runtime."
         echo ""
-        echo "  Also: droid service disable  (same as --full for background runtime)"
+        echo "  Also: unity service disable  (same as --full for background runtime)"
         return 0
         ;;
       *)
         log_error "Unknown option: $1"
-        echo "Run: droid stack down --help"
+        echo "Run: unity stack down --help"
         return 1
         ;;
     esac
@@ -942,8 +856,8 @@ cmd_down() {
     return 1
   fi
 
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -992,8 +906,8 @@ health_check_line() {
 cmd_health_summary() {
   local console_port="${CONSOLE_PORT:-3000}"
   local orchestra_port="${ORCHESTRA_PORT:-8000}"
-  local gateway_host="${DROID_GATEWAY_HOST:-127.0.0.1}"
-  local gateway_port="${DROID_GATEWAY_PORT:-8001}"
+  local gateway_host="${UNITY_GATEWAY_HOST:-127.0.0.1}"
+  local gateway_port="${UNITY_GATEWAY_PORT:-8001}"
 
   echo ""
   echo "Source Stack Health"
@@ -1002,8 +916,8 @@ cmd_health_summary() {
   health_check_line "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features"
   health_check_line "Gateway" "http://${gateway_host}:${gateway_port}/health"
   health_check_line "Account" "http://localhost:${console_port}/account"
-  if declare -F droid_cm_instance_count &>/dev/null; then
-    printf '  %-12s %s instance(s)\n' "Coordinator" "$(droid_cm_instance_count)"
+  if declare -F unity_cm_instance_count &>/dev/null; then
+    printf '  %-12s %s instance(s)\n' "Coordinator" "$(unity_cm_instance_count)"
   fi
 }
 
@@ -1047,17 +961,17 @@ cmd_repair_console() {
   export SELF_HOST=1
   export DEPLOY_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export DROID_REPO_PATH
+  export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$DROID_REPO_PATH/.env"
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
   fi
 
   setup_livekit_env
@@ -1092,11 +1006,11 @@ cmd_dev_env() {
 cmd_smoke() {
   export SELF_HOST=1
   export ORCHESTRA_REPO_PATH
-  export DROID_REPO_PATH
+  export UNITY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
-  export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -1104,15 +1018,15 @@ cmd_smoke() {
     export_self_host_coordinator_runtime_file
   fi
 
-  local py="$DROID_REPO_PATH/.venv/bin/python"
+  local py="$UNITY_REPO_PATH/.venv/bin/python"
   if [[ ! -x "$py" ]]; then
     py="python3"
   fi
 
   CONSOLE_PORT="${CONSOLE_PORT:-3000}" \
     ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}" \
-    DROID_GATEWAY_HOST="${DROID_GATEWAY_HOST:-127.0.0.1}" \
-    DROID_GATEWAY_PORT="${DROID_GATEWAY_PORT:-8001}" \
+    UNITY_GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}" \
+    UNITY_GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}" \
     SELF_HOST_COORDINATOR_RUNTIME_FILE="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" \
     STACK_SCRIPT="$SCRIPT_DIR/stack.sh" \
     "$py" <<'PY'
@@ -1171,12 +1085,12 @@ def check(
 
 console = f"http://127.0.0.1:{os.environ['CONSOLE_PORT']}"
 orchestra = f"http://127.0.0.1:{os.environ['ORCHESTRA_PORT']}"
-gateway = f"http://{os.environ['DROID_GATEWAY_HOST']}:{os.environ['DROID_GATEWAY_PORT']}"
+gateway = f"http://{os.environ['UNITY_GATEWAY_HOST']}:{os.environ['UNITY_GATEWAY_PORT']}"
 
-check("Console login", "GET", f"{console}/login", {200})
+check("Console", "GET", console, {200})
 check("Orchestra features", "GET", f"{orchestra}/v0/features", {200})
 check(
-    "Droid gateway",
+    "Unity gateway",
     "GET",
     f"{gateway}/health",
     {200},
@@ -1188,7 +1102,7 @@ check(
     f"{console}/api/auth/email/register",
     {422},
     body={
-        "email": "droid-smoke@example.local",
+        "email": "unity-smoke@example.local",
         "name": "Smoke",
         "lastName": "Check",
         "password": "Aa1!TemporaryLocalSmokePassword12345",  # pragma: allowlist secret
@@ -1201,7 +1115,9 @@ if runtime_file:
     try:
         credentials = json.loads(Path(runtime_file).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        log("INFO", f"Coordinator checks skipped: no saved login at {runtime_file}")
+        failures.append("Coordinator runtime file")
+        log("ERROR", f"Coordinator runtime file missing: {runtime_file}")
+        log("INFO", f"Coordinator runtime file recovery: {recovery_cmd}")
     except json.JSONDecodeError as exc:
         failures.append("Coordinator runtime file")
         log("ERROR", f"Coordinator runtime file is invalid JSON: {exc}")
@@ -1247,11 +1163,7 @@ if api_key and assistant_id:
     )
 else:
     log("INFO", "Coordinator checks skipped: register or sign in first.")
-    log(
-        "INFO",
-        "To opt into the legacy local owner bootstrap now: "
-        f"SELF_HOST_BOOTSTRAP_OWNER=1 {recovery_cmd}",
-    )
+    log("INFO", f"To recreate the local owner and Coordinator now: {recovery_cmd}")
 
 if failures:
     log("ERROR", "Self-host smoke failed: " + ", ".join(failures))
@@ -1283,7 +1195,7 @@ main() {
         cmd_redeploy "$@"
       fi
       ;;
-    redeploy|fresh|clean|clean-redeploy) cmd_redeploy "$@" ;;
+    redeploy|fresh) cmd_redeploy "$@" ;;
     resume) cmd_resume "$@" ;;
     down|stop) cmd_down "$@" ;;
     status) cmd_status "$@" ;;

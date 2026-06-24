@@ -3,7 +3,7 @@
 # update-metadata.sh - Update metadata on the tunnel server VM
 # =============================================================================
 #
-# Updates the droid-tunnel-server VM metadata and/or startup script.
+# Updates the unity-tunnel-server VM metadata and/or startup script.
 #
 # Usage:
 #   ./update-metadata.sh [options]
@@ -21,7 +21,7 @@
 #   ./update-metadata.sh --update-startup-script
 #
 #   # Update the GCS bucket metadata
-#   ./update-metadata.sh --metadata gcs-bucket=droid-tunnel-config-staging
+#   ./update-metadata.sh --metadata gcs-bucket=unity-tunnel-config-staging
 #
 #   # Update startup script and restart to apply
 #   ./update-metadata.sh --update-startup-script --restart
@@ -89,8 +89,8 @@ fi
 
 # Resolve VM name based on environment
 case "$TARGET_ENV" in
-    staging) VM_NAME="droid-tunnel-server-staging" ;;
-    *) VM_NAME="droid-tunnel-server" ;;
+    staging) VM_NAME="unity-tunnel-server-staging" ;;
+    *) VM_NAME="unity-tunnel-server" ;;
 esac
 
 command -v gcloud &>/dev/null || die "gcloud not found"

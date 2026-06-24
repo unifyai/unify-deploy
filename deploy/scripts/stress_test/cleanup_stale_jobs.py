@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 
 from job_utils import _admin_key, _comms_url, fetch_running_jobs
 
-namespace = os.getenv("DROID_NAMESPACE", "staging")
+namespace = os.getenv("UNITY_NAMESPACE", "staging")
 comms_url = _comms_url(namespace)
 admin_key = _admin_key()
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
@@ -101,7 +101,7 @@ def main() -> int:
     """Run the stale-job cleanup flow."""
 
     if not comms_url or not admin_key:
-        print("Error: DROID_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
+        print("Error: UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
         return 1
 
     cleanup_jobs(fetch_running_jobs(namespace))

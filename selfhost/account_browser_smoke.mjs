@@ -57,8 +57,8 @@ function selfHostOwnerFilePath() {
 
   const stateDir =
     process.env.SELF_HOST_STATE_DIR ||
-    process.env.DROID_HOME ||
-    path.join(os.homedir(), '.droid');
+    process.env.UNITY_HOME ||
+    path.join(os.homedir(), '.unity');
   return path.join(stateDir, 'self-host-owner.json');
 }
 

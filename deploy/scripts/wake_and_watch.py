@@ -206,7 +206,7 @@ def wait_for_new_job(
 ) -> str | None:
     """Poll AssistantJobs until a new job_name appears that we haven't seen.
 
-    The AssistantJobs record is created by Droid's ``log_job_startup``
+    The AssistantJobs record is created by Unity's ``log_job_startup``
     after the container starts, so the mere appearance of a new job_name
     means the container is alive.
     """

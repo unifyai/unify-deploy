@@ -17,7 +17,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
 1. **GCP authentication**:
    ```bash
    gcloud auth login
-   gcloud container clusters get-credentials droid --region us-central1 --project gcp-project-runtime
+   gcloud container clusters get-credentials unity --region us-central1 --project gcp-project-runtime
    ```
 
 2. **Python environment**:
@@ -36,7 +36,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
    ```
 
    Required keys:
-   - `UNIFY_KEY` -- your personal API key (from console.unify.ai or your droid `.env`)
+   - `UNIFY_KEY` -- your personal API key (from console.unify.ai or your unity `.env`)
    - `ORCHESTRA_ADMIN_KEY` -- admin key for the Comms App (shared team key)
    - `SHARED_UNIFY_KEY` -- shared key for AssistantJobs project (shared team key)
 

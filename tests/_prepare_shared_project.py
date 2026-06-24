@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Internal module to prepare the shared DroidDeployTests project for parallel runs.
+Internal module to prepare the shared UnityDeployTests project for parallel runs.
 
 This script is called by parallel_run.sh before spawning tmux sessions.
 It ensures the shared project and contexts exist, making subsequent
@@ -20,7 +20,7 @@ logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 import sys
 from pathlib import Path
 
-# Ensure repo root is in sys.path so we can import droid.
+# Ensure repo root is in sys.path so we can import unity.
 # This script is invoked directly by parallel_run.sh, not via pytest
 # which handles path setup automatically.
 _repo_root = Path(__file__).resolve().parent.parent
@@ -31,11 +31,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROJECT = "DroidDeployTests"
+PROJECT = "UnityDeployTests"
 
 
 def prepare_shared_project() -> None:
-    """Prepare the shared DroidDeployTests project and Combined context."""
+    """Prepare the shared UnityDeployTests project and Combined context."""
     try:
         import unify
     except ImportError:
@@ -73,16 +73,16 @@ def prepare_shared_project() -> None:
         # Tolerate field creation errors (may already exist)
         pass
 
-    # Pre-create assistant-derived contexts via droid.init() to avoid races
-    # when parallel pytest sessions (xdist, tmux, CI) all call droid.init()
+    # Pre-create assistant-derived contexts via unity.init() to avoid races
+    # when parallel pytest sessions (xdist, tmux, CI) all call unity.init()
     try:
-        import droid
+        import unity
 
-        droid.init(PROJECT)
+        unity.init(PROJECT)
     except Exception as e:
         # Tolerate if contexts already exist (another process created them)
         if "already exists" not in str(e).lower():
-            print(f"Note: droid.init() returned: {e}", file=sys.stderr)
+            print(f"Note: unity.init() returned: {e}", file=sys.stderr)
 
     print(f"Prepared shared project '{PROJECT}'")
 

@@ -1,6 +1,6 @@
 # Ubuntu VM Custom Image (Packer)
 
-Creates a custom GCP Ubuntu image with pre-installed software for Droid Ubuntu VMs.
+Creates a custom GCP Ubuntu image with pre-installed software for Unity Ubuntu VMs.
 
 This is equivalent to the Windows VM approach using `windows-vm-custom-image/`.
 
@@ -61,8 +61,8 @@ packer build \
 ### Build Output
 
 The image is created in your project with:
-- **Image family**: `droid-ubuntu-vm`
-- **Image name**: `droid-ubuntu-vm-{timestamp}`
+- **Image family**: `unity-ubuntu-vm`
+- **Image name**: `unity-ubuntu-vm-{timestamp}`
 
 ## Creating a VM from the Image
 
@@ -79,7 +79,7 @@ gcloud compute instances create ubuntu-vm-test \
   --project=YOUR_PROJECT_ID \
   --zone=us-central1-a \
   --machine-type=e2-standard-2 \
-  --image-family=droid-ubuntu-vm \
+  --image-family=unity-ubuntu-vm \
   --image-project=YOUR_PROJECT_ID \
   --address=ubuntu-vm-ip \
   --tags=http-server,https-server \
@@ -95,7 +95,7 @@ from google.cloud import compute_v1
 # Create disk from image family
 disk = compute_v1.AttachedDisk()
 disk.initialize_params = compute_v1.AttachedDiskInitializeParams()
-disk.initialize_params.source_image = f"projects/{project_id}/global/images/family/droid-ubuntu-vm"
+disk.initialize_params.source_image = f"projects/{project_id}/global/images/family/unity-ubuntu-vm"
 disk.initialize_params.disk_size_gb = 50
 disk.initialize_params.disk_type = f"zones/{zone}/diskTypes/pd-ssd"
 disk.boot = True
@@ -192,7 +192,7 @@ sudo tail -f /var/log/caddy/access.log
 | Feature | Windows | Ubuntu |
 |---------|---------|--------|
 | Base Image | `windows-2025` | `ubuntu-2204-lts` |
-| Image Family | `droid-windows-vm` | `droid-ubuntu-vm` |
+| Image Family | `unity-windows-vm` | `unity-ubuntu-vm` |
 | Startup Script Key | `windows-startup-script-ps1` | `startup-script` |
 | Desktop | Windows Explorer | XFCE4 |
 | VNC Server | TightVNC | TigerVNC |

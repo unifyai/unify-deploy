@@ -1,4 +1,4 @@
-# Droid Communication Platform
+# Unity Communication Platform
 
 ## System Architecture
 
@@ -13,7 +13,7 @@ This repository is the external communication gateway in a multi-repository syst
     └────┬───────────────────────────────┘
          │
     ┌────┴────┐    ┌─────────┐    ┌─────────┐
-    │  Droid  │    │  Unify  │    │Orchestra│
+    │  Unity  │    │  Unify  │    │Orchestra│
     │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
     │         │    │         │    │  (DB)   │
     └────┬────┘    └────┬────┘    └────┬────┘
@@ -25,10 +25,10 @@ This repository is the external communication gateway in a multi-repository syst
               └───────────┘       └────────────┘
 ```
 
-**This repo (Communication)** receives external events (Twilio webhooks, Gmail notifications) and routes them to Droid for processing. Droid calls back to Communication when it needs to send messages, make calls, or dispatch voice agents.
+**This repo (Communication)** receives external events (Twilio webhooks, Gmail notifications) and routes them to Unity for processing. Unity calls back to Communication when it needs to send messages, make calls, or dispatch voice agents.
 
 Related repositories:
-- [Droid](https://github.com/unifyai/droid) — AI assistant brain
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain
 - [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
 - [Console](https://github.com/unifyai/console) — Web UI and observability dashboard
 
@@ -38,7 +38,7 @@ This repository provides a unified communication service with two primary compon
 
 1. **Adapters** – A FastAPI application that handles unauthenticated webhooks from Twilio (voice, SMS, WhatsApp), Gmail, and Microsoft (Outlook, Teams). These endpoints are typically form-encoded or JSON-based callbacks from external services. The code resides in the `adapters/` directory and is deployed to Cloud Run.
 
-2. **Communication API** – A FastAPI application exposing JSON endpoints, protected by an admin API key (`auth_admin_key`), for orchestration by Droid/Orchestra. The code lives in the `communication/` package and is also deployed to Cloud Run.
+2. **Communication API** – A FastAPI application exposing JSON endpoints, protected by an admin API key (`auth_admin_key`), for orchestration by Unity/Orchestra. The code lives in the `communication/` package and is also deployed to Cloud Run.
 
 ---
 
@@ -50,8 +50,8 @@ All adapter endpoints that can trigger actions (start containers, send messages,
 
 **Authenticated endpoints** (require `Authorization: Bearer {ORCHESTRA_ADMIN_KEY}`):
 - `/assistant/wakeup`, `/assistant/update` — called by Orchestra during hiring/config changes
-- `/unify/attachment`, `/unify/message`, `/unify/meet` — called by Droid containers and Console
-- `/droid/system-event`, `/droid/pre-hire` — called by Orchestra
+- `/unify/attachment`, `/unify/message`, `/unify/meet` — called by Unity containers and Console
+- `/unity/system-event`, `/unity/pre-hire` — called by Orchestra
 - `/scheduled/*` (all 5 endpoints) — called by Cloud Scheduler with admin key in headers
 
 **Signature-validated endpoints** (Twilio):
@@ -159,7 +159,7 @@ python -m adapters.main
 
 ### Local Development with `local.sh`
 
-For integration testing with the Droid repository, use the `scripts/local.sh` script which provides:
+For integration testing with the Unity repository, use the `scripts/local.sh` script which provides:
 
 1. **Pub/Sub Emulator** — Local Google Cloud Pub/Sub emulator (no cloud credentials needed)
 2. **Adapters Service** — FastAPI server for webhook handling
@@ -191,10 +191,10 @@ eval "$(./scripts/local.sh start)"
 
 **Integration with Local Orchestra:**
 
-When running local orchestra (via Droid's `parallel_run.sh`), set `ORCHESTRA_URL` to point communication services to the local orchestra instance:
+When running local orchestra (via Unity's `parallel_run.sh`), set `ORCHESTRA_URL` to point communication services to the local orchestra instance:
 
 ```bash
-# Droid repo starts local orchestra at http://127.0.0.1:8000/v0
+# Unity repo starts local orchestra at http://127.0.0.1:8000/v0
 export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 
 # Communication services will now use local orchestra
@@ -245,7 +245,7 @@ The Adapters service is a FastAPI application that handles unauthenticated callb
 
 - Validates incoming webhooks (e.g., Twilio signatures).
 - Resolves the target assistant and user context via Orchestra.
-- Publishes events to Pub/Sub for Droid to consume.
+- Publishes events to Pub/Sub for Unity to consume.
 - Returns appropriate responses (e.g., TwiML for voice calls).
 
 **Key Endpoints**:
@@ -360,9 +360,9 @@ Note: The `black` formatting check always runs on every push.
 
 Both services are containerized and deployed to **Google Cloud Run**.
 
-- **Communication API**: Build using `Dockerfile-comms` and deploy to the `droid-comms-app` service.
-- **Adapters**: Build using `Dockerfile-adapters` and deploy to the `droid-adapters` service.
+- **Communication API**: Build using `Dockerfile-comms` and deploy to the `unity-comms-app` service.
+- **Adapters**: Build using `Dockerfile-adapters` and deploy to the `unity-adapters` service.
 
 Deployment is automated via **Google Cloud Build**. See the `cloudbuild/` directory for the build configurations:
-- `droid-comms-app.yaml`
+- `unity-comms-app.yaml`
 - `adapters.yaml`

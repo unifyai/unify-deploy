@@ -2,10 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: droid-ingest-worker
+  name: unity-ingest-worker
   namespace: staging
   labels:
-    app: droid-ingest-worker
+    app: unity-ingest-worker
     component: pipeline-worker
     environment: staging
 spec:
@@ -18,17 +18,17 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: droid-ingest-worker
+      app: unity-ingest-worker
   template:
     metadata:
       labels:
-        app: droid-ingest-worker
+        app: unity-ingest-worker
         component: pipeline-worker
         environment: staging
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      serviceAccountName: droid-pipeline-worker
+      serviceAccountName: unity-pipeline-worker
       # Ingest workers checkpoint per-chunk to GCS
       # (`_make_checkpoint_callback` in ingest_worker.py), so a
       # SIGKILL after the grace window only loses the current chunk:
@@ -41,11 +41,11 @@ spec:
       terminationGracePeriodSeconds: 600
       containers:
       - name: ingest-worker
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-staging:latest
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
         command:
         - python
         - -m
-        - droid_deploy.infra.workers.entrypoint_ingest
+        - unity_deploy.infra.workers.entrypoint_ingest
         lifecycle:
           preStop:
             exec:
@@ -60,24 +60,24 @@ spec:
             memory: "3Gi"
             ephemeral-storage: "4Gi"
         env:
-        - name: DROID_GCP_PIPELINE_ENVIRONMENT
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
-        - name: DROID_GCS_ARTIFACT_BUCKET
-          value: "droid-pipeline-artifacts-staging"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts-staging"
         # GCS attempt-lease TTL. Refreshed every chunk (~20-30s), so this is
         # only the window before an orphaned lease (from a killed pod) becomes
         # stealable. Kept comfortably above one chunk but bounded so scale-down/
         # rollout orphans recover quickly. See BACKFILL_RUNBOOK.md.
-        - name: DROID_INGEST_ATTEMPT_LEASE_TTL
+        - name: UNITY_INGEST_ATTEMPT_LEASE_TTL
           value: "480"
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: DROID_PUBSUB_PROJECT_ID
+        - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"
@@ -95,7 +95,7 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: droid-ingest-worker-hpa
+  name: unity-ingest-worker-hpa
   namespace: staging
   labels:
     environment: staging
@@ -103,7 +103,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: droid-ingest-worker
+    name: unity-ingest-worker
   minReplicas: 1
   maxReplicas: 15
   metrics:
@@ -113,7 +113,7 @@ spec:
         name: pubsub.googleapis.com|subscription|num_undelivered_messages
         selector:
           matchLabels:
-            resource.labels.subscription_id: droid-ingest-sub-staging
+            resource.labels.subscription_id: unity-ingest-sub-staging
       target:
         type: AverageValue
         averageValue: "1"
@@ -141,7 +141,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: droid-ingest-worker-pdb
+  name: unity-ingest-worker-pdb
   namespace: staging
   labels:
     environment: staging
@@ -149,4 +149,4 @@ spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: droid-ingest-worker
+      app: unity-ingest-worker

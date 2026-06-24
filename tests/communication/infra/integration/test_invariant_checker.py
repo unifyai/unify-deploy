@@ -31,13 +31,13 @@ def _fake_job(
     name: str,
     *,
     assistant_id: str = "",
-    droid_status: str = "running",
+    unity_status: str = "running",
     session_name: str = "",
     binding_id: str = "",
     active: int = 1,
     deleting: bool = False,
 ):
-    labels = {"droid-status": droid_status}
+    labels = {"unity-status": unity_status}
     if assistant_id:
         labels["assistant-id"] = assistant_id
     if session_name:
@@ -58,13 +58,13 @@ def test_check_invariants_flags_duplicate_binding_jobs():
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value.items = [
         _fake_job(
-            "droid-job-1",
+            "unity-job-1",
             assistant_id="1207",
             session_name="assistant-session-1207",
             binding_id="binding-1",
         ),
         _fake_job(
-            "droid-job-2",
+            "unity-job-2",
             assistant_id="1207",
             session_name="assistant-session-1207",
             binding_id="binding-1",
@@ -83,9 +83,9 @@ def test_check_invariants_flags_live_job_marked_for_deletion():
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value.items = [
         _fake_job(
-            "droid-job-1",
+            "unity-job-1",
             assistant_id="1207",
-            droid_status="running",
+            unity_status="running",
             deleting=True,
         ),
     ]

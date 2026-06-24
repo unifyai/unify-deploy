@@ -30,7 +30,7 @@ def request_idle_job_pool_replenishment(
     extra_demand: int = 0,
     source: str,
 ) -> dict[str, Any]:
-    """Ask adapters to replenish idle Droid jobs for product demand.
+    """Ask adapters to replenish idle Unity jobs for product demand.
 
     Args:
         extra_demand: Number of blocked `PendingJob` sessions that should be

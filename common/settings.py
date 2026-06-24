@@ -56,7 +56,7 @@ def _service_url(env_var: str, service: str) -> str:
 
 
 def _image_hash_blob_name(*, deploy_env: str) -> str:
-    """Resolve the GCS blob name that holds the active Droid image hash.
+    """Resolve the GCS blob name that holds the active Unity image hash.
 
     Production reads ``image_hash.txt``; staging reads
     ``image_hash_staging.txt``.
@@ -86,40 +86,40 @@ class Settings:
             "gcp-project-runtime",
         )
         self.default_region: str = "us-central1"
-        self.gke_cluster_name: str = os.environ.get("DROID_GKE_CLUSTER_NAME", "unity")
+        self.gke_cluster_name: str = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
         self.default_namespace: str = self.deploy_env
 
         # Service URLs
         self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
-        self.comms_url: str = _service_url("DROID_COMMS_URL", "comms")
-        self.adapters_url: str = _service_url("DROID_ADAPTERS_URL", "adapters")
+        self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
+        self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
         self.task_due_queue_location: str = os.environ.get(
-            "DROID_TASK_DUE_QUEUE_LOCATION",
+            "UNITY_TASK_DUE_QUEUE_LOCATION",
             self.default_region,
         )
         self.task_due_queue_name: str = os.environ.get(
-            "DROID_TASK_DUE_QUEUE_NAME",
-            f"droid-task-due{self.env_suffix}",
+            "UNITY_TASK_DUE_QUEUE_NAME",
+            f"unity-task-due{self.env_suffix}",
         )
         self.task_offline_queue_name: str = os.environ.get(
-            "DROID_TASK_OFFLINE_QUEUE_NAME",
-            f"droid-task-offline{self.env_suffix}",
+            "UNITY_TASK_OFFLINE_QUEUE_NAME",
+            f"unity-task-offline{self.env_suffix}",
         )
         self.task_activation_repair_queue_name: str = os.environ.get(
-            "DROID_TASK_ACTIVATION_REPAIR_QUEUE_NAME",
-            f"droid-task-activation-repair{self.env_suffix}",
+            "UNITY_TASK_ACTIVATION_REPAIR_QUEUE_NAME",
+            f"unity-task-activation-repair{self.env_suffix}",
         )
         self.task_due_dispatch_deadline_seconds: int = int(
-            os.environ.get("DROID_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
+            os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
         )
         self.task_activation_horizon_days: int = int(
-            os.environ.get("DROID_TASK_ACTIVATION_HORIZON_DAYS", "29"),
+            os.environ.get("UNITY_TASK_ACTIVATION_HORIZON_DAYS", "29"),
         )
         self.offline_task_job_ttl_seconds: int = int(
-            os.environ.get("DROID_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
         self.offline_task_job_active_deadline_seconds: int = int(
-            os.environ.get("DROID_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "1800"),
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "1800"),
         )
 
         # Auth keys
@@ -141,7 +141,7 @@ class Settings:
         # removed together with the platform mailbox provisioning
         # endpoints.
         self.job_inventory_lookback_hours: int = int(
-            os.environ.get("DROID_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
+            os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
         )
         self.workspace_admin_subject: str = os.environ.get(
             "WORKSPACE_ADMIN_SUBJECT",
@@ -184,26 +184,26 @@ class Settings:
         self.lease_duration_seconds: int = 60
 
         # Derived names used across the codebase
-        self.droid_image_name: str = f"droid{self.env_suffix}"
+        self.unity_image_name: str = f"unity{self.env_suffix}"
         self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
-        self.droid_coordinator_email_address: str = (
+        self.unity_coordinator_email_address: str = (
             (
-                os.environ.get("DROID_COORDINATOR_EMAIL_ADDRESS")
-                or os.environ.get("ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS")
+                os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
+                or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
                 or "twin@unify.ai"
             )
             .strip()
             .lower()
         )
-        self.droid_coordinator_email_watch_topic: str = os.environ.get(
-            "DROID_COORDINATOR_EMAIL_WATCH_TOPIC",
+        self.unity_coordinator_email_watch_topic: str = os.environ.get(
+            "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
             self.gmail_topic,
         )
         self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
 
         # Container image registry (Artifact Registry)
         self.image_registry: str = (
-            f"us-central1-docker.pkg.dev/{self.gcp_project_id}/droid"
+            f"us-central1-docker.pkg.dev/{self.gcp_project_id}/unity"
         )
 
         # VM infrastructure (dedicated GCP project, separate from GKE)
@@ -239,7 +239,7 @@ class Settings:
         ``_env_suffix(deploy_env)`` (e.g., ``-staging`` or empty for
         production).
         """
-        return f"droid-{assistant_id}{self.env_suffix}"
+        return f"unity-{assistant_id}{self.env_suffix}"
 
 
 SETTINGS = Settings()
