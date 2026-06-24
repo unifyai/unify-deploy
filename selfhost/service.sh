@@ -307,6 +307,15 @@ cmd_run() {
     if declare -F self_host_ensure_comms_bridge &>/dev/null; then
       self_host_ensure_comms_bridge || log_warn "Comms ingress bridge failed to start"
     fi
+    # Keep the inbound-call tunnel alive when calls are enabled, and re-point the
+    # localhost voice webhook if cloudflared restarted with a fresh URL. No-op
+    # when calls are disabled.
+    if declare -F self_host_ensure_tunnel &>/dev/null; then
+      self_host_ensure_tunnel || log_warn "Inbound-call tunnel failed to start"
+      if declare -F self_host_resync_voice_webhooks_if_changed &>/dev/null; then
+        self_host_resync_voice_webhooks_if_changed || true
+      fi
+    fi
     sleep 30
     local count
     count="$(droid_cm_instance_count)"
@@ -387,6 +396,12 @@ cmd_stop() {
 
   if declare -F self_host_stop_comms_bridge &>/dev/null; then
     self_host_stop_comms_bridge || true
+  fi
+  if declare -F self_host_revert_voice_webhooks &>/dev/null; then
+    self_host_revert_voice_webhooks || true
+  fi
+  if declare -F self_host_stop_tunnel &>/dev/null; then
+    self_host_stop_tunnel || true
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then

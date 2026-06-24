@@ -233,15 +233,78 @@ as siblings under one root (`UNIFY_STACK_ROOT`, defaults to the parent of
 
 ```bash
 bash selfhost/setup.sh        # one-time bootstrap (local Orchestra, Console env, voice)
-bash selfhost/stack.sh up     # the one command to run the whole stack
+bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 ```
 
-`selfhost/stack.sh` starts Orchestra, the Droid gateway, Console (in self-host
-mode), and the Coordinator runtime against the sibling checkouts.
+`selfhost/stack.sh up` is intentionally scratch-first because that is the normal
+developer loop. It stops any previous source stack, clears stale durable tmux
+state, starts the local services, resets the self-host owner + Coordinator state,
+rewrites the runtime credential files under `~/.droid`, seeds the `Builtins`
+catalogues, starts one Coordinator runtime, runs smoke checks, and verifies
+`http://localhost:3000/account`.
+
+Use `bash selfhost/stack.sh resume` only when you deliberately want to preserve
+the current local chat/onboarding/project history. `bash selfhost/stack.sh down
+--full` still stops everything.
+
+If a smoke check fails, rerun the canonical redeploy:
+
+```bash
+bash selfhost/stack.sh up
+```
+
+That path repairs the common local sharp edges: stale `coordinator-runtime.json`,
+a stale `droid-stack` tmux session, a missing `Builtins` project, or a stopped
+Droid gateway.
 
 Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
 data, E2E tests) and is not the way to run the product locally — `droid stack
 up` invokes it with `--self-host` for you.
+
+### Phone & WhatsApp calls (opt-in, source install)
+
+Browser/Console voice (Unify Meet) works out of the box via the local dev
+LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are opt-in
+because they need two things the default poll-only stack deliberately avoids:
+
+- A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
+  URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
+  text. `stack.sh` runs a managed `cloudflared` tunnel to the local CM ingress
+  and points the localhost number's `VoiceUrl` at it. Text stays poll-only.
+- **LiveKit Cloud SIP**: the local `livekit-server --dev` has no SIP service, so
+  the Twilio↔LiveKit media leg uses a LiveKit Cloud project. The local agent
+  worker connects outbound to the cloud room, so only the HTTP webhook is
+  tunneled — no SIP/RTP tunneling.
+
+Enable it:
+
+```bash
+# 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
+# 2. Provide its creds + SIP URI (BYOK wizard, or write ~/.droid/livekit_cloud.env):
+#      LIVEKIT_URL=wss://<project>.livekit.cloud
+#      LIVEKIT_API_KEY=...
+#      LIVEKIT_API_SECRET=...
+#      LIVEKIT_SIP_URI=<project>.sip.livekit.cloud
+# 3. Turn calls on and start the stack:
+export SELF_HOST_CALLS_ENABLED=1
+bash selfhost/stack.sh up
+```
+
+On `up` (when enabled) the stack: installs `cloudflared`, starts the tunnel,
+ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
+(`selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
+(`selfhost/sync_comms_webhooks.py --set-voice`). `stack.sh down --full` reverts
+the voice webhook and stops the tunnel.
+
+Caveats:
+
+- **Single-owner voice number.** A number has one `VoiceUrl`, so only one
+  developer can own the shared localhost voice number's calls at a time (unlike
+  the allowlist-shared SMS/WhatsApp text polling). `down --full` reverts it.
+- cloudflared quick tunnels get a fresh URL each run; the voice webhook is
+  re-synced automatically on `up` and whenever the tunnel restarts.
+- WhatsApp Business Calling additionally needs the feature enabled on the Twilio
+  account; the voice-app attach is best-effort and logs a warning otherwise.
 
 ## Builtins Artifacts
 
