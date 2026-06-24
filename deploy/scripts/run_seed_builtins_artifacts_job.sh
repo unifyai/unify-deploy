@@ -39,7 +39,7 @@ droid_project=""
 job_manifest_path=""
 workers="4"
 batch_size="25"
-timeout="3600s"
+timeout="7200s"
 backend_id=""
 wait_mode="async"
 dry_run="false"
@@ -169,10 +169,19 @@ fi
 
 desired_hash="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["desired_hash"])' "$request_json")"
 run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$request_json")"
-api_timeout_seconds="${timeout%s}"
-if [[ ! "$api_timeout_seconds" =~ ^[0-9]+$ ]]; then
-  echo "--timeout must be a duration in whole seconds, for example 3600s." >&2
+# ``timeout`` bounds the Cloud Run task (the trigger + the poll loop that waits
+# for the Orchestra-launched worker job). The seed endpoint returns 202 quickly,
+# so the POST itself only needs a short trigger timeout; the bulk of the budget
+# is the poll, which must finish before Cloud Run kills the task.
+task_timeout_seconds="${timeout%s}"
+if [[ ! "$task_timeout_seconds" =~ ^[0-9]+$ ]]; then
+  echo "--timeout must be a duration in whole seconds, for example 7200s." >&2
   exit 2
+fi
+trigger_timeout_seconds="${DROID_INTEGRATION_BOOTSTRAP_TRIGGER_TIMEOUT:-300}"
+poll_timeout_seconds=$(( task_timeout_seconds - 300 ))
+if (( poll_timeout_seconds < 600 )); then
+  poll_timeout_seconds=600
 fi
 
 if [[ "$dry_run" == "true" ]]; then
@@ -188,7 +197,9 @@ print(json.dumps({
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",
     "wait_mode": "$wait_mode",
-    "api_timeout_seconds": "$api_timeout_seconds",
+    "task_timeout_seconds": "$task_timeout_seconds",
+    "trigger_timeout_seconds": "$trigger_timeout_seconds",
+    "poll_timeout_seconds": "$poll_timeout_seconds",
     "setup_only": "$setup_only",
 }, sort_keys=True))
 PY
@@ -210,7 +221,7 @@ job_flags=(
   "--task-timeout=${timeout}"
   "--max-retries=0"
   "--service-account=${job_service_account}"
-  "--set-env-vars=ORCHESTRA_URL=${orchestra_url},DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=api,DROID_INTEGRATION_BOOTSTRAP_TIMEOUT=${api_timeout_seconds}"
+  "--set-env-vars=ORCHESTRA_URL=${orchestra_url},DROID_INTEGRATION_BOOTSTRAP_EXECUTOR=api,DROID_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},DROID_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
   "--update-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,UNIFY_KEY=GLOBAL_UNIFY_KEY:latest"
 )
 if gcloud --project "$droid_project" run jobs describe "$job_name" --region "$droid_region" >/dev/null 2>&1; then
@@ -232,7 +243,9 @@ print(json.dumps({
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",
     "wait_mode": "$wait_mode",
-    "api_timeout_seconds": "$api_timeout_seconds",
+    "task_timeout_seconds": "$task_timeout_seconds",
+    "trigger_timeout_seconds": "$trigger_timeout_seconds",
+    "poll_timeout_seconds": "$poll_timeout_seconds",
     "setup_only": True,
 }, sort_keys=True))
 PY
@@ -259,6 +272,8 @@ print(json.dumps({
     "desired_hash": "$desired_hash",
     "run_id": "$run_id",
     "wait_mode": "$wait_mode",
-    "api_timeout_seconds": "$api_timeout_seconds",
+    "task_timeout_seconds": "$task_timeout_seconds",
+    "trigger_timeout_seconds": "$trigger_timeout_seconds",
+    "poll_timeout_seconds": "$poll_timeout_seconds",
 }, sort_keys=True))
 PY
