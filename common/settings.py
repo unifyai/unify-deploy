@@ -86,7 +86,7 @@ class Settings:
             "gcp-project-runtime",
         )
         self.default_region: str = "us-central1"
-        self.gke_cluster_name: str = os.environ.get("DROID_GKE_CLUSTER_NAME", "droid")
+        self.gke_cluster_name: str = os.environ.get("DROID_GKE_CLUSTER_NAME", "unity")
         self.default_namespace: str = self.deploy_env
 
         # Service URLs
@@ -222,8 +222,8 @@ class Settings:
             if self.deploy_env == "production"
             else f"{self.deploy_env}.tunnel.unify.ai"
         )
-        self.tunnel_vm_name: str = f"droid-tunnel-server{self.env_suffix}"
-        self.tunnel_gcs_bucket: str = f"droid-tunnel-config{self.env_suffix}"
+        self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
+        self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
 
         # AssistantSession control plane
         self.assistant_session_group: str = "infra.unify.ai"

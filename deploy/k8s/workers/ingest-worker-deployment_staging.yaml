@@ -64,6 +64,12 @@ spec:
           value: "staging"
         - name: DROID_GCS_ARTIFACT_BUCKET
           value: "droid-pipeline-artifacts-staging"
+        # GCS attempt-lease TTL. Refreshed every chunk (~20-30s), so this is
+        # only the window before an orphaned lease (from a killed pod) becomes
+        # stealable. Kept comfortably above one chunk but bounded so scale-down/
+        # rollout orphans recover quickly. See BACKFILL_RUNBOOK.md.
+        - name: DROID_INGEST_ATTEMPT_LEASE_TTL
+          value: "480"
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY

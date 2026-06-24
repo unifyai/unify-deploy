@@ -8,6 +8,10 @@ set -euo pipefail
 SELF_HOST_RUNTIME_OWNER_SERVICE="service"
 SELF_HOST_RUNTIME_OWNER_STACK="stack"
 
+# Directory of this script (selfhost/), used to locate sibling helpers such as
+# the Gmail ingress bridge.
+_SELF_HOST_RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
 self_host_runtime_state_file() {
   printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
 }
@@ -104,6 +108,87 @@ self_host_gateway_is_healthy() {
   self_host_gateway_process_is_running || return 1
   command -v curl >/dev/null 2>&1 || return 0
   curl -sf "$(self_host_gateway_base_url)/health" >/dev/null 2>&1
+}
+
+# --- Comms ingress bridge (internal-dev hosted Coordinator comms) ------------
+# Polls hosted comms (Gmail for email, Twilio for SMS/WhatsApp) and forwards
+# inbound items to the CM's local ingress, so the local Coordinator works
+# without a public webhook. Each channel is active only when its credentials
+# are configured; otherwise the bridge is a no-op (default fully-local stack).
+
+self_host_comms_sa_file() {
+  printf '%s' \
+    "${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_sa.json}"
+}
+
+self_host_comms_bridge_pidfile() {
+  printf '%s/comms-bridge.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_comms_bridge_log_file() {
+  printf '%s/comms-bridge.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+self_host_comms_bridge_script() {
+  printf '%s/comms_ingress_bridge.py' "$_SELF_HOST_RUNTIME_DIR"
+}
+
+# Configured = at least one channel is set: a Gmail SA + Coordinator mailbox
+# (email), or Twilio creds (SMS/WhatsApp). No-op otherwise.
+self_host_comms_bridge_configured() {
+  [[ -f "$(self_host_comms_sa_file)" && -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]] && return 0
+  [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${TWILIO_AUTH_TOKEN:-}" ]] && return 0
+  return 1
+}
+
+self_host_comms_bridge_is_running() {
+  local pidfile pid
+  pidfile="$(self_host_comms_bridge_pidfile)"
+  [[ -f "$pidfile" ]] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+self_host_ensure_comms_bridge() {
+  self_host_comms_bridge_configured || return 0
+  self_host_comms_bridge_is_running && return 0
+
+  local script py log_file
+  script="$(self_host_comms_bridge_script)"
+  [[ -f "$script" ]] || return 0
+  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  [[ -x "$py" ]] || py="python3"
+  log_file="$(self_host_comms_bridge_log_file)"
+  self_host_ensure_state_dir
+
+  # Email channel keys off the comms SA + Coordinator mailbox; Twilio channels
+  # key off TWILIO_* + the Coordinator numbers + an explicit sender allowlist
+  # (all inherited from the exported env). TWILIO_* are already in the env.
+  # ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY let the bridge open the WhatsApp 24h
+  # free-form window in Orchestra on inbound (best-effort), mirroring the hosted
+  # adapter; without them every Coordinator reply falls back to a template.
+  GMAIL_BRIDGE_MAILBOX="${DROID_COORDINATOR_EMAIL_ADDRESS:-}" \
+    GMAIL_BRIDGE_SA_FILE="$(self_host_comms_sa_file)" \
+    COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${DROID_COORDINATOR_PHONE:-}}" \
+    COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${DROID_COORDINATOR_WHATSAPP_NUMBER:-}}" \
+    COMMS_BRIDGE_TWILIO_ALLOWLIST="${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" \
+    ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}" \
+    ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
+    nohup "$py" "$script" >>"$log_file" 2>&1 &
+  local pid=$!
+  disown "$pid" 2>/dev/null || true
+  echo "$pid" >"$(self_host_comms_bridge_pidfile)"
+}
+
+self_host_stop_comms_bridge() {
+  local pidfile pid
+  pidfile="$(self_host_comms_bridge_pidfile)"
+  [[ -f "$pidfile" ]] || return 0
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
 }
 
 self_host_patch_runtime_state() {
@@ -427,6 +512,19 @@ self_host_runtime_doctor_line() {
     printf 'gateway: running (%s)\n' "$(self_host_gateway_base_url)"
   else
     printf 'gateway: stopped (%s)\n' "$(self_host_gateway_base_url)"
+  fi
+  if self_host_comms_bridge_configured; then
+    local _bridge_channels=""
+    [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
+      && _bridge_channels="email"
+    if [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" ]]; then
+      _bridge_channels="${_bridge_channels:+$_bridge_channels,}sms,whatsapp"
+    fi
+    if self_host_comms_bridge_is_running; then
+      printf 'comms-bridge: running (%s)\n' "${_bridge_channels:-configured}"
+    else
+      printf 'comms-bridge: stopped\n'
+    fi
   fi
 }
 

@@ -15,6 +15,15 @@ Commands:
     inspect  -- Read parse manifests and display table schemas/samples
     reconcile-dlq -- Persist Pub/Sub DLQ messages to GCS and mark jobs visible
     retry    -- Safely re-publish persisted DLQ/stale/error jobs
+    verify   -- Compare declared manifest row_count vs durable checkpoint across
+                a dispatch/job; non-zero exit on any shortfall (audit gate)
+
+WARNING: Do not run ``retry`` and ``recover-stale`` on the same job
+concurrently. Both publish an ingest message; two live messages for one job
+contend for the GCS attempt-lease and can freeze the durable checkpoint,
+leading to a silent under-ingest. Both commands now refuse to publish while a
+recent in-flight message exists (override with ``--force`` only when you are
+certain the prior message is gone).
 
 Usage:
     python -m droid_deploy.infra.cli.pipeline_control submit \\
@@ -38,6 +47,8 @@ Usage:
         --dispatch-id <id> --only dlq --execute
     python -m droid_deploy.infra.cli.pipeline_control recover-stale --env production \\
         --dispatch-id <id> --dry-run
+    python -m droid_deploy.infra.cli.pipeline_control verify --env production \\
+        --dispatch-id <id>
 """
 
 from __future__ import annotations
@@ -48,6 +59,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -351,6 +363,62 @@ def _build_parser() -> argparse.ArgumentParser:
     p_refresh_check.add_argument("--json", action="store_true")
     p_refresh_check.add_argument("--debug", action="store_true")
 
+    # -- verify --------------------------------------------------------------
+
+    p_verify = sub.add_parser(
+        "verify",
+        help=(
+            "Verify ingest completeness: declared manifest row_count vs durable "
+            "checkpoint rows_committed across a dispatch or job. Exits non-zero "
+            "if any table is short or unverifiable."
+        ),
+    )
+    verify_target = p_verify.add_mutually_exclusive_group(required=True)
+    verify_target.add_argument("--dispatch-id", default=None)
+    verify_target.add_argument("--job-id", default=None)
+    p_verify.add_argument("--env", default="", help="Pipeline environment override")
+    p_verify.add_argument("--project", default="", help="Pub/Sub project override")
+    p_verify.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Treat tables with an unknown declared row_count as failures "
+            "(default: only a checkpoint short of a known total fails)"
+        ),
+    )
+    p_verify.add_argument("--json", action="store_true")
+    p_verify.add_argument("--debug", action="store_true")
+
+    # -- throughput ----------------------------------------------------------
+
+    p_throughput = sub.add_parser(
+        "throughput",
+        help=(
+            "Live ingest throughput from durable checkpoints: aggregate rows/s, "
+            "per-job progress + ETA, and stall detection. Immune to worker log "
+            "spam (reads GCS checkpoints, not logs)."
+        ),
+    )
+    throughput_target = p_throughput.add_mutually_exclusive_group(required=True)
+    throughput_target.add_argument("--dispatch-id", default=None)
+    throughput_target.add_argument("--job-id", default=None)
+    p_throughput.add_argument("--env", default="", help="Pipeline environment override")
+    p_throughput.add_argument("--project", default="", help="Pub/Sub project override")
+    p_throughput.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        help="Seconds between checkpoint samples (default: 60)",
+    )
+    p_throughput.add_argument(
+        "--iterations",
+        type=int,
+        default=0,
+        help="Stop after N samples (0 = run until all jobs terminal)",
+    )
+    p_throughput.add_argument("--json", action="store_true")
+    p_throughput.add_argument("--debug", action="store_true")
+
     return parser
 
 
@@ -453,12 +521,21 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     events = list_job_events(artifact_store, job_id) if include_events else []
     heartbeat_at = latest_heartbeat_at(artifact_store, job_id)
     leases = read_active_leases(artifact_store, job_id)
+    # Queued-age signal for queued-stale detection: prefer an explicit
+    # metadata "queued_at" (set whenever a job is (re)enqueued) and fall back
+    # to the job's created_at for jobs predating that metadata.
+    queued_at = ""
+    if job is not None:
+        queued_at = str(
+            (job.metadata or {}).get("queued_at") or job.created_at or "",
+        )
     derived_status, retry_classification, retry_eligible = derive_status(
         durable_status=durable_status,
         dlq_records=dlq_records,
         checkpoints=checkpoints,
         heartbeat_at=heartbeat_at,
         leases=leases,
+        queued_at=queued_at,
     )
     latest_checkpoint = None
     if checkpoints:
@@ -487,7 +564,7 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     if derived_status in {"dlq", "partial-dlq"}:
         next_action = f"pipeline_control retry --job-id {job_id} --only dlq --dry-run"
         queue_location = "dlq"
-    elif derived_status == "running-stale":
+    elif derived_status in {"running-stale", "queued-stale"}:
         next_action = f"pipeline_control recover-stale --job-id {job_id} --dry-run"
         queue_location = "none"
     elif durable_status == "queued":
@@ -508,13 +585,18 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
         status_reason = f"latest DLQ classification={retry_classification}"
     elif derived_status == "running-stale":
         status_reason = "durable status is running with no fresh heartbeat or lease"
+    elif derived_status == "queued-stale":
+        status_reason = (
+            "durable status is queued past the stale threshold with no fresh "
+            "heartbeat, lease, or in-flight message (limbo)"
+        )
     else:
         status_reason = derived_status
 
     retry_payload_source = "dlq" if latest_dlq and latest_dlq.payload else ""
     checkpoint_complete: bool | None = None
     recovery_action = ""
-    if derived_status == "running-stale":
+    if derived_status in {"running-stale", "queued-stale"}:
         payload, outbox_source = _read_parse_outbox_payload(artifact_store, job_id)
         if payload is not None:
             retry_payload_source = outbox_source
@@ -670,6 +752,129 @@ def _table_checkpoint_plan(
     return rows, complete
 
 
+def _verify_jobs(
+    infra,
+    job_ids: list[str],
+    *,
+    strict: bool = False,
+) -> tuple[list[dict], bool]:
+    """Compare each job's declared manifest row_count to its durable checkpoint.
+
+    Returns ``(results, all_ok)``. A job fails when any table's
+    ``rows_committed`` is short of the declared ``row_count`` (the exact
+    fact_TelematicsTrips 166k/206,719 signature), when the manifest cannot be
+    resolved, or - under ``strict`` - when a table has no declared total to
+    verify against. Destination context counts are intentionally left
+    out-of-band to keep this off the worker hot path.
+    """
+    from droid_deploy.infra.gcp.pipeline_observability import list_job_checkpoints
+
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    results: list[dict] = []
+    all_ok = True
+    for job_id in job_ids:
+        try:
+            job = job_store.read_job(job_id)
+            durable_status = str(getattr(job, "status", "") or "")
+        except Exception:
+            durable_status = "unknown"
+        checkpoints = list_job_checkpoints(artifact_store, job_id)
+        payload, payload_source = _read_parse_outbox_payload(artifact_store, job_id)
+        tables, _complete = _table_checkpoint_plan(
+            artifact_store=artifact_store,
+            payload=payload,
+            checkpoints=checkpoints,
+        )
+        if not tables:
+            all_ok = False
+            results.append(
+                {
+                    "job_id": job_id,
+                    "durable_status": durable_status,
+                    "ok": False,
+                    "reason": f"unverifiable (no manifest; payload={payload_source})",
+                    "tables": [],
+                },
+            )
+            continue
+        shorts: list[dict] = []
+        unknown: list[str] = []
+        for row in tables:
+            expected = row["expected_rows"]
+            if expected is None:
+                unknown.append(row["table_id"])
+            elif int(row["rows_committed"]) < int(expected):
+                shorts.append(row)
+        ok = not shorts and (not unknown or not strict)
+        if not ok:
+            all_ok = False
+        reason = ""
+        if shorts:
+            reason = "short: " + "; ".join(
+                f"{r['table_id']} {r['rows_committed']}/{r['expected_rows']}"
+                for r in shorts
+            )
+        elif unknown:
+            reason = "unknown declared row_count: " + ",".join(unknown)
+        results.append(
+            {
+                "job_id": job_id,
+                "durable_status": durable_status,
+                "ok": ok,
+                "reason": reason,
+                "tables": tables,
+            },
+        )
+    return results, all_ok
+
+
+# Freshness window for the in-flight publish guard. A job queued by
+# retry/recover-stale within this window is presumed to still have a live (or
+# about-to-be-delivered) ingest message; publishing a second one creates the
+# duplicate-message lease/checkpoint race that silently under-ingests (the
+# fact_TelematicsTrips 166k/206,719 case). Markers older than the window are
+# treated as a lost message so recovery can proceed without --force.
+_INFLIGHT_GUARD_SECONDS = int(os.environ.get("DROID_INFLIGHT_GUARD_SECONDS", "900"))
+
+
+def _recent_inflight_publish(job: Any, *, now: datetime | None = None) -> str | None:
+    """Return a skip reason if ``job`` has a recent in-flight publish from
+    either ``retry`` or ``recover-stale``; otherwise ``None``.
+
+    This is the cross-command guard: ``retry`` and ``recover-stale`` each only
+    track their own publish marker, so without this a second command would
+    re-publish while the first message is still in flight. Returns a reason
+    while the marker is fresh (status queued/running); stale markers are
+    ignored so a genuinely lost message can still be recovered.
+    """
+    metadata = getattr(job, "metadata", None) or {}
+    status = str(getattr(job, "status", "") or "")
+    if status not in {"queued", "running"}:
+        return None
+    retry_msg = metadata.get("last_retry_message_id")
+    stale_msg = metadata.get("last_stale_recovery_message_id")
+    msg_id = retry_msg or stale_msg
+    if not msg_id:
+        return None
+    published_at = metadata.get("last_publish_at")
+    if published_at:
+        try:
+            ts = datetime.fromisoformat(str(published_at))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            now = now or datetime.now(timezone.utc)
+            if (now - ts).total_seconds() > _INFLIGHT_GUARD_SECONDS:
+                return None  # presumed lost; allow recovery without --force
+        except Exception:
+            pass  # unparseable timestamp -> conservatively treat as in-flight
+    source = "retry" if retry_msg else "recover-stale"
+    return (
+        f"in-flight message {msg_id} from {source} (status={status}); "
+        "use --force to publish anyway"
+    )
+
+
 def _plan_stale_recovery(
     infra,
     job_ids: list[str],
@@ -691,11 +896,11 @@ def _plan_stale_recovery(
         if snap.derived_status == "running-active" and not force:
             skipped.append({"job_id": job_id, "reason": "fresh lease or heartbeat"})
             continue
-        if snap.derived_status != "running-stale" and not force:
+        if snap.derived_status not in {"running-stale", "queued-stale"} and not force:
             skipped.append(
                 {
                     "job_id": job_id,
-                    "reason": f"not running-stale ({snap.derived_status})",
+                    "reason": f"not stale ({snap.derived_status})",
                 },
             )
             continue
@@ -707,20 +912,9 @@ def _plan_stale_recovery(
             recovery_attempt = (
                 int((job.metadata or {}).get("stale_recovery_attempt", 0)) + 1
             )
-            if (
-                job.status == "queued"
-                and (job.metadata or {}).get("last_stale_recovery_message_id")
-                and not force
-            ):
-                skipped.append(
-                    {
-                        "job_id": job_id,
-                        "reason": (
-                            "already queued by stale recovery message "
-                            f"{job.metadata.get('last_stale_recovery_message_id')}"
-                        ),
-                    },
-                )
+            inflight_reason = _recent_inflight_publish(job)
+            if inflight_reason and not force:
+                skipped.append({"job_id": job_id, "reason": inflight_reason})
                 continue
             if recovery_attempt > max_attempts and not force:
                 skipped.append(
@@ -868,6 +1062,8 @@ async def _execute_stale_recovery(
                     "stale_recovery_source": "parse_outbox",
                     "previous_status": previous_status,
                     "last_stale_recovery_message_id": message_id,
+                    "last_publish_at": utc_now_iso(),
+                    "queued_at": utc_now_iso(),
                     "resume_rows": item["resume_rows"],
                     "resume_chunks": item["resume_chunks"],
                 }
@@ -1593,20 +1789,9 @@ async def cmd_retry(args: argparse.Namespace) -> None:
         try:
             job = job_store.read_job(job_id)
             retry_attempt = int((job.metadata or {}).get("retry_attempt", 0)) + 1
-            if (
-                job.status == "queued"
-                and (job.metadata or {}).get("last_retry_message_id")
-                and not args.force
-            ):
-                skipped.append(
-                    {
-                        "job_id": job_id,
-                        "reason": (
-                            "already queued by retry message "
-                            f"{job.metadata.get('last_retry_message_id')}"
-                        ),
-                    },
-                )
+            inflight_reason = _recent_inflight_publish(job)
+            if inflight_reason and not args.force:
+                skipped.append({"job_id": job_id, "reason": inflight_reason})
                 continue
             if retry_attempt > args.max_attempts and not args.force:
                 skipped.append(
@@ -1696,6 +1881,7 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                         "retry_source": "pipeline_control retry",
                         "previous_status": previous_status,
                         "last_retry_message_id": message_id,
+                        "last_publish_at": utc_now_iso(),
                     }
                     job_store.upsert_job(job)
                 write_job_event(
@@ -1812,6 +1998,218 @@ async def cmd_recover_stale(args: argparse.Namespace) -> None:
 async def cmd_reconcile_stale(args: argparse.Namespace) -> None:
     """Cron-friendly bounded stale-running reconciler."""
     await cmd_recover_stale(args)
+
+
+async def cmd_verify(args: argparse.Namespace) -> None:
+    """Verify ingest completeness (declared row_count vs durable checkpoint)."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    if args.job_id:
+        job_ids = [args.job_id]
+    else:
+        job_ids = list(job_store.read_dispatch(args.dispatch_id).job_ids)
+
+    results, all_ok = _verify_jobs(infra, job_ids, strict=args.strict)
+
+    if args.json:
+        print(json.dumps({"ok": all_ok, "results": results}, indent=2, default=str))
+        if not all_ok:
+            sys.exit(1)
+        return
+
+    print(f"Verifying {len(job_ids)} job(s)...", flush=True)
+    for result in results:
+        mark = "OK  " if result["ok"] else "FAIL"
+        suffix = f" {result['reason']}" if result["reason"] else ""
+        print(
+            f"  [{mark}] job={result['job_id']} "
+            f"status={result['durable_status']}{suffix}",
+            flush=True,
+        )
+        for row in result["tables"]:
+            print(
+                f"        table={row['table_id']} "
+                f"rows={row['rows_committed']}/{row['expected_rows']} "
+                f"complete={row['complete']}",
+                flush=True,
+            )
+    ok_count = sum(1 for result in results if result["ok"])
+    print(f"\n{ok_count}/{len(results)} job(s) verified complete.", flush=True)
+    if not all_ok:
+        print(
+            "DISCREPANCY: at least one job is short of its declared row_count.",
+            flush=True,
+        )
+        sys.exit(1)
+
+
+_THROUGHPUT_TERMINAL_STATUSES = {"success", "error", "cancelled"}
+
+
+def _collect_throughput_sample(infra, job_ids: list[str]) -> list[dict]:
+    """Per-job committed/expected/status snapshot for one throughput tick.
+
+    Reads durable GCS checkpoints (hardened: each blob is parsed and validated
+    individually by ``list_job_checkpoints``), so it is immune to worker log
+    spam and partial-read swings.
+    """
+    from droid_deploy.infra.gcp.pipeline_observability import list_job_checkpoints
+
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    sample: list[dict] = []
+    for job_id in job_ids:
+        try:
+            checkpoints = list_job_checkpoints(artifact_store, job_id)
+        except Exception:
+            checkpoints = {}
+        committed = sum(int(cp.rows_committed or 0) for cp in checkpoints.values())
+        try:
+            job = job_store.read_job(job_id)
+            status = job.status
+            expected = int((job.metadata or {}).get("rows_expected") or 0)
+        except Exception:
+            status = "unknown"
+            expected = 0
+        sample.append(
+            {
+                "job_id": job_id,
+                "committed_rows": committed,
+                "expected_rows": expected,
+                "status": status,
+            },
+        )
+    return sample
+
+
+def _build_throughput_report(
+    *,
+    current: list[dict],
+    prev_by_job: dict[str, int] | None,
+    dt_seconds: float,
+) -> dict:
+    """Compute aggregate rows/s, per-job deltas/ETA, and stall/terminal flags.
+
+    Pure function (no I/O) so the rate math is unit-testable. ``prev_by_job`` is
+    ``None`` on the first (baseline) sample, in which case rates are unknown.
+    """
+    total = sum(int(j["committed_rows"]) for j in current)
+    per_job: list[dict] = []
+    nonterminal = 0
+    for j in current:
+        terminal = j["status"] in _THROUGHPUT_TERMINAL_STATUSES
+        if not terminal:
+            nonterminal += 1
+        prev = prev_by_job.get(j["job_id"]) if prev_by_job is not None else None
+        delta = (j["committed_rows"] - prev) if prev is not None else None
+        rate = (delta / dt_seconds) if (delta is not None and dt_seconds > 0) else None
+        expected = int(j["expected_rows"] or 0)
+        remaining = max(0, expected - j["committed_rows"]) if expected else None
+        eta_seconds = (remaining / rate) if (remaining and rate and rate > 0) else None
+        per_job.append(
+            {
+                "job_id": j["job_id"],
+                "status": j["status"],
+                "committed_rows": j["committed_rows"],
+                "expected_rows": expected,
+                "delta_rows": delta,
+                "rows_per_s": round(rate, 1) if rate is not None else None,
+                "remaining_rows": remaining,
+                "eta_seconds": round(eta_seconds) if eta_seconds is not None else None,
+                "terminal": terminal,
+            },
+        )
+    prev_total = sum(prev_by_job.values()) if prev_by_job is not None else None
+    agg_delta = (total - prev_total) if prev_total is not None else None
+    agg_rate = (
+        (agg_delta / dt_seconds) if (agg_delta is not None and dt_seconds > 0) else None
+    )
+    # Stall: we have a prior sample, jobs are still running, yet no rows moved.
+    stalled = bool(
+        prev_by_job is not None and nonterminal > 0 and agg_delta == 0,
+    )
+    return {
+        "committed_rows": total,
+        "delta_rows": agg_delta,
+        "rows_per_s": round(agg_rate, 1) if agg_rate is not None else None,
+        "stalled": stalled,
+        "all_terminal": nonterminal == 0,
+        "nonterminal_jobs": nonterminal,
+        "jobs": per_job,
+    }
+
+
+def _print_throughput_report(report: dict) -> None:
+    rate = report["rows_per_s"]
+    rate_str = f"{rate} rows/s" if rate is not None else "baseline"
+    delta = report["delta_rows"] if report["delta_rows"] is not None else 0
+    stall = "  *** STALL ***" if report["stalled"] else ""
+    print(
+        f"[{utc_now_iso()[11:19]}] committed_rows={report['committed_rows']} "
+        f"(+{delta}) => {rate_str} "
+        f"nonterminal_jobs={report['nonterminal_jobs']}{stall}",
+        flush=True,
+    )
+    for j in report["jobs"]:
+        moved = bool(j["delta_rows"])
+        pending = (not j["terminal"]) and bool(j["remaining_rows"])
+        if not (moved or pending):
+            continue
+        progress = f"/{j['expected_rows']}" if j["expected_rows"] else ""
+        eta = f" eta={j['eta_seconds']}s" if j["eta_seconds"] is not None else ""
+        print(
+            f"    job={j['job_id'][:12]} status={j['status']} "
+            f"rows={j['committed_rows']}{progress} "
+            f"(+{j['delta_rows'] or 0}){eta}",
+            flush=True,
+        )
+
+
+async def cmd_throughput(args: argparse.Namespace) -> None:
+    """Live checkpoint-based ingest throughput monitor."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    if args.job_id:
+        job_ids = [args.job_id]
+    else:
+        job_ids = list(job_store.read_dispatch(args.dispatch_id).job_ids)
+
+    interval = max(1.0, float(args.interval))
+    prev_by_job: dict[str, int] | None = None
+    prev_clock: float | None = None
+    iteration = 0
+    if not args.json:
+        print(
+            f"=== throughput monitor: {len(job_ids)} job(s), "
+            f"interval={interval:.0f}s ===",
+            flush=True,
+        )
+    while True:
+        clock = time.monotonic()
+        current = _collect_throughput_sample(infra, job_ids)
+        dt = (clock - prev_clock) if prev_clock is not None else interval
+        report = _build_throughput_report(
+            current=current,
+            prev_by_job=prev_by_job,
+            dt_seconds=dt,
+        )
+        if args.json:
+            print(json.dumps({"ts": utc_now_iso(), **report}, default=str), flush=True)
+        else:
+            _print_throughput_report(report)
+
+        prev_by_job = {j["job_id"]: int(j["committed_rows"]) for j in current}
+        prev_clock = clock
+        iteration += 1
+        if report["all_terminal"]:
+            if not args.json:
+                print("All jobs terminal; throughput monitor done.", flush=True)
+            break
+        if args.iterations and iteration >= args.iterations:
+            break
+        await asyncio.sleep(interval)
 
 
 async def cmd_worker_refresh_check(args: argparse.Namespace) -> None:
@@ -2306,6 +2704,8 @@ def main() -> None:
         "worker-refresh-check": cmd_worker_refresh_check,
         "delete": cmd_delete,
         "inspect": cmd_inspect,
+        "verify": cmd_verify,
+        "throughput": cmd_throughput,
     }
 
     handler = commands.get(args.command)

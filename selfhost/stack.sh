@@ -17,6 +17,7 @@
 #   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
 #   ./scripts/stack.sh reset        Purge local self-host onboarding/chat history
 #   ./scripts/stack.sh dev-env      Print non-secret Console env expected by stack
+#   ./scripts/stack.sh sync-comms [--check]  Make localhost Twilio numbers poll-only
 #
 # Environment:
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/droid siblings
@@ -258,6 +259,35 @@ cmd_doctor() {
   return 1
 }
 
+SYNC_COMMS_SCRIPT="$SCRIPT_DIR/sync_comms_webhooks.py"
+
+# Enforce that the localhost Twilio numbers are "poll-only" (no hosted inbound
+# webhook), so a hosted backend never answers localhost traffic. Reads the
+# localhost numbers from self_host_env.sh and Twilio creds from the env /
+# ~/.droid/comms_twilio.env. No-op when the script or creds are absent.
+cmd_sync_comms() {
+  [[ -f "$SYNC_COMMS_SCRIPT" ]] || { log_warn "Missing $SYNC_COMMS_SCRIPT"; return 0; }
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    if declare -F self_host_export_comms_twilio &>/dev/null; then
+      self_host_export_comms_twilio
+    fi
+  fi
+  python3 "$SYNC_COMMS_SCRIPT" "$@"
+}
+
+# Best-effort, non-fatal drift warning used during `up`. Only runs when WhatsApp
+# creds are present; never blocks or fails startup.
+warn_if_comms_webhooks_drift() {
+  [[ -f "$SYNC_COMMS_SCRIPT" ]] || return 0
+  [[ -n "${TWILIO_WA_ACCOUNT_SID:-}" && -n "${TWILIO_WA_AUTH_TOKEN:-}" ]] || return 0
+  if ! python3 "$SYNC_COMMS_SCRIPT" --check >/dev/null 2>&1; then
+    log_warn "A localhost Twilio number still has a hosted inbound webhook —"
+    log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms"
+  fi
+}
+
 cmd_up() {
   echo ""
   echo "=============================================="
@@ -305,6 +335,34 @@ cmd_up() {
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi
+  fi
+
+  # Internal-dev hosted Coordinator email: load the comms service-account key
+  # (from ~/.droid, never a repo) so the gateway can send Coordinator email via
+  # the hosted Gmail mailbox. The comms ingress bridge that polls replies is
+  # started by the runtime supervisor. No-op when no key is present.
+  if declare -F self_host_export_comms_sa &>/dev/null; then
+    self_host_export_comms_sa
+  fi
+  if declare -F self_host_export_comms_twilio &>/dev/null; then
+    self_host_export_comms_twilio
+  fi
+
+  # Warn (don't mutate) if a localhost number drifted back to a hosted webhook.
+  warn_if_comms_webhooks_drift
+
+  # Self-host always runs with Console, so the Coordinator onboarding flow
+  # (narration + reference quiz) must stay active even though the public droid
+  # default (droid/.env) disables it for headless installs.
+  export DROID_CONSOLE_UI=true
+
+  # The self-host CM is the personal Coordinator; surface its universal email
+  # (and provider) the way the hosted assignment event would, so outbound
+  # Coordinator mail + the reference quiz work. No-op until a Coordinator
+  # mailbox is configured.
+  if [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+    export ASSISTANT_EMAIL="${DROID_COORDINATOR_EMAIL_ADDRESS}"
+    export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
   fi
 
   # voice.sh runs a local LiveKit server with dev credentials. droid/.env
@@ -634,6 +692,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -705,13 +764,20 @@ api_key = credentials.get("apiKey") or credentials.get("api_key")
 assistant_id = credentials.get("coordinatorAgentId") or credentials.get("coordinator_agent_id")
 if api_key and assistant_id:
     auth_headers = {"apiKey": str(api_key)}
+    catalog_query = urllib.parse.urlencode(
+        {
+            "projectName": "Builtins",
+            "context": "Integrations/Apps",
+            "limit": "1",
+            "offset": "0",
+            "fromFields": "canonical_app_slug,display_name,source_type",
+            "sorting": json.dumps({"display_name": "ascending"}),
+        }
+    )
     check(
         "Integration catalog",
         "GET",
-        (
-            f"{console}/api/integrations/provider/apps"
-            f"?owner_scope=assistant&assistant_id={assistant_id}&limit=100&offset=0&detail_level=summary"
-        ),
+        f"{console}/api/logs?{catalog_query}",
         {200},
         headers=auth_headers,
     )
@@ -770,6 +836,7 @@ main() {
     repair-console|restart-console) cmd_repair_console "$@" ;;
     reset|reset-db) cmd_reset "$@" ;;
     dev-env|print-console-env) cmd_dev_env "$@" ;;
+    sync-comms) cmd_sync_comms "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
     help|-h|--help)
       sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'

@@ -178,3 +178,55 @@ class TestCheckpointSafety:
                     rows_committed=90,
                 ),
             )
+
+    def test_concurrent_attempt_handoff_can_advance_checkpoint(self):
+        """A fresh-generation attempt taking over must still advance rows.
+
+        Regression for the fact_TelematicsTrips desync: the monotonic guard
+        only blocks regressions, never legitimate forward progress, so the
+        winning attempt (new attempt_id + higher lease_generation) can carry
+        a stalled 166k checkpoint to the declared 206,719 instead of being
+        silently fenced.
+        """
+        import json
+
+        from droid.common.pipeline.types import IngestCheckpoint
+
+        store = _make_store()
+        blob = MagicMock()
+        blob.generation = 11
+        blob.download_as_text.return_value = json.dumps(
+            {
+                "job_id": "job-1",
+                "artifact_id": "table-1",
+                "chunks_committed": 166,
+                "rows_committed": 166000,
+                "attempt_id": "attempt-old",
+                "lease_generation": 3,
+                "last_updated": "now",
+            },
+        )
+        store.bucket.blob.return_value = blob
+
+        store.write_checkpoint(
+            "job-1",
+            "table-1",
+            IngestCheckpoint(
+                job_id="job-1",
+                artifact_id="table-1",
+                chunks_committed=207,
+                rows_committed=206719,
+            ),
+            attempt_id="attempt-new",
+            lease_generation=4,
+        )
+
+        # The advance was written with optimistic-concurrency fencing on the
+        # generation we read, and carries the new attempt's identity.
+        assert blob.upload_from_string.call_count == 1
+        _, kwargs = blob.upload_from_string.call_args
+        assert kwargs["if_generation_match"] == 11
+        written = json.loads(blob.upload_from_string.call_args.args[0])
+        assert written["rows_committed"] == 206719
+        assert written["attempt_id"] == "attempt-new"
+        assert written["lease_generation"] == 4

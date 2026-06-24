@@ -237,3 +237,80 @@ def test_retry_policy_classification_bounds_deterministic_errors() -> None:
     )
     assert classify_error("Permission denied for service account") == "needs_operator"
     assert classify_error("503 unavailable") == "retryable"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: queued-stale (limbo) detection
+# ---------------------------------------------------------------------------
+
+
+def test_queued_with_fresh_queued_at_is_not_stale() -> None:
+    fresh = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    derived, classification, retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[],
+        checkpoints={},
+        queued_at=fresh,
+    )
+    assert derived == "queued"
+    assert classification == "queued"
+    assert retryable is False
+
+
+def test_queued_past_threshold_derives_queued_stale() -> None:
+    old = (datetime.now(timezone.utc) - timedelta(seconds=4000)).isoformat()
+    derived, classification, retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[],
+        checkpoints={},
+        queued_at=old,
+    )
+    assert derived == "queued-stale"
+    assert classification == "operator_retryable"
+    assert retryable is True
+
+
+def test_queued_with_unknown_queued_at_stays_conservative() -> None:
+    derived, classification, retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[],
+        checkpoints={},
+        queued_at="",
+    )
+    assert derived == "queued"
+    assert retryable is False
+
+
+def test_queued_stale_age_threshold_is_env_tunable(monkeypatch) -> None:
+    monkeypatch.setenv("DROID_QUEUED_STALE_AGE_SECONDS", "60")
+    aged = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    derived, _classification, retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[],
+        checkpoints={},
+        queued_at=aged,
+    )
+    assert derived == "queued-stale"
+    assert retryable is True
+
+
+def test_fresh_lease_beats_old_queued_at() -> None:
+    old = (datetime.now(timezone.utc) - timedelta(seconds=4000)).isoformat()
+    active_lease = LeaseRecord(
+        key="jobs/job-q/leases/ingest-table_1.json",
+        owner_id="ingest:pod-a:attempt",
+        attempt_id="attempt-a",
+        stage="ingest",
+        acquired_at=datetime.now(timezone.utc).isoformat(),
+        heartbeat_at=datetime.now(timezone.utc).isoformat(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        generation=1,
+    )
+    derived, _classification, _retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[],
+        checkpoints={},
+        leases=[active_lease],
+        queued_at=old,
+    )
+    assert derived == "running-active"

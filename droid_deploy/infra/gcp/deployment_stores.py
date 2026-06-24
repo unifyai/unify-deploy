@@ -120,6 +120,10 @@ class GcsDeploymentJobStore:
         job.status = "queued"
         job.paused_at = None
         job.pause_reason = None
+        # Stamp the re-enqueue time so queued-stale detection measures age from
+        # this transition (not the original dispatch), avoiding a just-resumed
+        # job being misclassified as limbo before its republished message lands.
+        job.metadata = {**(job.metadata or {}), "queued_at": utc_now_iso()}
         self.upsert_job(job)
         logger.info("Resumed job %s", job_id)
         return job

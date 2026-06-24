@@ -473,6 +473,18 @@ def initialize_worker_environment(*, debug: bool = False) -> Path:
     console.setFormatter(formatter)
     root_logger.addHandler(console)
 
+    # Silence litellm's "Provider List" banner. It is emitted via a bare
+    # print() (suppress_debug_info gate), so a logger level alone will not stop
+    # it; left unchecked it floods worker stdout and blinds log-based
+    # monitoring. Best-effort: never fail worker boot on a litellm import quirk.
+    try:
+        import litellm
+
+        litellm.suppress_debug_info = True
+    except Exception:
+        logger.debug("Could not set litellm.suppress_debug_info", exc_info=True)
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
     return droid_deploy_repo_root()
 
 

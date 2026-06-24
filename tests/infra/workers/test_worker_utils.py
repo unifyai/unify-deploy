@@ -60,6 +60,22 @@ def test_worker_bootstrap_imports_storage_client_symbol() -> None:
     assert worker_utils.storage.Client is not None
 
 
+def test_initialize_worker_environment_silences_litellm(
+    monkeypatch,
+    _restore_root_logger,
+) -> None:
+    """Bootstrap must suppress litellm's Provider List stdout spam."""
+    fake_litellm = types.ModuleType("litellm")
+    fake_litellm.suppress_debug_info = False
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    logging.getLogger("LiteLLM").setLevel(logging.NOTSET)
+
+    initialize_worker_environment(debug=False)
+
+    assert fake_litellm.suppress_debug_info is True
+    assert logging.getLogger("LiteLLM").level == logging.WARNING
+
+
 def test_activate_unify_context_uses_explicit_identity(monkeypatch) -> None:
     """Explicit args win; env fallbacks are not consulted."""
 

@@ -275,6 +275,7 @@ services:
       DROID_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
+      SELF_HOST_OWNER_FILE: /runtime/self-host-owner.json
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}

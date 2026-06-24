@@ -12,6 +12,25 @@ set -euo pipefail
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Droid/Local}"
 SELF_HOST_COORDINATOR_VOICE_PROVIDER="${SELF_HOST_COORDINATOR_VOICE_PROVIDER:-elevenlabs}"
 SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53GoZ742B}"
+# Shared Coordinator contact identities, dedicated per deployment mode so that
+# staging/production traffic never collides with localhost. Each mode owns a
+# distinct WhatsApp number, SMS/voice number, and email mailbox:
+#
+#   mode       console URL                                              WhatsApp
+#   ---------  ------------------------------------------------------   --------------
+#   production https://console.unify.ai/                                +447700900012
+#   staging    https://internal.example.com +447700900013
+#   localhost  http://localhost:3000/                                   +447700900001
+#
+# The localhost identities below are the live defaults used by the self-host
+# stack. They are "poll-only": their Twilio inbound webhooks are cleared so a
+# hosted backend never answers localhost traffic — the comms ingress bridge
+# polls Twilio and forwards inbound to the local CM. Run
+# `selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to enforce this.
+SELF_HOST_COORDINATOR_EMAIL_ADDRESS="${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:-local-twin@unify.ai}"
+SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
+SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"
+SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in droid-deploy/deploy/selfhost/.
@@ -40,9 +59,32 @@ ensure_self_host_workspace_dir() {
   mkdir -p "$workspace"
 }
 
+self_host_export_coordinator_contact_env() {
+  # The local Coordinator uses fixed, shared contact identities so every
+  # developer's localhost deployment converges on the same Twin contact rows.
+  export DROID_COORDINATOR_EMAIL_ADDRESS="$SELF_HOST_COORDINATOR_EMAIL_ADDRESS"
+  export ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS="${ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS:-$DROID_COORDINATOR_EMAIL_ADDRESS}"
+
+  export DROID_COORDINATOR_PHONE_US="$SELF_HOST_COORDINATOR_PHONE_US"
+  export ORCHESTRA_DROID_COORDINATOR_PHONE_US="${ORCHESTRA_DROID_COORDINATOR_PHONE_US:-$DROID_COORDINATOR_PHONE_US}"
+  export DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY="$SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY"
+  export ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY="${ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY:-$DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY}"
+
+  export DROID_COORDINATOR_PHONE="${SELF_HOST_COORDINATOR_PHONE:-$DROID_COORDINATOR_PHONE_US}"
+  export ASSISTANT_NUMBER="$DROID_COORDINATOR_PHONE"
+  export COMMS_BRIDGE_SMS_NUMBER="$DROID_COORDINATOR_PHONE"
+
+  export DROID_COORDINATOR_WHATSAPP_NUMBER="$SELF_HOST_COORDINATOR_WHATSAPP_NUMBER"
+  export ASSISTANT_WHATSAPP_NUMBER="$DROID_COORDINATOR_WHATSAPP_NUMBER"
+  export COMMS_BRIDGE_WHATSAPP_NUMBER="$DROID_COORDINATOR_WHATSAPP_NUMBER"
+}
+
+self_host_export_coordinator_contact_env
+
 load_self_host_env_file() {
   local env_file="${1:-}"
   if [[ -z "$env_file" || ! -f "$env_file" ]]; then
+    self_host_export_coordinator_contact_env
     return 0
   fi
   # Parse KEY=VALUE lines only — never `source` the whole file, which breaks on
@@ -62,6 +104,10 @@ skip = {
     "ORCHESTRA_URL",
     "DROID_COMMS_URL",
     "DROID_ADAPTERS_URL",
+    # Self-host always runs with Console, so the stack forces DROID_CONSOLE_UI=on
+    # (see stack.sh / service.sh). Ignore the public droid/.env value, which is
+    # the headless-install default, so it can't clobber the stack's export.
+    "DROID_CONSOLE_UI",
 }
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 seen: set[str] = set()
@@ -86,6 +132,39 @@ PYEOF
     # shellcheck disable=SC1090
     eval "$exports"
   fi
+  self_host_export_coordinator_contact_env
+}
+
+self_host_export_comms_sa() {
+  # Internal-dev hosted Coordinator email: export the comms service-account key
+  # so the gateway can send Coordinator email through the hosted Gmail mailbox
+  # (and the comms ingress bridge can poll replies). The key is read only from
+  # the self-host state dir (~/.droid by default) and never written to a repo.
+  # No-op when absent, so the default fully-local stack is unchanged.
+  local sa_file
+  sa_file="${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_sa.json}"
+  if [[ ! -f "$sa_file" ]]; then
+    return 0
+  fi
+  local sa_json
+  sa_json="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))' "$sa_file" 2>/dev/null || true)"
+  if [[ -n "$sa_json" ]]; then
+    export GCP_SA_KEY="$sa_json"
+  fi
+}
+
+self_host_export_comms_twilio() {
+  # Internal-dev hosted Coordinator SMS/WhatsApp: load Twilio creds + the
+  # Coordinator numbers so the gateway can send as the Coordinator and the comms
+  # bridge can poll inbound. Read only from the self-host state dir; never
+  # written to a repo. No-op when absent, so the default stack is unchanged.
+  local twilio_file
+  twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_twilio.env}"
+  [[ -f "$twilio_file" ]] || return 0
+  load_self_host_env_file "$twilio_file"
+  # Twilio credentials live in the local state file; Coordinator numbers come
+  # from the canonical self-host contact env above.
+  self_host_export_coordinator_contact_env
 }
 
 self_host_apply_user_desktops_export() {
@@ -132,6 +211,36 @@ append_self_host_droid_runtime_env() {
     "DROID_CONVERSATION_LOCAL_COMMS_HOST=${DROID_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
     "DROID_CONVERSATION_LOCAL_COMMS_PORT=${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
   )
+
+  # Local deployment is a debugging surface like the test suite (rapid iteration,
+  # breaking changes), so it adopts the test harness logging convention
+  # (droid/tests/parallel_run.sh): cross-repo OTel spans from droid, unify, and
+  # unillm aggregate into the droid repo's logs/all/ (one {trace_id}.jsonl per
+  # run), while each repo's full file logs — including the LLM request/response
+  # with reasoning — land in a per-repo logs/<repo>/ dir. All are opt-out: any
+  # value exported beforehand wins. Orchestra runs as a separate process; its
+  # equivalent dirs are set where it is launched (console start_orchestra).
+  local _droid_repo_root="${DROID_REPO_PATH:-${DROID_REPO:-}}"
+  if [[ -n "$_droid_repo_root" ]]; then
+    local _otel_log_dir="${DROID_OTEL_LOG_DIR:-$_droid_repo_root/logs/all}"
+    mkdir -p \
+      "$_otel_log_dir" \
+      "$_droid_repo_root/logs/droid" \
+      "$_droid_repo_root/logs/unify" \
+      "$_droid_repo_root/logs/unillm" 2>/dev/null || true
+    _target_array+=(
+      "DROID_OTEL=${DROID_OTEL:-true}"
+      "UNIFY_OTEL=${UNIFY_OTEL:-true}"
+      "UNILLM_OTEL=${UNILLM_OTEL:-true}"
+      "DROID_OTEL_LOG_DIR=$_otel_log_dir"
+      "UNIFY_OTEL_LOG_DIR=${UNIFY_OTEL_LOG_DIR:-$_otel_log_dir}"
+      "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
+      "DROID_LOG_DIR=${DROID_LOG_DIR:-$_droid_repo_root/logs/droid}"
+      "UNIFY_LOG_DIR=${UNIFY_LOG_DIR:-$_droid_repo_root/logs/unify}"
+      "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_droid_repo_root/logs/unillm}"
+    )
+  fi
+
   if [[ "${VOICE_PROVIDER:-}" == "elevenlabs" && -z "${VOICE_ID:-}" ]]; then
     _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
   fi

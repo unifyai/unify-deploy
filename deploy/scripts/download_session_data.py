@@ -40,7 +40,7 @@ import requests
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT = "gcp-project-runtime"
-GKE_CLUSTER = "droid"
+GKE_CLUSTER = os.environ.get("DROID_GKE_CLUSTER_NAME", "unity")
 GCS_BUCKET = "gs://bucket/unknown"
 ORCHESTRA_URL = "https://api.unify.ai/v0"
 GCLOUD = shutil.which("gcloud") or "gcloud"

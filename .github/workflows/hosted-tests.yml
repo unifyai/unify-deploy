@@ -80,21 +80,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Auth into Google Cloud
-      uses: 'google-github-actions/auth@v2'
-      with:
-        credentials_json: '${{ secrets.GCP_SERVICE_ACCOUNT_JSON || secrets.GCP_SA_KEY }}'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install black
-      run: pip install black==26.1.0
-
-    - name: Run black check
-      run: black --diff --color --check .
+    - name: Format check (locked black)
+      run: |
+        uv sync --only-group lint --no-install-project --frozen
+        uv run --no-sync black --check .
 
   deploy_tests:
     runs-on: ubuntu-latest
