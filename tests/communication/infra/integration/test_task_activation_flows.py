@@ -153,6 +153,7 @@ def _scheduled_task_entries(
         "name": f"Integration scheduled task {task_id}",
         "description": "Quietly start this work when it becomes due.",
         "status": "scheduled",
+        "priority": "normal",
         "_user_id": str(assistant_data["user_id"]),
         "_assistant_id": str(assistant_data["assistant_id"]),
         "schedule": {
