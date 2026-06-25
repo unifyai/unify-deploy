@@ -23,11 +23,9 @@ Adapters & env:
     TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN
     COMMS_BRIDGE_SMS_NUMBER       Coordinator SMS number (E.164).
     COMMS_BRIDGE_WHATSAPP_NUMBER  Coordinator WhatsApp number (E.164).
-    COMMS_BRIDGE_TWILIO_ALLOWLIST Comma-separated sender numbers (E.164) the
-                              bridge will forward. REQUIRED for Twilio: without
-                              it the SMS/WhatsApp adapters no-op, so a dev CM
-                              sharing a hosted number never reacts to (or
-                              replies to) that deployment's real inbound.
+    ORCHESTRA_URL / ORCHESTRA_ADMIN_KEY
+                              Local Orchestra resolves ownership for each
+                              inbound sender before anything reaches the CM.
   Common
     COMMS_BRIDGE_INGRESS_URL  CM local ingress base (default
                               ``http://127.0.0.1:8787``).
@@ -333,16 +331,15 @@ def _email_envelope(
 class TwilioAdapter:
     """Polls Twilio's Messages API for inbound texts on one channel.
 
-    ``channel`` is ``"sms"`` (``thread: "msg"``) or ``"whatsapp"``. A sender
-    allowlist is mandatory: when sharing a hosted number, this keeps the local
-    CM from ingesting (and replying to) that deployment's real inbound.
+    ``channel`` is ``"sms"`` (``thread: "msg"``) or ``"whatsapp"``. Twilio is
+    polled locally, but ownership/routing stays with local Orchestra via the
+    same resolve endpoints used by hosted adapters.
     """
 
-    def __init__(self, channel: str, number: str, allowlist: set[str]) -> None:
+    def __init__(self, channel: str, number: str) -> None:
         self.name = channel
         self._channel = channel
         self._number = number
-        self._allowlist = allowlist
         self._wa = channel == "whatsapp"
         self._client = None
         self.poll_interval = float(_env("COMMS_BRIDGE_POLL_SECONDS", "10"))
@@ -358,10 +355,10 @@ class TwilioAdapter:
 
     def configured(self) -> bool:
         sid, tok = self._creds()
-        return bool(sid and tok and self._number and self._allowlist)
+        return bool(sid and tok and self._number)
 
     def describe(self) -> str:
-        return f"{self._channel}<{self._number}> allow={sorted(self._allowlist)}"
+        return f"{self._channel}<{self._number}>"
 
     def _twilio_number(self) -> str:
         return f"whatsapp:{self._number}" if self._wa else self._number
@@ -401,10 +398,12 @@ class TwilioAdapter:
                     seen.add(msg.sid)
                     continue
             sender = self._strip(msg.from_ or "")
-            if sender not in self._allowlist:
+            route = self._resolve_route(sender)
+            if route is None:
+                seen.add(msg.sid)
                 continue
             if self._wa and self._is_call_permission_response(msg):
-                envelope = self._call_permission_envelope(msg, sender)
+                envelope = self._call_permission_envelope(msg, sender, route)
                 if envelope is None:
                     seen.add(msg.sid)
                     print(
@@ -415,10 +414,8 @@ class TwilioAdapter:
                     continue
                 self._record_call_permission(sender, msg)
             else:
-                envelope = self._envelope(msg, sender)
+                envelope = self._envelope(msg, sender, route)
             _post("/local/comms/envelope", envelope)
-            if self._wa:
-                self._touch_inbound_window(sender)
             seen.add(msg.sid)
             delivered += 1
             print(
@@ -440,7 +437,69 @@ class TwilioAdapter:
         )
         return str(payload or "").strip()
 
-    def _call_permission_envelope(self, msg, sender: str) -> dict | None:
+    def _resolve_route(self, sender: str) -> dict | None:
+        headers = _orchestra_admin_headers()
+        if headers is None:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: ORCHESTRA_ADMIN_KEY missing",
+                flush=True,
+            )
+            return None
+
+        platform = "whatsapp" if self._wa else "phone"
+        try:
+            response = requests.get(
+                f"{_orchestra_base_url()}/admin/{platform}/resolve",
+                params={"pool_number": self._number, "sender": sender},
+                headers=headers,
+                timeout=10,
+            )
+        except Exception as exc:
+            print(
+                f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
+                flush=True,
+            )
+            return None
+
+        if response.status_code == 404:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: no local route",
+                flush=True,
+            )
+            return None
+
+        try:
+            response.raise_for_status()
+            route = response.json()
+        except Exception as exc:
+            print(
+                f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
+                flush=True,
+            )
+            return None
+
+        action = route.get("action")
+        if action:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: action={action}",
+                flush=True,
+            )
+            return None
+
+        assistant_id = route.get("assistant_id")
+        if assistant_id is None:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: missing assistant_id",
+                flush=True,
+            )
+            return None
+
+        return {
+            "assistant_id": assistant_id,
+            "role": route.get("role") or "contact",
+        }
+
+    def _call_permission_envelope(self, msg, sender: str, route: dict) -> dict | None:
         button_payload = self._button_payload(msg)
         if button_payload not in {"ACCEPTED", "REJECTED"}:
             return None
@@ -455,6 +514,8 @@ class TwilioAdapter:
                 "body": msg.body or "",
                 "payload": button_payload,
                 "attachments": [],
+                "assistant_id": route["assistant_id"],
+                "role": route["role"],
             },
         }
 
@@ -493,30 +554,7 @@ class TwilioAdapter:
         except Exception as exc:
             print(f"[bridge] whatsapp call permission update failed: {exc}", flush=True)
 
-    def _touch_inbound_window(self, sender: str) -> None:
-        """Tell Orchestra an inbound arrived so the WhatsApp 24h free-form window
-        opens for this (pool, sender).
-
-        The hosted adapter resolves every inbound via Orchestra, which records
-        ``last_inbound_at``; self-host delivers inbound by polling and dispatches
-        routing locally, so this best-effort call exists purely for that
-        side-effect. It never blocks ingest — a failed touch only means the next
-        reply may fall back to a template.
-        """
-        headers = _orchestra_admin_headers()
-        if headers is None:
-            return
-        try:
-            requests.get(
-                f"{_orchestra_base_url()}/admin/whatsapp/resolve",
-                params={"pool_number": self._number, "sender": sender},
-                headers=headers,
-                timeout=10,
-            )
-        except Exception as exc:  # best-effort: never block inbound forwarding
-            print(f"[bridge] whatsapp window touch failed: {exc}", flush=True)
-
-    def _envelope(self, msg, sender: str) -> dict:
+    def _envelope(self, msg, sender: str, route: dict) -> dict:
         thread = "whatsapp" if self._wa else "msg"
         return {
             "thread": thread,
@@ -526,6 +564,8 @@ class TwilioAdapter:
                 "to_number": self._number if self._wa else (msg.to or ""),
                 "body": msg.body or "",
                 "attachments": [],
+                "assistant_id": route["assistant_id"],
+                "role": route["role"],
             },
         }
 
@@ -537,22 +577,8 @@ class TwilioAdapter:
 
 def _build_adapters() -> list:
     adapters: list = [GmailAdapter()]
-    allowlist = {
-        n.strip() for n in _env("COMMS_BRIDGE_TWILIO_ALLOWLIST").split(",") if n.strip()
-    }
-    twilio_configured = bool(_env("TWILIO_ACCOUNT_SID") and _env("TWILIO_AUTH_TOKEN"))
-    if twilio_configured and not allowlist:
-        print(
-            "[bridge] WARNING: Twilio creds present but COMMS_BRIDGE_TWILIO_ALLOWLIST "
-            "is empty — SMS/WhatsApp inbound disabled so the local CM cannot react "
-            "to the shared number's real traffic. Set it to your test sender(s).",
-            file=sys.stderr,
-            flush=True,
-        )
-    adapters.append(TwilioAdapter("sms", _env("COMMS_BRIDGE_SMS_NUMBER"), allowlist))
-    adapters.append(
-        TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER"), allowlist),
-    )
+    adapters.append(TwilioAdapter("sms", _env("COMMS_BRIDGE_SMS_NUMBER")))
+    adapters.append(TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER")))
     return [a for a in adapters if a.configured()]
 
 

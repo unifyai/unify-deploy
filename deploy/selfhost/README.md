@@ -299,8 +299,10 @@ the voice webhook and stops the tunnel.
 Caveats:
 
 - **Single-owner voice number.** A number has one `VoiceUrl`, so only one
-  developer can own the shared localhost voice number's calls at a time (unlike
-  the allowlist-shared SMS/WhatsApp text polling). `down --full` reverts it.
+  developer can own the shared localhost voice number's calls at a time. SMS and
+  WhatsApp text stay poll-only locally, and local Orchestra resolves ownership
+  before the bridge forwards anything to the local Coordinator. `down --full`
+  reverts the voice webhook.
 - cloudflared quick tunnels get a fresh URL each run; the voice webhook is
   re-synced automatically on `up` and whenever the tunnel restarts.
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio
