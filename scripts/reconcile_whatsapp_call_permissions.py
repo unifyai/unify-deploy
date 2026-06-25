@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 from twilio.rest import Client
@@ -43,7 +45,8 @@ def _post_permission(
     pool_number: str,
     contact_number: str,
     status: str,
-) -> None:
+    source: str = "twilio_reconciliation",
+) -> dict:
     response = requests.post(
         f"{orchestra_url.rstrip('/')}/admin/whatsapp/call-permission",
         headers={"Authorization": f"Bearer {admin_key}"},
@@ -51,11 +54,47 @@ def _post_permission(
             "pool_number": pool_number,
             "contact_number": contact_number,
             "status": status,
-            "source": "twilio_reconciliation",
+            "source": source,
         },
         timeout=10,
     )
     response.raise_for_status()
+    return response.json()
+
+
+def _permission_cache_path(args: argparse.Namespace) -> Path:
+    configured = args.permission_cache or _env("COMMS_BRIDGE_PERMISSION_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".unity" / "whatsapp_call_permissions.json"
+
+
+def _write_permission_cache(
+    *,
+    args: argparse.Namespace,
+    pool_number: str,
+    contact_number: str,
+    status: str,
+    response_payload: dict | None,
+) -> None:
+    if status not in {"accepted", "rejected"}:
+        return
+    path = _permission_cache_path(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        cache = {}
+    cache[f"{pool_number}|{contact_number}"] = {
+        "pool_number": pool_number,
+        "contact_number": contact_number,
+        "status": status,
+        "expires_at": (response_payload or {}).get("expires_at"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = path.with_suffix(f"{path.suffix}.tmp")
+    tmp.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
 
 
 def reconcile(args: argparse.Namespace) -> int:
@@ -63,6 +102,45 @@ def reconcile(args: argparse.Namespace) -> int:
     admin_key = args.orchestra_admin_key or _env("ORCHESTRA_ADMIN_KEY")
     if not orchestra_url or not admin_key:
         raise RuntimeError("ORCHESTRA_URL and ORCHESTRA_ADMIN_KEY are required.")
+
+    if args.mark_accepted_local:
+        if not args.contact_number:
+            raise RuntimeError(
+                "--contact-number is required with --mark-accepted-local.",
+            )
+        if not args.yes_i_verified_whatsapp_approved:
+            raise RuntimeError(
+                "--yes-i-verified-whatsapp-approved is required with --mark-accepted-local.",
+            )
+        if len(args.pool_number) != 1:
+            raise RuntimeError(
+                "--mark-accepted-local requires exactly one --pool-number.",
+            )
+        pool_number = args.pool_number[0]
+        response_payload = None
+        print(
+            "manual repair whatsapp_call_permission "
+            f"pool={pool_number} contact={args.contact_number} status=accepted",
+            flush=True,
+        )
+        if not args.dry_run:
+            response_payload = _post_permission(
+                orchestra_url=orchestra_url,
+                admin_key=admin_key,
+                pool_number=pool_number,
+                contact_number=args.contact_number,
+                status="accepted",
+                source="manual_local_repair",
+            )
+            _write_permission_cache(
+                args=args,
+                pool_number=pool_number,
+                contact_number=args.contact_number,
+                status="accepted",
+                response_payload=response_payload,
+            )
+        print(f"reconciled=1 dry_run={args.dry_run}", flush=True)
+        return 1
 
     client = _twilio_client()
     since_dt = datetime.now(timezone.utc) - timedelta(days=args.lookback_days)
@@ -89,12 +167,19 @@ def reconcile(args: argparse.Namespace) -> int:
                 flush=True,
             )
             if not args.dry_run:
-                _post_permission(
+                response_payload = _post_permission(
                     orchestra_url=orchestra_url,
                     admin_key=admin_key,
                     pool_number=pool_number,
                     contact_number=contact_number,
                     status=status,
+                )
+                _write_permission_cache(
+                    args=args,
+                    pool_number=pool_number,
+                    contact_number=contact_number,
+                    status=status,
+                    response_payload=response_payload,
                 )
             reconciled += 1
 
@@ -116,6 +201,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--orchestra-url", default="")
     parser.add_argument("--orchestra-admin-key", default="")
+    parser.add_argument("--contact-number", default="")
+    parser.add_argument("--permission-cache", default="")
+    parser.add_argument("--mark-accepted-local", action="store_true")
+    parser.add_argument("--yes-i-verified-whatsapp-approved", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
