@@ -118,15 +118,25 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python3 scripts/configure_ci_uv_sources.py
-        uv sync --all-groups --all-extras
+        # The merge_gate integration tests drive the deployed stack over HTTP and
+        # the Kubernetes/GCE/Pub-Sub clients; they do not import the first-party
+        # unity/unify/unillm SDKs. Install only the unity-deploy package, its core
+        # dependencies (which already include the kubernetes + google-cloud
+        # clients the tests use) and pytest. This avoids building the heavy SDKs
+        # via uv sync, which is unnecessary for this subset.
+        uv venv
+        uv pip install -e . pytest pytest-asyncio pytest-env
 
     - name: Run merge-gate subset
       id: run-tests
       run: |
         set +e
+        # --confcutdir keeps pytest from loading the repo-root tests/conftest.py,
+        # which imports the unity/unify runtimes we intentionally did not install.
+        # The integration conftest under this directory is self-contained.
         .venv/bin/python -m pytest -vs \
           -m merge_gate \
+          --confcutdir=tests/communication/infra/integration \
           tests/communication/infra/integration \
           --ignore=tests/communication/infra/integration/contracts
         exit_code=$?
