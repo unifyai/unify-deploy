@@ -120,6 +120,7 @@ markers = [
     "integration: tests that exercise cross-service or deployed infrastructure contracts",
     "invariant: tests that validate hosted infrastructure invariants",
     "slow: tests that are too slow for the default hosted CI path",
+    "merge_gate: minimal representative subset run live against staging to gate staging -> main merges",
 ]
 env = [
     "GRPC_ENABLE_FORK_SUPPORT=0",

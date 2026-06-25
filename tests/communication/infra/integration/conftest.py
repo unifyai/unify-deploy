@@ -485,6 +485,11 @@ def pytest_configure(config):
         "markers",
         "slow: long-running tests (VM provision, etc.) — deselect with -m 'not slow'",
     )
+    config.addinivalue_line(
+        "markers",
+        "merge_gate: minimal representative subset run live against staging to gate "
+        "staging -> main merges",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
