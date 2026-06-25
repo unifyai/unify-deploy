@@ -91,6 +91,8 @@ load_self_host_context() {
     # (narration + reference quiz) must stay active. The public unity default
     # (unity/.env) disables it for headless installs; force it on here.
     export UNITY_CONSOLE_UI=true
+    export UNITY_GATEWAY_LOG_LEVEL="${UNITY_GATEWAY_LOG_LEVEL:-debug}"
+    export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
     # The self-host CM is the personal Coordinator, so surface its universal
     # email (and provider) the way the hosted assignment event would. Without
     # this the CM boots with no email and outbound Coordinator mail / the
