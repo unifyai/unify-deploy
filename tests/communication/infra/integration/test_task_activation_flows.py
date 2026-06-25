@@ -113,22 +113,28 @@ def _create_remote_task_assistant(batch_api) -> dict[str, Any]:
         desktop_mode=None,
     )
     assistant_id = str(assistant["assistant_id"])
-    response = requests.patch(
-        f"{ORCHESTRA_URL}/assistant/{assistant_id}/config",
-        json={"is_local": False},
-        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=30,
-    )
-    assert response.status_code == 200, (
-        f"Failed to switch assistant {assistant_id} to the deployed runtime lane: "
-        f"{response.status_code} {response.text}"
-    )
-    expire_test_assistant_records(assistant_id)
-    cleanup_assistant_jobs(
-        batch_api,
-        [assistant_id],
-        context="task-activation-setup",
-    )
+    try:
+        response = requests.patch(
+            f"{ORCHESTRA_URL}/assistant/{assistant_id}/config",
+            json={"is_local": False},
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"Failed to switch assistant {assistant_id} to the deployed runtime "
+            f"lane: {response.status_code} {response.text}"
+        )
+        expire_test_assistant_records(assistant_id)
+        cleanup_assistant_jobs(
+            batch_api,
+            [assistant_id],
+            context="task-activation-setup",
+        )
+    except Exception:
+        # The assistant already exists on Orchestra; delete it before
+        # re-raising so a setup failure never leaks a paid runtime resource.
+        _delete_test_assistant(assistant_id, batch_api)
+        raise
     return assistant
 
 
