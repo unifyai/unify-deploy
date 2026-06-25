@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timezone
 from email.message import EmailMessage
 import importlib.util
@@ -468,7 +469,10 @@ def test_twilio_poll_skips_when_resolve_raises(monkeypatch) -> None:
     assert seen == {"resolve-error"}
 
 
-def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> None:
+def test_twilio_whatsapp_permission_response_updates_orchestra(
+    monkeypatch,
+    tmp_path,
+) -> None:
     sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
     adapter = bridge.TwilioAdapter("whatsapp", "+447700900001")
     adapter._client = SimpleNamespace(
@@ -493,6 +497,10 @@ def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> N
 
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setenv(
+        "COMMS_BRIDGE_PERMISSION_CACHE",
+        str(tmp_path / "wa-permissions.json"),
+    )
     monkeypatch.setattr(
         bridge,
         "_post",
@@ -521,6 +529,7 @@ def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> N
                     "pool_number": "+447700900001",
                     "contact_number": "+4915550100009",
                     "status": "accepted",
+                    "source": "selfhost_bridge",
                 },
                 "timeout": 10,
             },
@@ -551,6 +560,7 @@ def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> N
 
 def test_twilio_whatsapp_permission_rejection_updates_orchestra_and_forwards_event(
     monkeypatch,
+    tmp_path,
 ) -> None:
     sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
     adapter = bridge.TwilioAdapter("whatsapp", "+447700900001")
@@ -575,6 +585,10 @@ def test_twilio_whatsapp_permission_rejection_updates_orchestra_and_forwards_eve
     gets = []
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setenv(
+        "COMMS_BRIDGE_PERMISSION_CACHE",
+        str(tmp_path / "wa-permissions.json"),
+    )
     monkeypatch.setattr(
         bridge,
         "_post",
@@ -596,6 +610,7 @@ def test_twilio_whatsapp_permission_rejection_updates_orchestra_and_forwards_eve
     assert adapter.poll(1_000_000, set()) == 1
 
     assert posts[0][1]["json"]["status"] == "rejected"
+    assert posts[0][1]["json"]["source"] == "selfhost_bridge"
     assert forwarded[0][1]["event"]["type"] == "call_permission_response"
     assert forwarded[0][1]["event"]["payload"] == "REJECTED"
     assert forwarded[0][1]["event"]["contact_number"] == "+4915550100009"
@@ -604,7 +619,7 @@ def test_twilio_whatsapp_permission_rejection_updates_orchestra_and_forwards_eve
     assert gets[0][0] == "http://orchestra.test/v0/admin/whatsapp/resolve"
 
 
-def test_twilio_whatsapp_permission_without_payload_is_not_rejected(
+def test_twilio_whatsapp_permission_without_payload_is_unknown_interaction(
     monkeypatch,
 ) -> None:
     sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
@@ -647,8 +662,61 @@ def test_twilio_whatsapp_permission_without_payload_is_not_rejected(
         or _Response(payload={"assistant_id": 8, "role": "owner"}),
     )
 
-    assert adapter.poll(1_000_000, set()) == 0
+    assert adapter.poll(1_000_000, set()) == 1
 
-    assert posts == []
-    assert forwarded == []
+    assert posts[0][1]["json"] == {
+        "pool_number": "+447700900001",
+        "contact_number": "+4915550100009",
+        "status": "unknown_interaction",
+        "source": "selfhost_bridge",
+    }
+    assert forwarded[0][1]["event"]["type"] == "call_permission_response"
+    assert forwarded[0][1]["event"]["payload"] == "UNKNOWN"
+    assert forwarded[0][1]["event"]["contact_number"] == "+4915550100009"
     assert gets[0][0] == "http://orchestra.test/v0/admin/whatsapp/resolve"
+
+
+def test_whatsapp_permission_cache_hydrates_orchestra(monkeypatch, tmp_path) -> None:
+    cache_path = tmp_path / "wa-permissions.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "+447700900001|+4915550100009": {
+                    "pool_number": "+447700900001",
+                    "contact_number": "+4915550100009",
+                    "status": "accepted",
+                    "expires_at": "2999-01-01T00:00:00+00:00",
+                    "updated_at": "2026-06-25T16:00:00+00:00",
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+    posts = []
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setenv("COMMS_BRIDGE_PERMISSION_CACHE", str(cache_path))
+    monkeypatch.setattr(
+        bridge.requests,
+        "post",
+        lambda url, **kwargs: posts.append((url, kwargs))
+        or SimpleNamespace(raise_for_status=lambda: None),
+    )
+
+    bridge._hydrate_call_permission_cache()
+
+    assert posts == [
+        (
+            "http://orchestra.test/v0/admin/whatsapp/call-permission",
+            {
+                "headers": {"Authorization": "Bearer admin-key"},
+                "json": {
+                    "pool_number": "+447700900001",
+                    "contact_number": "+4915550100009",
+                    "status": "accepted",
+                    "source": "selfhost_bridge_cache",
+                },
+                "timeout": 10,
+            },
+        ),
+    ]
