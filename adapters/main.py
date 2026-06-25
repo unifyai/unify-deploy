@@ -101,7 +101,7 @@ def _store_refreshed_oauth_secrets(
     ``POST /assistant/{id}/secret`` creates a missing one.  Refresh jobs usually
     update existing access-token rows, but new expiry/source keys can be absent
     on legacy assistants, so the helper updates first and falls back to create
-    only on ``404``.  Droid does not receive these values directly; it later
+    only on ``404``.  Unity does not receive these values directly; it later
     pulls them from Orchestra through SecretManager's debounced sync gate.
     """
 
@@ -179,7 +179,7 @@ from .helpers import (
     check_valid_contact,
     create_conference_response,
     dispatch_livekit_agent,
-    dispatch_droid_start_intent,
+    dispatch_unity_start_intent,
     expire_all_stale_jobs,
     get_assistant,
     get_contacts,
@@ -189,7 +189,7 @@ from .helpers import (
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
-    is_droid_coordinator_email_address,
+    is_unity_coordinator_email_address,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -198,12 +198,12 @@ from .helpers import (
     resolve_slack_inbound,
     slack_message_already_seen,
     resolve_whatsapp_route,
-    start_droid_job,
+    start_unity_job,
     update_whatsapp_call_session,
     update_phone_call_session,
     upsert_phone_call_session,
     upsert_whatsapp_call_session,
-    uses_local_droid_runtime,
+    uses_local_unity_runtime,
     verify_slack_signature,
 )
 from common.google_oauth import (
@@ -220,7 +220,7 @@ from common.scopes import build_scope_string
 
 load_dotenv()
 app = FastAPI(
-    title="Droid Adapters",
+    title="Unity Adapters",
     description="Webhook adapters for Twilio, Gmail, and internal services",
     version="1.0.0",
 )
@@ -418,15 +418,15 @@ async def twilio_call_webhook(request: Request):
     sip_dispatch_rule_id = None
     if is_shared_phone_route:
         call_id = provider_call_sid.replace(":", "-")
-        conference_name = f"droid_phone_conf_{call_id}"
-        room_name = f"droid_phone_room_{assistant_id}_{call_id}"
+        conference_name = f"unity_phone_conf_{call_id}"
+        room_name = f"unity_phone_room_{assistant_id}_{call_id}"
         sip_uri, sip_target = make_call_scoped_sip_uri(
             twilio_number,
             call_id,
             headers={
-                "X-Droid-Call-Session": call_id,
-                "X-Droid-Provider-Call-Sid": provider_call_sid,
-                "X-Droid-Room": room_name,
+                "X-Unity-Call-Session": call_id,
+                "X-Unity-Provider-Call-Sid": provider_call_sid,
+                "X-Unity-Room": room_name,
             },
         )
         sip_dispatch_rule_id = await ensure_call_scoped_dispatch_rule(
@@ -464,7 +464,7 @@ async def twilio_call_webhook(request: Request):
             },
         )
     else:
-        conference_name = f"Droid_{twilio_number[1:]}_{date_time}"
+        conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
         room_name = make_room_name(assistant_id, "phone")
         sip_uri = make_sip_uri(twilio_number)
         await ensure_phone_dispatch_rule(twilio_number, room_name)
@@ -649,8 +649,8 @@ async def livekit_recording_complete(request: Request):
     """Handle LiveKit Egress completion webhooks for call/meet recordings.
 
     LiveKit Egress uploads the recording directly to GCS. This adapter
-    verifies the webhook, ensures the assistant's Droid container is
-    running, and publishes a recording_ready Pub/Sub event so Droid can
+    verifies the webhook, ensures the assistant's Unity container is
+    running, and publishes a recording_ready Pub/Sub event so Unity can
     link the recording URL to the transcript exchange.
     """
     body = (await request.body()).decode()
@@ -714,7 +714,7 @@ async def livekit_recording_complete(request: Request):
 
     # Construct GCS public URL and publish.
     file_result = egress_info.file_results[0]
-    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "droid-call-recordings")
+    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
     recording_url = (
         f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
     )
@@ -1070,6 +1070,7 @@ async def twilio_whatsapp_webhook(request: Request):
                                 "contacts": contacts,
                                 "to_number": to_number,
                                 "from_number": from_number,
+                                "contact_number": sender,
                                 "body": body,
                                 "role": resolve_data.get("role", "contact"),
                                 "type": "call_permission_response",
@@ -1225,15 +1226,15 @@ async def twilio_whatsapp_call_webhook(request: Request):
     contacts = context["contacts"]
 
     call_id = provider_call_sid.replace(":", "-")
-    conference_name = f"droid_wa_conf_{call_id}"
-    room_name = f"droid_wa_room_{assistant_id}_{call_id}"
+    conference_name = f"unity_wa_conf_{call_id}"
+    room_name = f"unity_wa_room_{assistant_id}_{call_id}"
     sip_uri, sip_target = make_call_scoped_sip_uri(
         pool_number,
         call_id,
         headers={
-            "X-Droid-Call-Session": call_id,
-            "X-Droid-Provider-Call-Sid": provider_call_sid,
-            "X-Droid-Room": room_name,
+            "X-Unity-Call-Session": call_id,
+            "X-Unity-Provider-Call-Sid": provider_call_sid,
+            "X-Unity-Room": room_name,
         },
     )
     logger.info(f"Setting up WhatsApp call conference {conference_name}")
@@ -1361,7 +1362,7 @@ async def twilio_whatsapp_call_status_webhook(request: Request):
     """Status callback for outbound WhatsApp Business Calling.
 
     Publishes whatsapp_call_answered / whatsapp_call_not_answered events
-    to Pub/Sub so Droid can track the call lifecycle.
+    to Pub/Sub so Unity can track the call lifecycle.
     """
     form_data = await request.form()
     call_status = form_data.get("CallStatus")
@@ -1534,9 +1535,9 @@ class CoordinatorDelegatePayload(BaseModel):
 #      which consults per-workspace installs, channel bindings,
 #      thread routes, ``<@app> <token>`` addressing, and the
 #      coordinator fallback. Returns a routing tuple.
-#   5. Fetch assistant + contacts, best-effort wake the Droid job,
+#   5. Fetch assistant + contacts, best-effort wake the Unity job,
 #      publish onto the assistant's Pub/Sub topic with
-#      ``thread="slack"``. Droid's CommsManager dispatch picks it
+#      ``thread="slack"``. Unity's CommsManager dispatch picks it
 #      up from there.
 
 
@@ -1570,7 +1571,7 @@ async def slack_events_webhook(request: Request):
         return {"ok": True}
 
     # Slack retries when we don't ACK within ~3s. ACK retries
-    # without reprocessing -- downstream dedup (Pub/Sub + Droid's
+    # without reprocessing -- downstream dedup (Pub/Sub + Unity's
     # CommsManager._seen_slack_ids) handles the steady-state case;
     # the retry-header short-circuit just keeps us cheap.
     if request.headers.get("X-Slack-Retry-Num"):
@@ -1594,7 +1595,7 @@ async def slack_events_webhook(request: Request):
     # A channel mention arrives twice (app_mention + message) with the same
     # client_msg_id; collapse the pair so we dispatch + publish once. Keyed
     # by team to avoid cross-workspace collisions. Best-effort across Cloud
-    # Run instances; Droid dedups authoritatively downstream.
+    # Run instances; Unity dedups authoritatively downstream.
     team_id = payload.get("team_id", "")
     dedup_key = inner.get("client_msg_id") or inner.get("ts") or ""
     if dedup_key and slack_message_already_seen(f"{team_id}:{dedup_key}"):
@@ -1642,18 +1643,18 @@ async def slack_events_webhook(request: Request):
     if not contacts:
         contacts = get_default_contacts(assistant_data)
 
-    # Best-effort wake of the assistant's Droid job (matches the
+    # Best-effort wake of the assistant's Unity job (matches the
     # other inbound channels' fire-and-forget pattern: comms is
     # given a fast edge handoff and we never block the webhook
     # thread on AssistantSession convergence). Local-runtime
     # assistants publish to Pub/Sub but keep their runtime local, so
     # we must not start a remote job for them (it would compete with
     # the developer's local subscriber on the same subscription).
-    if uses_local_droid_runtime(assistant_data):
+    if uses_local_unity_runtime(assistant_data):
         logger.info("Skipped remote job start for local Slack assistant")
     else:
         asyncio.create_task(
-            asyncio.to_thread(start_droid_job, assistant_data, "slack"),
+            asyncio.to_thread(start_unity_job, assistant_data, "slack"),
         )
 
     # Attachments: Slack ``files`` blocks expose URL + mime so the
@@ -1977,7 +1978,7 @@ async def unify_message_webhook(request: Request):
 async def api_message_webhook(request: Request):
     """
     API message webhook — handles programmatic messages sent via Orchestra's
-    REST API. Ensures the assistant's Droid job is running before publishing.
+    REST API. Ensures the assistant's Unity job is running before publishing.
     Supports optional file attachments and developer-supplied tags.
     """
     payload = await request.json()
@@ -2075,6 +2076,7 @@ async def unify_meet_webhook(request: Request):
 
     room_name = payload.get("room_name", "")
     livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    call_session_id = str(payload.get("call_session_id") or "").strip()
     if not room_name:
         logger.info("room_name is required")
         return Response(status_code=400)
@@ -2137,6 +2139,8 @@ async def unify_meet_webhook(request: Request):
         "livekit_agent_name": livekit_agent_name,
         "timestamp": int(time.time() * 1000),
     }
+    if call_session_id:
+        event_payload["call_session_id"] = call_session_id
     if opening_config is not None:
         event_payload["opening_config"] = opening_config
     try:
@@ -2163,7 +2167,7 @@ async def unify_meet_webhook(request: Request):
 
 
 # =============================================================================
-# Droid System Webhooks
+# Unity System Webhooks
 # =============================================================================
 
 
@@ -2255,7 +2259,7 @@ def _async_delegation_receipt() -> dict[str, Any]:
     }
 
 
-def _publish_droid_system_event(
+def _publish_unity_system_event(
     *,
     assistant_id: str,
     event_type: str,
@@ -2263,7 +2267,7 @@ def _publish_droid_system_event(
     contacts: list[dict] | None = None,
     extra_event_fields: dict | None = None,
 ) -> None:
-    """Publish a Droid system event to the assistant's Pub/Sub topic."""
+    """Publish a Unity system event to the assistant's Pub/Sub topic."""
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -2281,7 +2285,7 @@ def _publish_droid_system_event(
         topic_path,
         json.dumps(
             {
-                "thread": "droid_system_event",
+                "thread": "unity_system_event",
                 "publish_timestamp": time.time(),
                 "event": event_payload,
             },
@@ -2293,10 +2297,10 @@ def _publish_droid_system_event(
         logger.info(f"Message ID: {message_id}")
 
 
-@app.post("/droid/system-event", dependencies=[Depends(require_admin_key)])
-async def droid_system_event_webhook(request: Request):
-    """Droid system event webhook - handles system-level events."""
-    logger.info("droid_system_event_webhook function started")
+@app.post("/unity/system-event", dependencies=[Depends(require_admin_key)])
+async def unity_system_event_webhook(request: Request):
+    """Unity system event webhook - handles system-level events."""
+    logger.info("unity_system_event_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -2323,7 +2327,7 @@ async def droid_system_event_webhook(request: Request):
 
     # Optional structured payload that callers can attach alongside
     # the human-readable ``message``. Forwarded verbatim onto the
-    # Pub/Sub event so Droid-side dispatch can pluck out subtype /
+    # Pub/Sub event so Unity-side dispatch can pluck out subtype /
     # details (e.g. coordinator onboarding narration) without
     # re-parsing the message string. Must be a dict if present —
     # anything else gets dropped to keep the published event shape
@@ -2334,13 +2338,13 @@ async def droid_system_event_webhook(request: Request):
     )
 
     logger.info(
-        f"Received droid_system_event for event_type={event_type}",
+        f"Received unity_system_event for event_type={event_type}",
     )
 
     # shared context
     context = await asyncio.to_thread(
         build_webhook_context,
-        channel="droid_system_event",
+        channel="unity_system_event",
         destination="",
         sender="",
         assistant_id=assistant_id,
@@ -2355,16 +2359,16 @@ async def droid_system_event_webhook(request: Request):
     )
 
     try:
-        _publish_droid_system_event(
+        _publish_unity_system_event(
             assistant_id=assistant_id,
             event_type=event_type,
             message=message,
             contacts=contacts,
             extra_event_fields=extra_event_fields,
         )
-        logger.info("droid_system_event message published to Pub/Sub successfully")
+        logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
-        logger.error(f"Error publishing droid_system_event to Pub/Sub: {e}")
+        logger.error(f"Error publishing unity_system_event to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
@@ -2404,8 +2408,8 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
     wake_reason = _build_task_due_reason(payload)
 
     try:
-        if uses_local_droid_runtime(assistant_data):
-            _publish_droid_system_event(
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="task_due",
                 message=_task_due_message(payload),
@@ -2418,7 +2422,7 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             }
 
         response = await asyncio.to_thread(
-            dispatch_droid_start_intent,
+            dispatch_unity_start_intent,
             assistant_data,
             "api_message",
             wake_reasons=[wake_reason],
@@ -2454,7 +2458,7 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
 
     if start_result.get("active_session_already_running"):
         try:
-            _publish_droid_system_event(
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="task_due",
                 message=_task_due_message(payload),
@@ -2509,8 +2513,8 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
     message = _coordinator_delegate_message(payload)
 
     try:
-        if uses_local_droid_runtime(assistant_data):
-            _publish_droid_system_event(
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="coordinator_delegate",
                 message=message,
@@ -2524,7 +2528,7 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
             }
 
         response = await asyncio.to_thread(
-            dispatch_droid_start_intent,
+            dispatch_unity_start_intent,
             assistant_data,
             "api_message",
             wake_reasons=[wake_reason],
@@ -2563,7 +2567,7 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
 
     if start_result.get("active_session_already_running"):
         try:
-            _publish_droid_system_event(
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="coordinator_delegate",
                 message=message,
@@ -2602,12 +2606,12 @@ async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPaylo
 
     Mirrors the cold-pod / hot-pod dispatch pattern used by
     ``scheduled_task_due_webhook``: if the assistant runs locally we
-    publish the system event directly; otherwise we dispatch a Droid
+    publish the system event directly; otherwise we dispatch a Unity
     start intent and, if a session is already running, also publish
     the system event so the live brain observes the reason.
 
     Called by the orchestra inactivity-followup routine; the brain in
-    Droid reads the ``inactivity_followup`` reason and composes /
+    Unity reads the ``inactivity_followup`` reason and composes /
     sends the re-engagement message itself.
     """
 
@@ -2630,8 +2634,8 @@ async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPaylo
     wake_reason = _build_inactivity_followup_reason()
 
     try:
-        if uses_local_droid_runtime(assistant_data):
-            _publish_droid_system_event(
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="inactivity_followup",
                 message=_inactivity_followup_message(assistant_id),
@@ -2644,7 +2648,7 @@ async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPaylo
             }
 
         response = await asyncio.to_thread(
-            dispatch_droid_start_intent,
+            dispatch_unity_start_intent,
             assistant_data,
             "api_message",
             wake_reasons=[wake_reason],
@@ -2683,7 +2687,7 @@ async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPaylo
 
     if start_result.get("active_session_already_running"):
         try:
-            _publish_droid_system_event(
+            _publish_unity_system_event(
                 assistant_id=assistant_id,
                 event_type="inactivity_followup",
                 message=_inactivity_followup_message(assistant_id),
@@ -2714,10 +2718,10 @@ async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPaylo
     }
 
 
-@app.post("/droid/pre-hire", dependencies=[Depends(require_admin_key)])
-async def droid_pre_hire_webhook(request: Request):
-    """Droid pre-hire webhook - logs chat history before hiring."""
-    logger.info("droid_pre_hire_webhook function started")
+@app.post("/unity/pre-hire", dependencies=[Depends(require_admin_key)])
+async def unity_pre_hire_webhook(request: Request):
+    """Unity pre-hire webhook - logs chat history before hiring."""
+    logger.info("unity_pre_hire_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -2983,7 +2987,7 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         # extract Gmail notification details (mailbox address being watched)
         assistant_email_address = notification["emailAddress"].strip().lower()
         history_id = notification["historyId"]
-        is_shared_coordinator_email = is_droid_coordinator_email_address(
+        is_shared_coordinator_email = is_unity_coordinator_email_address(
             assistant_email_address,
         )
 
@@ -3218,10 +3222,10 @@ async def outlook_notification_processor(request: Request):
                 return Response(content=error_message, status_code=500)
 
             # Local assistants publish to Pub/Sub but keep runtime local.
-            if uses_local_droid_runtime(assistant_data):
+            if uses_local_unity_runtime(assistant_data):
                 logger.info("Skipped remote job start for local email assistant")
             else:
-                start_droid_job(assistant_data, "email")
+                start_unity_job(assistant_data, "email")
                 logger.info("Job start requested for email handler")
 
             logger.info(
@@ -3531,10 +3535,10 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False, None
 
-            if uses_local_droid_runtime(assistant_data):
+            if uses_local_unity_runtime(assistant_data):
                 logger.info("Skipped remote job start for local teams assistant")
             else:
-                start_droid_job(assistant_data, "teams")
+                start_unity_job(assistant_data, "teams")
                 logger.info("Job start requested for teams handler")
             return contacts, True, matched
 
@@ -3572,7 +3576,7 @@ async def teams_notification_processor(request: Request):
 
         # Fetch the conversation roster and pre-resolve as many members
         # as possible against the contacts we already loaded for the
-        # sender path.  Droid finishes unresolved entries via its
+        # sender path.  Unity finishes unresolved entries via its
         # canonical unknown-contact creation flow; we deliberately don't
         # mint contacts here so ``ContactManager`` stays the sole writer.
         #
@@ -3659,11 +3663,11 @@ async def teams_notification_processor(request: Request):
         ]
 
         # Resolve the sender asymmetry between comms (name-fallback
-        # tolerant) and droid.comms_manager (email-exact).  If we
+        # tolerant) and unity.comms_manager (email-exact).  If we
         # matched a real contact but the only email we had was our
         # synthetic ``{id}@teams`` placeholder, rewrite ``sender`` to
         # the contact's real email so downstream email-keyed lookups
-        # hit.  We also pass ``resolved_contact_id`` so droid can
+        # hit.  We also pass ``resolved_contact_id`` so unity can
         # skip the re-resolution entirely.
         resolved_contact_id = (
             matched_contact.get("contact_id") if matched_contact else None
@@ -4036,7 +4040,7 @@ async def _extract_message_mentions(
     uses at the "Fetch email from user profile if not in message"
     branch above).  Failures fall back to ``email=None`` so
     :func:`_resolve_roster_participants` still emits the entry with a
-    ``None`` contact_id, letting Droid's unknown-contact flow decide.
+    ``None`` contact_id, letting Unity's unknown-contact flow decide.
 
     For private and shared channels this is the *only* participant
     signal available without ``ChannelMember.Read.All``, so we try
@@ -4087,7 +4091,7 @@ def _resolve_roster_participants(
 ) -> list[dict]:
     """Resolve each roster member to ``contact_id`` where possible.
 
-    Returns a list of participant dicts shaped for downstream Droid
+    Returns a list of participant dicts shaped for downstream Unity
     consumption::
 
         {"contact_id": int | None,
@@ -4106,9 +4110,9 @@ def _resolve_roster_participants(
        consumer Teams users without a resolvable email.
 
     Members that can't be matched are emitted with ``contact_id=None``
-    so Droid's ``_get_or_create_unknown_contact`` path can finish the
+    so Unity's ``_get_or_create_unknown_contact`` path can finish the
     resolve with the canonical contact creation semantics.  Members
-    missing any usable email are emitted with ``email=None`` so Droid
+    missing any usable email are emitted with ``email=None`` so Unity
     skips unknown-contact creation for them (creating a contact keyed
     on a synthetic ``{id}@teams`` placeholder would pollute the store).
     """
@@ -4248,7 +4252,7 @@ async def microsoft_router(request: Request):
     logger.info(f"routing {len(notifications)} notification(s)")
 
     # Route each notification to appropriate processor
-    adapters_url = os.getenv("DROID_ADAPTERS_URL", "http://localhost:8001")
+    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
 
     async with httpx.AsyncClient() as client:
         for notification in notifications:
@@ -4514,7 +4518,7 @@ async def microsoft_oauth_callback(request: Request):
                 status_code=400,
             )
 
-    redirect_uri = os.getenv("DROID_ADAPTERS_URL", "") + "/microsoft/auth/callback"
+    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
 
     # ------------------------------------------------------------------
     # Exchange code → tokens
@@ -4758,7 +4762,7 @@ async def google_oauth_callback(request: Request):
             status_code=500,
         )
 
-    redirect_uri = os.getenv("DROID_ADAPTERS_URL", "") + "/google/auth/callback"
+    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/google/auth/callback"
 
     # Exchange code → tokens
     try:
@@ -4896,7 +4900,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
         email = assistant.get("email")
         if not email:
             continue
-        if is_droid_coordinator_email_address(email):
+        if is_unity_coordinator_email_address(email):
             continue
 
         # Determine provider from the assistant record.  Fall back to
@@ -4967,15 +4971,15 @@ def scheduled_email_watches(payload: ScheduledPayload):
             response = requests.post(
                 f"{SETTINGS.comms_url}/gmail/watch",
                 json={
-                    "primary_email": SETTINGS.droid_coordinator_email_address,
-                    "topic_name": SETTINGS.droid_coordinator_email_watch_topic,
+                    "primary_email": SETTINGS.unity_coordinator_email_address,
+                    "topic_name": SETTINGS.unity_coordinator_email_watch_topic,
                 },
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=30,
             ).json()
             results["gmail"].append(
                 {
-                    "email": SETTINGS.droid_coordinator_email_address,
+                    "email": SETTINGS.unity_coordinator_email_address,
                     **response,
                 },
             )
@@ -5175,7 +5179,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
 
             api_key = assistant.get("api_key")
 
-            # Persist the refreshed token set to Orchestra.  Droid assistants
+            # Persist the refreshed token set to Orchestra.  Unity assistants
             # will pick these values up on the next assistant-secret sync
             # boundary (execute_code, explicit OAuth helper, secret ask, etc.).
             secrets_to_store = {
@@ -5303,7 +5307,7 @@ def scheduled_google_tokens(payload: ScheduledPayload):
 
             api_key = assistant.get("api_key")
 
-            # Persist refreshed Google credentials to Orchestra.  The Droid
+            # Persist refreshed Google credentials to Orchestra.  The Unity
             # runtime intentionally pulls from Orchestra later instead of this
             # cron job pushing directly into running assistant processes.
             secrets_to_store = {
@@ -5658,7 +5662,7 @@ def scheduled_cert_renewal():
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("Starting Droid Adapters server...")
+    logger.info("Starting Unity Adapters server...")
     logger.info("Available endpoints:")
     logger.info("  Twilio:")
     logger.info("    - POST /twilio/call")
@@ -5670,9 +5674,9 @@ if __name__ == "__main__":
     logger.info("  Unify:")
     logger.info("    - POST /unify/message")
     logger.info("    - POST /unify/meet")
-    logger.info("  Droid:")
-    logger.info("    - POST /droid/system-event")
-    logger.info("    - POST /droid/pre-hire")
+    logger.info("  Unity:")
+    logger.info("    - POST /unity/system-event")
+    logger.info("    - POST /unity/pre-hire")
     logger.info("  Assistant:")
     logger.info("    - POST /assistant/wakeup")
     logger.info("    - POST /assistant/update")

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from droid.common.pipeline.types import (
+from unity.common.pipeline.types import (
     FileParseResult,
     InlineRowsHandle,
     IngestCheckpoint,
     IngestPlan,
     TableMeta,
 )
-from droid_deploy.infra.cli import pipeline_control
-from droid_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
+from unity_deploy.infra.cli import pipeline_control
+from unity_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
 
 
 class _ArtifactStore:
@@ -336,7 +336,7 @@ def _patch_verify(monkeypatch, *, checkpoint_rows: int):
         "_get_job_store",
         lambda _infra: _JobStore(),
     )
-    from droid_deploy.infra.gcp import pipeline_observability
+    from unity_deploy.infra.gcp import pipeline_observability
 
     monkeypatch.setattr(
         pipeline_observability,

@@ -2,10 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: droid-parse-worker
+  name: unity-parse-worker
   namespace: staging
   labels:
-    app: droid-parse-worker
+    app: unity-parse-worker
     component: pipeline-worker
     environment: staging
 spec:
@@ -18,34 +18,34 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: droid-parse-worker
+      app: unity-parse-worker
   template:
     metadata:
       labels:
-        app: droid-parse-worker
+        app: unity-parse-worker
         component: pipeline-worker
         environment: staging
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      serviceAccountName: droid-pipeline-worker
+      serviceAccountName: unity-pipeline-worker
       # Parse workers have no per-chunk checkpoint (one message =
       # one download + one Docling parse + one manifest write), so a
       # SIGKILL mid-parse means the whole message retries from
       # scratch.  GKE Autopilot caps termination grace at 10 min,
       # so large in-flight parses may retry after rollouts/drains;
       # the Pub/Sub DLQ
-      # (`droid-dead-letter` + maxDeliveryAttempts=15 from
+      # (`unity-dead-letter` + maxDeliveryAttempts=15 from
       # deploy/scripts/dev/setup_pipeline_infra.sh) still bounds
       # worst-case loops for truly pathological files.
       terminationGracePeriodSeconds: 600
       containers:
       - name: parse-worker
-        image: us-central1-docker.pkg.dev/gcp-project-runtime/droid/droid-staging:latest
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
         command:
         - python
         - -m
-        - droid_deploy.infra.workers.entrypoint_parse
+        - unity_deploy.infra.workers.entrypoint_parse
         lifecycle:
           preStop:
             exec:
@@ -60,16 +60,16 @@ spec:
             memory: "4Gi"
             ephemeral-storage: "4Gi"
         env:
-        - name: DROID_GCP_PIPELINE_ENVIRONMENT
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
-        - name: DROID_GCS_ARTIFACT_BUCKET
-          value: "droid-pipeline-artifacts-staging"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts-staging"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: DROID_PUBSUB_PROJECT_ID
+        - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         livenessProbe:
           exec:
@@ -85,7 +85,7 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: droid-parse-worker-hpa
+  name: unity-parse-worker-hpa
   namespace: staging
   labels:
     environment: staging
@@ -93,7 +93,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: droid-parse-worker
+    name: unity-parse-worker
   minReplicas: 1
   maxReplicas: 10
   metrics:
@@ -103,7 +103,7 @@ spec:
         name: pubsub.googleapis.com|subscription|num_undelivered_messages
         selector:
           matchLabels:
-            resource.labels.subscription_id: droid-parse-sub-staging
+            resource.labels.subscription_id: unity-parse-sub-staging
       target:
         type: AverageValue
         averageValue: "1"
@@ -127,7 +127,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: droid-parse-worker-pdb
+  name: unity-parse-worker-pdb
   namespace: staging
   labels:
     environment: staging
@@ -135,4 +135,4 @@ spec:
   maxUnavailable: 1
   selector:
     matchLabels:
-      app: droid-parse-worker
+      app: unity-parse-worker

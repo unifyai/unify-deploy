@@ -4,7 +4,7 @@ Tests the code generation and helper functions without requiring
 an actual MCP server process.
 """
 
-from droid_deploy.assistant_deployments.integrations.mcp_adapter import (
+from unity_deploy.assistant_deployments.integrations.mcp_adapter import (
     MCPIntegrationAdapter,
     MCPTool,
     _json_type_to_python,

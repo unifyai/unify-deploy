@@ -9,20 +9,20 @@ from pathlib import Path
 
 import yaml
 
-from droid_deploy.assistant_deployments.integrations.loader import (
+from unity_deploy.assistant_deployments.integrations.loader import (
     AggregatedIntegrations,
     load_integration,
     load_integrations,
     _load_guidance,
 )
-from droid.guidance_manager.types.guidance import Guidance
-from droid_deploy.assistant_deployments.integrations.types import (
+from unity.guidance_manager.types.guidance import Guidance
+from unity_deploy.assistant_deployments.integrations.types import (
     Capability,
     IntegrationManifest,
     MCPServerConfig,
     SecretSchema,
 )
-from droid.secret_manager.types import Secret
+from unity.secret_manager.types import Secret
 
 
 @pytest.fixture

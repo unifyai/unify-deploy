@@ -4,18 +4,18 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from droid_deploy.assistant_deployments.integrations.activation import (
+from unity_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
-from droid_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
-from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from droid_deploy.assistant_deployments.scenarios.loader import (
+from unity_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
+from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unity_deploy.assistant_deployments.scenarios.loader import (
     load_scenarios_from_integration,
 )
-from droid_deploy.assistant_deployments.scenarios import cli as scenario_cli
-from droid_deploy.assistant_deployments.scenarios import runtime as scenario_runtime
-from droid_deploy.assistant_deployments.scenarios.runtime import run_scenario_tick
-from droid_deploy.assistant_deployments.scenarios.types import (
+from unity_deploy.assistant_deployments.scenarios import cli as scenario_cli
+from unity_deploy.assistant_deployments.scenarios import runtime as scenario_runtime
+from unity_deploy.assistant_deployments.scenarios.runtime import run_scenario_tick
+from unity_deploy.assistant_deployments.scenarios.types import (
     IntegrationBinding,
     ScenarioSpec,
 )

@@ -159,7 +159,7 @@ def delete_job(
     namespace: str = "default",
     resource_version: str | None = None,
 ):
-    """Delete a Droid job.
+    """Delete a Unity job.
 
     Args:
         resource_version: If provided, the job's resourceVersion must match this
@@ -207,7 +207,7 @@ def read_job(
     job_name: str,
     namespace: str = "default",
 ) -> dict | None:
-    """Read a single Droid job's metadata. Returns None if not found."""
+    """Read a single Unity job's metadata. Returns None if not found."""
     try:
         job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
         return {
@@ -229,15 +229,15 @@ def patch_job_labels(
     labels: dict,
     namespace: str = "default",
 ):
-    """Patch labels on an existing Droid job.
+    """Patch labels on an existing Unity job.
 
     Includes a server-side guard: if the job already has an assistant-id
-    assigned and the patch tries to set droid-status back to idle, the
+    assigned and the patch tries to set unity-status back to idle, the
     patch is rejected.  This prevents a delayed boot-time "I'm idle"
     label from overwriting a valid container assignment.
     """
     try:
-        if labels.get("droid-status") == "idle":
+        if labels.get("unity-status") == "idle":
             job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
             current_labels = job.metadata.labels or {}
             if current_labels.get("assistant-id"):
@@ -285,26 +285,26 @@ def _merge_env_overrides(
     return merged
 
 
-def build_droid_job_manifest(
+def build_unity_job_manifest(
     job_name: str,
     namespace: str = "default",
-    image: str = f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:latest",
+    image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
     deploy_env: str = SETTINGS.deploy_env,
     ttl_seconds_after_finished: int | None = None,
     active_deadline_seconds: int | None = None,
-    droid_status: str = "idle",
+    unity_status: str = "idle",
     priority_class_name: str | None = None,
-    app_label: str = "droid",
+    app_label: str = "unity",
     extra_labels: dict | None = None,
     extra_annotations: dict | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict:
-    """Build the Kubernetes ``batch/v1`` Job manifest for a Droid assistant.
+    """Build the Kubernetes ``batch/v1`` Job manifest for a Unity assistant.
 
     Pure data construction: no Kubernetes API calls, no logging, no
     exception swallowing. The caller decides what to do with the
     returned dict (submit it, dry-run it, render it as YAML, mutate
-    it, ...). The canonical caller is :func:`create_droid_job` in
+    it, ...). The canonical caller is :func:`create_unity_job` in
     this module, which builds + submits.
 
     The split exists so tests can assert manifest shape with direct
@@ -313,13 +313,13 @@ def build_droid_job_manifest(
 
     Args:
         job_name: Name of the Job (also stamped into env as
-            ``DROID_CONVERSATION_JOB_NAME``).
+            ``UNITY_CONVERSATION_JOB_NAME``).
         namespace: Target Kubernetes namespace.
         image: Container image. ``:latest`` tags get
             ``imagePullPolicy: Always``; any other tag (e.g. a SHA)
             gets ``IfNotPresent``.
         deploy_env: ``production`` | ``staging``. Drives env vars
-            (``DEPLOY_ENV``, the gateway transports, ``DROID_STARTUP_TIMING``,
+            (``DEPLOY_ENV``, the gateway transports, ``UNITY_STARTUP_TIMING``,
             the pipeline artifact bucket name).
         ttl_seconds_after_finished: If set, applied to
             ``spec.ttlSecondsAfterFinished`` so finished Jobs garbage
@@ -327,15 +327,15 @@ def build_droid_job_manifest(
         active_deadline_seconds: If set, applied to
             ``spec.activeDeadlineSeconds`` so the Job is hard-killed
             after this duration.
-        droid_status: Initial value of the ``droid-status`` label
+        unity_status: Initial value of the ``unity-status`` label
             (``idle`` for pool jobs, ``running`` for controller-spawned
             jobs with image overrides, etc.).
         priority_class_name: Pod priority class. Defaults to
-            ``droid-idle``.
+            ``unity-idle``.
         app_label: Value of the ``app`` label on both Job and pod
-            template. Defaults to ``droid``; offline-task jobs use
-            ``droid-offline``, dashboard-action jobs use
-            ``droid-dashboard-action``.
+            template. Defaults to ``unity``; offline-task jobs use
+            ``unity-offline``, dashboard-action jobs use
+            ``unity-dashboard-action``.
         extra_labels: Merged into Job ``metadata.labels`` (does NOT
             propagate to the pod template).
         extra_annotations: Merged into both Job
@@ -345,22 +345,22 @@ def build_droid_job_manifest(
             matches one already in the explicit env list override the
             earlier definition (see :func:`_merge_env_overrides`).
     """
-    optional_droid_config_keys = {"DROID_DEPLOY_RUNTIME_RECONCILE_MODE"}
-    droid_config_env = []
+    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
+    unity_config_env = []
     for key in (
         "GCP_PROJECT_ID",
         "PROJECT_ID",
         "VERTEXAI_LOCATION",
         "VERTEXAI_PROJECT",
-        "DROID_DEPLOY_RUNTIME_RECONCILE_MODE",
+        "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
     ):
         config_ref = {
-            "name": "droid-config",
+            "name": "unity-config",
             "key": key,
         }
-        if key in optional_droid_config_keys:
+        if key in optional_unity_config_keys:
             config_ref["optional"] = True
-        droid_config_env.append(
+        unity_config_env.append(
             {
                 "name": key,
                 "valueFrom": {
@@ -368,12 +368,12 @@ def build_droid_job_manifest(
                 },
             },
         )
-    droid_secret_env = [
+    unity_secret_env = [
         {
             "name": key,
             "valueFrom": {
                 "secretKeyRef": {
-                    "name": "droid-secrets",
+                    "name": "unity-secrets",
                     "key": key,
                 },
             },
@@ -393,13 +393,13 @@ def build_droid_job_manifest(
             "SHARED_UNIFY_KEY",
             "TAVILY_API_KEY",
             "VERTEXAI_CREDENTIALS",
-            "_DROID_STARTUP_HOOK_GROUP",
-            "_DROID_STARTUP_HOOK_PACKAGE",
+            "_UNITY_STARTUP_HOOK_GROUP",
+            "_UNITY_STARTUP_HOOK_PACKAGE",
         )
     ]
 
     env_vars = [
-        {"name": "DROID_CONVERSATION_JOB_NAME", "value": job_name},
+        {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
         {"name": "DEPLOY_ENV", "value": deploy_env},
         {
             "name": "GOOGLE_APPLICATION_CREDENTIALS",
@@ -416,40 +416,40 @@ def build_droid_job_manifest(
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
         {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
         {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
-        {"name": "DROID_COMMS_URL", "value": SETTINGS.comms_url},
-        {"name": "DROID_ADAPTERS_URL", "value": SETTINGS.adapters_url},
+        {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
+        {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         {
-            "name": "DROID_STARTUP_TIMING",
+            "name": "UNITY_STARTUP_TIMING",
             "value": "0",
         },
         # Pipeline worker dispatch: route attachment ingestion through the
         # GKE parse/ingest workers via Pub/Sub (topic names are derived
         # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
-        # ``droid-{name}{env_suffix}`` convention).
-        {"name": "DROID_FILE_PIPELINE_DISPATCH_ENABLED", "value": "false"},
+        # ``unity-{name}{env_suffix}`` convention).
+        {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "false"},
         {
-            "name": "DROID_FILE_PIPELINE_ARTIFACT_BUCKET",
+            "name": "UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
             "value": (
-                "droid-pipeline-artifacts"
+                "unity-pipeline-artifacts"
                 if deploy_env == "production"
-                else f"droid-pipeline-artifacts-{deploy_env}"
+                else f"unity-pipeline-artifacts-{deploy_env}"
             ),
         },
     ]
-    env_vars.extend(droid_config_env)
-    env_vars.extend(droid_secret_env)
+    env_vars.extend(unity_config_env)
+    env_vars.extend(unity_secret_env)
     if deploy_env == "staging":
-        # Activate the new droid.gateway transports on staging Jobs
+        # Activate the new unity.gateway transports on staging Jobs
         # so the extracted Ingress + Outbound code paths get exercised
         # against real Pub/Sub traffic before any production cutover.
         # Production Jobs continue using the legacy inline
         # subscribe_to_topic and inline publisher.publish paths until
-        # those paths are explicitly retired. See droid/gateway/PHASES.md
+        # those paths are explicitly retired. See unity/gateway/PHASES.md
         # (Phase A.bis).
         env_vars += [
-            {"name": "DROID_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
-            {"name": "DROID_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},
+            {"name": "UNITY_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
+            {"name": "UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},
         ]
     env_vars = _merge_env_overrides(env_vars, extra_env)
 
@@ -460,9 +460,9 @@ def build_droid_job_manifest(
     metadata_labels = {
         "app": app_label,
         "created-by": "create_job_script",
-        "droid-status": droid_status,
-        "droid-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "droid-image-hash": (image.rsplit(":", 1)[-1] if ":" in image else "unknown"),
+        "unity-status": unity_status,
+        "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "unity-image-hash": (image.rsplit(":", 1)[-1] if ":" in image else "unknown"),
     }
     if extra_labels:
         metadata_labels.update(extra_labels)
@@ -495,10 +495,10 @@ def build_droid_job_manifest(
                     "restartPolicy": "Never",
                     "serviceAccountName": "comm-sa",
                     "terminationGracePeriodSeconds": 30,  # Faster termination
-                    "priorityClassName": (priority_class_name or "droid-idle"),
+                    "priorityClassName": (priority_class_name or "unity-idle"),
                     "containers": [
                         {
-                            "name": "droid-assistant",
+                            "name": "unity-assistant",
                             "image": image,
                             "imagePullPolicy": image_pull_policy,
                             "ports": [
@@ -558,24 +558,24 @@ def build_droid_job_manifest(
     return job_manifest
 
 
-def create_droid_job(
+def create_unity_job(
     batch_api,
     job_name: str,
     namespace: str = "default",
-    image: str = f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:latest",
+    image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
     deploy_env: str = SETTINGS.deploy_env,
     ttl_seconds_after_finished: int | None = None,
     active_deadline_seconds: int | None = None,
-    droid_status: str = "idle",
+    unity_status: str = "idle",
     priority_class_name: str | None = None,
-    app_label: str = "droid",
+    app_label: str = "unity",
     extra_labels: dict | None = None,
     extra_annotations: dict | None = None,
     extra_env: dict[str, str] | None = None,
 ):
-    """Build and submit a Kubernetes Job for a Droid assistant.
+    """Build and submit a Kubernetes Job for a Unity assistant.
 
-    Thin wrapper around :func:`build_droid_job_manifest`: builds the
+    Thin wrapper around :func:`build_unity_job_manifest`: builds the
     manifest from the same arguments, then calls
     ``batch_api.create_namespaced_job(...)``.
 
@@ -593,18 +593,18 @@ def create_droid_job(
       see the test for /infra/job/create's response handling.
 
     All keyword arguments are forwarded to
-    :func:`build_droid_job_manifest` -- see that function for full
+    :func:`build_unity_job_manifest` -- see that function for full
     parameter docs.
     """
     try:
-        job_manifest = build_droid_job_manifest(
+        job_manifest = build_unity_job_manifest(
             job_name=job_name,
             namespace=namespace,
             image=image,
             deploy_env=deploy_env,
             ttl_seconds_after_finished=ttl_seconds_after_finished,
             active_deadline_seconds=active_deadline_seconds,
-            droid_status=droid_status,
+            unity_status=unity_status,
             priority_class_name=priority_class_name,
             app_label=app_label,
             extra_labels=extra_labels,

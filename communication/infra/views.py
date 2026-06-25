@@ -19,7 +19,7 @@ from common.int_list_codec import normalize_int_list
 from common.team_summaries_codec import decode_team_summaries_from_form
 from .helpers import (
     acquire_named_lease,
-    create_droid_job,
+    create_unity_job,
     delete_job,
     get_job_logs,
     patch_job_labels,
@@ -134,7 +134,7 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DROID_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.droid_image_name}:latest"
+DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
 TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
@@ -164,7 +164,7 @@ async def _publish_desktop_ready(
 ) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
-    Publishes a single inbound message for Droid. Droid's event handler
+    Publishes a single inbound message for Unity. Unity's event handler
     constructs the correct liveview URL (with ``/desktop/custom.html``)
     and re-publishes to the ``assistant_desktop_ready`` thread that
     Console's SSE subscription listens on.
@@ -177,7 +177,7 @@ async def _publish_desktop_ready(
 
     message_data = json.dumps(
         {
-            "thread": "droid_system_event",
+            "thread": "unity_system_event",
             "publish_timestamp": time.time(),
             "event": {
                 "assistant_id": assistant_id,
@@ -800,24 +800,24 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(SETTINGS.default_namespace),
-    image: str = Form(DEFAULT_DROID_IMAGE),
+    image: str = Form(DEFAULT_UNITY_IMAGE),
 ):
     """
-    Create a Kubernetes Job for a Droid assistant.
+    Create a Kubernetes Job for a Unity assistant.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to production/staging)
-        image: Docker image to use (optional, defaults to latest droid image)
+        image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = f"droid-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
+        job_name = f"unity-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
 
         job = await asyncio.to_thread(
-            create_droid_job,
+            create_unity_job,
             batch_api=batch_api,
             job_name=job_name,
             namespace=namespace,
@@ -862,7 +862,7 @@ async def delete_kubernetes_job(
     resource_version: str = Form(None),
 ):
     """
-    Delete a Kubernetes Job for a Droid assistant.
+    Delete a Kubernetes Job for a Unity assistant.
 
     Args:
         job_name: Name of the job (required)
@@ -1604,7 +1604,7 @@ async def stop_job(
     namespace: str = Form(SETTINGS.default_namespace),
 ):
     """
-    Stop a Kubernetes Job for a Droid assistant.
+    Stop a Kubernetes Job for a Unity assistant.
     """
     causal_token = push_causal_context(
         build_causal_context(
@@ -1715,7 +1715,7 @@ async def stop_job(
 
 
 def _job_started_at(job) -> datetime | None:
-    """Best-effort UTC start time for a Droid job."""
+    """Best-effort UTC start time for a Unity job."""
     creation_timestamp = getattr(job.metadata, "creation_timestamp", None)
     if creation_timestamp is not None:
         if creation_timestamp.tzinfo is None:
@@ -1741,7 +1741,7 @@ def _job_started_at(job) -> datetime | None:
 
 
 def _job_date_selector(now: datetime, hours: int | None) -> str | None:
-    """Return a droid-date label selector covering the full requested window."""
+    """Return a unity-date label selector covering the full requested window."""
     if hours is None:
         return None
 
@@ -1753,7 +1753,7 @@ def _job_date_selector(now: datetime, hours: int | None) -> str | None:
         (start_date + timedelta(days=offset)).isoformat()
         for offset in range(day_count + 1)
     ]
-    return f"droid-date in ({','.join(relevant_dates)})"
+    return f"unity-date in ({','.join(relevant_dates)})"
 
 
 def _job_status(job) -> str:
@@ -1792,16 +1792,16 @@ def _serialize_job(job) -> dict:
 async def list_kubernetes_jobs(
     namespace: str = SETTINGS.default_namespace,
     hours: int | None = None,
-    label_selector: str = "app=droid",
+    label_selector: str = "app=unity",
 ):
     """
-    List all Droid Kubernetes jobs in the namespace.
+    List all Unity Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
         hours: Optional lookback window in hours. When omitted, returns all
             matching jobs without time-based filtering.
-        label_selector: K8s label selector (optional, defaults to "app=droid")
+        label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
@@ -1880,11 +1880,11 @@ async def get_job_logs_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to get job logs: {str(e)}")
 
 
-# get latest droid image commit hash
+# get latest unity image commit hash
 @router.get("/image")
-async def get_latest_droid_image_commit():
+async def get_latest_unity_image_commit():
     """
-    Get the commit hash of the latest Droid Docker image from a text file in Google Cloud Storage.
+    Get the commit hash of the latest Unity Docker image from a text file in Google Cloud Storage.
 
     Returns:
         JSON response with image details with commit hash
@@ -1893,7 +1893,7 @@ async def get_latest_droid_image_commit():
         storage_client = storage.Client(credentials=_service_account_credentials())
 
         # Define the bucket and file path
-        bucket_name = "droid-image-hash"
+        bucket_name = "unity-image-hash"
         blob_name = SETTINGS.image_hash_blob
 
         try:
@@ -1936,7 +1936,7 @@ async def get_latest_droid_image_commit():
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get latest Droid image commit: {str(e)}",
+            detail=f"Failed to get latest Unity image commit: {str(e)}",
         )
 
 
@@ -2810,7 +2810,7 @@ async def _runtime_resource_state(
 ) -> dict[str, object]:
     """Return the live runtime resources currently owned by an assistant.
 
-    Offline task runners (``app=droid-offline``) run outside the AssistantSession
+    Offline task runners (``app=unity-offline``) run outside the AssistantSession
     lifecycle but still hold writes against the owning body. They are reported
     alongside online Jobs so callers that gate on quiescence — most notably the
     membership-change runtime barrier behind ``/infra/runtime`` — wait for
@@ -2822,12 +2822,12 @@ async def _runtime_resource_state(
         asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=SETTINGS.default_namespace,
-            label_selector=f"app=droid,assistant-id={sanitized}",
+            label_selector=f"app=unity,assistant-id={sanitized}",
         ),
         asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=SETTINGS.default_namespace,
-            label_selector=f"app=droid-offline,assistant-id={sanitized}",
+            label_selector=f"app=unity-offline,assistant-id={sanitized}",
         ),
     )
     active_job_names = [
@@ -2875,7 +2875,7 @@ async def _binding_runtime_resource_state(
         batch_api.list_namespaced_job,
         namespace=SETTINGS.default_namespace,
         label_selector=(
-            f"app=droid,assistant-id={sanitized_assistant_id},"
+            f"app=unity,assistant-id={sanitized_assistant_id},"
             f"{SESSION_BINDING_ID_LABEL}={sanitized_binding_id}"
         ),
     )
@@ -3269,7 +3269,7 @@ async def reconcile_orphaned_disks_endpoint(
     idle_hours: int | None = None,
     hard_cap_hours: int | None = None,
 ):
-    """Garbage-collect unattached ``droid-disk-*`` assistant disks.
+    """Garbage-collect unattached ``unity-disk-*`` assistant disks.
 
     Three deletion branches cover the cost-leak patterns:
 

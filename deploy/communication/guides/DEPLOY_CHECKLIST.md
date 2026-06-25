@@ -5,29 +5,29 @@ the Lease-based container assignment work into staging and production.
 
 ---
 
-## 1. Deprecated: `droid-startup` Pub/Sub topic
+## 1. Deprecated: `unity-startup` Pub/Sub topic
 
-The `droid-startup` (and `droid-startup-staging`) topic is **no longer
+The `unity-startup` (and `unity-startup-staging`) topic is **no longer
 used** in the startup path. The current design works as follows:
 
 - `/infra/job/start` uses a **K8s Lease + CAS** to atomically claim an
   idle container by patching its Job labels and annotations.
 - Containers **poll** `GET /infra/job/{JOB_NAME}` every 500ms to detect
   assignment (no Pub/Sub subscription).
-- `droid-pending-startups` is only used when the pool is exhausted
+- `unity-pending-startups` is only used when the pool is exhausted
   (overflow queue), not as the primary startup mechanism.
 
-### What still references `droid-startup`
+### What still references `unity-startup`
 
 | Location | Status |
 |----------|--------|
 | `scripts/local.sh` | Creates topic in Pub/Sub emulator — **remove** |
 | Root `README.md` (system source of truth), `guides/infra/*.md` | Describe the old flow — **update** |
-| Droid Grafana dashboards | Legacy metric references — **update when convenient** |
+| Unity Grafana dashboards | Legacy metric references — **update when convenient** |
 
 ### Action items
 
-- [ ] Delete the `droid-startup` and `droid-startup-staging` topics and
+- [ ] Delete the `unity-startup` and `unity-startup-staging` topics and
       subscriptions from GCP Pub/Sub after confirming no other service
       references them.
 - [ ] Update `scripts/local.sh` to stop creating the topic (done in this
@@ -46,7 +46,7 @@ and `cloudbuild/adapters-staging.yaml` in this branch.
 
 The scheduler runs every minute and calls the adapters endpoint, which
 forwards to `POST {COMMS_URL}/infra/pending/process` on the Comms App.
-This drains the `droid-pending-startups` Pub/Sub queue and assigns
+This drains the `unity-pending-startups` Pub/Sub queue and assigns
 queued startups to idle containers.
 
 ### Action items
@@ -121,30 +121,30 @@ kubectl auth can-i create leases.coordination.k8s.io \
 
 ---
 
-## 4. Pub/Sub topic creation: `droid-pending-startups`
+## 4. Pub/Sub topic creation: `unity-pending-startups`
 
-The `droid-pending-startups` (and `droid-pending-startups-staging`) topic
+The `unity-pending-startups` (and `unity-pending-startups-staging`) topic
 and subscription must exist in the `gcp-project-runtime` GCP project.
 
 If they don't exist yet:
 
 ```bash
 # Staging
-gcloud pubsub topics create droid-pending-startups-staging \
+gcloud pubsub topics create unity-pending-startups-staging \
   --project=gcp-project-runtime
-gcloud pubsub subscriptions create droid-pending-startups-staging-sub \
-  --topic=droid-pending-startups-staging \
+gcloud pubsub subscriptions create unity-pending-startups-staging-sub \
+  --topic=unity-pending-startups-staging \
   --project=gcp-project-runtime
 
 # Production
-gcloud pubsub topics create droid-pending-startups \
+gcloud pubsub topics create unity-pending-startups \
   --project=gcp-project-runtime
-gcloud pubsub subscriptions create droid-pending-startups-sub \
-  --topic=droid-pending-startups \
+gcloud pubsub subscriptions create unity-pending-startups-sub \
+  --topic=unity-pending-startups \
   --project=gcp-project-runtime
 ```
 
 ### Action items
 
-- [ ] Verify `droid-pending-startups-staging` topic and sub exist
-- [ ] Verify `droid-pending-startups` topic and sub exist (before prod deploy)
+- [ ] Verify `unity-pending-startups-staging` topic and sub exist
+- [ ] Verify `unity-pending-startups` topic and sub exist (before prod deploy)

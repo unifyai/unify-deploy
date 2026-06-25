@@ -10,11 +10,11 @@ to a known-good steady state.
 | Setting | Production | Staging | Where |
 | --- | --- | --- | --- |
 | HPA `minReplicas`/`maxReplicas` | `1` / `20` | `1` / `15` | `ingest-worker-deployment*.yaml` |
-| `DROID_INGEST_ATTEMPT_LEASE_TTL` | `480`s | `480`s | `ingest-worker-deployment*.yaml` |
-| `DROID_INGEST_LEASE_MAX_LIFETIME_S` (code default) | `1800`s | `1800`s | `entrypoint_ingest._lease_lifetime_cap` |
-| `DROID_QUEUED_STALE_AGE_SECONDS` (code default) | `900`s | `900`s | `pipeline_observability.queued_stale_age_seconds` |
+| `UNITY_INGEST_ATTEMPT_LEASE_TTL` | `480`s | `480`s | `ingest-worker-deployment*.yaml` |
+| `UNITY_INGEST_LEASE_MAX_LIFETIME_S` (code default) | `1800`s | `1800`s | `entrypoint_ingest._lease_lifetime_cap` |
+| `UNITY_QUEUED_STALE_AGE_SECONDS` (code default) | `900`s | `900`s | `pipeline_observability.queued_stale_age_seconds` |
 
-The code default for `DROID_INGEST_ATTEMPT_LEASE_TTL` is `480` and matches the
+The code default for `UNITY_INGEST_ATTEMPT_LEASE_TTL` is `480` and matches the
 manifests; the env var is the single source of truth in the cluster.
 
 ## Backfill mode (pin the fleet)
@@ -27,7 +27,7 @@ steadier throughput and avoids churn.
 1. Pin the HPA to a fixed size (`N` = desired steady worker count, e.g. `8`):
 
    ```bash
-   kubectl -n production patch hpa droid-ingest-worker-hpa \
+   kubectl -n production patch hpa unity-ingest-worker-hpa \
      --type merge -p '{"spec":{"minReplicas":8,"maxReplicas":8}}'
    ```
 
@@ -36,14 +36,14 @@ steadier throughput and avoids churn.
    modify-ack-deadline cap):
 
    ```bash
-   kubectl -n production set env deploy/droid-ingest-worker \
-     DROID_INGEST_ATTEMPT_LEASE_TTL=480
+   kubectl -n production set env deploy/unity-ingest-worker \
+     UNITY_INGEST_ATTEMPT_LEASE_TTL=480
    ```
 
 3. Monitor throughput from durable checkpoints (immune to worker log spam):
 
    ```bash
-   uv run python -m droid_deploy.infra.cli.pipeline_control throughput \
+   uv run python -m unity_deploy.infra.cli.pipeline_control throughput \
      --dispatch-id <DISPATCH_ID> --interval 60
    ```
 
@@ -55,11 +55,11 @@ max 20`; staging to `min 1 / max 15`.**
 
 ```bash
 # Production
-kubectl -n production patch hpa droid-ingest-worker-hpa \
+kubectl -n production patch hpa unity-ingest-worker-hpa \
   --type merge -p '{"spec":{"minReplicas":1,"maxReplicas":20}}'
 
 # Staging
-kubectl -n staging patch hpa droid-ingest-worker-hpa \
+kubectl -n staging patch hpa unity-ingest-worker-hpa \
   --type merge -p '{"spec":{"minReplicas":1,"maxReplicas":15}}'
 ```
 
@@ -79,7 +79,7 @@ After any backfill or recovery, confirm declared rows landed in durable
 checkpoints:
 
 ```bash
-uv run python -m droid_deploy.infra.cli.pipeline_control verify \
+uv run python -m unity_deploy.infra.cli.pipeline_control verify \
   --dispatch-id <DISPATCH_ID>
 ```
 
@@ -94,16 +94,16 @@ A non-zero exit means at least one table's checkpoint is short of its declared
 - **running-stale / queued-stale "limbo"**: the `stale-reconciler` CronJob
   (`reconcile-stale --execute`, every 15m) republishes from the parse outbox /
   checkpoints. `queued-stale` only triggers after
-  `DROID_QUEUED_STALE_AGE_SECONDS` so a freshly-dispatched job whose message is
+  `UNITY_QUEUED_STALE_AGE_SECONDS` so a freshly-dispatched job whose message is
   still in flight is never prematurely recovered.
 - **Duplicate live attempt**: deferred until just after the holder's lease is
   stealable (expiry + steal-grace + buffer), bounded by
-  `DROID_DUPLICATE_DEFER_MAX_ATTEMPTS`.
+  `UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS`.
 
 ### Do not run `retry` and `recover-stale` concurrently
 
 Both publish ingest messages. Running them at the same time on the same job
 creates the duplicate-message lease/checkpoint race that can silently
-under-ingest. The in-flight publish guard (`DROID_INFLIGHT_GUARD_SECONDS`) skips
+under-ingest. The in-flight publish guard (`UNITY_INFLIGHT_GUARD_SECONDS`) skips
 a second publish within the window unless `--force` is passed — do not override
 it without confirming no message is in flight.

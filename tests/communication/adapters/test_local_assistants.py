@@ -144,7 +144,7 @@ def _mock_pubsub():
     mock_future = MagicMock()
     mock_future.result.return_value = "test-message-id"
     mock_publisher = MagicMock()
-    mock_publisher.topic_path.return_value = "projects/test/topics/droid-assistant-123"
+    mock_publisher.topic_path.return_value = "projects/test/topics/unity-assistant-123"
     mock_publisher.publish.return_value = mock_future
     return mock_publisher
 
@@ -191,7 +191,7 @@ def test_outlook_notification_respects_local_runtime(
             ),
         ),
         patch.object(app_module, "publish_outlook_thread_id") as mock_publish_thread,
-        patch.object(app_module, "start_droid_job") as mock_start_droid_job,
+        patch.object(app_module, "start_unity_job") as mock_start_unity_job,
     ):
         client = TestClient(app_module.app)
         response = client.post(
@@ -206,9 +206,9 @@ def test_outlook_notification_respects_local_runtime(
     assert response.text == "OK"
     mock_publish_thread.assert_called_once()
     if should_start:
-        mock_start_droid_job.assert_called_once_with(assistant_data, "email")
+        mock_start_unity_job.assert_called_once_with(assistant_data, "email")
     else:
-        mock_start_droid_job.assert_not_called()
+        mock_start_unity_job.assert_not_called()
 
 
 @pytest.mark.parametrize(("is_local", "should_start"), [(True, False), (False, True)])
@@ -251,7 +251,7 @@ def test_teams_notification_respects_local_runtime(
             ),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
-        patch.object(app_module, "start_droid_job") as mock_start_droid_job,
+        patch.object(app_module, "start_unity_job") as mock_start_unity_job,
         patch.object(
             app_module.httpx,
             "AsyncClient",
@@ -272,9 +272,9 @@ def test_teams_notification_respects_local_runtime(
     assert response.text == "OK"
     mock_publisher.publish.assert_called_once()
     if should_start:
-        mock_start_droid_job.assert_called_once_with(assistant_data, "teams")
+        mock_start_unity_job.assert_called_once_with(assistant_data, "teams")
     else:
-        mock_start_droid_job.assert_not_called()
+        mock_start_unity_job.assert_not_called()
 
 
 def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
@@ -322,7 +322,7 @@ def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
             ),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
-        patch.object(app_module, "start_droid_job"),
+        patch.object(app_module, "start_unity_job"),
         patch.object(
             app_module,
             "get_admin_graph_bearer_token",
@@ -373,7 +373,7 @@ def test_teams_notification_emits_resolved_participants(app_module):
     """Group chat inbound must publish a ``participants`` list with the
     assistant resolved to its self contact, known senders matched to their
     contact row by email, and unknowns preserved with ``contact_id=None``
-    so Droid finishes the resolve via its unknown-contact path.
+    so Unity finishes the resolve via its unknown-contact path.
     """
     from fastapi.testclient import TestClient
 
@@ -451,7 +451,7 @@ def test_teams_notification_emits_resolved_participants(app_module):
             return_value=(contacts, True, contacts[1]),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
-        patch.object(app_module, "start_droid_job"),
+        patch.object(app_module, "start_unity_job"),
         patch.object(app_module.httpx, "AsyncClient", return_value=routed),
     ):
         # Ensure a prior test didn't leave a stale roster cached for this chat.
@@ -491,7 +491,7 @@ def test_teams_notification_emits_resolved_participants(app_module):
     bob_entry = by_email.get("bob@external.com")
     assert bob_entry is not None, "unknown member must still be emitted"
     assert bob_entry["contact_id"] is None, (
-        "unknown members must carry contact_id=None so Droid resolves via "
+        "unknown members must carry contact_id=None so Unity resolves via "
         "_get_or_create_unknown_contact rather than the adapter minting rows"
     )
 
@@ -617,7 +617,7 @@ def _run_channel_participants_test(
             return_value=(contacts, True, contacts[1]),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
-        patch.object(app_module, "start_droid_job"),
+        patch.object(app_module, "start_unity_job"),
         patch.object(app_module.httpx, "AsyncClient", return_value=routed),
     ):
         app_module._invalidate_teams_roster(
@@ -665,7 +665,7 @@ def _run_channel_participants_test(
     assert alice_entry["contact_id"] == 5
 
     # @mentioned user (Bob) must always be in participants; contact_id
-    # stays None because Bob isn't in the contacts dict — Droid's
+    # stays None because Bob isn't in the contacts dict — Unity's
     # unknown-contact path owns that creation.
     bob_entry = by_email.get("bob@external.com")
     assert bob_entry is not None, "@mentioned user must be in participants"

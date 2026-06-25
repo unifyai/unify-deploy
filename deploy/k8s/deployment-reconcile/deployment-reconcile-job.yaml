@@ -1,10 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: droid-deployment-reconcile-
+  generateName: unity-deployment-reconcile-
   namespace: __NAMESPACE__
   labels:
-    app: droid-deployment-reconcile
+    app: unity-deployment-reconcile
     component: deployment-reconcile
     environment: __ENVIRONMENT__
 spec:
@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app: droid-deployment-reconcile
+        app: unity-deployment-reconcile
         component: deployment-reconcile
         environment: __ENVIRONMENT__
     spec:
@@ -28,28 +28,28 @@ spec:
         - -c
         - |
           set -eu
-          set -- python -m droid_deploy.scripts.reconcile_deployment \
-            --environment "${DROID_DEPLOYMENT_ENVIRONMENT}" \
-            --planes "${DROID_DEPLOYMENT_PLANES}" \
-            --concurrency "${DROID_DEPLOYMENT_CONCURRENCY}" \
+          set -- python -m unity_deploy.scripts.reconcile_deployment \
+            --environment "${UNITY_DEPLOYMENT_ENVIRONMENT}" \
+            --planes "${UNITY_DEPLOYMENT_PLANES}" \
+            --concurrency "${UNITY_DEPLOYMENT_CONCURRENCY}" \
             --apply
-          if [ -n "${DROID_DEPLOYMENT_CLIENT:-}" ]; then
-            set -- "$@" --client "${DROID_DEPLOYMENT_CLIENT}"
+          if [ -n "${UNITY_DEPLOYMENT_CLIENT:-}" ]; then
+            set -- "$@" --client "${UNITY_DEPLOYMENT_CLIENT}"
           fi
-          if [ -n "${DROID_DEPLOYMENT_ASSISTANT_ID:-}" ]; then
-            set -- "$@" --assistant-id "${DROID_DEPLOYMENT_ASSISTANT_ID}"
+          if [ -n "${UNITY_DEPLOYMENT_ASSISTANT_ID:-}" ]; then
+            set -- "$@" --assistant-id "${UNITY_DEPLOYMENT_ASSISTANT_ID}"
           fi
           exec "$@"
         env:
-        - name: DROID_DEPLOYMENT_ENVIRONMENT
+        - name: UNITY_DEPLOYMENT_ENVIRONMENT
           value: "__ENVIRONMENT__"
-        - name: DROID_DEPLOYMENT_PLANES
+        - name: UNITY_DEPLOYMENT_PLANES
           value: "__PLANES__"
-        - name: DROID_DEPLOYMENT_CONCURRENCY
+        - name: UNITY_DEPLOYMENT_CONCURRENCY
           value: "__CONCURRENCY__"
-        - name: DROID_DEPLOYMENT_CLIENT
+        - name: UNITY_DEPLOYMENT_CLIENT
           value: "__CLIENT__"
-        - name: DROID_DEPLOYMENT_ASSISTANT_ID
+        - name: UNITY_DEPLOYMENT_ASSISTANT_ID
           value: "__ASSISTANT_ID__"
         # brain_operator/deployment.py reads these at reconcile time to
         # decide whether to activate the brain.scheduled cron scenarios.
@@ -61,10 +61,10 @@ spec:
           value: "__BRAIN_OPERATOR_TASKS_ENABLED__"
         - name: ORCHESTRA_URL
           value: "__ORCHESTRA_URL__"
-        - name: DROID_COMMS_URL
-          value: "__DROID_COMMS_URL__"
+        - name: UNITY_COMMS_URL
+          value: "__UNITY_COMMS_URL__"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY

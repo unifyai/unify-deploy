@@ -1,10 +1,10 @@
 # Self-host docker compose stack.
-# Copy to ~/.droid/ by install-compose.sh; keys live in .env beside this file.
+# Copy to ~/.unity/ by install-compose.sh; keys live in .env beside this file.
 
-name: droid-selfhost
+name: unity-selfhost
 
-x-droid-image: &droid_image
-  image: ${DROID_IMAGE:-ghcr.io/unifyai/droid-selfhost:staging}
+x-unity-image: &unity_image
+  image: ${UNITY_IMAGE:-ghcr.io/unifyai/unity-selfhost:staging}
 
 x-console-image: &console_image
   image: ${CONSOLE_IMAGE:-ghcr.io/unifyai/console-selfhost:staging}
@@ -131,8 +131,8 @@ services:
       # SELF_HOST_COMMS_URL at a hosted (e.g. staging) comms deployment to light
       # up the channels that gateway provides — its ORCHESTRA_ADMIN_KEY must then
       # match that deployment's admin key.
-      DROID_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      DROID_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - local-bucket:/data/local-bucket
     depends_on:
@@ -149,8 +149,8 @@ services:
     - "127.0.0.1:8000:8000"
     restart: unless-stopped
 
-  droid-builtins-seed:
-    <<: *droid_image
+  unity-builtins-seed:
+    <<: *unity_image
     command:
     - /bin/bash
     - -c
@@ -175,7 +175,7 @@ services:
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
-      DROID_BUILTINS_PROJECT: ${DROID_BUILTINS_PROJECT:-Builtins}
+      UNITY_BUILTINS_PROJECT: ${UNITY_BUILTINS_PROJECT:-Builtins}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     volumes:
     - runtime:/runtime
@@ -219,19 +219,19 @@ services:
     restart: unless-stopped
 
   gateway:
-    <<: *droid_image
+    <<: *unity_image
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/gateway-entrypoint.sh"]
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
-      DROID_GATEWAY_HOST: 0.0.0.0
-      DROID_GATEWAY_PORT: 8001
-      DROID_GATEWAY_SINGLE_URL: "true"
-      DROID_GATEWAY_STORAGE_DIR: /data/local-bucket
-      DROID_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
-      DROID_COMMS_URL: http://gateway:8001
-      DROID_ADAPTERS_URL: http://gateway:8001
-      DROID_GATEWAY_LOCAL_INGRESS_URL: http://livekit:8787
+      UNITY_GATEWAY_HOST: 0.0.0.0
+      UNITY_GATEWAY_PORT: 8001
+      UNITY_GATEWAY_SINGLE_URL: "true"
+      UNITY_GATEWAY_STORAGE_DIR: /data/local-bucket
+      UNITY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
+      UNITY_COMMS_URL: http://gateway:8001
+      UNITY_ADAPTERS_URL: http://gateway:8001
+      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://livekit:8787
       LIVEKIT_URL: ws://livekit:7880
       LIVEKIT_API_KEY: devkey # pragma: allowlist secret
       LIVEKIT_API_SECRET: secret # pragma: allowlist secret
@@ -271,8 +271,8 @@ services:
       ORCHESTRA_URL: http://orchestra:8000
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       LOCAL_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      DROID_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      DROID_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       SELF_HOST_OWNER_FILE: /runtime/self-host-owner.json
@@ -296,8 +296,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  droid-cm:
-    <<: *droid_image
+  unity-cm:
+    <<: *unity_image
     network_mode: "service:livekit"
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/cm-entrypoint.sh"]
     environment:
@@ -308,12 +308,12 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
       PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
-      DROID_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      DROID_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      DROID_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
-      DROID_CONVERSATION_LOCAL_COMMS_PORT: 8787
-      DROID_DESKTOP_SHARED_MOUNT: "1"
-      DROID_LOCAL_ROOT: /Droid/Local
+      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
+      UNITY_CONVERSATION_LOCAL_COMMS_PORT: 8787
+      UNITY_DESKTOP_SHARED_MOUNT: "1"
+      UNITY_LOCAL_ROOT: /Unity/Local
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       LIVEKIT_URL: ws://127.0.0.1:7880
@@ -329,13 +329,13 @@ services:
       VOICE_PROVIDER: ${VOICE_PROVIDER:-}
       VOICE_ID: ${VOICE_ID:-}
       UNIFY_MODEL: ${UNIFY_MODEL:-}
-      DROID_WEB_TAVILY_API_KEY: ${DROID_WEB_TAVILY_API_KEY:-}
-      DROID_WEB_ENABLED: ${DROID_WEB_ENABLED:-false}
+      UNITY_WEB_TAVILY_API_KEY: ${UNITY_WEB_TAVILY_API_KEY:-}
+      UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-false}
       ANTICAPTCHA_KEY: ${ANTICAPTCHA_KEY:-}
-      DROID_ACTOR_ANTICAPTCHA_KEY: ${DROID_ACTOR_ANTICAPTCHA_KEY:-}
+      UNITY_ACTOR_ANTICAPTCHA_KEY: ${UNITY_ACTOR_ANTICAPTCHA_KEY:-}
     volumes:
     - runtime:/runtime
-    - ${DROID_WORKSPACE_HOST:-./workspace}:/Droid/Local
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     depends_on:
       livekit:
         condition: service_started
@@ -348,17 +348,17 @@ services:
     restart: unless-stopped
 
   desktop:
-    image: ${DESKTOP_IMAGE:-ghcr.io/unifyai/droid-desktop-selfhost:staging}
+    image: ${DESKTOP_IMAGE:-ghcr.io/unifyai/unity-desktop-selfhost:staging}
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/desktop-entrypoint.sh"]
     environment:
-      HOME: /Droid
-      DROID_LOCAL_ROOT: /Droid/Local
+      HOME: /Unity
+      UNITY_LOCAL_ROOT: /Unity/Local
       PORT: "3000"
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
       UNIFY_MODEL: ${UNIFY_MODEL:-}
     volumes:
     - runtime:/runtime
-    - ${DROID_WORKSPACE_HOST:-./workspace}:/Droid/Local
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     restart: unless-stopped
 
   desktop-proxy:
@@ -372,7 +372,7 @@ services:
     restart: unless-stopped
 
   desktop-ready:
-    <<: *droid_image
+    <<: *unity_image
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/publish-desktop-ready.sh"]
     environment:
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json

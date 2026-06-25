@@ -1,19 +1,19 @@
-# Droid Session Visualizer
+# Unity Session Visualizer
 
-Web-based tool for monitoring and analyzing Droid assistant sessions. Downloads session data from GCP and the Orchestra API, then serves an interactive dashboard for exploring timelines, LLM calls, API calls, system logs, guidance, functions, and uploaded files.
+Web-based tool for monitoring and analyzing Unity assistant sessions. Downloads session data from GCP and the Orchestra API, then serves an interactive dashboard for exploring timelines, LLM calls, API calls, system logs, guidance, functions, and uploaded files.
 
 ## Prerequisites
 
 - **gcloud CLI** authenticated with access to the `gcp-project-runtime` project
 - **uv** (Python package manager)
-- `.env` file in `droid/` with:
+- `.env` file in `unity/` with:
   - `ORCHESTRA_ADMIN_KEY` — admin API key for assistant discovery
   - `SHARED_UNIFY_KEY` — shared key for AssistantJobs queries
 
 ## Quick start
 
 ```bash
-cd droid/
+cd unity/
 
 # Download data for an organization
 uv run python scripts/download_session_data.py --org-id 2
@@ -82,7 +82,7 @@ The script is **incremental** — re-running it only downloads new sessions. Gui
       pod_logs/
         unillm/                 # LLM request/response logs
         unify/                  # Orchestra API call logs
-        droid/                  # Framework debug logs
+        unity/                  # Framework debug logs
 ```
 
 ## Visualizer

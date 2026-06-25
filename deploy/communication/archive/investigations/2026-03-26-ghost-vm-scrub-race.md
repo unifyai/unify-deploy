@@ -28,7 +28,7 @@ and immediately killed by scrub before they can transition to idle.
 ## Evidence
 
 ```
-gcloud compute instances list --project=droid-assistant-vms --zones=us-central1-b \
+gcloud compute instances list --project=gcp-project-vms --zones=us-central1-b \
   --filter="labels.pool-role=stopped AND status=RUNNING"
 
 → 10 ghost VMs: all labeled stopped but RUNNING

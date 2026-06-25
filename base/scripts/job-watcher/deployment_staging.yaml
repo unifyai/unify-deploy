@@ -5,7 +5,7 @@ metadata:
   name: job-watcher-critical
 value: 1000000
 globalDefault: false
-description: "Same priority as droid-critical — ensures the watcher is never preempted for lower-priority workloads."
+description: "Same priority as unity-critical — ensures the watcher is never preempted for lower-priority workloads."
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -82,7 +82,7 @@ spec:
       serviceAccountName: comm-sa
       containers:
       - name: job-watcher-staging
-        image: us-central1-docker.pkg.dev/your-gcp-project-id/droid/job-watcher-staging:latest
+        image: us-central1-docker.pkg.dev/your-gcp-project-id/unity/job-watcher-staging:latest
         command: ["kopf", "run", "watcher.py", "--liveness=http://0.0.0.0:8080/healthz", "--namespace=staging", "--standalone"]
         ports:
         - containerPort: 8080
@@ -92,14 +92,14 @@ spec:
           value: staging
         - name: DEPLOY_ENV
           value: staging
-        - name: DROID_COMMS_URL
+        - name: UNITY_COMMS_URL
           value: "https://service.a.run.app"
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
-              name: droid-secrets
+              name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
         resources:
           requests:

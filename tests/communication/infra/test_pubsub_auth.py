@@ -90,7 +90,7 @@ def test_pull_outbound_messages_reports_resolved_identity_on_permission_denied(
     """Permission errors should surface the chosen Pub/Sub principal clearly."""
 
     fake_client = MagicMock(name="subscriber-client")
-    fake_client.subscription_path.return_value = "projects/gcp-project-runtime/subscriptions/droid-1808-staging-outbound-sub"
+    fake_client.subscription_path.return_value = "projects/gcp-project-runtime/subscriptions/unity-1808-staging-outbound-sub"
     fake_client.pull.side_effect = PermissionDenied("forbidden")
     monkeypatch.setattr(
         pubsub_auth.pubsub_v1,
@@ -115,4 +115,4 @@ def test_pull_outbound_messages_reports_resolved_identity_on_permission_denied(
     assert "pubsub.subscriptions.consume" not in message
     assert SERVICE_ACCOUNT_INFO["client_email"] in message
     assert "TEST_GOOGLE_APPLICATION_CREDENTIALS" in message
-    assert "droid-1808-staging-outbound-sub" in message
+    assert "unity-1808-staging-outbound-sub" in message

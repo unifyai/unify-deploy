@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
-VM_IDENTITY_AUDIENCE = "droid-comms-vm"
+VM_IDENTITY_AUDIENCE = "unity-comms-vm"
 VM_SA_EMAIL = f"pool-vm-sa@{SETTINGS.vm_project_id}.iam.gserviceaccount.com"
 
 

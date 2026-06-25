@@ -2,11 +2,11 @@
 tests/conftest.py
 =================
 
-Lightweight pytest configuration for droid-deploy.
+Lightweight pytest configuration for unity-deploy.
 
-Droid-deploy tests are mostly offline unit tests.  The heavy session lifecycle
+Unity-deploy tests are mostly offline unit tests.  The heavy session lifecycle
 (project create/delete, per-test context isolation, cost tracking, stub
-patching) from the droid repo is NOT replicated here — it's unnecessary.
+patching) from the unity repo is NOT replicated here — it's unnecessary.
 
 Integration tests that need a live Unify project use ``@_handle_project``
 from ``tests.helpers`` and are gated behind ``@pytest.mark.requires_orchestra``.
@@ -25,7 +25,7 @@ import pytest
 import unify
 
 from tests.settings import SETTINGS
-from droid.manager_registry import ManagerRegistry
+from unity.manager_registry import ManagerRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _check_orchestra_available() -> bool:
 # --------------------------------------------------------------------------- #
 def pytest_configure(config):
     try:
-        from droid_deploy.utils.load_repo_env import load_repo_dotenv
+        from unity_deploy.utils.load_repo_env import load_repo_dotenv
 
         load_repo_dotenv(override=False)
     except Exception:

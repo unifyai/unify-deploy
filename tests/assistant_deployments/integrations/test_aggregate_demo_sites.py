@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from droid_deploy.assistant_deployments.integrations.aggregate_demo_sites import (
+from unity_deploy.assistant_deployments.integrations.aggregate_demo_sites import (
     aggregate_demo_sites,
 )
 

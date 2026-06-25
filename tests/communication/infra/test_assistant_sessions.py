@@ -33,7 +33,7 @@ from communication.infra.assistant_sessions import (
     create_or_update_bootstrap_secret,
     delete_assistant_session,
     desktop_url_matches_vm_ref,
-    get_latest_droid_image,
+    get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
     persist_binding_vm_assignment_result,
@@ -114,16 +114,16 @@ def test_build_assistant_session_spec_carries_image_override():
         desktop_mode="ubuntu",
         startup_secret_ref="session-bootstrap-42",
         activation_id="act-1",
-        image_override="registry/droid-staging:override-myslug-deadbeef",
+        image_override="registry/unity-staging:override-myslug-deadbeef",
     )
-    assert spec["imageOverride"] == ("registry/droid-staging:override-myslug-deadbeef")
+    assert spec["imageOverride"] == ("registry/unity-staging:override-myslug-deadbeef")
 
 
 def test_build_assistant_session_spec_carries_runtime_service_urls():
     service_urls = build_runtime_service_urls(
         orchestra_url="https://internal.example.com/v0",
-        comms_url="https://coordinator---droid-comms-app-staging.run.app",
-        adapters_url="https://coordinator---droid-adapters-staging.run.app",
+        comms_url="https://coordinator---unity-comms-app-staging.run.app",
+        adapters_url="https://coordinator---unity-adapters-staging.run.app",
     )
     spec = build_assistant_session_spec(
         assistant_id="42",
@@ -138,8 +138,8 @@ def test_build_assistant_session_spec_carries_runtime_service_urls():
     assert spec["serviceUrls"] == service_urls
     assert session_runtime_service_env({"spec": spec}) == {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "DROID_COMMS_URL": "https://coordinator---droid-comms-app-staging.run.app",
-        "DROID_ADAPTERS_URL": "https://coordinator---droid-adapters-staging.run.app",
+        "UNITY_COMMS_URL": "https://coordinator---unity-comms-app-staging.run.app",
+        "UNITY_ADAPTERS_URL": "https://coordinator---unity-adapters-staging.run.app",
     }
 
 
@@ -148,7 +148,7 @@ def test_session_runtime_service_env_rejects_partial_service_urls():
         "spec": {
             "serviceUrls": {
                 "orchestra": "https://internal.example.com/v0",
-                "adapters": "https://coordinator---droid-adapters-staging.run.app",
+                "adapters": "https://coordinator---unity-adapters-staging.run.app",
             },
         },
     }
@@ -164,9 +164,9 @@ def test_session_image_override_normalizes_missing_or_blank_values():
     assert session_image_override({"spec": {"imageOverride": "   "}}) is None
     assert (
         session_image_override(
-            {"spec": {"imageOverride": "registry/droid-staging:override-x"}},
+            {"spec": {"imageOverride": "registry/unity-staging:override-x"}},
         )
-        == "registry/droid-staging:override-x"
+        == "registry/unity-staging:override-x"
     )
 
 
@@ -196,37 +196,37 @@ def test_merge_conditions_replaces_by_type():
 def test_vm_refs_match_requires_same_identity():
     assert vm_refs_match(
         {
-            "name": "droid-pool-ubuntu-10-staging",
-            "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
         },
         {
-            "name": "droid-pool-ubuntu-10-staging",
-            "hostname": "https://droid-pool-ubuntu-10-staging.vm.unify.ai/",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "https://unity-pool-ubuntu-10-staging.vm.unify.ai/",
         },
     )
     assert not vm_refs_match(
         {
-            "name": "droid-pool-ubuntu-10-staging",
-            "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
         },
         {
-            "name": "droid-pool-ubuntu-14-staging",
-            "hostname": "droid-pool-ubuntu-14-staging.vm.unify.ai",
+            "name": "unity-pool-ubuntu-14-staging",
+            "hostname": "unity-pool-ubuntu-14-staging.vm.unify.ai",
         },
     )
 
 
 def test_desktop_url_matches_vm_ref_normalizes_scheme():
     vm_ref = {
-        "name": "droid-pool-ubuntu-10-staging",
-        "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+        "name": "unity-pool-ubuntu-10-staging",
+        "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
     }
     assert desktop_url_matches_vm_ref(
-        "https://droid-pool-ubuntu-10-staging.vm.unify.ai/",
+        "https://unity-pool-ubuntu-10-staging.vm.unify.ai/",
         vm_ref,
     )
     assert not desktop_url_matches_vm_ref(
-        "https://droid-pool-ubuntu-14-staging.vm.unify.ai",
+        "https://unity-pool-ubuntu-14-staging.vm.unify.ai",
         vm_ref,
     )
 
@@ -244,13 +244,13 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
             "observedActivationId": "act-1",
             "binding": build_binding(
                 binding_id="binding-1",
-                job_ref={"name": "droid-job-1"},
-                pod_ref={"name": "droid-pod-1"},
+                job_ref={"name": "unity-job-1"},
+                pod_ref={"name": "unity-pod-1"},
                 vm_ref={
-                    "name": "droid-pool-ubuntu-10-staging",
-                    "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+                    "name": "unity-pool-ubuntu-10-staging",
+                    "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
                 },
-                desktop_url="https://droid-pool-ubuntu-10-staging.vm.unify.ai",
+                desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
             "lastError": "waiting",
             "suspendIntent": build_suspend_intent(
@@ -270,9 +270,9 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
     assert summary["assistant_id"] == "1207"
     assert summary["session_name"] == "assistant-session-1207"
     assert summary["activation_id"] == "act-1"
-    assert summary["job_name"] == "droid-job-1"
-    assert summary["vm_name"] == "droid-pool-ubuntu-10-staging"
-    assert summary["vm_hostname"] == "droid-pool-ubuntu-10-staging.vm.unify.ai"
+    assert summary["job_name"] == "unity-job-1"
+    assert summary["vm_name"] == "unity-pool-ubuntu-10-staging"
+    assert summary["vm_hostname"] == "unity-pool-ubuntu-10-staging.vm.unify.ai"
     assert summary["suspend_intent"] == SUSPEND_INTENT_REPLACE
     assert summary["suspend_intent_binding_id"] == "binding-1"
     assert summary["suspend_intent_source"] == "controller.bootstrap_timeout"
@@ -289,8 +289,8 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
             "status": {
                 "binding": build_binding(
                     binding_id="binding-1",
-                    vm_ref={"name": "droid-pool-ubuntu-10-staging"},
-                    desktop_url="https://droid-pool-ubuntu-10-staging.vm.unify.ai",
+                    vm_ref={"name": "unity-pool-ubuntu-10-staging"},
+                    desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
                 ),
             },
         },
@@ -406,7 +406,7 @@ def test_patch_assistant_session_status_replaces_signals_without_touching_bindin
             "phase": "PendingGuest",
             "binding": build_binding(
                 binding_id="binding-1",
-                vm_ref={"name": "droid-pool-ubuntu-10-staging"},
+                vm_ref={"name": "unity-pool-ubuntu-10-staging"},
             ),
         },
     }
@@ -436,7 +436,7 @@ def test_patch_assistant_session_status_replaces_signals_without_touching_bindin
             "desktopReady": build_binding_signal(
                 binding_id="binding-1",
                 state="ready",
-                hostname="droid-pool-ubuntu-10-staging.vm.unify.ai",
+                hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
         },
     )
@@ -456,7 +456,7 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
                 "vmGuestHealth": build_binding_signal(
                     binding_id="binding-1",
                     state="ready",
-                    vmRef={"name": "droid-pool-ubuntu-10-staging"},
+                    vmRef={"name": "unity-pool-ubuntu-10-staging"},
                 ),
             },
         },
@@ -487,13 +487,13 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
         payload=build_binding_signal(
             binding_id="binding-1",
             state="ready",
-            hostname="droid-pool-ubuntu-10-staging.vm.unify.ai",
+            hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
         ),
         source="test",
     )
 
     assert session_signal(updated, "vmGuestHealth")["state"] == "ready"
-    assert session_signal(updated, "desktopReady")["hostname"].startswith("droid-pool")
+    assert session_signal(updated, "desktopReady")["hostname"].startswith("unity-pool")
 
 
 def test_record_released_binding_upserts_release_ledger(monkeypatch):
@@ -632,8 +632,8 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
         attempt_id="attempt-1",
         state="assigned",
         vm_ref={
-            "name": "droid-pool-ubuntu-10-staging",
-            "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
             "vmType": "ubuntu",
         },
         source="test",
@@ -642,7 +642,7 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
     assert persisted is True
     assert (
         binding_vm_ref(session["status"]["binding"])["name"]
-        == "droid-pool-ubuntu-10-staging"
+        == "unity-pool-ubuntu-10-staging"
     )
     assert binding_vm_assignment(session["status"]["binding"]) == {}
 
@@ -763,7 +763,7 @@ def test_record_assistant_session_signal_persists_source_and_causal_context(
             payload=build_binding_signal(
                 binding_id="binding-1",
                 state="ready",
-                hostname="droid-pool-ubuntu-10-staging.vm.unify.ai",
+                hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
             source="test",
         )
@@ -783,13 +783,13 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
             "phase": "Active",
             "binding": build_binding(
                 binding_id="binding-1",
-                job_ref={"name": "droid-job-1", "namespace": "staging"},
-                pod_ref={"name": "droid-pod-1", "namespace": "staging"},
+                job_ref={"name": "unity-job-1", "namespace": "staging"},
+                pod_ref={"name": "unity-pod-1", "namespace": "staging"},
                 vm_ref={
-                    "name": "droid-pool-ubuntu-10-staging",
-                    "hostname": "droid-pool-ubuntu-10-staging.vm.unify.ai",
+                    "name": "unity-pool-ubuntu-10-staging",
+                    "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
                 },
-                desktop_url="https://droid-pool-ubuntu-10-staging.vm.unify.ai",
+                desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
         },
     }
@@ -1381,7 +1381,7 @@ def test_create_or_update_assistant_session_converges_after_patch_conflict_when_
     assert session["spec"]["medium"] == "unify_message"
 
 
-def test_get_latest_droid_image_uses_inline_service_account_when_present(
+def test_get_latest_unity_image_uses_inline_service_account_when_present(
     monkeypatch,
 ):
     from google.cloud import storage
@@ -1419,19 +1419,19 @@ def test_get_latest_droid_image_uses_inline_service_account_when_present(
     )
     monkeypatch.setattr(storage, "Client", FakeStorageClient)
 
-    image = get_latest_droid_image()
+    image = get_latest_unity_image()
 
     assert seen["info"] == {"client_email": "svc@example.com"}
     assert seen["credentials"] is sentinel_creds
-    assert seen["bucket"] == "droid-image-hash"
+    assert seen["bucket"] == "unity-image-hash"
     assert seen["blob"] == assistant_sessions_module.SETTINGS.image_hash_blob
     assert (
         image == f"{assistant_sessions_module.SETTINGS.image_registry}/"
-        f"{assistant_sessions_module.SETTINGS.droid_image_name}:abc123"
+        f"{assistant_sessions_module.SETTINGS.unity_image_name}:abc123"
     )
 
 
-def test_get_latest_droid_image_falls_back_to_adc_when_inline_key_missing(
+def test_get_latest_unity_image_falls_back_to_adc_when_inline_key_missing(
     monkeypatch,
 ):
     from google.cloud import storage
@@ -1464,10 +1464,10 @@ def test_get_latest_droid_image_falls_back_to_adc_when_inline_key_missing(
     )
     monkeypatch.setattr(storage, "Client", FakeStorageClient)
 
-    image = get_latest_droid_image()
+    image = get_latest_unity_image()
 
     assert seen["credentials"] is None
     assert (
         image == f"{assistant_sessions_module.SETTINGS.image_registry}/"
-        f"{assistant_sessions_module.SETTINGS.droid_image_name}:def456"
+        f"{assistant_sessions_module.SETTINGS.unity_image_name}:def456"
     )

@@ -3,12 +3,12 @@
 Internal full-local stack using prebuilt images and Docker Compose. This is an
 **internal-only** path: it brings up local Orchestra + Console + Coordinator +
 gateway and depends on the private `console`/`orchestra` images. The
-open-source `droid` public path instead runs the agent runtime locally against
-the hosted Orchestra backend (see `droid/README.md`).
+open-source `unity` public path instead runs the agent runtime locally against
+the hosted Orchestra backend (see `unity/README.md`).
 
 ## Quick start
 
-Run from a `droid-deploy` checkout:
+Run from a `unity-deploy` checkout:
 
 ```bash
 bash selfhost/install-compose.sh
@@ -16,7 +16,7 @@ bash selfhost/install-compose.sh
 
 Requires **Docker** only. The installer:
 
-1. Writes `~/.droid/docker-compose.yml` and `.env`
+1. Writes `~/.unity/docker-compose.yml` and `.env`
 2. Runs the BYOK wizard (LLM + voice keys)
 3. Pulls GHCR images and starts the stack
 4. Opens Console at http://127.0.0.1:3000
@@ -33,9 +33,9 @@ Use this when Twin should drive **your physical Mac** (Finder, Chrome, logged-in
 
 ### 1. Finish the compose install first
 
-Complete [Quick start](#quick-start) above: `droid stack up`, sign in at Console, hire or open your Coordinator.
+Complete [Quick start](#quick-start) above: `unity stack up`, sign in at Console, hire or open your Coordinator.
 
-Copy **your API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. This is your Orchestra user key (the same one Twin uses), not `ORCHESTRA_ADMIN_KEY`. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. It is **not** written to `~/.droid/.env` (that file is only for stack secrets and BYOK provider keys).
+Copy **your API key** from Console: assistant row → **⋯** → **Connect your desktop** → **Copy API Key**. This is your Orchestra user key (the same one Twin uses), not `ORCHESTRA_ADMIN_KEY`. Paste it into the Desktop Assistant installer or tray **Settings…** when prompted. It is **not** written to `~/.unity/.env` (that file is only for stack secrets and BYOK provider keys).
 
 ### 2. Install Unify Desktop Assistant
 
@@ -50,7 +50,7 @@ cd unify-desktop-assistant/macos/tools
 ./setup.sh --self-host --unify-key YOUR_KEY --link-coordinator
 ```
 
-`YOUR_KEY` is the same **Copy API Key** value from Console (**Connect your desktop**), not `ORCHESTRA_ADMIN_KEY` from `~/.droid/.env`.
+`YOUR_KEY` is the same **Copy API Key** value from Console (**Connect your desktop**), not `ORCHESTRA_ADMIN_KEY` from `~/.unity/.env`.
 
 ### 3. Enable Screen Sharing
 
@@ -60,7 +60,7 @@ The Desktop Assistant installer (or `setup.sh`) turns on **Screen Sharing** (Rem
 |---------|------|------|
 | Apple Screen Sharing (VNC) | 5900 | Your Mac's display |
 | websockify (noVNC) | 6080 | Local proxy for the agent |
-| agent-service | 13000 | Droid control API (Console keeps **3000**) |
+| agent-service | 13000 | Unity control API (Console keeps **3000**) |
 
 On first run, macOS may prompt for **Screen Sharing** / **Accessibility** permissions — approve them.
 
@@ -70,28 +70,28 @@ Verify locally (optional): tray app → open desktop viewer, or check the menu-b
 
 ### 4. Register and link in Console
 
-With `droid stack up` running, open **Unify Desktop Assistant → Settings…** and paste your API key (from **Connect your desktop** in Console) if you did not enter it during install. Compose self-host is auto-detected (`~/.droid/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
+With `unity stack up` running, open **Unify Desktop Assistant → Settings…** and paste your API key (from **Connect your desktop** in Console) if you did not enter it during install. Compose self-host is auto-detected (`~/.unity/docker-compose.yml`); setup registers `http://host.docker.internal:13000` and links the Coordinator.
 
 Then in Console → assistant **⋯** → **Connect your desktop**:
 
 - Confirm your Mac appears in the list and link it to the Coordinator if needed.
 - **Save User Password** (macOS login password) if prompted — used later for unlock/accessibility.
 
-### 5. Restart Droid so CM picks up the link
+### 5. Restart Unity so CM picks up the link
 
 ```bash
-droid restart
+unity restart
 ```
 
 Ask Twin to do something on your Mac (e.g. “take a screenshot of my desktop”). You do **not** need to open `http://127.0.0.1:6080/vnc.html` — that URL is for local debugging; Console shows Twin’s **managed** desktop at `:8090`, not your Mac’s noVNC feed.
 
 ## Control your Linux desktop
 
-Use this when Twin should drive **your physical Linux session** (your logged-in desktop, not the Docker sandbox at `:8090`). Requires a graphical desktop (X11) and `droid stack up` running first.
+Use this when Twin should drive **your physical Linux session** (your logged-in desktop, not the Docker sandbox at `:8090`). Requires a graphical desktop (X11) and `unity stack up` running first.
 
 ### 1. Finish the compose install first
 
-Same as [Quick start](#quick-start): `droid stack up`, sign in at Console, open your Coordinator.
+Same as [Quick start](#quick-start): `unity stack up`, sign in at Console, open your Coordinator.
 
 Copy **your API key** from Console → assistant **⋯** → **Connect your desktop** → **Copy API Key** (your Orchestra user key, not `ORCHESTRA_ADMIN_KEY`).
 
@@ -103,7 +103,7 @@ Download **`unify-desktop-assistant-staging.deb`** from [GitHub Releases](https:
 sudo apt install ./unify-desktop-assistant-staging.deb
 ```
 
-Enter your API key when prompted. If `~/.droid/docker-compose.yml` exists, the installer auto-detects compose self-host: agent listens on **13000** (Console stays on **3000**).
+Enter your API key when prompted. If `~/.unity/docker-compose.yml` exists, the installer auto-detects compose self-host: agent listens on **13000** (Console stays on **3000**).
 
 **Developer alternative** (no `.deb`):
 
@@ -116,21 +116,21 @@ cd unify-desktop-assistant/ubuntu/tools
 
 The assistant starts **x11vnc** (5900), **websockify/noVNC** (6080), and **agent-service** (13000 in self-host mode). The tray icon should turn green when all are up.
 
-If registration failed because Orchestra was not up yet, run **`droid stack up`**, then tray **Settings…** → paste your API key again (or `setup.sh --reconfigure --unify-key YOUR_KEY`).
+If registration failed because Orchestra was not up yet, run **`unity stack up`**, then tray **Settings…** → paste your API key again (or `setup.sh --reconfigure --unify-key YOUR_KEY`).
 
-### 4. Link in Console and restart Droid
+### 4. Link in Console and restart Unity
 
 Console → **Connect your desktop** → link your machine → then:
 
 ```bash
-droid restart
+unity restart
 ```
 
 Ask Twin to do something on **your Linux desktop** (e.g. “take a screenshot of my desktop”).
 
 ## Control your Windows desktop
 
-Use this when Twin should drive **your physical Windows desktop** (not the Docker sandbox). Requires **`droid stack up`** running (Docker Desktop) before or during assistant setup.
+Use this when Twin should drive **your physical Windows desktop** (not the Docker sandbox). Requires **`unity stack up`** running (Docker Desktop) before or during assistant setup.
 
 ### 1. Finish the compose install first
 
@@ -140,7 +140,7 @@ Same as [Quick start](#quick-start). Copy **your API key** from Console → **Co
 
 Download **`unify-desktop-assistant-staging.exe`** from [GitHub Releases](https://github.com/unifyai/unify-desktop-assistant/releases) and run the installer.
 
-When `%USERPROFILE%\.droid\docker-compose.yml` exists, the installer detects compose self-host: **TightVNC** + **websockify** + **agent-service** on port **13000** (Console keeps **3000**).
+When `%USERPROFILE%\.unity\docker-compose.yml` exists, the installer detects compose self-host: **TightVNC** + **websockify** + **agent-service** on port **13000** (Console keeps **3000**).
 
 **Developer alternative**:
 
@@ -154,39 +154,39 @@ cd unify-desktop-assistant\windows\tools
 If install logged `Failed to connect to 127.0.0.1 port 8000`, start the stack and re-register:
 
 ```powershell
-droid stack up
+unity stack up
 # then tray Settings → paste API key, or:
 .\setup.ps1 -Reconfigure -UnifyKey YOUR_KEY
 ```
 
-### 4. Link in Console and restart Droid
+### 4. Link in Console and restart Unity
 
 Console → **Connect your desktop** → link your PC → then:
 
 ```bash
-droid restart
+unity restart
 ```
 
 Ask Twin to do something on **your Windows desktop**.
 
-A copy of this guide is written to `~/.droid/README.md` when you run the installer.
+A copy of this guide is written to `~/.unity/README.md` when you run the installer.
 
 ## Daily commands
 
 | Command | Effect |
 |---------|--------|
-| `droid` (or `droid up`) | Start or resume the stack |
-| `droid down` | Stop Console UI; CM + scheduler keep running |
-| `droid down --full` | Stop all services |
-| `droid restart` | Recreate containers after editing `.env` |
-| `droid status` | Show container status |
-| `droid smoke` | Verify the running local stack end-to-end |
-| `droid logs [service...]` | Follow logs (optionally for specific services) |
-| `droid pull` | Pull the latest images |
-| `droid doctor` | Docker + key + service health |
-| `droid integrations-sync` | Rerun the Builtins integrations artifact seed (needs `COMPOSIO_API_KEY`) |
+| `unity` (or `unity up`) | Start or resume the stack |
+| `unity down` | Stop Console UI; CM + scheduler keep running |
+| `unity down --full` | Stop all services |
+| `unity restart` | Recreate containers after editing `.env` |
+| `unity status` | Show container status |
+| `unity smoke` | Verify the running local stack end-to-end |
+| `unity logs [service...]` | Follow logs (optionally for specific services) |
+| `unity pull` | Pull the latest images |
+| `unity doctor` | Docker + key + service health |
+| `unity integrations-sync` | Rerun the Builtins integrations artifact seed (needs `COMPOSIO_API_KEY`) |
 
-Every command is also available under `droid stack <command>` (e.g. `droid stack logs`).
+Every command is also available under `unity stack <command>` (e.g. `unity stack logs`).
 
 ## Configuration
 
@@ -199,37 +199,37 @@ The installer generates local secrets (`POSTGRES_PASSWORD`, `ORCHESTRA_ADMIN_KEY
 | `OPENAI_API_KEY` | Tool-search embeddings (recommended even with other chat providers) |
 | `DEEPGRAM_API_KEY` + `CARTESIA_API_KEY` or `ELEVEN_API_KEY` | Browser voice calls (STT + TTS) |
 | `COMPOSIO_API_KEY` | Optional provider-backed integration catalog sync |
-| `UNIFY_MODEL` | Optional override; Droid picks a default when unset |
+| `UNIFY_MODEL` | Optional override; Unity picks a default when unset |
 
 On first `docker compose up`, the one-shot `orchestra-seed` service inserts billing
-plan rows Postgres needs before registration. Always start with `droid stack up`
+plan rows Postgres needs before registration. Always start with `unity stack up`
 (full stack) — starting individual services manually can skip that seed step.
 
-The stack also seeds Builtins artifacts through the `droid-builtins-seed` one-shot
-service. Core artifacts (functions and guidance) are seeded from the Droid image.
+The stack also seeds Builtins artifacts through the `unity-builtins-seed` one-shot
+service. Core artifacts (functions and guidance) are seeded from the Unity image.
 If `COMPOSIO_API_KEY` is set, the self-host integration manifest at
 `deploy/selfhost/integration-bootstrap.selfhost.toml` seeds provider-backed
 integration apps/tools into Orchestra's `Builtins/Integrations/*` contexts. Rerun
 that artifact seed after changing provider keys or manifests:
 
 ```bash
-droid integrations-sync
+unity integrations-sync
 ```
 
-Edit `~/.droid/.env` for BYOK keys and secrets. After changes:
+Edit `~/.unity/.env` for BYOK keys and secrets. After changes:
 
 ```bash
-droid restart
+unity restart
 ```
 
-Workspace files live at `~/Droid/Local` (bind-mounted into CM and desktop containers).
+Workspace files live at `~/Unity/Local` (bind-mounted into CM and desktop containers).
 
 ## Developer source install
 
 Run the full stack from sibling source checkouts (for internal development).
-Lay out `droid`, `unify`, `unillm`, `console`, `orchestra`, and `droid-deploy`
+Lay out `unity`, `unify`, `unillm`, `console`, `orchestra`, and `unity-deploy`
 as siblings under one root (`UNIFY_STACK_ROOT`, defaults to the parent of
-`droid-deploy`), then drive everything from this repo's `selfhost/` scripts:
+`unity-deploy`), then drive everything from this repo's `selfhost/` scripts:
 
 ```bash
 bash selfhost/setup.sh        # one-time bootstrap (local Orchestra, Console env, voice)
@@ -239,7 +239,7 @@ bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 `selfhost/stack.sh up` is intentionally scratch-first because that is the normal
 developer loop. It stops any previous source stack, clears stale durable tmux
 state, starts the local services, resets the self-host owner + Coordinator state,
-rewrites the runtime credential files under `~/.droid`, seeds the `Builtins`
+rewrites the runtime credential files under `~/.unity`, seeds the `Builtins`
 catalogues, starts one Coordinator runtime, runs smoke checks, and verifies
 `http://localhost:3000/account`.
 
@@ -254,19 +254,18 @@ bash selfhost/stack.sh up
 ```
 
 That path repairs the common local sharp edges: stale `coordinator-runtime.json`,
-a stale `droid-stack` tmux session, a missing `Builtins` project, or a stopped
-Droid gateway.
+a stale `unity-stack` tmux session, a missing `Builtins` project, or a stopped
+Unity gateway.
 
 Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
-data, E2E tests) and is not the way to run the product locally — `droid stack
+data, E2E tests) and is not the way to run the product locally — `unity stack
 up` invokes it with `--self-host` for you.
 
-### Phone & WhatsApp calls (source install)
+### Phone & WhatsApp calls (opt-in, source install)
 
 Browser/Console voice (Unify Meet) works out of the box via the local dev
-LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are enabled
-for local self-host because onboarding exercises them. They need two extra
-runtime pieces:
+LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are opt-in
+because they need two things the default poll-only stack deliberately avoids:
 
 - A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
   URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
@@ -277,25 +276,25 @@ runtime pieces:
   worker connects outbound to the cloud room, so only the HTTP webhook is
   tunneled — no SIP/RTP tunneling.
 
-Before starting the stack, create the local secret files from the tracked
-templates:
+Enable it:
 
 ```bash
-mkdir -p ~/.droid
-cp selfhost/comms_twilio.env.example ~/.droid/comms_twilio.env
-cp selfhost/livekit_cloud.env.example ~/.droid/livekit_cloud.env
-
-# Fill both files with the localhost Twilio + LiveKit Cloud SIP credentials.
+# 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
+# 2. Provide its creds + SIP URI (BYOK wizard, or write ~/.unity/livekit_cloud.env):
+#      LIVEKIT_URL=wss://<project>.livekit.cloud
+#      LIVEKIT_API_KEY=...
+#      LIVEKIT_API_SECRET=...
+#      LIVEKIT_SIP_URI=<project>.sip.livekit.cloud
+# 3. Turn calls on and start the stack:
+export SELF_HOST_CALLS_ENABLED=1
 bash selfhost/stack.sh up
 ```
 
-On `up` the stack installs `cloudflared`, starts the tunnel, ensures a LiveKit
-Cloud inbound SIP trunk covers the localhost numbers
+On `up` (when enabled) the stack: installs `cloudflared`, starts the tunnel,
+ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
 (`selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
-(`selfhost/sync_comms_webhooks.py --set-voice`). If any call prerequisite cannot
-be established, `stack.sh up` fails rather than leaving Twilio pointed at a stale
-or hosted webhook. `stack.sh down --full` reverts the voice webhook and stops the
-tunnel.
+(`selfhost/sync_comms_webhooks.py --set-voice`). `stack.sh down --full` reverts
+the voice webhook and stops the tunnel.
 
 Caveats:
 
@@ -305,13 +304,12 @@ Caveats:
 - cloudflared quick tunnels get a fresh URL each run; the voice webhook is
   re-synced automatically on `up` and whenever the tunnel restarts.
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio
-  account; otherwise startup fails with the Twilio error so the broken call path
-  is visible immediately.
+  account; the voice-app attach is best-effort and logs a warning otherwise.
 
 ## Builtins Artifacts
 
 The compose bootstrap creates the shared `Builtins` project and seeds the core
-Droid artifacts used by self-hosted assistants. Provider-backed integration
+Unity artifacts used by self-hosted assistants. Provider-backed integration
 artifacts, such as Composio app/tool rows, are explicit because they require the
 provider credential for the selected backend.
 
@@ -348,4 +346,4 @@ Voice uses LiveKit in `--dev` mode with ports `7880` (WS), `7881` (TCP fallback)
 
 See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, LiveKit, gateway, Console, CM supervisor, desktop, and Caddy proxy.
 
-Entrypoint scripts (`cm-entrypoint.sh`, `desktop-entrypoint.sh`, `publish-desktop-ready.sh`, `ensure-pubsub-topics.sh`) ship inside the `droid-selfhost` and `droid-desktop-selfhost` images. After changing them, rebuild and publish those images — editing copies under `~/.droid/` does not affect running containers.
+Entrypoint scripts (`cm-entrypoint.sh`, `desktop-entrypoint.sh`, `publish-desktop-ready.sh`, `ensure-pubsub-topics.sh`) ship inside the `unity-selfhost` and `unity-desktop-selfhost` images. After changing them, rebuild and publish those images — editing copies under `~/.unity/` does not affect running containers.

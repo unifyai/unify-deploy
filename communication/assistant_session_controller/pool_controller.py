@@ -61,7 +61,7 @@ def pending_vm_demand(sessions: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
-    """Return the number of sessions blocked on idle Droid container capacity."""
+    """Return the number of sessions blocked on idle Unity container capacity."""
 
     pending = 0
     for session in sessions:
@@ -92,7 +92,7 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
             if pending_jobs > 0
             else False
         )
-        results["droid_jobs"] = {
+        results["unity_jobs"] = {
             "pending_sessions": pending_jobs,
             "replenish_scheduled": replenish_scheduled,
         }
@@ -103,8 +103,8 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
             replenish_scheduled=replenish_scheduled,
         )
     except Exception as exc:  # pragma: no cover - safety net for live loop
-        logger.exception("Pool controller reconcile failed for droid jobs")
-        results["droid_jobs"] = {
+        logger.exception("Pool controller reconcile failed for unity jobs")
+        results["unity_jobs"] = {
             "pending_sessions": pending_jobs,
             "error": f"{type(exc).__name__}: {exc}",
         }

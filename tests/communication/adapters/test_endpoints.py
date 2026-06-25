@@ -19,7 +19,7 @@ pytestmark = pytest.mark.live
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
     os.getenv("GCP_PROJECT_ID"),
-    "droid-default-test-assistant-staging-sub",
+    "unity-default-test-assistant-staging-sub",
 )
 
 
@@ -87,11 +87,11 @@ def test_twilio_call_webhook(test_client):
         assert data is not None
         assert "thread" in data and data["thread"] == "call"
         assert "event" in data and data["event"] is not None
-        assert f"Droid_{assistant_number[1:]}" in data["event"]["conference_name"]
+        assert f"Unity_{assistant_number[1:]}" in data["event"]["conference_name"]
         assert data["event"]["caller_number"] == user_number
-        assert data["event"]["livekit_room"] == "droid_default-test-assistant_phone"
+        assert data["event"]["livekit_room"] == "unity_default-test-assistant_phone"
         assert data["event"]["sip_uri"].startswith(
-            "sip:droid_default-test-assistant_phone@",
+            "sip:unity_default-test-assistant_phone@",
         ), f"SIP URI should use room name, got: {data['event']['sip_uri']}"
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert (
@@ -229,7 +229,7 @@ def test_unify_message_webhook(test_client):
 
 def test_log_pre_hire_chats_webhook(test_client):
     """Test successful log_pre_hire_chats webhook processing with body list."""
-    endpoint = "/droid/pre-hire"
+    endpoint = "/unity/pre-hire"
     body = [
         {"role": "user", "msg": "Hey, I'm interested in the role."},
         {"role": "assistant", "msg": "Great! Can you share your resume?"},
@@ -275,7 +275,7 @@ def test_log_pre_hire_chats_webhook(test_client):
 def test_unify_meet_webhook(test_client):
     """Test successful unify_meet webhook processing."""
     endpoint = "/unify/meet"
-    room_name = "droid_default-test-assistant_meet"
+    room_name = "unity_default-test-assistant_meet"
     opening_config = {
         "mode": "simulated",
         "simulated_utterance": "Hello from the coordinator.",
@@ -322,9 +322,9 @@ def test_unify_meet_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_droid_system_event_webhook(test_client):
-    """Test successful droid system event webhook processing."""
-    endpoint = "/droid/system-event"
+def test_unity_system_event_webhook(test_client):
+    """Test successful unity system event webhook processing."""
+    endpoint = "/unity/system-event"
     event_type = "test_event"
     message = "This is a test message"
     form_payload = {
@@ -354,7 +354,7 @@ def test_droid_system_event_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "droid_system_event"
+        assert "thread" in data and data["thread"] == "unity_system_event"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["event_type"] == event_type
@@ -601,7 +601,7 @@ def test_unify_meet_webhook_unauthorized(test_client):
     """Test that unify_meet webhook rejects unauthorized requests."""
     endpoint = "/unify/meet"
     json_payload = {
-        "room_name": "droid_default-test-assistant_meet",
+        "room_name": "unity_default-test-assistant_meet",
         "assistant_id": "default-test-assistant",
     }
 
@@ -630,9 +630,9 @@ def test_unify_meet_webhook_missing_required_fields(test_client):
     assert response.status_code == 400
 
 
-def test_droid_system_event_webhook_unauthorized(test_client):
-    """Test that droid_system_event webhook rejects unauthorized requests."""
-    endpoint = "/droid/system-event"
+def test_unity_system_event_webhook_unauthorized(test_client):
+    """Test that unity_system_event webhook rejects unauthorized requests."""
+    endpoint = "/unity/system-event"
     json_payload = {
         "assistant_id": "default-test-assistant",
         "event_type": "test_event",
@@ -645,9 +645,9 @@ def test_droid_system_event_webhook_unauthorized(test_client):
     assert response.status_code == 401
 
 
-def test_droid_system_event_webhook_missing_fields(test_client):
-    """Test that droid_system_event webhook requires all required fields."""
-    endpoint = "/droid/system-event"
+def test_unity_system_event_webhook_missing_fields(test_client):
+    """Test that unity_system_event webhook requires all required fields."""
+    endpoint = "/unity/system-event"
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
     # Missing assistant_id
@@ -678,9 +678,9 @@ def test_droid_system_event_webhook_missing_fields(test_client):
     assert response.status_code == 400
 
 
-def test_droid_pre_hire_webhook_unauthorized(test_client):
-    """Test that droid_pre_hire webhook rejects unauthorized requests."""
-    endpoint = "/droid/pre-hire"
+def test_unity_pre_hire_webhook_unauthorized(test_client):
+    """Test that unity_pre_hire webhook rejects unauthorized requests."""
+    endpoint = "/unity/pre-hire"
     json_payload = {
         "assistant_id": "default-test-assistant",
         "body": [{"role": "user", "msg": "test"}],
@@ -692,9 +692,9 @@ def test_droid_pre_hire_webhook_unauthorized(test_client):
     assert response.status_code == 401
 
 
-def test_droid_pre_hire_webhook_invalid_body_format(test_client):
-    """Test that droid_pre_hire webhook validates body format."""
-    endpoint = "/droid/pre-hire"
+def test_unity_pre_hire_webhook_invalid_body_format(test_client):
+    """Test that unity_pre_hire webhook validates body format."""
+    endpoint = "/unity/pre-hire"
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
     # Body is not a list
@@ -856,7 +856,7 @@ def test_livekit_recording_webhook_happy_path(test_client):
     """
     endpoint = "/livekit/recording-complete"
     assistant_id = "default-test-assistant"
-    room_name = "droid_test_room"
+    room_name = "unity_test_room"
 
     egress_body = json.dumps(
         {

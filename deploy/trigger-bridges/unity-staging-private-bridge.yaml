@@ -1,0 +1,22 @@
+steps:
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'trigger-private-base-build'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    gcloud builds triggers run unity-base-staging-private \
+      --project=${PROJECT_ID} \
+      --region=${_REGION} \
+      --branch=staging \
+      --substitutions=_UNITY_REF=staging,_UNITY_SHA=${COMMIT_SHA}
+
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+substitutions:
+  _REGION: 'us-central1'
+
+timeout: '600s'

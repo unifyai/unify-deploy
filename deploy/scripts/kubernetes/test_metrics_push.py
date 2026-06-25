@@ -26,10 +26,10 @@ resource = Resource.create(
         "cloud.account.id": "gcp-project-runtime",
         "cloud.platform": "gcp_kubernetes_engine",
         "cloud.region": "us-central1",
-        "k8s.cluster.name": "droid",
+        "k8s.cluster.name": "unity",
         "k8s.namespace.name": "staging",
         "k8s.pod.name": f"test-metrics-{socket.gethostname()}",
-        "k8s.container.name": "droid-assistant",
+        "k8s.container.name": "unity-assistant",
     },
 )
 print(f"Resource: {resource.attributes}")
@@ -44,7 +44,7 @@ print("MeterProvider configured")
 # Record a test metric
 meter = metrics.get_meter("test", version="0.1.0")
 test_histogram = meter.create_histogram(
-    name="droid_test_metric",
+    name="unity_test_metric",
     description="Smoke test metric — safe to delete.",
     unit="s",
 )
@@ -60,5 +60,5 @@ time.sleep(15)
 print("Shutting down...")
 provider.shutdown()
 print(
-    "Done. Check Metrics Explorer for 'droid_test_metric' under Kubernetes Container.",
+    "Done. Check Metrics Explorer for 'unity_test_metric' under Kubernetes Container.",
 )

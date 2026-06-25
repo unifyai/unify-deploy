@@ -212,7 +212,7 @@ def generate_client_config(
 ) -> str:
     """Generate rathole client TOML config content."""
     return (
-        f"# Droid Tunnel — config for tunnel: {tunnel_id}\n"
+        f"# Unity Tunnel — config for tunnel: {tunnel_id}\n"
         f"# Save as client.toml and run: rathole client.toml\n"
         f"\n"
         f"[client]\n"

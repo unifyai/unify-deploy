@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# compose-cli.sh — Docker Compose lifecycle for Droid self-host
+# compose-cli.sh — Docker Compose lifecycle for Unity self-host
 # =============================================================================
 set -euo pipefail
 
-DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-COMPOSE_DIR="${DROID_COMPOSE_DIR:-$DROID_HOME}"
+UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+COMPOSE_DIR="${UNITY_COMPOSE_DIR:-$UNITY_HOME}"
 COMPOSE_FILE="${COMPOSE_FILE:-$COMPOSE_DIR/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-$COMPOSE_DIR/.env}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -49,7 +49,7 @@ compose() {
 require_compose() {
   if [[ ! -f "$COMPOSE_FILE" ]]; then
     log_err "Compose stack not found at $COMPOSE_FILE"
-    log_info "Run the self-host installer: droid-deploy/selfhost/install-compose.sh"
+    log_info "Run the self-host installer: unity-deploy/selfhost/install-compose.sh"
     exit 1
   fi
   if ! command -v docker >/dev/null 2>&1; then
@@ -67,8 +67,8 @@ cmd_up() {
   if declare -F stack_state_refuse_if_source_active >/dev/null 2>&1; then
     stack_state_refuse_if_source_active || return 1
   fi
-  mkdir -p "$(grep -E '^DROID_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Droid/Local")"
-  log_info "Starting Droid self-host stack..."
+  mkdir -p "$(grep -E '^UNITY_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Unity/Local")"
+  log_info "Starting Unity self-host stack..."
   compose up -d "$@"
   if [[ $# -eq 0 ]]; then
     if _has_env COMPOSIO_API_KEY; then
@@ -76,7 +76,7 @@ cmd_up() {
     else
       log_info "Builtins catalogue seed runs in the background (usually a few minutes)"
     fi
-    log_info "Watch progress: droid stack logs droid-builtins-seed"
+    log_info "Watch progress: unity stack logs unity-builtins-seed"
   fi
   log_ok "Stack is up — open ${NEXTAUTH_URL:-http://127.0.0.1:3000}"
 }
@@ -87,18 +87,18 @@ cmd_integrations_sync() {
     log_info "COMPOSIO_API_KEY not set — skipping integrations catalog sync"
     return 0
   fi
-  log_info "Composio integration catalogue sync runs via droid-builtins-seed"
+  log_info "Composio integration catalogue sync runs via unity-builtins-seed"
   cmd_builtins_sync
 }
 
 cmd_builtins_sync() {
   require_compose
   log_info "Starting Builtins catalogue seed in the background..."
-  compose up -d --force-recreate droid-builtins-seed
+  compose up -d --force-recreate unity-builtins-seed
   if _has_env COMPOSIO_API_KEY; then
     log_info "Composio configured — full catalogue may take ~30 minutes"
   fi
-  log_info "Watch progress: droid stack logs droid-builtins-seed"
+  log_info "Watch progress: unity stack logs unity-builtins-seed"
 }
 
 cmd_down() {
@@ -110,7 +110,7 @@ cmd_down() {
     log_info "Stopping Console UI (runtime services keep running)..."
     compose stop console
     log_ok "Console stopped. CM, gateway, and scheduler remain active."
-    log_info "Stop everything: droid stack down --full"
+    log_info "Stop everything: unity stack down --full"
   fi
 }
 
@@ -118,7 +118,7 @@ cmd_restart() {
   require_compose
   log_info "Recreating stack with updated .env..."
   compose up -d --force-recreate
-  log_info "Builtins catalogue seed runs in the background — droid stack logs droid-builtins-seed"
+  log_info "Builtins catalogue seed runs in the background — unity stack logs unity-builtins-seed"
   log_ok "Restart complete"
 }
 
@@ -172,7 +172,7 @@ cmd_doctor() {
       log_warn "Voice calls need DEEPGRAM_API_KEY and a TTS key (CARTESIA_API_KEY or ELEVEN_API_KEY)"
     fi
     if _has_env COMPOSIO_API_KEY; then
-      log_ok "Composio API key configured (integration catalogue seeds via droid-builtins-seed)"
+      log_ok "Composio API key configured (integration catalogue seeds via unity-builtins-seed)"
     else
       log_info "COMPOSIO_API_KEY not set — third-party app integrations disabled (optional)"
     fi
@@ -187,23 +187,23 @@ cmd_doctor() {
   elif [[ -n "$seed_status" ]]; then
     log_warn "orchestra-seed status: ${seed_status//$'\t'/ }"
   else
-    log_warn "orchestra-seed not found — run: droid stack up"
+    log_warn "orchestra-seed not found — run: unity stack up"
   fi
   local builtins_status
   builtins_status="$(compose ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
-    | awk '$1=="droid-builtins-seed"{print $2"\t"$3; exit}')"
+    | awk '$1=="unity-builtins-seed"{print $2"\t"$3; exit}')"
   case "$builtins_status" in
     running*)
-      log_info "Builtins catalogue seed in progress — droid stack logs droid-builtins-seed"
+      log_info "Builtins catalogue seed in progress — unity stack logs unity-builtins-seed"
       ;;
     "exited	0")
       log_ok "Builtins catalogue seed completed"
       ;;
     exited*)
-      log_warn "Builtins catalogue seed failed (${builtins_status//$'\t'/ }) — run: droid stack builtins-sync"
+      log_warn "Builtins catalogue seed failed (${builtins_status//$'\t'/ }) — run: unity stack builtins-sync"
       ;;
     *)
-      log_info "Builtins catalogue seed not started — run: droid stack builtins-sync"
+      log_info "Builtins catalogue seed not started — run: unity stack builtins-sync"
       ;;
   esac
   compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'

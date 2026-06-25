@@ -2,14 +2,14 @@ import os
 from pathlib import Path
 
 FIRST_PARTY_REPOS = {
-    "droid": "droid",
+    "unity": "unity",
     "unify": "unify",
     "unillm": "unillm",
 }
 
 
 def main() -> None:
-    branch = os.environ.get("DROID_DEPLOY_CI_FIRST_PARTY_BRANCH", "staging")
+    branch = os.environ.get("UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH", "staging")
     pyproject = Path("pyproject.toml")
     text = pyproject.read_text()
     for package, repo in FIRST_PARTY_REPOS.items():

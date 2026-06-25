@@ -11,7 +11,7 @@ localhost numbers. Idempotent: numbers already covered by any trunk are skipped.
 
 Requires the LiveKit Cloud credentials (URL/key/secret) in the environment, as
 loaded by ``self_host_env.sh`` (``self_host_export_livekit_cloud`` reads
-``~/.droid/livekit_cloud.env``). Run with the droid venv python so the
+``~/.unity/livekit_cloud.env``). Run with the unity venv python so the
 ``livekit`` package is importable.
 
 Usage:
@@ -33,7 +33,7 @@ from livekit.api import (
 )
 from livekit.protocol.sip import ListSIPInboundTrunkRequest
 
-SELF_HOST_TRUNK_NAME = "Droid_SelfHost"
+SELF_HOST_TRUNK_NAME = "Unity_SelfHost"
 
 
 def _normalize(number: str) -> str:
@@ -47,10 +47,10 @@ def _target_numbers() -> list[str]:
     """Collect the localhost call numbers from the environment (deduped)."""
     candidates = [
         os.environ.get("COMMS_BRIDGE_SMS_NUMBER", ""),
-        os.environ.get("DROID_COORDINATOR_PHONE", ""),
-        os.environ.get("DROID_COORDINATOR_PHONE_US", ""),
+        os.environ.get("UNITY_COORDINATOR_PHONE", ""),
+        os.environ.get("UNITY_COORDINATOR_PHONE_US", ""),
         os.environ.get("COMMS_BRIDGE_WHATSAPP_NUMBER", ""),
-        os.environ.get("DROID_COORDINATOR_WHATSAPP_NUMBER", ""),
+        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER", ""),
     ]
     numbers: list[str] = []
     for raw in candidates:

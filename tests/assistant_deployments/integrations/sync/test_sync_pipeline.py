@@ -1,7 +1,7 @@
 """End-to-end tests verifying integration data flows into real managers.
 
 These tests exercise the full path: manifest -> loader -> typed Guidance/Secret
-models -> manager CRUD. They use the real Droid test infrastructure (Unify
+models -> manager CRUD. They use the real Unity test infrastructure (Unify
 context, actual manager instances) rather than mocks.
 """
 
@@ -14,19 +14,19 @@ import pytest
 import yaml
 
 from tests.helpers import _handle_project
-from droid.guidance_manager.guidance_manager import GuidanceManager
-from droid.guidance_manager.types.guidance import Guidance
-from droid_deploy.assistant_deployments.integrations.loader import (
+from unity.guidance_manager.guidance_manager import GuidanceManager
+from unity.guidance_manager.types.guidance import Guidance
+from unity_deploy.assistant_deployments.integrations.loader import (
     LoadedIntegration,
     _load_guidance,
     load_integration,
 )
-from droid_deploy.assistant_deployments.integrations.types import (
+from unity_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     SecretSchema,
 )
-from droid.secret_manager.secret_manager import SecretManager
-from droid.secret_manager.types import Secret
+from unity.secret_manager.secret_manager import SecretManager
+from unity.secret_manager.types import Secret
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -80,7 +80,7 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
     """After VM assignment, the agent-service on the VM should accept the
     expected bearer token.
 
-    Verifies INV-11: the key Droid sends must equal the key in the VM's
+    Verifies INV-11: the key Unity sends must equal the key in the VM's
     agent-service UNIFY_KEY.
 
     Note: This test waits for the pool watcher to configure agent-service,
@@ -496,7 +496,7 @@ def test_orphaned_vm_detected_and_reconciled(
 
         jobs = batch_api.list_namespaced_job(
             namespace=NAMESPACE,
-            label_selector=f"app=droid,assistant-id={orphan_aid}",
+            label_selector=f"app=unity,assistant-id={orphan_aid}",
         )
         active_jobs = [j for j in jobs.items if j.status.active and j.status.active > 0]
         assert (
@@ -542,7 +542,7 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
 
     archive_aid = f"archive-test-{int(time.time())}"
     archive_binding = f"{archive_aid}-binding"
-    archive_bucket = "droid-assistant-archives"
+    archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{archive_aid}.tar.gz"
     vm_hostname = None
 
@@ -588,7 +588,7 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
             f"https://{vm_hostname}/api/exec",
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             json={
-                "command": "echo 'archive-test-marker' > /Droid/Local/archive-test.txt",
+                "command": "echo 'archive-test-marker' > /Unity/Local/archive-test.txt",
                 "timeout": 5000,
             },
             timeout=10,
@@ -597,7 +597,7 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
         assert (
             write_resp.status_code == 200
         ), f"Failed to write marker file: {write_resp.status_code} {write_resp.text}"
-        print("  Marker file written to /Droid/Local/archive-test.txt")
+        print("  Marker file written to /Unity/Local/archive-test.txt")
 
         comms.post(
             "/infra/vm/pool/release",
@@ -652,7 +652,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
     assert UNIFY_KEY, "UNIFY_KEY must be set for GCS restore test"
 
     restore_aid = f"restore-test-{int(time.time())}"
-    archive_bucket = "droid-assistant-archives"
+    archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{restore_aid}.tar.gz"
 
     try:
@@ -694,7 +694,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             f"https://{hostname1}/api/exec",
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             json={
-                "command": "echo 'restore-marker-12345' > /Droid/Local/restore-test.txt",
+                "command": "echo 'restore-marker-12345' > /Unity/Local/restore-test.txt",
                 "timeout": 5000,
             },
             timeout=10,
@@ -717,7 +717,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
         print(f"  Phase 1: archive verified at {archive_path}")
 
         # Phase 2: delete the PD so next assign gets a fresh disk
-        disk_name = f"droid-disk-{restore_aid}"
+        disk_name = f"unity-disk-{restore_aid}"
         from google.cloud import compute_v1
 
         try:
@@ -756,7 +756,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             f"https://{hostname2}/api/exec",
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             json={
-                "command": "cat /Droid/Local/restore-test.txt",
+                "command": "cat /Unity/Local/restore-test.txt",
                 "timeout": 5000,
             },
             timeout=10,
@@ -785,7 +785,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             compute_v1.DisksClient().delete(
                 project=VM_PROJECT_ID,
                 zone=VM_ZONE,
-                disk=f"droid-disk-{restore_aid}",
+                disk=f"unity-disk-{restore_aid}",
             ).result()
         except Exception:
             pass

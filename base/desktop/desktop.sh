@@ -9,7 +9,7 @@ chmod 600 /root/.vnc/passwd
 # Start TigerVNC (combined X display server + VNC server in one process)
 Xtigervnc :99 -geometry 1920x1080 -depth 24 \
     -rfbport 5900 -rfbauth /root/.vnc/passwd \
-    -AlwaysShared -desktop "Droid Desktop" &
+    -AlwaysShared -desktop "Unity Desktop" &
 sleep 2
 
 # XFCE desktop session

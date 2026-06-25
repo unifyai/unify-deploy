@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from droid_deploy.assistant_deployments.integrations.packages.employment_hero.functions import (
+from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions import (
     _client,
 )
 

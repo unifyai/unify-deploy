@@ -114,7 +114,7 @@ class TestVMPoolStatus:
 
 class TestImageHash:
     """Contract: GET /infra/image returns the commit hash of the latest
-    deployed Droid container image."""
+    deployed Unity container image."""
 
     def test_image_hash_returns_commit(self):
         resp = requests.get(
@@ -143,7 +143,7 @@ class TestJobListing:
     def test_list_jobs_returns_array(self):
         resp = requests.get(
             f"{COMMS_APP_URL}/infra/jobs",
-            params={"label_selector": "app=droid", "hours": 2},
+            params={"label_selector": "app=unity", "hours": 2},
             headers=_ADMIN_HEADERS,
             timeout=30,
         )
@@ -158,7 +158,7 @@ class TestJobListing:
         resp = requests.get(
             f"{COMMS_APP_URL}/infra/jobs",
             params={
-                "label_selector": "app=droid,droid-status=idle",
+                "label_selector": "app=unity,unity-status=idle",
                 "hours": 1,
             },
             headers=_ADMIN_HEADERS,
@@ -285,7 +285,7 @@ class TestJobRead:
     def test_read_existing_job(self, comms):
         jobs_resp = comms.get(
             "/infra/jobs",
-            params={"label_selector": "app=droid", "hours": 1},
+            params={"label_selector": "app=unity", "hours": 1},
         )
         jobs = jobs_resp.json().get("jobs", [])
         if not jobs:
@@ -312,7 +312,7 @@ class TestAssistantSessionRead:
     def test_read_existing_session(self, comms):
         jobs_resp = comms.get(
             "/infra/jobs",
-            params={"label_selector": "app=droid,droid-status=running", "hours": 1},
+            params={"label_selector": "app=unity,unity-status=running", "hours": 1},
         )
         jobs = jobs_resp.json().get("jobs", [])
         if not jobs:
@@ -336,7 +336,7 @@ class TestJobLogs:
     def test_get_logs_for_existing_job(self, comms):
         jobs_resp = comms.get(
             "/infra/jobs",
-            params={"label_selector": "app=droid,droid-status=running", "hours": 1},
+            params={"label_selector": "app=unity,unity-status=running", "hours": 1},
         )
         jobs = jobs_resp.json().get("jobs", [])
         if not jobs:

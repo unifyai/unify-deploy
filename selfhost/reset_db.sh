@@ -5,14 +5,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-DROID_REPO_PATH="${DROID_REPO_PATH:-$UNIFY_STACK_ROOT/droid}"
+UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 
 YES=false
 STOP_RUNTIME=true
-BOOTSTRAP_OWNER=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,21 +23,16 @@ while [[ $# -gt 0 ]]; do
       STOP_RUNTIME=false
       shift
       ;;
-    --bootstrap-owner)
-      BOOTSTRAP_OWNER=true
-      shift
-      ;;
     -h|--help)
       cat <<EOF
-Usage: $(basename "$0") [--yes] [--keep-runtime] [--bootstrap-owner]
+Usage: $(basename "$0") [--yes] [--keep-runtime]
 
 Deletes local self-host user/org/assistant/project history while preserving the
 self-host owner login, API key, platform defaults, and the personal Coordinator.
 
 Options:
-  --yes              Run without an interactive confirmation prompt.
-  --keep-runtime     Leave the current Droid runtime process running.
-  --bootstrap-owner  Create the legacy local owner if no real owner exists.
+  --yes           Run without an interactive confirmation prompt.
+  --keep-runtime  Leave the current Unity runtime process running.
 EOF
       exit 0
       ;;
@@ -64,18 +58,15 @@ if [[ "$YES" != "true" ]]; then
 fi
 
 export SELF_HOST=1
-export DROID_HOME="${DROID_HOME:-$HOME/.droid}"
-export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$DROID_HOME}"
-if [[ "$BOOTSTRAP_OWNER" == "true" ]]; then
-  export SELF_HOST_BOOTSTRAP_OWNER=1
-fi
+export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
 
 if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
   # shellcheck disable=SC1090
   source "$SELF_HOST_ENV_SCRIPT"
   export_self_host_coordinator_runtime_file
-  if [[ -f "$DROID_REPO_PATH/.env" ]]; then
-    load_self_host_env_file "$DROID_REPO_PATH/.env"
+  if [[ -f "$UNITY_REPO_PATH/.env" ]]; then
+    load_self_host_env_file "$UNITY_REPO_PATH/.env"
   fi
 fi
 
@@ -91,7 +82,7 @@ export ORCHESTRA_DB_PASS="${ORCHESTRA_DB_PASS:-orchestra}"
 export ORCHESTRA_DB_BASE="${ORCHESTRA_DB_BASE:-orchestra}"
 
 if [[ "$STOP_RUNTIME" == "true" && -f "$CONSOLE_REPO_PATH/scripts/local.sh" ]]; then
-  DROID_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_REPO_PATH/scripts/local.sh" stop-runtime-backend >/dev/null 2>&1 || true
+  UNITY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_REPO_PATH/scripts/local.sh" stop-runtime-backend >/dev/null 2>&1 || true
 fi
 
 cd "$ORCHESTRA_REPO_PATH"
@@ -152,13 +143,6 @@ engine = create_engine(str(settings.db_url), pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 identifier_preparer = engine.dialect.identifier_preparer
 reset_api_key = os.environ.get("SELF_HOST_RESET_API_KEY", "").strip()
-bootstrap_owner = os.environ.get("SELF_HOST_BOOTSTRAP_OWNER", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("DROID_HOME") or Path.home() / ".droid")
 
 
 def quote_identifier(value: str) -> str:
@@ -189,37 +173,6 @@ def owner_display_name(owner: User) -> str | None:
     ]
     display_name = " ".join(str(part).strip() for part in parts if str(part or "").strip())
     return display_name or None
-
-
-def read_json_file(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def resolve_owner_from_api_key(session, api_key: str) -> User | None:
-    if not api_key:
-        return None
-    return session.scalar(
-        select(User)
-        .join(ApiKey, ApiKey.user_id == User.id)
-        .where(ApiKey.key == api_key),
-    )
-
-
-def resolve_owner_from_state(session) -> User | None:
-    owner_payload = read_json_file(state_dir / "self-host-owner.json")
-    owner_email = str(owner_payload.get("email") or "").strip().lower()
-    if owner_email:
-        owner = session.scalar(select(User).where(User.email == owner_email))
-        if owner is not None:
-            return owner
-
-    runtime_payload = read_json_file(state_dir / "coordinator-runtime.json")
-    return resolve_owner_from_api_key(
-        session,
-        str(runtime_payload.get("apiKey") or runtime_payload.get("api_key") or "").strip(),
-    )
 
 
 def delete_matching(session, table_name: str, columns: set[str], values: dict[str, list[Any]]) -> int:
@@ -286,27 +239,21 @@ def reset_coordinator_profile(coordinator: Assistant) -> None:
 
 def resolve_reset_owner(session) -> User:
     if reset_api_key:
-        owner = resolve_owner_from_api_key(session, reset_api_key)
+        owner = session.scalar(
+            select(User)
+            .join(ApiKey, ApiKey.user_id == User.id)
+            .where(ApiKey.key == reset_api_key),
+        )
         if owner is None:
             raise RuntimeError("SELF_HOST_RESET_API_KEY does not match a local user")
         return owner
 
-    owner = resolve_owner_from_state(session)
-    if owner is not None:
-        return owner
-
     owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
-    if owner is not None:
-        return owner
-
-    if bootstrap_owner:
+    if owner is None:
         run_self_host_bootstrap(SessionLocal)
         owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
     if owner is None:
-        raise RuntimeError(
-            "No local self-host owner exists. Create an account in Console first, "
-            "or rerun with --bootstrap-owner to create the legacy local owner."
-        )
+        raise RuntimeError(f"Self-host owner {SELF_HOST_OWNER_EMAIL} was not bootstrapped")
     return owner
 
 
@@ -478,6 +425,7 @@ with SessionLocal() as session:
         "default_tasks": default_tasks,
         "credits": normalize_json(billing_account.credits if billing_account else None),
     }
+    state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("UNITY_HOME") or Path.home() / ".unity")
     write_json_file(
         state_dir / "coordinator-runtime.json",
         {

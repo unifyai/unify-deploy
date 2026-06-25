@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from droid_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from droid_deploy.assistant_deployments.clients import (
+from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unity_deploy.assistant_deployments.clients import (
     _CLIENT_DEPLOYMENTS,
     resolve,
     resolve_from_deployments,
 )
-from droid_deploy.assistant_deployments.deployment_types import (
+from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
@@ -320,7 +320,7 @@ class TestMergeActorConfigs:
 class TestRegisterClient:
 
     def test_registers_into_client_deployments(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v0 = _make_spec("v0", "Default v0")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: v0)
@@ -341,7 +341,7 @@ class TestRegisterClient:
         assert entry.environment == "production"
 
     def test_multiple_deployments_loaded_once(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         call_count = {"v0": 0, "v1": 0}
         v0 = _make_spec("v0", "Default v0")
@@ -375,7 +375,7 @@ class TestIsolatedResolution:
 
     def _register_with_default(self, monkeypatch, *, environment=None):
         """Register a client whose mapping has assistant + default targets."""
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v0 = _make_spec("v0", "Default v0")
         v1 = _make_spec("v1", "Assistant v1")
@@ -400,7 +400,7 @@ class TestIsolatedResolution:
 
     def _register_assistant_only(self, monkeypatch, *, environment=None):
         """Register a client whose mapping has only assistant targets (no default)."""
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v1 = _make_spec("v1", "Assistant v1")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
@@ -465,7 +465,7 @@ class TestIsolatedResolution:
         assert result.guidance == []
 
     def test_function_dir_in_resolved(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = _make_spec("v0", "With funcs", function_dir=_FAKE_DIR_A)
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -479,7 +479,7 @@ class TestIsolatedResolution:
         assert result.function_dirs == [_FAKE_DIR_A]
 
     def test_secrets_in_resolved(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         secrets = [
             SecretEntry(name="KEY_A", value="val-a", description="Secret A"),
@@ -497,7 +497,7 @@ class TestIsolatedResolution:
         assert "KEY_A" in secret_names
 
     def test_console_config_in_resolved(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         console_config = {
             "version": "1",
@@ -528,7 +528,7 @@ class TestIsolatedResolution:
 class TestEnvironmentGuardrail:
 
     def test_env_mismatch_skips_client(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = _make_spec("v0", "Staging-only")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -548,7 +548,7 @@ class TestEnvironmentGuardrail:
         assert result is None
 
     def test_env_match_resolves(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = _make_spec("v0", "Production-only")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -569,7 +569,7 @@ class TestEnvironmentGuardrail:
         assert result.config.guidelines == "Production-only"
 
     def test_no_env_tag_always_matches(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = _make_spec("v0", "Any env")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -598,7 +598,7 @@ class TestUnifyCompanyRouting:
     @staticmethod
     def _reload_unify_company(monkeypatch, orchestra_url: str):
         monkeypatch.setenv("ORCHESTRA_URL", orchestra_url)
-        import droid_deploy.assistant_deployments.clients.unify_company as uc
+        import unity_deploy.assistant_deployments.clients.unify_company as uc
 
         return importlib.reload(uc)
 
@@ -647,7 +647,7 @@ class TestScopeRouting:
     """Verify that scoping lives entirely in DeploymentTarget."""
 
     def test_org_wide_catches_any_assistant_in_org(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v1 = _make_spec("v1", "Org-wide v1")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
@@ -662,7 +662,7 @@ class TestScopeRouting:
         assert resolve_from_deployments(org_id=99, assistant_id=83) is None
 
     def test_assistant_target_beats_org_target(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v0 = _make_spec("v0", "Personal v0")
         v1 = _make_spec("v1", "Org-wide v1")
@@ -689,7 +689,7 @@ class TestScopeRouting:
         assert org_asst.config.guidelines == "Org-wide v1"
 
     def test_user_wide_catches_any_assistant_for_user(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         v1 = _make_spec("v1", "User-wide v1")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
@@ -717,7 +717,7 @@ class TestSeedLayers:
     """Verify register_layer() and the merge behaviour in _spec_to_resolved."""
 
     def _register(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = _make_spec("v0", "Default v0")
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -909,7 +909,7 @@ class TestSeedLayers:
     # -- secrets merge --
 
     def test_secrets_layer_merged_with_spec(self, monkeypatch):
-        from droid_deploy.assistant_deployments import deployment_types as dt
+        from unity_deploy.assistant_deployments import deployment_types as dt
 
         spec = DeploymentSpec(
             name="v0",

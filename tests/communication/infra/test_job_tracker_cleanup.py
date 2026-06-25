@@ -20,12 +20,12 @@ def _job(
 def test_job_tracker_deletes_synthetic_assistant_labeled_jobs_directly(monkeypatch):
     batch_api = MagicMock()
     batch_api.read_namespaced_job.return_value = _job(
-        labels={"assistant-id": "test-guard", "droid-status": "running"},
+        labels={"assistant-id": "test-guard", "unity-status": "running"},
     )
     stop_runtime = MagicMock()
     replenish_pool = MagicMock()
     tracker = integration_conftest.JobTracker(
-        jobs=["droid-job-1"],
+        jobs=["unity-job-1"],
         batch_api=batch_api,
     )
 
@@ -43,7 +43,7 @@ def test_job_tracker_deletes_synthetic_assistant_labeled_jobs_directly(monkeypat
     tracker.cleanup()
 
     batch_api.delete_namespaced_job.assert_called_once_with(
-        name="droid-job-1",
+        name="unity-job-1",
         namespace=integration_conftest.NAMESPACE,
         propagation_policy="Foreground",
     )
@@ -57,13 +57,13 @@ def test_job_tracker_uses_session_driven_cleanup_for_session_backed_jobs(monkeyp
         labels={
             "assistant-id": "1207",
             integration_conftest.ASSISTANT_SESSION_REF_LABEL: "assistant-session-1207",
-            "droid-status": "running",
+            "unity-status": "running",
         },
     )
     stop_runtime = MagicMock()
     replenish_pool = MagicMock()
     tracker = integration_conftest.JobTracker(
-        jobs=["droid-job-1"],
+        jobs=["unity-job-1"],
         batch_api=batch_api,
     )
 

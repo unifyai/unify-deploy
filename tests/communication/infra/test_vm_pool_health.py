@@ -76,7 +76,7 @@ def test_is_stale_inflight_vm_prefers_explicit_transition_epoch():
     old_started_at = datetime.now(UTC) - timedelta(seconds=1200)
     recent_transition = datetime.now(UTC) - timedelta(seconds=120)
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-6-staging",
+        name="unity-pool-ubuntu-6-staging",
         labels={
             "pool-role": "starting",
             "pool-transition-epoch": str(int(recent_transition.timestamp())),
@@ -96,7 +96,7 @@ def test_is_stale_inflight_vm_ignores_non_inflight_roles():
 
 def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-6-staging",
+        name="unity-pool-ubuntu-6-staging",
         labels=_current_contract_labels(**{"vm-type": "ubuntu"}),
     )
     client = MagicMock()
@@ -126,7 +126,7 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     client.start.assert_called_once()
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-6-staging",
+            "unity-pool-ubuntu-6-staging",
             {
                 "pool-watcher-script": "watcher",
                 "pool-contract-generation": vm_helpers_module.POOL_VM_CONTRACT_GENERATION,
@@ -137,15 +137,15 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
 
 def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypatch):
     pool_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-2-staging",
+        name="unity-pool-ubuntu-2-staging",
         labels=_current_contract_labels(**{"pool-role": "idle", "vm-type": "ubuntu"}),
-        label_fingerprint="droid-pool-ubuntu-2-staging-fp",
+        label_fingerprint="unity-pool-ubuntu-2-staging-fp",
         network_interfaces=[],
         metadata=SimpleNamespace(
             items=[
                 SimpleNamespace(
                     key="hostname",
-                    value="droid-pool-ubuntu-2-staging.example.com",
+                    value="unity-pool-ubuntu-2-staging.example.com",
                 ),
             ],
         ),
@@ -175,7 +175,7 @@ def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypa
         vm_number=None,
     )
 
-    assert claimed["vm_name"] == "droid-pool-ubuntu-2-staging"
+    assert claimed["vm_name"] == "unity-pool-ubuntu-2-staging"
 
 
 def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypatch):
@@ -184,19 +184,19 @@ def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypa
         "list_pool_vms",
         lambda: [
             {
-                "vm_name": "droid-pool-ubuntu-1-staging",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "assistant_id": "assistant-123",
                 "binding_id": "binding-current",
                 "pool_role": "assigned",
             },
             {
-                "vm_name": "droid-pool-ubuntu-2-staging",
+                "vm_name": "unity-pool-ubuntu-2-staging",
                 "assistant_id": "assistant-123",
                 "binding_id": "binding-other",
                 "pool_role": "releasing",
             },
             {
-                "vm_name": "droid-pool-ubuntu-3-staging",
+                "vm_name": "unity-pool-ubuntu-3-staging",
                 "assistant_id": "assistant-999",
                 "binding_id": "binding-current",
                 "pool_role": "assigned",
@@ -209,13 +209,13 @@ def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypa
         binding_id="binding-current",
     )
 
-    assert [vm["vm_name"] for vm in current] == ["droid-pool-ubuntu-1-staging"]
-    assert [vm["vm_name"] for vm in other] == ["droid-pool-ubuntu-2-staging"]
+    assert [vm["vm_name"] for vm in current] == ["unity-pool-ubuntu-1-staging"]
+    assert [vm["vm_name"] for vm in other] == ["unity-pool-ubuntu-2-staging"]
 
 
 def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-2-staging",
+        name="unity-pool-ubuntu-2-staging",
         labels={"pool-role": "idle", "vm-type": "ubuntu"},
         status="RUNNING",
     )
@@ -237,7 +237,7 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
     )
 
     assert action == (
-        "Quarantined unhealthy VM droid-pool-ubuntu-2-staging: "
+        "Quarantined unhealthy VM unity-pool-ubuntu-2-staging: "
         "failed health probe during claim"
     )
     client.stop.assert_called_once()
@@ -245,7 +245,7 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
 
 def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -281,7 +281,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -295,7 +295,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
 
 def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -327,16 +327,16 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     result = release_pool_vm(
         "assistant-123",
         "binding-123",
-        vm_name="droid-pool-ubuntu-3-staging",
+        vm_name="unity-pool-ubuntu-3-staging",
     )
 
     assert result["released"] is True
-    assert result["vm_name"] == "droid-pool-ubuntu-3-staging"
+    assert result["vm_name"] == "unity-pool-ubuntu-3-staging"
     assert result["release_generation"] == 1
     client.list.assert_not_called()
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -350,7 +350,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
 
 def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -378,7 +378,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
     result = release_pool_vm(
         "assistant-123",
         "binding-123",
-        vm_name="droid-pool-ubuntu-3-staging",
+        vm_name="unity-pool-ubuntu-3-staging",
     )
 
     assert result["released"] is False
@@ -388,7 +388,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
 
 def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -424,7 +424,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -438,7 +438,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
 
 def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -486,13 +486,13 @@ def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
     assert result["release_generation"] == 2
     set_pool_labels.assert_called_once_with(
         client,
-        "droid-pool-ubuntu-3-staging",
+        "unity-pool-ubuntu-3-staging",
         {"pool-role": "releasing"},
         expected_role="releasing",
     )
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -506,7 +506,7 @@ def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
 
 def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     stale_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels={
             "pool-role": "assigned",
             "assistant-id": "assistant-123",
@@ -549,7 +549,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
 
 def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -585,7 +585,7 @@ def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -627,7 +627,7 @@ def test_release_pool_vm_skips_when_binding_lease_stays_busy(monkeypatch):
 
 def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     releasing_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -677,7 +677,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     recover_release.assert_called_once_with(
         "assistant-123",
         "binding-123",
-        vm_name="droid-pool-ubuntu-3-staging",
+        vm_name="unity-pool-ubuntu-3-staging",
         current_release_generation=1,
         allow_rearm=True,
         retire_reason="aged_releasing_vm",
@@ -685,7 +685,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     assert result["releasing_checked"] == 1
     assert result["releasing_recovered"] == [
         {
-            "vm_name": "droid-pool-ubuntu-3-staging",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "assistant_id": "assistant-123",
             "binding_id": "binding-123",
             "action": "rearmed",
@@ -697,7 +697,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
 
 def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     releasing_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         status="RUNNING",
         labels=_current_contract_labels(
             **{
@@ -718,7 +718,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._detach_attached_assistant_disk",
-        lambda vm_name: (True, "droid-disk-assistant-123"),
+        lambda vm_name: (True, "unity-disk-assistant-123"),
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
@@ -729,13 +729,13 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
         lambda *_args, **_kwargs: True,
     )
 
-    result = complete_pool_vm_release("droid-pool-ubuntu-3-staging", "binding-123")
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-staging", "binding-123")
 
     assert result["pool_role"] == "idle"
     assert result["detached"] is True
     assert metadata_updates == [
         (
-            "droid-pool-ubuntu-3-staging",
+            "unity-pool-ubuntu-3-staging",
             {
                 "assistant-id": "",
                 "binding-id": "",
@@ -751,7 +751,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
 
 def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
     idle_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-3-staging",
+        name="unity-pool-ubuntu-3-staging",
         status="RUNNING",
         labels=_current_contract_labels(
             **{
@@ -788,10 +788,10 @@ def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
         ),
     )
 
-    result = complete_pool_vm_release("droid-pool-ubuntu-3-staging", "binding-123")
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-staging", "binding-123")
 
     assert result == {
-        "vm_name": "droid-pool-ubuntu-3-staging",
+        "vm_name": "unity-pool-ubuntu-3-staging",
         "vm_type": "ubuntu",
         "pool_role": "idle",
         "assistant_id": None,
@@ -803,18 +803,18 @@ def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
 def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkeypatch):
     claim_idle = MagicMock(
         return_value={
-            "vm_name": "droid-pool-ubuntu-4-staging",
+            "vm_name": "unity-pool-ubuntu-4-staging",
             "ip_address": "34.0.0.4",
-            "hostname": "droid-pool-ubuntu-4-staging.vm.unify.ai",
-            "desktop_url": "https://droid-pool-ubuntu-4-staging.vm.unify.ai",
+            "hostname": "unity-pool-ubuntu-4-staging.vm.unify.ai",
+            "desktop_url": "https://unity-pool-ubuntu-4-staging.vm.unify.ai",
             "status": "RUNNING",
         },
     )
     complete_release = MagicMock(
-        return_value={"vm_name": "droid-pool-ubuntu-3-staging", "pool_role": "idle"},
+        return_value={"vm_name": "unity-pool-ubuntu-3-staging", "pool_role": "idle"},
     )
     find_disk_owner = MagicMock(
-        side_effect=["droid-pool-ubuntu-3-staging", None],
+        side_effect=["unity-pool-ubuntu-3-staging", None],
     )
 
     monkeypatch.setattr(
@@ -836,7 +836,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     monkeypatch.setattr(
         "communication.infra.vm_helpers._attached_disk_vm_state",
         lambda *_args, **_kwargs: {
-            "vm_name": "droid-pool-ubuntu-3-staging",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "binding_id": "binding-old",
             "pool_role": "releasing",
         },
@@ -852,7 +852,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers.attach_assistant_disk",
-        lambda *_args, **_kwargs: "droid-disk-assistant-123",
+        lambda *_args, **_kwargs: "unity-disk-assistant-123",
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._fetch_existing_ssh_key",
@@ -878,7 +878,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     result = assign_pool_vm("assistant-123", "binding-new", "unify-key")
 
     complete_release.assert_called_once_with(
-        "droid-pool-ubuntu-3-staging",
+        "unity-pool-ubuntu-3-staging",
         "binding-old",
     )
     claim_idle.assert_called_once_with(
@@ -887,7 +887,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
         "ubuntu",
         vm_number=None,
     )
-    assert result["vm_name"] == "droid-pool-ubuntu-4-staging"
+    assert result["vm_name"] == "unity-pool-ubuntu-4-staging"
 
 
 def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypatch):
@@ -907,12 +907,12 @@ def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypat
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers.find_vm_with_disk",
-        lambda *_args, **_kwargs: "droid-pool-ubuntu-3-staging",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-staging",
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._attached_disk_vm_state",
         lambda *_args, **_kwargs: {
-            "vm_name": "droid-pool-ubuntu-3-staging",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "binding_id": "binding-old",
             "pool_role": "assigned",
         },
@@ -997,7 +997,7 @@ def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers.find_vm_with_disk",
-        lambda *_args, **_kwargs: "droid-pool-ubuntu-3-staging",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-staging",
     )
 
     with pytest.raises(AssistantDiskInUseError):
@@ -1006,7 +1006,7 @@ def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
 
 def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
     vm = SimpleNamespace(
-        name="droid-pool-ubuntu-15-staging",
+        name="unity-pool-ubuntu-15-staging",
         labels={"pool-role": "quarantined", "vm-type": "ubuntu"},
         status="RUNNING",
     )
@@ -1025,7 +1025,7 @@ def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
     actions = vm_helpers_module._scrub_inconsistent_vms("ubuntu")
 
     assert actions == [
-        "Scrub: stop requested for droid-pool-ubuntu-15-staging "
+        "Scrub: stop requested for unity-pool-ubuntu-15-staging "
         "(quarantined_but_running)",
     ]
     client.stop.assert_called_once()
@@ -1033,7 +1033,7 @@ def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
 
 def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     stopped_vm = SimpleNamespace(
-        name="droid-pool-ubuntu-6-staging",
+        name="unity-pool-ubuntu-6-staging",
         labels={"vm-type": "ubuntu"},
     )
 
@@ -1089,7 +1089,7 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     result = replenish_pool("ubuntu")
 
     assert result["vm_type"] == "ubuntu"
-    assert result["actions"] == ["Started stopped VM droid-pool-ubuntu-6-staging"]
+    assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-staging"]
 
 
 def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
@@ -1097,7 +1097,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     deleted_vm_names = []
     stopped_vms = [
         SimpleNamespace(
-            name="droid-pool-ubuntu-14-staging",
+            name="unity-pool-ubuntu-14-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1105,7 +1105,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T09:00:00+00:00",
         ),
         SimpleNamespace(
-            name="droid-pool-ubuntu-15-staging",
+            name="unity-pool-ubuntu-15-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1113,7 +1113,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T08:59:00+00:00",
         ),
         SimpleNamespace(
-            name="droid-pool-ubuntu-16-staging",
+            name="unity-pool-ubuntu-16-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1121,7 +1121,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T08:58:00+00:00",
         ),
         SimpleNamespace(
-            name="droid-pool-ubuntu-17-staging",
+            name="unity-pool-ubuntu-17-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1152,21 +1152,21 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     result = vm_helpers_module.trim_stopped_pool_reserve("ubuntu")
 
     assert result["kept"] == [
-        "droid-pool-ubuntu-14-staging",
-        "droid-pool-ubuntu-15-staging",
+        "unity-pool-ubuntu-14-staging",
+        "unity-pool-ubuntu-15-staging",
     ]
     assert result["deleted"] == [
-        "droid-pool-ubuntu-16-staging",
-        "droid-pool-ubuntu-17-staging",
+        "unity-pool-ubuntu-16-staging",
+        "unity-pool-ubuntu-17-staging",
     ]
     assert result["actions"] == [
-        "Deleted excess stopped reserve VM droid-pool-ubuntu-16-staging",
-        "Deleted excess stopped reserve VM droid-pool-ubuntu-17-staging",
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-16-staging",
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-17-staging",
     ]
     assert result["errors"] == []
     assert deleted_vm_names == [
-        ("droid-pool-ubuntu-16-staging", "ubuntu"),
-        ("droid-pool-ubuntu-17-staging", "ubuntu"),
+        ("unity-pool-ubuntu-16-staging", "ubuntu"),
+        ("unity-pool-ubuntu-17-staging", "ubuntu"),
     ]
 
 
@@ -1300,8 +1300,8 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
         "cleanup_orphaned_pool_network_resources",
         lambda *_args, **_kwargs: {
             "actions": ["deleted orphaned IP"],
-            "deleted_addresses": ["droid-pool-ubuntu-ip-18-staging"],
-            "deleted_dns": ["droid-pool-ubuntu-18-staging.vm.unify.ai"],
+            "deleted_addresses": ["unity-pool-ubuntu-ip-18-staging"],
+            "deleted_dns": ["unity-pool-ubuntu-18-staging.vm.unify.ai"],
             "errors": [],
         },
     )
@@ -1325,8 +1325,8 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
         "trim_stopped_pool_reserve",
         lambda *_args, **_kwargs: {
             "actions": ["deleted old reserve"],
-            "deleted": ["droid-pool-ubuntu-17-staging"],
-            "kept": ["droid-pool-ubuntu-14-staging"],
+            "deleted": ["unity-pool-ubuntu-17-staging"],
+            "kept": ["unity-pool-ubuntu-14-staging"],
         },
     )
 
@@ -1341,11 +1341,11 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
             "trimmed idle",
             "deleted old reserve",
         ],
-        "orphaned_static_ips_deleted": ["droid-pool-ubuntu-ip-18-staging"],
-        "orphaned_dns_deleted": ["droid-pool-ubuntu-18-staging.vm.unify.ai"],
+        "orphaned_static_ips_deleted": ["unity-pool-ubuntu-ip-18-staging"],
+        "orphaned_dns_deleted": ["unity-pool-ubuntu-18-staging.vm.unify.ai"],
         "orphaned_network_errors": [],
-        "stopped_reserve_deleted": ["droid-pool-ubuntu-17-staging"],
-        "stopped_reserve_kept": ["droid-pool-ubuntu-14-staging"],
+        "stopped_reserve_deleted": ["unity-pool-ubuntu-17-staging"],
+        "stopped_reserve_kept": ["unity-pool-ubuntu-14-staging"],
     }
 
 
@@ -1430,7 +1430,7 @@ def _install_disk_reconcile_env(
 def test_reconcile_deletes_orphan_after_grace(monkeypatch):
     disks = [
         _fake_disk(
-            name="droid-disk-gone-assistant-staging",
+            name="unity-disk-gone-assistant-staging",
             last_detach_seconds_ago=int(timedelta(hours=73).total_seconds()),
         ),
     ]
@@ -1447,7 +1447,7 @@ def test_reconcile_deletes_orphan_after_grace(monkeypatch):
         hard_cap_hours=0,
     )
 
-    assert delete_calls == ["droid-disk-gone-assistant-staging"]
+    assert delete_calls == ["unity-disk-gone-assistant-staging"]
     assert result["deleted"] == 1
     assert result["deleted_orphan"] == 1
     assert result["deleted_idle"] == 0
@@ -1457,7 +1457,7 @@ def test_reconcile_deletes_orphan_after_grace(monkeypatch):
 def test_reconcile_skips_orphan_inside_grace_window(monkeypatch):
     disks = [
         _fake_disk(
-            name="droid-disk-gone-assistant-staging",
+            name="unity-disk-gone-assistant-staging",
             last_detach_seconds_ago=int(timedelta(hours=1).total_seconds()),
         ),
     ]
@@ -1482,7 +1482,7 @@ def test_reconcile_skips_orphan_inside_grace_window(monkeypatch):
 def test_reconcile_skips_active_assistant_under_idle_threshold(monkeypatch):
     disks = [
         _fake_disk(
-            name="droid-disk-hot-assistant-staging",
+            name="unity-disk-hot-assistant-staging",
             last_detach_seconds_ago=int(timedelta(hours=2).total_seconds()),
         ),
     ]
@@ -1509,7 +1509,7 @@ def test_reconcile_deletes_idle_assistant_with_fresh_archive(monkeypatch):
     detach_seconds = int(timedelta(days=31).total_seconds())
     disks = [
         _fake_disk(
-            name="droid-disk-cold-assistant-staging",
+            name="unity-disk-cold-assistant-staging",
             last_detach_seconds_ago=detach_seconds,
         ),
     ]
@@ -1528,7 +1528,7 @@ def test_reconcile_deletes_idle_assistant_with_fresh_archive(monkeypatch):
         hard_cap_hours=0,
     )
 
-    assert delete_calls == ["droid-disk-cold-assistant-staging"]
+    assert delete_calls == ["unity-disk-cold-assistant-staging"]
     assert result["deleted_idle"] == 1
     assert result["deleted_orphan"] == 0
 
@@ -1536,7 +1536,7 @@ def test_reconcile_deletes_idle_assistant_with_fresh_archive(monkeypatch):
 def test_reconcile_keeps_idle_disk_when_archive_missing(monkeypatch):
     disks = [
         _fake_disk(
-            name="droid-disk-cold-assistant-staging",
+            name="unity-disk-cold-assistant-staging",
             last_detach_seconds_ago=int(timedelta(days=45).total_seconds()),
         ),
     ]
@@ -1562,7 +1562,7 @@ def test_reconcile_keeps_idle_disk_when_archive_older_than_detach(monkeypatch):
     detach_seconds = int(timedelta(days=45).total_seconds())
     disks = [
         _fake_disk(
-            name="droid-disk-cold-assistant-staging",
+            name="unity-disk-cold-assistant-staging",
             last_detach_seconds_ago=detach_seconds,
         ),
     ]
@@ -1589,7 +1589,7 @@ def test_reconcile_hard_cap_deletes_when_enabled(monkeypatch):
     detach_seconds = int(timedelta(days=200).total_seconds())
     disks = [
         _fake_disk(
-            name="droid-disk-very-cold-staging",
+            name="unity-disk-very-cold-staging",
             last_detach_seconds_ago=detach_seconds,
         ),
     ]
@@ -1606,7 +1606,7 @@ def test_reconcile_hard_cap_deletes_when_enabled(monkeypatch):
         hard_cap_hours=24 * 180,
     )
 
-    assert delete_calls == ["droid-disk-very-cold-staging"]
+    assert delete_calls == ["unity-disk-very-cold-staging"]
     assert result["deleted_hard_cap"] == 1
     assert result["skipped_no_archive"] == 0
 
@@ -1619,14 +1619,14 @@ def test_reconcile_ignores_non_assistant_and_attached_disks(monkeypatch):
             last_detach_seconds_ago=old_detach,
         ),
         _fake_disk(
-            name="droid-disk-attached-staging",
+            name="unity-disk-attached-staging",
             last_detach_seconds_ago=old_detach,
             users=[
-                "projects/gcp-project-vms/zones/us-central1-f/instances/droid-pool-ubuntu-3",
+                "projects/gcp-project-vms/zones/us-central1-f/instances/unity-pool-ubuntu-3",
             ],
         ),
         _fake_disk(
-            name="droid-disk-ssd-pool-staging",
+            name="unity-disk-ssd-pool-staging",
             last_detach_seconds_ago=old_detach,
             type_url=(
                 "projects/gcp-project-vms/zones/us-central1-f/" "diskTypes/pd-ssd"
@@ -1654,7 +1654,7 @@ def test_reconcile_records_delete_race_as_error(monkeypatch):
     detach_seconds = int(timedelta(days=45).total_seconds())
     disks = [
         _fake_disk(
-            name="droid-disk-racing-staging",
+            name="unity-disk-racing-staging",
             last_detach_seconds_ago=detach_seconds,
         ),
     ]
@@ -1694,4 +1694,4 @@ def test_reconcile_records_delete_race_as_error(monkeypatch):
 
     assert result["deleted"] == 0
     assert len(result["errors"]) == 1
-    assert result["errors"][0]["disk"] == "droid-disk-racing-staging"
+    assert result["errors"][0]["disk"] == "unity-disk-racing-staging"

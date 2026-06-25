@@ -237,7 +237,7 @@ def test_delete_assistant_runtime_cleanup_completes(
     """
     assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
     agent_id = str(assistant["assistant_id"])
-    topic_name = f"droid-{agent_id}{_PUBSUB_SUFFIX}"
+    topic_name = f"unity-{agent_id}{_PUBSUB_SUFFIX}"
     topic_path = pubsub_publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
     try:

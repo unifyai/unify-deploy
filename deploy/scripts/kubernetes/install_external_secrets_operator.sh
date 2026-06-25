@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Install External Secrets Operator and Droid GCP Secret Manager wiring (one-time per cluster).
+# Install External Secrets Operator and Unity GCP Secret Manager wiring (one-time per cluster).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 PROJECT_ID="${GCP_PROJECT_ID:-gcp-project-runtime}"
-CLUSTER="${DROID_GKE_CLUSTER_NAME:-unity}"
+CLUSTER="${UNITY_GKE_CLUSTER_NAME:-unity}"
 REGION="${GKE_REGION:-us-central1}"
 ESO_VERSION="${ESO_VERSION:-0.14.2}"
 
@@ -34,14 +34,14 @@ cat <<'EOF'
 ✅ External Secrets Operator is installed and the ClusterSecretStore is valid.
 
 Per environment:
-  kubectl apply -f deploy/k8s/secrets/droid-secrets-external-secret_staging.yaml
-  kubectl apply -f deploy/k8s/secrets/droid-secrets-external-secret_production.yaml
+  kubectl apply -f deploy/k8s/secrets/unity-secrets-external-secret_staging.yaml
+  kubectl apply -f deploy/k8s/secrets/unity-secrets-external-secret_production.yaml
 
 Verify:
   kubectl get externalsecret -n staging
-  kubectl describe externalsecret droid-secrets -n staging
+  kubectl describe externalsecret unity-secrets -n staging
 
-After SM rotation, annotate force-sync or wait for refreshInterval, then restart Droid jobs.
-See deploy/guides/DROID_CLUSTER_SECRETS.md
+After SM rotation, annotate force-sync or wait for refreshInterval, then restart Unity jobs.
+See deploy/guides/UNITY_CLUSTER_SECRETS.md
 
 EOF

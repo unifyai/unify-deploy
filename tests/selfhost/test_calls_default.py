@@ -31,7 +31,7 @@ def test_sync_comms_defaults_to_voice_mode_without_public_url():
         if k
         not in {
             "SELF_HOST_CALLS_ENABLED",
-            "DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
+            "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
             "LOCAL_COMMS_PUBLIC_URL",
         }
     }
@@ -45,6 +45,6 @@ def test_sync_comms_defaults_to_voice_mode_without_public_url():
 
     assert completed.returncode == 2
     assert (
-        "--set-voice needs DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL"
+        "--set-voice needs UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL"
         in completed.stderr
     )

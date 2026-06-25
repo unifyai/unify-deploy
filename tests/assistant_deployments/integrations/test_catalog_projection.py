@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from droid_deploy.assistant_deployments.integrations.activation import (
+from unity_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
-from droid_deploy.assistant_deployments.integrations.catalog_projection import (
+from unity_deploy.assistant_deployments.integrations.catalog_projection import (
     NATIVE_INTEGRATION_BACKEND_ID,
     native_catalog_app_from_registry_row,
     native_catalog_apps_from_registry,
@@ -64,17 +64,17 @@ def test_sync_native_catalog_seeds_builtins_app_rows(monkeypatch) -> None:
         calls.append(kwargs)
         return True
 
-    droid_module = ModuleType("droid")
-    integrations_module = ModuleType("droid.integrations")
-    builtins_catalog_module = ModuleType("droid.integrations.builtins_catalog")
+    unity_module = ModuleType("unity")
+    integrations_module = ModuleType("unity.integrations")
+    builtins_catalog_module = ModuleType("unity.integrations.builtins_catalog")
     builtins_catalog_module.seed_builtin_integrations = fake_seed_builtin_integrations
     integrations_module.builtins_catalog = builtins_catalog_module
-    droid_module.integrations = integrations_module
-    monkeypatch.setitem(sys.modules, "droid", droid_module)
-    monkeypatch.setitem(sys.modules, "droid.integrations", integrations_module)
+    unity_module.integrations = integrations_module
+    monkeypatch.setitem(sys.modules, "unity", unity_module)
+    monkeypatch.setitem(sys.modules, "unity.integrations", integrations_module)
     monkeypatch.setitem(
         sys.modules,
-        "droid.integrations.builtins_catalog",
+        "unity.integrations.builtins_catalog",
         builtins_catalog_module,
     )
 
@@ -84,7 +84,7 @@ def test_sync_native_catalog_seeds_builtins_app_rows(monkeypatch) -> None:
         "status": "synced",
         "backend_id": NATIVE_INTEGRATION_BACKEND_ID,
         "source_type": "native",
-        "cache_version": "droid-deploy-native-v1",
+        "cache_version": "unity-deploy-native-v1",
         "apps_upserted": 1,
         "tools_upserted": 0,
     }

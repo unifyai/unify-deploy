@@ -35,7 +35,7 @@ def test_dashboard_action_env_carries_team_ids_as_csv():
             "boss_contact_id": 43,
         },
         run_key="run-123",
-        job_name="droid-dashboard-action-abc",
+        job_name="unity-dashboard-action-abc",
     )
 
     assert env["TEAM_IDS"] == "3,4"
@@ -70,7 +70,7 @@ def test_dashboard_action_env_uses_empty_team_ids_for_solo_assistant():
             "boss_contact_id": 43,
         },
         run_key="run-123",
-        job_name="droid-dashboard-action-abc",
+        job_name="unity-dashboard-action-abc",
     )
 
     assert env["TEAM_IDS"] == ""

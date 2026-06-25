@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared self-host runtime ownership, locking, and health helpers.
 #
-# Expects self_host_env.sh to be sourced first (or DROID_HOME / SELF_HOST_STATE_DIR set).
+# Expects self_host_env.sh to be sourced first (or UNITY_HOME / SELF_HOST_STATE_DIR set).
 
 set -euo pipefail
 
@@ -13,23 +13,23 @@ SELF_HOST_RUNTIME_OWNER_STACK="stack"
 _SELF_HOST_RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 self_host_runtime_state_file() {
-  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_runtime_lock_file() {
-  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_marker_file() {
-  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_supervisor_pidfile() {
-  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_log_file() {
-  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_is_enabled() {
@@ -46,7 +46,7 @@ self_host_disable_runtime() {
 }
 
 self_host_ensure_state_dir() {
-  mkdir -p "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  mkdir -p "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_read_runtime_state() {
@@ -82,12 +82,12 @@ self_host_runtime_gateway_pid() {
 
 self_host_gateway_base_url() {
   printf 'http://%s:%s' \
-    "${DROID_GATEWAY_HOST:-127.0.0.1}" \
-    "${DROID_GATEWAY_PORT:-8001}"
+    "${UNITY_GATEWAY_HOST:-127.0.0.1}" \
+    "${UNITY_GATEWAY_PORT:-8001}"
 }
 
 self_host_gateway_pidfile() {
-  printf '/tmp/droid-gateway.pid'
+  printf '/tmp/unity-gateway.pid'
 }
 
 self_host_gateway_process_pid() {
@@ -118,15 +118,15 @@ self_host_gateway_is_healthy() {
 
 self_host_comms_sa_file() {
   printf '%s' \
-    "${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/comms_sa.json}"
+    "${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/comms_sa.json}"
 }
 
 self_host_comms_bridge_pidfile() {
-  printf '%s/comms-bridge.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/comms-bridge.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_comms_bridge_log_file() {
-  printf '%s/comms-bridge.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/comms-bridge.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_comms_bridge_script() {
@@ -136,7 +136,7 @@ self_host_comms_bridge_script() {
 # Configured = at least one channel is set: a Gmail SA + Coordinator mailbox
 # (email), or Twilio creds (SMS/WhatsApp). No-op otherwise.
 self_host_comms_bridge_configured() {
-  [[ -f "$(self_host_comms_sa_file)" && -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" ]] && return 0
+  [[ -f "$(self_host_comms_sa_file)" && -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]] && return 0
   [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${TWILIO_AUTH_TOKEN:-}" ]] && return 0
   return 1
 }
@@ -156,7 +156,7 @@ self_host_ensure_comms_bridge() {
   local script py log_file
   script="$(self_host_comms_bridge_script)"
   [[ -f "$script" ]] || return 0
-  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
   log_file="$(self_host_comms_bridge_log_file)"
   self_host_ensure_state_dir
@@ -167,10 +167,10 @@ self_host_ensure_comms_bridge() {
   # ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY let the bridge open the WhatsApp 24h
   # free-form window in Orchestra on inbound (best-effort), mirroring the hosted
   # adapter; without them every Coordinator reply falls back to a template.
-  GMAIL_BRIDGE_MAILBOX="${DROID_COORDINATOR_EMAIL_ADDRESS:-}" \
+  GMAIL_BRIDGE_MAILBOX="${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" \
     GMAIL_BRIDGE_SA_FILE="$(self_host_comms_sa_file)" \
-    COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${DROID_COORDINATOR_PHONE:-}}" \
-    COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${DROID_COORDINATOR_WHATSAPP_NUMBER:-}}" \
+    COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${UNITY_COORDINATOR_PHONE:-}}" \
+    COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${UNITY_COORDINATOR_WHATSAPP_NUMBER:-}}" \
     COMMS_BRIDGE_TWILIO_ALLOWLIST="${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" \
     ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
@@ -200,19 +200,19 @@ self_host_stop_comms_bridge() {
 # default; SELF_HOST_CALLS_ENABLED=0 is reserved for emergency local debugging.
 
 self_host_local_comms_port() {
-  printf '%s' "${DROID_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+  printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 }
 
 self_host_tunnel_pidfile() {
-  printf '%s/call-tunnel.pid' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/call-tunnel.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_log_file() {
-  printf '%s/call-tunnel.log' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/call-tunnel.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_url_file() {
-  printf '%s/call-tunnel-url' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/call-tunnel-url' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_sync_comms_script() {
@@ -220,7 +220,7 @@ self_host_sync_comms_script() {
 }
 
 self_host_voice_synced_url_file() {
-  printf '%s/call-voice-synced-url' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/call-voice-synced-url' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_is_running() {
@@ -249,7 +249,7 @@ self_host_ensure_tunnel() {
     local existing
     existing="$(self_host_tunnel_url 2>/dev/null || true)"
     if [[ -n "$existing" ]]; then
-      export DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$existing"
+      export UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$existing"
       return 0
     fi
     # Running but URL not yet recorded — fall through to re-resolve from the log.
@@ -289,13 +289,13 @@ self_host_ensure_tunnel() {
   fi
 
   printf '%s' "$url" >"$url_file"
-  export DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url"
+  export UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url"
   # The tunnel exposes the CM comms ingress (8787), NOT the gateway (8001).
-  # droid/scripts/local.sh defaults DROID_GATEWAY_PUBLIC_URL to the comms public
+  # unity/scripts/local.sh defaults UNITY_GATEWAY_PUBLIC_URL to the comms public
   # URL when unset, which would point the gateway health check + outbound
   # callback base at the comms tunnel. Pin the gateway to its local URL so only
   # the CM ingress is tunneled.
-  export DROID_GATEWAY_PUBLIC_URL="${DROID_GATEWAY_PUBLIC_URL:-http://127.0.0.1:${DROID_GATEWAY_PORT:-8001}}"
+  export UNITY_GATEWAY_PUBLIC_URL="${UNITY_GATEWAY_PUBLIC_URL:-http://127.0.0.1:${UNITY_GATEWAY_PORT:-8001}}"
   if declare -F self_host_patch_runtime_state &>/dev/null; then
     self_host_patch_runtime_state "call_tunnel_url=$url" || true
   fi
@@ -331,9 +331,9 @@ self_host_resync_voice_webhooks_if_changed() {
   [[ "$url" == "$prev" ]] && return 0
   script="$(self_host_sync_comms_script)"
   [[ -f "$script" ]] || return 0
-  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
-  if DROID_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url" \
+  if UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url" \
     "$py" "$script" --set-voice >/dev/null 2>&1; then
     printf '%s' "$url" >"$marker"
   fi
@@ -351,7 +351,7 @@ self_host_revert_voice_webhooks() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
-  py="${DROID_REPO_PATH:-}/.venv/bin/python"
+  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
   "$py" "$script" --revert-voice >/dev/null 2>&1 || true
   rm -f "$(self_host_voice_synced_url_file)"
@@ -417,15 +417,15 @@ self_host_clear_runtime_state() {
   rm -f "$(self_host_runtime_state_file)"
 }
 
-droid_cm_pidfile() {
-  printf '/tmp/droid-local.pid'
+unity_cm_pidfile() {
+  printf '/tmp/unity-local.pid'
 }
 
-droid_cm_process_pids() {
+unity_cm_process_pids() {
   local main_pids="" pidfile_pid="" merged=""
-  main_pids="$(pgrep -f "[Pp]ython.*-m droid\.conversation_manager\.main" 2>/dev/null || true)"
-  if [[ -f "$(droid_cm_pidfile)" ]]; then
-    pidfile_pid="$(cat "$(droid_cm_pidfile)" 2>/dev/null || true)"
+  main_pids="$(pgrep -f "[Pp]ython.*-m unity\.conversation_manager\.main" 2>/dev/null || true)"
+  if [[ -f "$(unity_cm_pidfile)" ]]; then
+    pidfile_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
     if [[ -n "$pidfile_pid" ]] && ! kill -0 "$pidfile_pid" 2>/dev/null; then
       pidfile_pid=""
     fi
@@ -437,9 +437,9 @@ droid_cm_process_pids() {
   return 0
 }
 
-droid_cm_instance_count() {
+unity_cm_instance_count() {
   local pids count
-  pids="$(droid_cm_process_pids)"
+  pids="$(unity_cm_process_pids)"
   if [[ -z "$pids" ]]; then
     echo 0
     return 0
@@ -448,7 +448,7 @@ droid_cm_instance_count() {
   echo "$count"
 }
 
-droid_cm_assistant_id_for_pid() {
+unity_cm_assistant_id_for_pid() {
   local pid="$1"
   ps eww -p "$pid" 2>/dev/null \
     | tr ' ' '\n' \
@@ -456,7 +456,7 @@ droid_cm_assistant_id_for_pid() {
     | head -1
 }
 
-droid_cm_is_alive() {
+unity_cm_is_alive() {
   local pid="${1:-}"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
@@ -552,7 +552,7 @@ self_host_service_runtime_is_healthy() {
   self_host_service_is_enabled || return 1
   self_host_service_supervisor_is_running || return 1
   local count
-  count="$(droid_cm_instance_count)"
+  count="$(unity_cm_instance_count)"
   [[ "$count" -eq 1 ]]
 }
 
@@ -564,7 +564,7 @@ self_host_should_preserve_background_on_interactive_stop() {
 self_host_should_preserve_runtime_on_interactive_stop() {
   self_host_should_preserve_background_on_interactive_stop || return 1
   local count
-  count="$(droid_cm_instance_count)"
+  count="$(unity_cm_instance_count)"
   [[ "$count" -eq 1 ]]
 }
 
@@ -594,12 +594,12 @@ self_host_adopt_coordinator_for_service() {
   local coordinator_agent_id="${1:-}"
   local cm_pid=""
 
-  cm_pid="$(cat "$(droid_cm_pidfile)" 2>/dev/null || true)"
+  cm_pid="$(cat "$(unity_cm_pidfile)" 2>/dev/null || true)"
   [[ -n "$cm_pid" ]] || return 1
-  droid_cm_is_alive "$cm_pid" || return 1
+  unity_cm_is_alive "$cm_pid" || return 1
 
   if [[ -z "$coordinator_agent_id" ]]; then
-    coordinator_agent_id="$(droid_cm_assistant_id_for_pid "$cm_pid")"
+    coordinator_agent_id="$(unity_cm_assistant_id_for_pid "$cm_pid")"
   fi
   [[ -n "$coordinator_agent_id" ]] || return 1
 
@@ -616,11 +616,11 @@ self_host_apply_service_coordinator_context() {
   if ! self_host_service_supervisor_is_running; then
     return 0
   fi
-  export DROID_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
-  export DROID_SERVICE_RUNTIME=1
+  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export UNITY_SERVICE_RUNTIME=1
 }
 
-with_droid_runtime_start_lock() {
+with_unity_runtime_start_lock() {
   local timeout="${1:-30}"
   shift
   self_host_ensure_state_dir
@@ -662,7 +662,7 @@ self_host_runtime_doctor_line() {
   fi
 
   local cm_count
-  cm_count="$(droid_cm_instance_count)"
+  cm_count="$(unity_cm_instance_count)"
   local cm_label
   if [[ "$cm_count" -eq 0 ]]; then
     cm_label="0 instances (stopped)"
@@ -681,7 +681,7 @@ self_host_runtime_doctor_line() {
   fi
   if self_host_comms_bridge_configured; then
     local _bridge_channels=""
-    [[ -n "${DROID_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
+    [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
       && _bridge_channels="email"
     if [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" ]]; then
       _bridge_channels="${_bridge_channels:+$_bridge_channels,}sms,whatsapp"
@@ -705,7 +705,7 @@ self_host_load_coordinator_credentials() {
     if declare -F self_host_coordinator_runtime_file &>/dev/null; then
       runtime_file="$(self_host_coordinator_runtime_file)"
     else
-      runtime_file="${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}/coordinator-runtime.json"
+      runtime_file="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/coordinator-runtime.json"
     fi
   fi
   if [[ ! -f "$runtime_file" ]]; then

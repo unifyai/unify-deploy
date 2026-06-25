@@ -1,27 +1,27 @@
 steps:
-  # Clone the staging Droid source and overlay the mirrored hosted deploy assets.
+  # Clone the staging Unity source and overlay the mirrored hosted deploy assets.
 - name: 'gcr.io/cloud-builders/git'
-  id: 'clone-droid'
+  id: 'clone-unity'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
     set -euo pipefail
-    DROID_REF="${_DROID_REF:-${_UNITY_REF:-staging}}"
-    DROID_SHA_OVERRIDE="${_DROID_SHA:-${_UNITY_SHA:-}}"
-    git clone --depth 1 --branch "$${DROID_REF}" https://$$GITHUB_TOKEN@github.com/unifyai/droid.git /workspace/droid-src
-    if [ -n "$${DROID_SHA_OVERRIDE}" ]; then
-      git -C /workspace/droid-src fetch --depth 1 origin "$${DROID_SHA_OVERRIDE}"
-      git -C /workspace/droid-src checkout --detach FETCH_HEAD
+    UNITY_REF="${_UNITY_REF:-${_UNITY_REF:-staging}}"
+    UNITY_SHA_OVERRIDE="${_UNITY_SHA:-${_UNITY_SHA:-}}"
+    git clone --depth 1 --branch "$${UNITY_REF}" https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-src
+    if [ -n "$${UNITY_SHA_OVERRIDE}" ]; then
+      git -C /workspace/unity-src fetch --depth 1 origin "$${UNITY_SHA_OVERRIDE}"
+      git -C /workspace/unity-src checkout --detach FETCH_HEAD
     fi
-    git -C /workspace/droid-src rev-parse --short=12 HEAD > /workspace/droid_sha.txt
-    mkdir -p /workspace/droid-public-deploy
-    cp -R /workspace/droid-src/deploy/integrations /workspace/droid-public-deploy/integrations
-    rm -rf /workspace/droid-src/deploy
-    mkdir -p /workspace/droid-src/deploy
-    cp -R /workspace/base/. /workspace/droid-src/deploy/
-    cp -R /workspace/droid-public-deploy/integrations /workspace/droid-src/deploy/integrations
-    echo "Using Droid SHA: $$(cat /workspace/droid_sha.txt)"
+    git -C /workspace/unity-src rev-parse --short=12 HEAD > /workspace/unity_sha.txt
+    mkdir -p /workspace/unity-public-deploy
+    cp -R /workspace/unity-src/deploy/integrations /workspace/unity-public-deploy/integrations
+    rm -rf /workspace/unity-src/deploy
+    mkdir -p /workspace/unity-src/deploy
+    cp -R /workspace/base/. /workspace/unity-src/deploy/
+    cp -R /workspace/unity-public-deploy/integrations /workspace/unity-src/deploy/integrations
+    echo "Using Unity SHA: $$(cat /workspace/unity_sha.txt)"
   secretEnv: ['GITHUB_TOKEN']
   waitFor: ['-']
 
@@ -32,7 +32,7 @@ steps:
   args:
   - '-c'
   - |
-    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:latest || true
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest || true
 
   # Resolve latest commit SHAs from dependency repos so the Docker layer cache
   # is busted whenever unify or unillm change.
@@ -57,22 +57,22 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    DROID_REF="${_DROID_REF:-${_UNITY_REF:-staging}}"
-    DROID_SHA=$$(cat /workspace/droid_sha.txt)
+    UNITY_REF="${_UNITY_REF:-${_UNITY_REF:-staging}}"
+    UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
-      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:latest \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
-      --build-arg BRANCH=$${DROID_REF} \
+      --build-arg BRANCH=$${UNITY_REF} \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
-      -f /workspace/droid-src/deploy/Dockerfile \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:$${DROID_SHA} \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:latest \
-      /workspace/droid-src
+      -f /workspace/unity-src/deploy/Dockerfile \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:$${UNITY_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest \
+      /workspace/unity-src
   secretEnv: ['ORCHESTRA_API_KEY', 'GITHUB_TOKEN']
-  waitFor: ['clone-droid', 'pull-cache', 'resolve-dep-shas']
+  waitFor: ['clone-unity', 'pull-cache', 'resolve-dep-shas']
 
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
@@ -81,16 +81,16 @@ steps:
   args:
   - '-c'
   - |
-    DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:$${DROID_SHA}
+    UNITY_SHA=$$(cat /workspace/unity_sha.txt)
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:$${UNITY_SHA}
   waitFor: ['build-image']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
-  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:latest']
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest']
   waitFor: ['build-image']
 
-  # Build job-watcher image from the cloned Droid source plus mirrored private assets.
+  # Build job-watcher image from the cloned Unity source plus mirrored private assets.
 - name: 'gcr.io/cloud-builders/docker'
   id: 'build-job-watcher'
   entrypoint: 'bash'
@@ -98,17 +98,17 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    DROID_REF="${_DROID_REF:-${_UNITY_REF:-staging}}"
-    DROID_SHA=$$(cat /workspace/droid_sha.txt)
+    UNITY_REF="${_UNITY_REF:-${_UNITY_REF:-staging}}"
+    UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
-      --build-arg BRANCH=$${DROID_REF} \
-      -f /workspace/droid-src/deploy/scripts/job-watcher/Dockerfile \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${DROID_SHA} \
+      --build-arg BRANCH=$${UNITY_REF} \
+      -f /workspace/unity-src/deploy/scripts/job-watcher/Dockerfile \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:latest \
-      /workspace/droid-src
+      /workspace/unity-src
   secretEnv: ['GITHUB_TOKEN']
-  waitFor: ['clone-droid']
+  waitFor: ['clone-unity']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-job-watcher'
@@ -123,10 +123,10 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    DROID_SHA=$$(cat /workspace/droid_sha.txt)
+    UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
-    sed "s|image:.*job-watcher.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${DROID_SHA}|" \
-      /workspace/droid-src/deploy/scripts/job-watcher/deployment_staging.yaml | kubectl apply -f -
+    sed "s|image:.*job-watcher.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${UNITY_SHA}|" \
+      /workspace/unity-src/deploy/scripts/job-watcher/deployment_staging.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
 
   # Trigger the staging overlay build on top of the just-pushed base image.
@@ -137,12 +137,12 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    gcloud builds triggers run droid-deploy-staging \
+    UNITY_SHA=$$(cat /workspace/unity_sha.txt)
+    gcloud builds triggers run unity-deploy-staging \
       --project=${PROJECT_ID} \
       --region=${_REGION} \
       --branch=staging \
-      --substitutions=_BASE_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/droid-base-staging:$${DROID_SHA},_DROID_SHA=$${DROID_SHA}
+      --substitutions=_BASE_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:$${UNITY_SHA},_UNITY_SHA=$${UNITY_SHA}
   waitFor: ['push-sha-tag', 'push-latest-tag']
 
 options:
@@ -151,10 +151,10 @@ options:
 
 substitutions:
   _REGION: 'us-central1'
-  _REPOSITORY: 'droid'
+  _REPOSITORY: 'unity'
   _CLUSTER: 'unity'
-  _DROID_REF: 'staging'
-  _DROID_SHA: ''
+  _UNITY_REF: 'staging'
+  _UNITY_SHA: ''
 
 availableSecrets:
   secretManager:

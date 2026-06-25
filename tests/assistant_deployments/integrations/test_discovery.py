@@ -8,12 +8,12 @@ from pathlib import Path
 
 import yaml
 
-from droid_deploy.assistant_deployments.integrations.discovery import (
+from unity_deploy.assistant_deployments.integrations.discovery import (
     discover_from_directory,
     discover_integrations,
     _load_manifest,
 )
-from droid_deploy.assistant_deployments.integrations.types import IntegrationManifest
+from unity_deploy.assistant_deployments.integrations.types import IntegrationManifest
 
 
 @pytest.fixture

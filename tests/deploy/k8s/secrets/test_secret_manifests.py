@@ -22,17 +22,17 @@ def test_cluster_secret_store_targets_gcp_project() -> None:
 
 def test_external_secret_targets_match_namespace() -> None:
     for filename, namespace in (
-        ("droid-secrets-external-secret_staging.yaml", "staging"),
-        ("droid-secrets-external-secret_production.yaml", "production"),
+        ("unity-secrets-external-secret_staging.yaml", "staging"),
+        ("unity-secrets-external-secret_production.yaml", "production"),
     ):
         doc = _load_yaml(filename)
         assert doc["metadata"]["namespace"] == namespace
-        assert doc["spec"]["target"]["name"] == "droid-secrets"
-        assert doc["spec"]["secretStoreRef"]["name"] == "droid-gcp-secret-manager"
+        assert doc["spec"]["target"]["name"] == "unity-secrets"
+        assert doc["spec"]["secretStoreRef"]["name"] == "unity-gcp-secret-manager"
 
 
 def test_tavily_key_maps_from_secret_manager() -> None:
-    doc = _load_yaml("droid-secrets-external-secret_staging.yaml")
+    doc = _load_yaml("unity-secrets-external-secret_staging.yaml")
     tavily_entries = [
         item for item in doc["spec"]["data"] if item["secretKey"] == "TAVILY_API_KEY"
     ]
