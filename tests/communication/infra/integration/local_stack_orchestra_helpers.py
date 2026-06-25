@@ -11,7 +11,7 @@ import uuid
 import requests
 from google.api_core.exceptions import DeadlineExceeded, NotFound
 
-from tests.infra.integration.conftest import LocalStackUrls
+from tests.communication.infra.integration.conftest import LocalStackUrls
 
 _TEMP_SUBSCRIPTION_TTL_SECONDS = 86_400
 

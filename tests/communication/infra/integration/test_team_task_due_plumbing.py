@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 import pytest
 import requests
 
-from tests.infra.integration.conftest import LocalStackUrls
-from tests.infra.integration.local_stack_orchestra_helpers import (
+from tests.communication.infra.integration.conftest import LocalStackUrls
+from tests.communication.infra.integration.local_stack_orchestra_helpers import (
     admin_key,
     auth_headers,
     create_organization,

@@ -26,7 +26,7 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
-from tests.infra.integration.pubsub_auth import (
+from tests.communication.infra.integration.pubsub_auth import (
     build_pubsub_publisher_client,
     build_pubsub_subscriber_client,
     client_credential_context,
