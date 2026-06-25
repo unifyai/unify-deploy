@@ -1,0 +1,81 @@
+---
+# Self-hosted GitHub Actions runner that executes the `Integration smoke` merge
+# gate from inside the `unity` cluster, so it can reach internal Orchestra and
+# the cluster API server. One persistent replica is enough — the gate runs only
+# on staging -> main PRs, [run-integration] pushes, and manual dispatch.
+#
+# GCP access (GCE pool VMs + Pub/Sub) reuses the existing comm-sa key, mounted at
+# /secrets/comm-sa/key.json; the workflow activates it and points
+# GOOGLE_APPLICATION_CREDENTIALS at it. The GitHub registration credential and
+# Orchestra/Unify test secrets are NOT mounted here — GitHub injects job secrets
+# into the runner over its encrypted channel; only the runner-registration token
+# lives on the pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-integration-runner
+  namespace: staging
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+spec:
+  replicas: 1
+  # Never run two registrations of the same runner name side by side.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ci-integration-runner
+  template:
+    metadata:
+      labels:
+        app: ci-integration-runner
+        component: ci-runner
+        environment: staging
+    spec:
+      serviceAccountName: ci-integration-runner
+      # The runner runs `docker`-free shell jobs; no privileged access needed.
+      securityContext:
+        runAsUser: 0
+      containers:
+      - name: runner
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity-comms-app-repo/ci-integration-runner:latest
+        imagePullPolicy: Always
+        env:
+        - name: RUNNER_SCOPE
+          value: "repo"
+        - name: REPO_URL
+          value: "https://github.com/unifyai/unity-deploy"
+        - name: RUNNER_NAME_PREFIX
+          value: "unity-cluster-staging"
+        - name: LABELS
+          value: "self-hosted,unity-cluster,staging"
+        - name: EPHEMERAL
+          value: "true"
+        - name: DISABLE_AUTO_UPDATE
+          value: "true"
+        # PAT (or GitHub App installation token) with repo admin:runner scope,
+        # synced from Secret Manager via the ExternalSecret in this directory.
+        - name: ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: ci-integration-runner-github
+              key: ACCESS_TOKEN
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /secrets/comm-sa/key.json
+        volumeMounts:
+        - name: comm-sa-key
+          mountPath: /secrets/comm-sa
+          readOnly: true
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+      volumes:
+      - name: comm-sa-key
+        secret:
+          secretName: comm-sa-key

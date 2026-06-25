@@ -1,0 +1,61 @@
+---
+# ServiceAccount + RBAC for the in-cluster self-hosted GitHub Actions runner
+# that executes the `Integration smoke` merge gate (.github/workflows/
+# integration-smoke.yml). The runner reaches the Kubernetes API via in-cluster
+# config, so it needs the namespaced permissions the merge_gate tests exercise
+# directly: creating/deleting Jobs (stale-job injection + cleanup), reading
+# Pods/Secrets (runtime + bootstrap inspection), and reading/deleting
+# AssistantSession custom objects (teardown verification).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-integration-runner
+  namespace: staging
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-integration-runner
+  namespace: staging
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch", "delete"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions/status"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-integration-runner
+  namespace: staging
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+subjects:
+- kind: ServiceAccount
+  name: ci-integration-runner
+  namespace: staging
+roleRef:
+  kind: Role
+  name: ci-integration-runner
+  apiGroup: rbac.authorization.k8s.io
