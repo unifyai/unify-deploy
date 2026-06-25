@@ -215,7 +215,15 @@ class GmailAdapter:
                 flush=True,
             )
             return False
-        _post("/local/comms/envelope", _email_envelope(message, internal_ms))
+        _post(
+            "/local/comms/envelope",
+            _email_envelope(
+                message,
+                internal_ms,
+                gmail_message_id=gmail_id,
+                thread_id=fetched.get("threadId"),
+            ),
+        )
         _mark_gmail_read(service, gmail_id)
         print(
             f"[bridge] email from={message.get('From','')!r} "
@@ -290,7 +298,13 @@ def _message_from_mailbox(message: Message, mailbox: str) -> bool:
     )
 
 
-def _email_envelope(message: Message, internal_ms: int | None = None) -> dict:
+def _email_envelope(
+    message: Message,
+    internal_ms: int | None = None,
+    *,
+    gmail_message_id: str | None = None,
+    thread_id: str | None = None,
+) -> dict:
     envelope = {
         "thread": "email",
         "event": {
@@ -298,6 +312,8 @@ def _email_envelope(message: Message, internal_ms: int | None = None) -> dict:
             "subject": message.get("Subject", ""),
             "body": _email_body(message),
             "email_id": message.get("Message-ID") or make_msgid(),
+            "thread_id": thread_id or "",
+            "gmail_message_id": gmail_message_id or "",
             "attachments": [],
             "to": _email_recipients(message.get("To")),
             "cc": _email_recipients(message.get("Cc")),
@@ -388,8 +404,19 @@ class TwilioAdapter:
             if sender not in self._allowlist:
                 continue
             if self._wa and self._is_call_permission_response(msg):
+                envelope = self._call_permission_envelope(msg, sender)
+                if envelope is None:
+                    seen.add(msg.sid)
+                    print(
+                        "[bridge] whatsapp call permission response missing "
+                        f"ButtonPayload from={sender!r}; skipped",
+                        flush=True,
+                    )
+                    continue
                 self._record_call_permission(sender, msg)
-            _post("/local/comms/envelope", self._envelope(msg, sender))
+            else:
+                envelope = self._envelope(msg, sender)
+            _post("/local/comms/envelope", envelope)
             if self._wa:
                 self._touch_inbound_window(sender)
             seen.add(msg.sid)
@@ -413,12 +440,40 @@ class TwilioAdapter:
         )
         return str(payload or "").strip()
 
+    def _call_permission_envelope(self, msg, sender: str) -> dict | None:
+        button_payload = self._button_payload(msg)
+        if button_payload not in {"ACCEPTED", "REJECTED"}:
+            return None
+        return {
+            "thread": "whatsapp",
+            "event": {
+                "contacts": [],
+                "type": "call_permission_response",
+                "contact_number": sender,
+                "from_number": sender,
+                "to_number": self._number,
+                "body": msg.body or "",
+                "payload": button_payload,
+                "attachments": [],
+            },
+        }
+
     def _record_call_permission(self, sender: str, msg) -> None:
         headers = _orchestra_admin_headers()
         if headers is None:
             return
         button_payload = self._button_payload(msg)
-        status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+        if button_payload == "ACCEPTED":
+            status = "accepted"
+        elif button_payload == "REJECTED":
+            status = "rejected"
+        else:
+            print(
+                "[bridge] whatsapp call permission update skipped for unknown "
+                f"ButtonPayload={button_payload!r} from={sender!r}",
+                flush=True,
+            )
+            return
         try:
             response = requests.post(
                 f"{_orchestra_base_url()}/admin/whatsapp/call-permission",

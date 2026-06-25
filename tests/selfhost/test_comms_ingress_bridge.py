@@ -119,6 +119,7 @@ def test_gmail_poll_forwards_non_self_mail_with_provider_timestamp(monkeypatch) 
         {
             "inbound": {
                 "id": "inbound",
+                "threadId": "gmail-thread-1",
                 "internalDate": "2000000",
                 "labelIds": ["UNREAD"],
                 "raw": _raw_message(sender="Daniel <dan@unify.ai>", body="2001"),
@@ -140,6 +141,8 @@ def test_gmail_poll_forwards_non_self_mail_with_provider_timestamp(monkeypatch) 
     assert forwarded[0][1]["thread"] == "email"
     assert forwarded[0][1]["publish_timestamp"] == 2000
     assert forwarded[0][1]["event"]["body"].strip() == "2001"
+    assert forwarded[0][1]["event"]["thread_id"] == "gmail-thread-1"
+    assert forwarded[0][1]["event"]["gmail_message_id"] == "inbound"
     assert service._messages.marked_read == ["inbound"]
     assert adapter._history_id == "history-start"
 
@@ -149,6 +152,7 @@ def test_gmail_poll_uses_history_after_bootstrap(monkeypatch) -> None:
         {
             "history-msg": {
                 "id": "history-msg",
+                "threadId": "gmail-thread-history",
                 "internalDate": "3000000",
                 "labelIds": ["UNREAD"],
                 "raw": _raw_message(
@@ -180,6 +184,8 @@ def test_gmail_poll_uses_history_after_bootstrap(monkeypatch) -> None:
     assert service._history.calls[0]["startHistoryId"] == "history-start"
     assert adapter._history_id == "history-next"
     assert forwarded[0][1]["event"]["body"].strip() == "history body"
+    assert forwarded[0][1]["event"]["thread_id"] == "gmail-thread-history"
+    assert forwarded[0][1]["event"]["gmail_message_id"] == "history-msg"
 
 
 def test_twilio_poll_skips_outbound_messages(monkeypatch) -> None:
@@ -279,25 +285,125 @@ def test_twilio_whatsapp_permission_response_updates_orchestra(monkeypatch) -> N
             },
         ),
     ]
-    assert forwarded[0][1]["event"]["body"] == "VOICE_CALL_REQUEST"
+    assert forwarded == [
+        (
+            "/local/comms/envelope",
+            {
+                "thread": "whatsapp",
+                "event": {
+                    "contacts": [],
+                    "type": "call_permission_response",
+                    "contact_number": "+4915550100009",
+                    "from_number": "+4915550100009",
+                    "to_number": "+447700900001",
+                    "body": "VOICE_CALL_REQUEST",
+                    "payload": "ACCEPTED",
+                    "attachments": [],
+                },
+            },
+        ),
+    ]
     assert gets[0][0] == "http://orchestra.test/v0/admin/whatsapp/resolve"
 
 
-def test_twilio_whatsapp_permission_rejection_updates_orchestra(monkeypatch) -> None:
+def test_twilio_whatsapp_permission_rejection_updates_orchestra_and_forwards_event(
+    monkeypatch,
+) -> None:
+    sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
     adapter = bridge.TwilioAdapter("whatsapp", "+447700900001", {"+4915550100009"})
+    adapter._client = SimpleNamespace(
+        messages=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(
+                    sid="wa-rejected-permission",
+                    direction="inbound",
+                    date_sent=sent,
+                    date_created=sent,
+                    from_="whatsapp:+4915550100009",
+                    to="whatsapp:+447700900001",
+                    body="VOICE_CALL_REQUEST",
+                    button_payload="REJECTED",
+                ),
+            ],
+        ),
+    )
+    forwarded = []
     posts = []
+    gets = []
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setattr(
+        bridge,
+        "_post",
+        lambda path, envelope: forwarded.append((path, envelope)),
+    )
     monkeypatch.setattr(
         bridge.requests,
         "post",
         lambda url, **kwargs: posts.append((url, kwargs))
         or SimpleNamespace(raise_for_status=lambda: None),
     )
-
-    adapter._record_call_permission(
-        "+4915550100009",
-        SimpleNamespace(body="VOICE_CALL_REQUEST", button_payload="REJECTED"),
+    monkeypatch.setattr(
+        bridge.requests,
+        "get",
+        lambda url, **kwargs: gets.append((url, kwargs))
+        or SimpleNamespace(raise_for_status=lambda: None),
     )
 
+    assert adapter.poll(1_000_000, set()) == 1
+
     assert posts[0][1]["json"]["status"] == "rejected"
+    assert forwarded[0][1]["event"]["type"] == "call_permission_response"
+    assert forwarded[0][1]["event"]["payload"] == "REJECTED"
+    assert forwarded[0][1]["event"]["contact_number"] == "+4915550100009"
+    assert gets[0][0] == "http://orchestra.test/v0/admin/whatsapp/resolve"
+
+
+def test_twilio_whatsapp_permission_without_payload_is_not_rejected(
+    monkeypatch,
+) -> None:
+    sent = datetime.fromtimestamp(2_000, tz=timezone.utc)
+    adapter = bridge.TwilioAdapter("whatsapp", "+447700900001", {"+4915550100009"})
+    adapter._client = SimpleNamespace(
+        messages=SimpleNamespace(
+            list=lambda **_kwargs: [
+                SimpleNamespace(
+                    sid="wa-missing-permission-payload",
+                    direction="inbound",
+                    date_sent=sent,
+                    date_created=sent,
+                    from_="whatsapp:+4915550100009",
+                    to="whatsapp:+447700900001",
+                    body="VOICE_CALL_REQUEST",
+                ),
+            ],
+        ),
+    )
+    forwarded = []
+    posts = []
+    gets = []
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "http://orchestra.test/v0")
+    monkeypatch.setattr(
+        bridge,
+        "_post",
+        lambda path, envelope: forwarded.append((path, envelope)),
+    )
+    monkeypatch.setattr(
+        bridge.requests,
+        "post",
+        lambda url, **kwargs: posts.append((url, kwargs))
+        or SimpleNamespace(raise_for_status=lambda: None),
+    )
+    monkeypatch.setattr(
+        bridge.requests,
+        "get",
+        lambda url, **kwargs: gets.append((url, kwargs))
+        or SimpleNamespace(raise_for_status=lambda: None),
+    )
+
+    assert adapter.poll(1_000_000, set()) == 0
+
+    assert posts == []
+    assert forwarded == []
+    assert gets == []
