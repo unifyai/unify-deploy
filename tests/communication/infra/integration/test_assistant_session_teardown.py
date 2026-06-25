@@ -211,6 +211,7 @@ def test_delete_assistant_response_is_fast(
         _delete_test_assistant(agent_id, batch_api)
 
 
+@pytest.mark.merge_gate
 def test_delete_assistant_runtime_cleanup_completes(
     batch_api,
     gce_client,

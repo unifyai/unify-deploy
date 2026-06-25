@@ -51,6 +51,7 @@ def _wakeup(assistant_id: str):
 class TestE2EFlows:
     """End-to-end flows exercising the adapter -> comms app -> K8s pipeline."""
 
+    @pytest.mark.merge_gate
     @pytest.mark.timeout(60)
     def test_wakeup_responds_within_orchestra_timeout(
         self,
@@ -89,6 +90,7 @@ class TestE2EFlows:
                 pass
             replenish_pool()
 
+    @pytest.mark.merge_gate
     @pytest.mark.timeout(300)
     def test_wakeup_starts_container_for_real_assistant(
         self,

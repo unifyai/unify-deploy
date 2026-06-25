@@ -404,6 +404,7 @@ def _assert_no_outbound_messages(
 class TestTaskActivationFlows:
     """Real staging user-flow tests for scheduled, triggered, and offline tasks."""
 
+    @pytest.mark.merge_gate
     def test_scheduled_due_wakes_sleeping_assistant_with_startup_reason_and_stays_silent(
         self,
         batch_api,
@@ -737,6 +738,7 @@ class TestTaskActivationFlows:
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)
 
+    @pytest.mark.merge_gate
     def test_offline_scheduled_task_does_not_wake_runtime(
         self,
         batch_api,

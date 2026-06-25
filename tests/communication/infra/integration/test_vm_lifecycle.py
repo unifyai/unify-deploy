@@ -31,6 +31,7 @@ _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 pytestmark = [pytest.mark.integration]
 
 
+@pytest.mark.merge_gate
 @pytest.mark.invariant("INV-9", "INV-10")
 def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
     """Assigning a pool VM sets correct GCE labels and metadata.
