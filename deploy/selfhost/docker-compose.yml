@@ -155,16 +155,11 @@ services:
     - /bin/bash
     - -c
     - |
-      bootstrap_json="/runtime/self-host-bootstrap.json"
-      if [ ! -f "$$bootstrap_json" ]; then
-        echo "Missing /runtime/self-host-bootstrap.json; orchestra-owner-bootstrap must run first." >&2
+      if [ -z "$${ORCHESTRA_ADMIN_KEY:-}" ]; then
+        echo "ORCHESTRA_ADMIN_KEY is required to seed Builtins." >&2
         exit 1
       fi
-      export UNIFY_KEY="$$(python3 -c "import json; print(json.load(open('/runtime/self-host-bootstrap.json'))['api_key'])")"
-      if [ -z "$$UNIFY_KEY" ]; then
-        echo "Self-host bootstrap JSON is missing api_key." >&2
-        exit 1
-      fi
+      export UNIFY_KEY="$${ORCHESTRA_ADMIN_KEY}"
       if [ -z "$${COMPOSIO_API_KEY:-}" ]; then
         echo "COMPOSIO_API_KEY not set; seeding static Builtins catalogues only."
         python3 scripts/seed_builtins_catalog.py

@@ -263,7 +263,7 @@ bash selfhost/stack.sh up
 ```
 
 That path repairs the common local sharp edges: stale `coordinator-runtime.json`,
-a stale `unity-stack` tmux session, a missing `Builtins` project, or a stopped
+a stale `unity-stack` tmux session, missing Builtins catalogue rows, or a stopped
 Unity gateway.
 
 Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
@@ -323,10 +323,10 @@ Caveats:
 
 ## Builtins Artifacts
 
-The compose bootstrap creates the shared `Builtins` project and seeds the core
-Unity artifacts used by self-hosted assistants. Provider-backed integration
-artifacts, such as Composio app/tool rows, are explicit because they require the
-provider credential for the selected backend.
+The bootstrap creates a system-owned `Builtins` project and seeds the core Unity
+artifacts used by self-hosted assistants before any user signs up. Provider-backed
+integration artifacts, such as Composio app/tool rows, are explicit because they
+require the provider credential for the selected backend.
 
 For development source installs, run the direct worker path from the local
 `orchestra` checkout after Postgres and Orchestra migrations are available:

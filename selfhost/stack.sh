@@ -512,8 +512,8 @@ cmd_seed_builtins() {
   local api_key=""
   api_key="$(runtime_json_value "$runtime_file" apiKey api_key 2>/dev/null || true)"
   if [[ -z "$api_key" ]]; then
-    log_info "Builtins catalogue seed skipped: register in Console to create the local owner first"
-    return 0
+    api_key="$(console_admin_key)"
+    log_info "Seeding Builtins catalogues with local Orchestra admin key"
   fi
 
   local py="$UNITY_REPO_PATH/.venv/bin/python"
