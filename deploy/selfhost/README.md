@@ -239,9 +239,18 @@ bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 `selfhost/stack.sh up` is intentionally scratch-first because that is the normal
 developer loop. It stops any previous source stack, clears stale durable tmux
 state, purges the local Orchestra database, clears stale runtime identity files
-under `~/.unity`, starts the local services, creates a fresh self-host owner +
-Coordinator, seeds the `Builtins` catalogues, starts one Coordinator runtime,
-runs smoke checks, and verifies `http://localhost:3000/account`.
+under `~/.unity`, and starts the local services. On a fresh install this leaves
+the stack in a pre-signup state; create the local owner in Console, then Console
+starts the single Coordinator runtime for that user.
+
+There are two expected states:
+
+- **Pre-signup:** infra is running, but no user or Coordinator exists yet.
+- **Post-signup:** the single UI-created owner has one personal Coordinator, and
+  the local runtime state files point at that same owner/Coordinator pair.
+
+Setup never provisions a placeholder owner. If duplicate owners or Coordinators
+appear, reset back to the real owner (or pre-signup if no owner exists yet).
 
 Use `bash selfhost/stack.sh resume` only when you deliberately want to preserve
 the current local chat/onboarding/project history. `bash selfhost/stack.sh down

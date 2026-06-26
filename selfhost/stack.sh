@@ -512,8 +512,8 @@ cmd_seed_builtins() {
   local api_key=""
   api_key="$(runtime_json_value "$runtime_file" apiKey api_key 2>/dev/null || true)"
   if [[ -z "$api_key" ]]; then
-    log_error "Coordinator runtime credentials missing after reset: $runtime_file"
-    return 1
+    log_info "Builtins catalogue seed skipped: register in Console to create the local owner first"
+    return 0
   fi
 
   local py="$UNITY_REPO_PATH/.venv/bin/python"
@@ -582,7 +582,11 @@ wait_for_source_stack_ready() {
   wait_for_http "Console" "http://127.0.0.1:${console_port}" 90
   wait_for_http "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features" 90
   wait_for_http "Unity gateway" "http://${gateway_host}:${gateway_port}/health" 90
-  wait_for_coordinator_runtime 90
+  if [[ -f "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" ]]; then
+    wait_for_coordinator_runtime 90
+  else
+    log_info "Coordinator runtime pending signup"
+  fi
 }
 
 check_account_page() {
@@ -634,14 +638,18 @@ cmd_redeploy() {
   cmd_reset --yes
   cmd_seed_builtins
 
-  if [[ -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
+  if [[ -f "$CONSOLE_LOCAL_SCRIPT" && -f "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" ]]; then
     UNITY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
     SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
   fi
 
   wait_for_source_stack_ready
   cmd_smoke
-  check_account_page
+  if [[ -f "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" ]]; then
+    check_account_page
+  else
+    log_info "Authenticated browser smoke pending signup"
+  fi
 
   echo ""
   cmd_status
@@ -966,8 +974,12 @@ cmd_health_summary() {
   health_check_line "Console" "http://127.0.0.1:${console_port}"
   health_check_line "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features"
   health_check_line "Gateway" "http://${gateway_host}:${gateway_port}/health"
-  health_check_line "Account" "http://localhost:${console_port}/account"
-  if declare -F unity_cm_instance_count &>/dev/null; then
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-${UNITY_HOME:-$HOME/.unity}/coordinator-runtime.json}"
+  if [[ ! -f "$runtime_file" ]]; then
+    health_check_line "Login" "http://localhost:${console_port}/login"
+    printf '  %-12s %s\n' "Coordinator" "pending signup"
+  elif declare -F unity_cm_instance_count &>/dev/null; then
+    health_check_line "Account" "http://localhost:${console_port}/account"
     printf '  %-12s %s instance(s)\n' "Coordinator" "$(unity_cm_instance_count)"
   fi
 }
@@ -1094,7 +1106,7 @@ def log(kind: str, message: str) -> None:
     print(f"[{kind}] {message}")
 
 
-def request_status(method: str, url: str, *, headers=None, body=None, timeout=15):
+def request_status(method: str, url: str, *, headers=None, body=None, timeout=30):
     data = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -1166,9 +1178,7 @@ if runtime_file:
     try:
         credentials = json.loads(Path(runtime_file).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        failures.append("Coordinator runtime file")
-        log("ERROR", f"Coordinator runtime file missing: {runtime_file}")
-        log("INFO", f"Coordinator runtime file recovery: {recovery_cmd}")
+        log("INFO", f"Coordinator checks skipped: register in Console to create {runtime_file}.")
     except json.JSONDecodeError as exc:
         failures.append("Coordinator runtime file")
         log("ERROR", f"Coordinator runtime file is invalid JSON: {exc}")
@@ -1213,8 +1223,7 @@ if api_key and assistant_id:
         recovery=f"{recovery_cmd}  # refreshes Coordinator credentials and runtime",
     )
 else:
-    log("INFO", "Coordinator checks skipped: register or sign in first.")
-    log("INFO", f"To recreate the local owner and Coordinator now: {recovery_cmd}")
+    log("INFO", "Coordinator checks skipped: register in Console to create the local owner.")
 
 if failures:
     log("ERROR", "Self-host smoke failed: " + ", ".join(failures))
@@ -1254,6 +1263,7 @@ main() {
     smoke) cmd_smoke "$@" ;;
     repair-console|restart-console) cmd_repair_console "$@" ;;
     reset|reset-db) cmd_reset "$@" ;;
+    seed-builtins) cmd_seed_builtins "$@" ;;
     dev-env|print-console-env) cmd_dev_env "$@" ;;
     sync-comms) cmd_sync_comms "$@" ;;
     doctor|check) cmd_doctor "$@" ;;
