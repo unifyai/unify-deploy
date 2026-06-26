@@ -4,7 +4,41 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _sibling_unity_local_sh() -> Path | None:
+    """Resolve the sibling unity checkout's scripts/local.sh, if present."""
+    stack_root = os.environ.get("UNIFY_STACK_ROOT")
+    roots = [Path(stack_root)] if stack_root else []
+    roots.append(REPO_ROOT.parent)
+    for root in roots:
+        candidate = root / "unity" / "scripts" / "local.sh"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def test_gateway_launch_forwards_tunnel_url_for_call_callbacks():
+    """The gateway places Twilio call callbacks, so it must receive the
+    cloudflared tunnel URL + local-comms mode; otherwise Twilio gets
+    unreachable localhost callbacks and outbound calls fail on answer."""
+    local_sh = _sibling_unity_local_sh()
+    if local_sh is None:
+        pytest.skip("sibling unity checkout not available")
+
+    text = local_sh.read_text(encoding="utf-8")
+    start = text.index("start_gateway()")
+    body = text[start : text.index("\n}\n", start)]
+
+    for var in (
+        "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
+        "UNITY_CONVERSATION_LOCAL_COMMS_MODE",
+        "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED",
+    ):
+        assert var in body, f"{var} not forwarded to the gateway process"
 
 
 def test_self_host_calls_enabled_by_default():
