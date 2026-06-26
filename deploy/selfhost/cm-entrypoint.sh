@@ -63,9 +63,11 @@ build_cm_env() {
   export UNITY_CONVERSATION_LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"
   export UNITY_CONVERSATION_LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 
-  export LIVEKIT_URL="${LIVEKIT_URL:-ws://livekit:7880}"
-  export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"
-  export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
+  : "${LIVEKIT_URL:?LIVEKIT_URL must point at your LiveKit Cloud websocket URL}"
+  : "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set}"
+  : "${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET must be set}"
+  export LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET
+  export LIVEKIT_SIP_URI="${LIVEKIT_SIP_URI:-}"
 
   # Voice jobs need the turn-detector assets baked at image build time (/opt/hf-cache).
   # Production entrypoint.sh seeds these into /tmp/huggingface; self-host CM bypasses that path.

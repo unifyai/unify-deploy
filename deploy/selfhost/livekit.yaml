@@ -1,6 +1,0 @@
-# LiveKit config for compose self-host.
-# Browser clients reach the server via published host ports (127.0.0.1:7880).
-# Advertise the host loopback IP so WebRTC ICE candidates are reachable from the Mac/PC browser.
-rtc:
-  use_external_ip: false
-  node_ip: 127.0.0.1

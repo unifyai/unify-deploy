@@ -204,20 +204,6 @@ services:
       retries: 20
     restart: unless-stopped
 
-  livekit:
-    image: livekit/livekit-server:latest
-    command: ["--dev", "--bind", "0.0.0.0", "--config", "/etc/livekit.yaml"]
-    extra_hosts:
-    - "host.docker.internal:host-gateway"
-    volumes:
-    - ./livekit.yaml:/etc/livekit.yaml:ro
-    ports:
-    - "7880:7880"
-    - "7881:7881"
-    - "7882:7882/udp"
-    - "8787:8787"
-    restart: unless-stopped
-
   gateway:
     <<: *unity_image
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/gateway-entrypoint.sh"]
@@ -231,10 +217,11 @@ services:
       UNITY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
       UNITY_COMMS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
-      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://livekit:8787
-      LIVEKIT_URL: ws://livekit:7880
-      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
-      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
+      LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
+      LIVEKIT_SIP_URI: ${LIVEKIT_SIP_URI:-}
       UNIFY_MODEL: ${UNIFY_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -281,10 +268,10 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
       PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
-      LIVEKIT_URL: ws://127.0.0.1:7880
-      LIVEKIT_API_URL: http://livekit:7880
-      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
-      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
+      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
       ELEVEN_API_KEY: ${ELEVEN_API_KEY:-}
@@ -299,7 +286,6 @@ services:
 
   unity-cm:
     <<: *unity_image
-    network_mode: "service:livekit"
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/cm-entrypoint.sh"]
     environment:
       SELF_HOST: "1"
@@ -317,9 +303,10 @@ services:
       UNITY_LOCAL_ROOT: /Unity/Local
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
-      LIVEKIT_URL: ws://127.0.0.1:7880
-      LIVEKIT_API_KEY: devkey # pragma: allowlist secret
-      LIVEKIT_API_SECRET: secret # pragma: allowlist secret
+      LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
+      LIVEKIT_SIP_URI: ${LIVEKIT_SIP_URI:-}
       HF_HOME: /opt/hf-cache
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -337,9 +324,9 @@ services:
     volumes:
     - runtime:/runtime
     - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    ports:
+    - "127.0.0.1:8787:8787"
     depends_on:
-      livekit:
-        condition: service_started
       orchestra:
         condition: service_healthy
       gateway:

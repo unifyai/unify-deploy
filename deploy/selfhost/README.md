@@ -344,16 +344,16 @@ completed batches instead of falling back to the inline API path.
 - ~12 GB RAM recommended (desktop + CM + ML deps)
 - Multi-GB disk for image pulls
 
-## LiveKit / voice (compose)
+## LiveKit / voice
 
-The Docker Compose bundle is separate from the source-stack inner loop and still
-ships a local LiveKit `--dev` service with ports `7880` (WS), `7881` (TCP
-fallback), and `7882/udp` mapped to the host. If browser calls fail on macOS
-Docker Desktop in compose mode, confirm these ports are reachable and not blocked
-by a firewall. See `deploy/selfhost/LIVEKIT_COMPOSE.md` for validation steps.
+Compose and source installs both use LiveKit Cloud for browser Meet, Unity voice
+workers, room APIs, and SIP. Set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and
+`LIVEKIT_API_SECRET` in the compose `.env`; set `LIVEKIT_SIP_URI` when phone or
+WhatsApp calls are enabled. The bundle does not ship or start a local
+media server.
 
 ## Architecture
 
-See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, LiveKit, gateway, Console, CM supervisor, desktop, and Caddy proxy.
+See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, gateway, Console, CM supervisor, desktop, and Caddy proxy.
 
 Entrypoint scripts (`cm-entrypoint.sh`, `desktop-entrypoint.sh`, `publish-desktop-ready.sh`, `ensure-pubsub-topics.sh`) ship inside the `unity-selfhost` and `unity-desktop-selfhost` images. After changing them, rebuild and publish those images — editing copies under `~/.unity/` does not affect running containers.

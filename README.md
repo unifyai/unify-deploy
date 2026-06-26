@@ -370,7 +370,7 @@ cd unity-deploy && uv sync --all-groups && pre-commit install
 ```
 First-party deps resolve from sibling editable checkouts. Run `pre-commit install` in every fresh checkout/worktree.
 
-The full all-repo local stack (local Orchestra + Console + Coordinator + gateway) is in `selfhost/` — start with `bash selfhost/stack.sh up --durable`, inspect with `selfhost/stack.sh status`, reset with `selfhost/stack.sh reset`. The inner-loop runbook is [`docs/local-full-stack-inner-loop.md`](docs/local-full-stack-inner-loop.md). LiveKit compose: [`deploy/selfhost/LIVEKIT_COMPOSE.md`](deploy/selfhost/LIVEKIT_COMPOSE.md).
+The full all-repo local stack (local Orchestra + Console + Coordinator + gateway) is in `selfhost/` — start with `bash selfhost/stack.sh up --durable`, inspect with `selfhost/stack.sh status`, reset with `selfhost/stack.sh reset`. The inner-loop runbook is [`docs/local-full-stack-inner-loop.md`](docs/local-full-stack-inner-loop.md). LiveKit is an external Cloud BYOK dependency for both source and compose stacks.
 
 ---
 
