@@ -32,14 +32,14 @@ SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
 SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"
 SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
 
-# Inbound/outbound phone & WhatsApp calls are opt-in. Unlike text (which the
-# comms ingress bridge polls), a call is synchronous: Twilio POSTs the number's
-# voice webhook and needs TwiML back in seconds, so calls need a live public
-# webhook (a cloudflared tunnel to the local CM ingress) and a LiveKit Cloud SIP
-# trunk for the media leg (the local `livekit-server --dev` used for browser meet
-# has no SIP service). When disabled (default) the stack stays poll-only and the
-# localhost numbers keep cleared voice webhooks. See selfhost/sync_comms_webhooks.py.
-SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-0}"
+# Inbound/outbound phone & WhatsApp calls are part of the default self-host
+# stack. Unlike text (which the comms ingress bridge polls), a call is
+# synchronous: Twilio POSTs the number's voice webhook and needs TwiML back in
+# seconds, so calls need a live public webhook (a cloudflared tunnel to the local
+# CM ingress) and a LiveKit Cloud SIP trunk for the media leg (the local
+# `livekit-server --dev` used for browser meet has no SIP service). Set
+# SELF_HOST_CALLS_ENABLED=0 only for an explicitly poll-only text stack.
+SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-1}"
 
 # The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
 # script in unity-deploy/deploy/selfhost/.
@@ -177,7 +177,7 @@ self_host_export_comms_twilio() {
 }
 
 self_host_calls_enabled() {
-  # True when the opt-in phone/WhatsApp call support is turned on.
+  # True when phone/WhatsApp call support is turned on.
   case "${SELF_HOST_CALLS_ENABLED:-0}" in
     1 | true | TRUE | yes | YES | on | ON) return 0 ;;
     *) return 1 ;;

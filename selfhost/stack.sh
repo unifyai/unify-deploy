@@ -27,11 +27,11 @@
 #   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
-#   SELF_HOST_CALLS_ENABLED=1 Opt in to inbound/outbound phone & WhatsApp calls
-#                             (needs LiveKit Cloud SIP creds in
-#                             ~/.unity/livekit_cloud.env + cloudflared). Brings up
-#                             a tunnel + SIP trunk and points the localhost
-#                             number's voice webhook at the local CM.
+#   SELF_HOST_CALLS_ENABLED=0 Disable inbound/outbound phone & WhatsApp calls.
+#                             Calls default on and need LiveKit Cloud SIP creds
+#                             in ~/.unity/livekit_cloud.env plus cloudflared.
+#                             Startup brings up a tunnel + SIP trunk and points
+#                             the localhost number's voice webhook at the local CM.
 #
 set -euo pipefail
 
@@ -325,10 +325,9 @@ warn_if_comms_webhooks_drift() {
   fi
 }
 
-# Bring up the inbound-call edge (opt-in): the cloudflared tunnel to the local CM
-# ingress, the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook
-# pointing at the tunnel (text stays poll-only). Best-effort and non-fatal: a
-# failure here never blocks the rest of the stack. No-op when calls are disabled.
+# Bring up the inbound-call edge: the cloudflared tunnel to the local CM ingress,
+# the LiveKit Cloud inbound SIP trunk, and the Twilio voice webhook pointing at
+# the tunnel (text stays poll-only). No-op when calls are explicitly disabled.
 cmd_up_calls_setup() {
   if ! declare -F self_host_calls_enabled &>/dev/null || ! self_host_calls_enabled; then
     return 0
@@ -340,38 +339,45 @@ cmd_up_calls_setup() {
     source "$ENSURE_PREREQS_SCRIPT"
     if declare -F ensure_cloudflared &>/dev/null; then
       if ! ensure_cloudflared; then
-        log_warn "cloudflared unavailable — inbound calls disabled this session"
-        return 0
+        log_error "cloudflared unavailable — cannot expose local call webhooks"
+        return 1
       fi
     fi
   fi
 
   if ! declare -F self_host_ensure_tunnel &>/dev/null || ! self_host_ensure_tunnel; then
-    log_warn "Call tunnel failed to start — inbound calls disabled this session"
-    return 0
+    log_error "Call tunnel failed to start — cannot expose local call webhooks"
+    return 1
   fi
   log_success "Call tunnel: ${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
 
   local py="$UNITY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
 
-  if [[ -f "$SCRIPT_DIR/provision_call_sip.py" ]]; then
-    "$py" "$SCRIPT_DIR/provision_call_sip.py" \
-      || log_warn "LiveKit SIP trunk provisioning failed — inbound calls may not route"
+  if [[ ! -f "$SCRIPT_DIR/provision_call_sip.py" ]]; then
+    log_error "Missing $SCRIPT_DIR/provision_call_sip.py"
+    return 1
+  fi
+  if ! "$py" "$SCRIPT_DIR/provision_call_sip.py"; then
+    log_error "LiveKit SIP trunk provisioning failed — inbound calls cannot route"
+    return 1
   fi
 
-  if [[ -f "$SYNC_COMMS_SCRIPT" ]]; then
-    if declare -F self_host_export_comms_twilio &>/dev/null; then
-      self_host_export_comms_twilio
+  if [[ ! -f "$SYNC_COMMS_SCRIPT" ]]; then
+    log_error "Missing $SYNC_COMMS_SCRIPT"
+    return 1
+  fi
+  if declare -F self_host_export_comms_twilio &>/dev/null; then
+    self_host_export_comms_twilio
+  fi
+  if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
+    if declare -F self_host_voice_synced_url_file &>/dev/null; then
+      printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+        >"$(self_host_voice_synced_url_file)"
     fi
-    if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
-      if declare -F self_host_voice_synced_url_file &>/dev/null; then
-        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
-          >"$(self_host_voice_synced_url_file)"
-      fi
-    else
-      log_warn "Voice webhook sync failed — inbound calls may be answered by staging/prod"
-    fi
+  else
+    log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
+    return 1
   fi
 }
 
