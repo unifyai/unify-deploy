@@ -263,20 +263,21 @@ up` invokes it with `--self-host` for you.
 
 ### Phone & WhatsApp calls (source install)
 
-Browser/Console voice (Unify Meet) works out of the box via the local dev
-LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are part of
-the default self-host source stack and need two additional pieces:
+Browser/Console voice (Unify Meet), Unity voice workers, room APIs, and real
+**inbound/outbound phone and WhatsApp calls** use one LiveKit Cloud project in
+the source stack. This keeps the localhost app code local while treating media
+transport like the other BYOK services.
 
 - A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
   URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
   text. `stack.sh` runs a managed `cloudflared` tunnel to the local CM ingress
   and points the localhost number's `VoiceUrl` at it. Text stays poll-only.
-- **LiveKit Cloud SIP**: the local `livekit-server --dev` has no SIP service, so
-  the Twilio↔LiveKit media leg uses a LiveKit Cloud project. The local agent
-  worker connects outbound to the cloud room, so only the HTTP webhook is
-  tunneled — no SIP/RTP tunneling.
+- **LiveKit Cloud**: Console mints browser tokens for the cloud room, the local
+  Unity worker connects outbound to the same project, and Twilio uses LiveKit
+  Cloud SIP for the phone media leg. Only the HTTP webhook is tunneled — no
+  SIP/RTP tunneling from the laptop.
 
-Configure the LiveKit Cloud SIP side once, then start the stack:
+Configure the LiveKit Cloud side once, then start the stack:
 
 ```bash
 # 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
@@ -296,7 +297,8 @@ ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
 step fails, startup stops rather than leaving a broken inbound-call path.
 `stack.sh down --full` reverts the voice webhook and stops the tunnel.
 
-For a deliberately text-only local stack, set `SELF_HOST_CALLS_ENABLED=0`.
+For a deliberately text-only local stack, set `SELF_HOST_CALLS_ENABLED=0`; browser
+Meet still uses the LiveKit Cloud media credentials.
 
 Caveats:
 
@@ -344,7 +346,11 @@ completed batches instead of falling back to the inline API path.
 
 ## LiveKit / voice (compose)
 
-Voice uses LiveKit in `--dev` mode with ports `7880` (WS), `7881` (TCP fallback), and `7882/udp` mapped to the host. If browser calls fail on macOS Docker Desktop, confirm these ports are reachable and not blocked by a firewall. See `deploy/selfhost/LIVEKIT_COMPOSE.md` for validation steps.
+The Docker Compose bundle is separate from the source-stack inner loop and still
+ships a local LiveKit `--dev` service with ports `7880` (WS), `7881` (TCP
+fallback), and `7882/udp` mapped to the host. If browser calls fail on macOS
+Docker Desktop in compose mode, confirm these ports are reachable and not blocked
+by a firewall. See `deploy/selfhost/LIVEKIT_COMPOSE.md` for validation steps.
 
 ## Architecture
 

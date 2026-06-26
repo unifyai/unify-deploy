@@ -16,7 +16,7 @@ stack_state_ensure_dir() {
 }
 
 stack_state_lsof_listeners() {
-  local ports="${1:-3000,8000,8001,8085,7880,8090}"
+  local ports="${1:-3000,8000,8001,8085,8090}"
   command -v lsof >/dev/null 2>&1 || return 0
   local args=()
   local port
@@ -65,7 +65,6 @@ data = {
         "orchestra": env("ORCHESTRA_PORT", "8000"),
         "gateway": env("UNITY_GATEWAY_PORT", "8001"),
         "pubsub": env("PUBSUB_EMULATOR_PORT", "8085"),
-        "livekit": "7880",
         "desktop": "8090",
     },
     "console_env": {
@@ -80,7 +79,7 @@ data = {
         "PUBSUB_EMULATOR_HOST": env("PUBSUB_EMULATOR_HOST", "localhost:8085"),
         "GCP_PROJECT_ID": env("GCP_PROJECT_ID", "local-test-project"),
         "PUBSUB_TOPIC_SUFFIX": env("PUBSUB_TOPIC_SUFFIX", "-staging"),
-        "LIVEKIT_URL": env("LIVEKIT_URL", "ws://localhost:7880"),
+        "LIVEKIT_URL": env("LIVEKIT_URL"),
         "SELF_HOST_DESKTOP_URL": env("SELF_HOST_DESKTOP_URL", "http://127.0.0.1:8090"),
     },
 }

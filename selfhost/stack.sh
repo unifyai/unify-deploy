@@ -206,7 +206,7 @@ cmd_doctor() {
   echo "BYOK keys (unity/.env)"
   echo "----------------------"
   echo "  Required: LLM (OpenAI or Anthropic)"
-  echo "  Voice:    Deepgram + Cartesia (browser calls; LiveKit auto-configured on stack up)"
+  echo "  Voice:    LiveKit Cloud + Deepgram + Cartesia/ElevenLabs"
   echo "  Optional: Tavily (web search), AntiCaptcha (computer use)"
   echo ""
 
@@ -250,6 +250,26 @@ cmd_doctor() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     self_host_runtime_doctor_line | sed 's/^/  /'
+    if declare -F self_host_export_livekit_backend &>/dev/null; then
+      self_host_export_livekit_backend
+    fi
+    if declare -F self_host_livekit_media_configured &>/dev/null \
+      && self_host_livekit_media_configured; then
+      log_success "LiveKit Cloud media credentials configured ($(self_host_livekit_cloud_file))"
+    else
+      log_error "Missing LiveKit Cloud media credentials — add LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET to $(self_host_livekit_cloud_file)"
+      ok=false
+    fi
+    if declare -F self_host_calls_enabled &>/dev/null \
+      && self_host_calls_enabled; then
+      if declare -F self_host_livekit_sip_configured &>/dev/null \
+        && self_host_livekit_sip_configured; then
+        log_success "LiveKit Cloud SIP URI configured"
+      else
+        log_error "Missing LIVEKIT_SIP_URI in $(self_host_livekit_cloud_file) — phone and WhatsApp calls require LiveKit Cloud SIP"
+        ok=false
+      fi
+    fi
     echo ""
     log_info "Daily driver: unity stack up / unity stack down"
     log_info "Stop everything: unity stack down --full  (or: unity service disable)"
@@ -286,28 +306,25 @@ cmd_sync_comms() {
   python3 "$SYNC_COMMS_SCRIPT" "$@"
 }
 
-# Select the LiveKit backend for the runtime. Browser meet uses the local
-# `livekit-server --dev` (no SIP). Phone/WhatsApp calls need LiveKit Cloud SIP,
-# so when calls are enabled the cloud creds (from ~/.unity/livekit_cloud.env via
-# self_host_export_livekit_cloud) win over both the dev pair and any unity/.env
-# values, and serve browser meet too.
+# Select the LiveKit backend for the source stack. Browser Meet, phone, and
+# WhatsApp calls all use the same LiveKit Cloud project.
 setup_livekit_env() {
-  if declare -F self_host_calls_enabled &>/dev/null && self_host_calls_enabled; then
-    if declare -F self_host_export_livekit_cloud &>/dev/null; then
-      self_host_export_livekit_cloud
-    fi
-    if [[ -z "${LIVEKIT_URL:-}" || -z "${LIVEKIT_SIP_URI:-}" ]]; then
-      log_warn "Calls enabled but LiveKit Cloud creds/SIP URI missing —"
-      log_warn "run the BYOK wizard or populate $(self_host_livekit_cloud_file)"
-    fi
-    return 0
+  if declare -F self_host_export_livekit_backend &>/dev/null; then
+    self_host_export_livekit_backend
   fi
-  # voice.sh runs a local LiveKit server with dev credentials. unity/.env often
-  # also contains cloud LiveKit keys that override the dev pair when sourced,
-  # which breaks browser meet token minting in Console.
-  export LIVEKIT_URL="ws://localhost:7880"
-  export LIVEKIT_API_KEY="devkey"  # pragma: allowlist secret
-  export LIVEKIT_API_SECRET="secret"  # pragma: allowlist secret
+  if ! declare -F self_host_livekit_media_configured &>/dev/null \
+    || ! self_host_livekit_media_configured; then
+    log_error "LiveKit Cloud media credentials are required for the source stack"
+    log_info "Add LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET to $(self_host_livekit_cloud_file)"
+    return 1
+  fi
+  if declare -F self_host_calls_enabled &>/dev/null \
+    && self_host_calls_enabled \
+    && [[ -z "${LIVEKIT_SIP_URI:-}" ]]; then
+    log_error "LIVEKIT_SIP_URI is required when phone/WhatsApp calls are enabled"
+    log_info "Add it to $(self_host_livekit_cloud_file)"
+    return 1
+  fi
 }
 
 # Best-effort, non-fatal drift warning used during `up`. Only runs when WhatsApp
@@ -488,7 +505,7 @@ cmd_seed_builtins() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
   fi
 
   local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$UNITY_HOME/coordinator-runtime.json}"
@@ -648,13 +665,6 @@ cmd_resume() {
     return 1
   fi
 
-  if [[ -x "$UNITY_REPO_PATH/scripts/voice.sh" ]]; then
-    log_info "Ensuring local LiveKit + voice BYOK keys..."
-    UNITY_HOME="${UNITY_HOME:-$HOME/.unity}" \
-      UNITY_REPO="${UNITY_REPO:-$UNITY_REPO_PATH}" \
-      bash "$UNITY_REPO_PATH/scripts/voice.sh" setup || log_warn "LiveKit setup failed — meet may not work"
-  fi
-
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
     return 1
@@ -673,7 +683,7 @@ cmd_resume() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi
@@ -707,7 +717,7 @@ cmd_resume() {
     export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
   fi
 
-  setup_livekit_env
+  setup_livekit_env || return 1
 
   # Bring up the inbound-call edge before Console starts the CM, so the CM
   # inherits the public tunnel URL and the voice webhook points at it. No-op
@@ -1012,10 +1022,10 @@ cmd_repair_console() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
   fi
 
-  setup_livekit_env
+  setup_livekit_env || return 1
 
   if ! bash "$CONSOLE_LOCAL_SCRIPT" repair-console --self-host; then
     log_error "Console repair failed"

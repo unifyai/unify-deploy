@@ -36,8 +36,7 @@ SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHO
 # stack. Unlike text (which the comms ingress bridge polls), a call is
 # synchronous: Twilio POSTs the number's voice webhook and needs TwiML back in
 # seconds, so calls need a live public webhook (a cloudflared tunnel to the local
-# CM ingress) and a LiveKit Cloud SIP trunk for the media leg (the local
-# `livekit-server --dev` used for browser meet has no SIP service). Set
+# CM ingress) and a LiveKit Cloud SIP trunk for the media leg. Set
 # SELF_HOST_CALLS_ENABLED=0 only for an explicitly poll-only text stack.
 SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-1}"
 
@@ -100,6 +99,7 @@ load_self_host_env_file() {
   # orphan values or duplicate keys that produce multiline upserts.
   local exports
   exports="$(python3 - "$env_file" <<'PYEOF'
+import os
 import re
 import shlex
 import sys
@@ -118,6 +118,16 @@ skip = {
     # the headless-install default, so it can't clobber the stack's export.
     "UNITY_CONSOLE_UI",
 }
+if os.environ.get("SELF_HOST_SKIP_LIVEKIT_ENV_KEYS", "") == "1":
+    skip.update(
+        {
+            "LIVEKIT_URL",
+            "LIVEKIT_API_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET",
+            "LIVEKIT_SIP_URI",
+        },
+    )
 key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 seen: set[str] = set()
 for raw in path.read_text().splitlines():
@@ -142,6 +152,10 @@ PYEOF
     eval "$exports"
   fi
   self_host_export_coordinator_contact_env
+}
+
+load_self_host_repo_env_file() {
+  SELF_HOST_SKIP_LIVEKIT_ENV_KEYS=1 load_self_host_env_file "$@"
 }
 
 self_host_export_comms_sa() {
@@ -190,16 +204,32 @@ self_host_livekit_cloud_file() {
 }
 
 self_host_export_livekit_cloud() {
-  # Calls bridge Twilio -> LiveKit Cloud SIP, so they need a LiveKit Cloud
-  # project (URL/key/secret + SIP URI), distinct from the local dev LiveKit used
-  # for browser meet. The creds live in the self-host state dir (never a repo).
-  # No-op unless calls are enabled and the file exists, so the default
-  # browser-meet stack (local dev LiveKit) is untouched.
-  self_host_calls_enabled || return 0
+  # The source stack uses LiveKit Cloud for browser media and SIP. Credentials
+  # live in the self-host state dir, never a repo .env file.
   local lk_file
   lk_file="$(self_host_livekit_cloud_file)"
   [[ -f "$lk_file" ]] || return 0
   load_self_host_env_file "$lk_file"
+}
+
+self_host_export_livekit_backend() {
+  self_host_export_livekit_cloud
+}
+
+self_host_livekit_cloud_url_configured() {
+  case "${LIVEKIT_URL:-}" in
+    "" | ws://localhost* | ws://127.* | http://localhost* | http://127.*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+self_host_livekit_media_configured() {
+  self_host_livekit_cloud_url_configured \
+    && [[ -n "${LIVEKIT_API_KEY:-}" && -n "${LIVEKIT_API_SECRET:-}" ]]
+}
+
+self_host_livekit_sip_configured() {
+  self_host_livekit_media_configured && [[ -n "${LIVEKIT_SIP_URI:-}" ]]
 }
 
 self_host_apply_user_desktops_export() {
@@ -234,7 +264,7 @@ self_host_apply_user_desktops_export() {
 append_self_host_unity_runtime_env() {
   local -n _target_array="$1"
   local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNITY_ENV_FILE:-${UNITY_REPO:-}/.env}}}"
-  load_self_host_env_file "$env_file"
+  load_self_host_repo_env_file "$env_file"
 
   local workspace
   workspace="$(default_self_host_workspace)"
@@ -282,32 +312,23 @@ append_self_host_unity_runtime_env() {
     _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
   fi
 
-  # Phone & WhatsApp calls (opt-in): forward the LiveKit Cloud creds + SIP URI so
-  # the persistent LiveKit worker registers with the cloud, and the public tunnel
-  # URL (exported by stack.sh/service.sh once cloudflared is up) so the local
-  # ingress reconstructs Twilio signature URLs and recording callbacks correctly.
-  # No-op when calls are disabled. LiveKit creds are otherwise inherited from the
-  # exported environment for the local dev server (browser meet).
-  if self_host_calls_enabled; then
-    # Load the LiveKit Cloud creds last so they win over any dev LIVEKIT_* that
-    # load_self_host_env_file just pulled from unity/.env (voice.sh writes the
-    # local dev pair there for browser meet).
-    self_host_export_livekit_cloud
-    local _call_key
-    for _call_key in \
-      LIVEKIT_URL \
-      LIVEKIT_API_KEY \
-      LIVEKIT_API_SECRET \
-      LIVEKIT_SIP_URI; do
-      if [[ -n "${!_call_key:-}" ]]; then
-        _target_array+=("$_call_key=${!_call_key}")
-      fi
-    done
-    if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}" ]]; then
-      _target_array+=(
-        "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}"
-      )
+  self_host_export_livekit_backend
+  local _livekit_key
+  for _livekit_key in \
+    LIVEKIT_URL \
+    LIVEKIT_API_URL \
+    LIVEKIT_API_KEY \
+    LIVEKIT_API_SECRET \
+    LIVEKIT_SIP_URI \
+    LIVEKIT_EGRESS_GCS_BUCKET; do
+    if [[ -n "${!_livekit_key:-}" ]]; then
+      _target_array+=("$_livekit_key=${!_livekit_key}")
     fi
+  done
+  if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}" ]]; then
+    _target_array+=(
+      "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}"
+    )
   fi
 
   local key val

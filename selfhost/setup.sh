@@ -507,17 +507,22 @@ EOF
     log_success "Wrote $env_file"
 }
 
-# --- Voice stack (LiveKit + BYOK keys) ------------------------------------
+# --- Voice stack (LiveKit Cloud + BYOK keys) -------------------------------
 setup_voice_defaults() {
-    log_info "Setting up local voice (LiveKit + BYOK keys)..."
+    log_info "Checking LiveKit Cloud voice configuration..."
 
-    if [ -x "$UNITY_REPO/scripts/voice.sh" ]; then
-        if ! bash "$UNITY_REPO/scripts/voice.sh" setup; then
-            log_warn "LiveKit setup failed — browser calls may not work until you run: unity voice setup"
+    if [[ -f "$SCRIPT_DIR/self_host_env.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$SCRIPT_DIR/self_host_env.sh"
+        self_host_export_livekit_backend
+        if self_host_livekit_media_configured; then
+            log_success "LiveKit Cloud media credentials configured"
+            return 0
         fi
-    else
-        log_warn "voice.sh not found — skipping LiveKit setup"
     fi
+
+    log_warn "LiveKit Cloud media credentials are not configured yet."
+    log_info "The BYOK wizard will write them to ${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
 }
 
 ensure_console_npm_deps() {
@@ -564,7 +569,7 @@ main() {
     done
 
     echo ""
-    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + voice"
+    echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + Cloud voice"
     echo ""
 
     if [ ! -d "$UNITY_REPO" ]; then
@@ -617,7 +622,7 @@ main() {
         exit 1
     fi
 
-    if ! progress_step_run 7 "Setting up local voice (LiveKit)" \
+    if ! progress_step_run 7 "Checking LiveKit Cloud voice configuration" \
         setup_voice_defaults; then
         exit 1
     fi
