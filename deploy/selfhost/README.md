@@ -238,10 +238,10 @@ bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 
 `selfhost/stack.sh up` is intentionally scratch-first because that is the normal
 developer loop. It stops any previous source stack, clears stale durable tmux
-state, starts the local services, resets the self-host owner + Coordinator state,
-rewrites the runtime credential files under `~/.unity`, seeds the `Builtins`
-catalogues, starts one Coordinator runtime, runs smoke checks, and verifies
-`http://localhost:3000/account`.
+state, purges the local Orchestra database, clears stale runtime identity files
+under `~/.unity`, starts the local services, creates a fresh self-host owner +
+Coordinator, seeds the `Builtins` catalogues, starts one Coordinator runtime,
+runs smoke checks, and verifies `http://localhost:3000/account`.
 
 Use `bash selfhost/stack.sh resume` only when you deliberately want to preserve
 the current local chat/onboarding/project history. `bash selfhost/stack.sh down

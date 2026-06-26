@@ -7,7 +7,7 @@
 # the Unity CM for the signed-in user's Coordinator when credentials exist.
 #
 # Usage:
-#   ./scripts/stack.sh up           Fresh redeploy: reset, seed, start, smoke
+#   ./scripts/stack.sh up           Fresh redeploy: purge local DB, seed, start, smoke
 #   ./scripts/stack.sh up --durable Fresh redeploy in a persistent tmux session
 #   ./scripts/stack.sh resume       Start/resume without resetting local history
 #   ./scripts/stack.sh redeploy     Alias for up
@@ -395,6 +395,40 @@ stop_durable_stack_session() {
   tmux kill-session -t "=${session}" 2>/dev/null || true
 }
 
+cmd_purge_fresh_redeploy_state() {
+  export SELF_HOST=1
+  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+  fi
+
+  local orchestra_local_script="$ORCHESTRA_REPO_PATH/scripts/local.sh"
+  if [[ ! -f "$orchestra_local_script" ]]; then
+    log_error "Missing $orchestra_local_script"
+    return 1
+  fi
+
+  local state_dir="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  log_info "Clearing self-host runtime identity state in $state_dir"
+  local stale_state_files=(
+    "coordinator-runtime.json"
+    "self-host-owner.json"
+    "runtime-state.json"
+    "runtime.lock"
+    "full-stack-state.json"
+  )
+  local file
+  for file in "${stale_state_files[@]}"; do
+    rm -f "$state_dir/$file"
+  done
+
+  log_info "Purging local Orchestra database for a fresh self-host redeploy"
+  ORCHESTRA_ALLOW_ISOLATED=1 bash "$orchestra_local_script" purge
+}
+
 read_env_value() {
   local key="$1"
   shift
@@ -572,6 +606,7 @@ cmd_redeploy() {
   stop_durable_stack_session
   cmd_down --full || true
 
+  cmd_purge_fresh_redeploy_state
   cmd_resume
   cmd_reset --yes
   cmd_seed_builtins
