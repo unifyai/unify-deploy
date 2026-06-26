@@ -712,8 +712,12 @@ def main() -> None:
     )
     seen: dict[str, set[str]] = {a.name: set() for a in adapters}
     next_poll_at: dict[str, float] = {a.name: 0 for a in adapters}
+    next_permission_hydration_at = time.time() + 60
     while True:
         now = time.time()
+        if now >= next_permission_hydration_at:
+            _hydrate_call_permission_cache()
+            next_permission_hydration_at = now + 60
         for adapter in adapters:
             if now < next_poll_at[adapter.name]:
                 continue
