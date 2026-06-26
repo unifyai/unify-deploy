@@ -22,6 +22,7 @@ from .conftest import (
 pytestmark = [pytest.mark.integration]
 
 
+@pytest.mark.merge_gate
 @pytest.mark.invariant("INV-8")
 def test_resource_version_guard_prevents_stale_delete(
     comms,
@@ -127,6 +128,7 @@ def test_delete_with_current_resource_version_succeeds(
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.invariant("INV-7", "INV-8")
 def test_cleanup_does_not_delete_running_jobs(
     comms,

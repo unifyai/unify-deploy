@@ -460,6 +460,7 @@ bootstrap_console_env() {
         log_info "Console .env.local present — ensuring self-host flags are set..."
         upsert_env_var "$env_file" SELF_HOST 1
         upsert_env_var "$env_file" NEXT_PUBLIC_SELF_HOST 1
+        upsert_env_var "$env_file" NEXT_PUBLIC_CONSOLE_DEBUG true
         log_success "Ensured self-host flags in $env_file"
         return 0
     fi
@@ -500,6 +501,7 @@ ORCHESTRA_ADMIN_KEY=${admin_key}
 # See console/src/lib/environment/environment.ts.
 SELF_HOST=1
 NEXT_PUBLIC_SELF_HOST=1
+NEXT_PUBLIC_CONSOLE_DEBUG=true
 EOF
 
     log_success "Wrote $env_file"

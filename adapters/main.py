@@ -43,6 +43,15 @@ def _redact_phone(number: str) -> str:
     return f"***{number[-4:]}"
 
 
+def _whatsapp_call_permission_status(button_payload: str) -> tuple[str, str]:
+    payload = (button_payload or "").strip()
+    if payload == "ACCEPTED":
+        return "accepted", "ACCEPTED"
+    if payload == "REJECTED":
+        return "rejected", "REJECTED"
+    return "unknown_interaction", "UNKNOWN"
+
+
 def _redact_email(email: str) -> str:
     if "@" in email:
         return f"***@{email.split('@', 1)[1]}"
@@ -1014,7 +1023,9 @@ async def twilio_whatsapp_webhook(request: Request):
             f"WhatsApp call permission response from {_redact_phone(sender)}: "
             f"{button_payload}",
         )
-        status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+        permission_status, event_payload = _whatsapp_call_permission_status(
+            button_payload,
+        )
 
         # Forward permission state to Orchestra
         try:
@@ -1027,7 +1038,8 @@ async def twilio_whatsapp_webhook(request: Request):
                     json={
                         "pool_number": pool_number,
                         "contact_number": sender,
-                        "status": status,
+                        "status": permission_status,
+                        "source": "twilio_webhook",
                     },
                     timeout=10.0,
                 )
@@ -1074,7 +1086,7 @@ async def twilio_whatsapp_webhook(request: Request):
                                 "body": body,
                                 "role": resolve_data.get("role", "contact"),
                                 "type": "call_permission_response",
-                                "payload": button_payload,
+                                "payload": event_payload,
                             },
                         },
                     ).encode("utf-8"),

@@ -119,6 +119,7 @@ def test_invariant_health(k8s_clients, gce_client):
         )
 
 
+@pytest.mark.merge_gate
 def test_container_pool_health(k8s_clients):
     """Basic health: the container pool has idle capacity."""
     batch_api = k8s_clients[0]

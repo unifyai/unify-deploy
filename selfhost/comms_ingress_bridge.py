@@ -23,11 +23,9 @@ Adapters & env:
     TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN
     COMMS_BRIDGE_SMS_NUMBER       Coordinator SMS number (E.164).
     COMMS_BRIDGE_WHATSAPP_NUMBER  Coordinator WhatsApp number (E.164).
-    COMMS_BRIDGE_TWILIO_ALLOWLIST Comma-separated sender numbers (E.164) the
-                              bridge will forward. REQUIRED for Twilio: without
-                              it the SMS/WhatsApp adapters no-op, so a dev CM
-                              sharing a hosted number never reacts to (or
-                              replies to) that deployment's real inbound.
+    ORCHESTRA_URL / ORCHESTRA_ADMIN_KEY
+                              Local Orchestra resolves ownership for each
+                              inbound sender before anything reaches the CM.
   Common
     COMMS_BRIDGE_INGRESS_URL  CM local ingress base (default
                               ``http://127.0.0.1:8787``).
@@ -75,6 +73,128 @@ def _orchestra_admin_headers() -> dict[str, str] | None:
     if not admin_key:
         return None
     return {"Authorization": f"Bearer {admin_key}"}
+
+
+def _call_permission_status(button_payload: str) -> tuple[str, str]:
+    payload = (button_payload or "").strip()
+    if payload == "ACCEPTED":
+        return "accepted", "ACCEPTED"
+    if payload == "REJECTED":
+        return "rejected", "REJECTED"
+    return "unknown_interaction", "UNKNOWN"
+
+
+def _permission_cache_path() -> Path:
+    configured = _env("COMMS_BRIDGE_PERMISSION_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".unity" / "whatsapp_call_permissions.json"
+
+
+def _permission_cache_key(pool_number: str, contact_number: str) -> str:
+    return f"{pool_number}|{contact_number}"
+
+
+def _load_permission_cache() -> dict[str, dict]:
+    path = _permission_cache_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[bridge] failed to read WhatsApp permission cache: {exc}", flush=True)
+        return {}
+    if isinstance(payload, dict):
+        return {
+            str(key): value for key, value in payload.items() if isinstance(value, dict)
+        }
+    return {}
+
+
+def _write_permission_cache(cache: dict[str, dict]) -> None:
+    path = _permission_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f"{path.suffix}.tmp")
+    tmp.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _cache_call_permission(
+    *,
+    pool_number: str,
+    contact_number: str,
+    status: str,
+    response_payload: dict | None,
+) -> None:
+    if status not in {"accepted", "rejected"}:
+        return
+    cache = _load_permission_cache()
+    cache[_permission_cache_key(pool_number, contact_number)] = {
+        "pool_number": pool_number,
+        "contact_number": contact_number,
+        "status": status,
+        "expires_at": (response_payload or {}).get("expires_at"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_permission_cache(cache)
+
+
+def _cached_permission_is_expired(entry: dict) -> bool:
+    if entry.get("status") != "accepted":
+        return False
+    expires_at = entry.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return False
+    return parsed <= datetime.now(parsed.tzinfo)
+
+
+def _hydrate_call_permission_cache() -> None:
+    headers = _orchestra_admin_headers()
+    if headers is None:
+        return
+    hydrated = 0
+    for entry in _load_permission_cache().values():
+        status = entry.get("status")
+        pool_number = entry.get("pool_number")
+        contact_number = entry.get("contact_number")
+        if (
+            status not in {"accepted", "rejected"}
+            or not pool_number
+            or not contact_number
+        ):
+            continue
+        if _cached_permission_is_expired(entry):
+            continue
+        try:
+            response = requests.post(
+                f"{_orchestra_base_url()}/admin/whatsapp/call-permission",
+                headers=headers,
+                json={
+                    "pool_number": pool_number,
+                    "contact_number": contact_number,
+                    "status": status,
+                    "source": "selfhost_bridge_cache",
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            hydrated += 1
+        except Exception as exc:
+            print(
+                "[bridge] whatsapp call permission cache hydration failed "
+                f"for contact={contact_number!r}: {exc}",
+                flush=True,
+            )
+    if hydrated:
+        print(
+            f"[bridge] hydrated {hydrated} WhatsApp call permission entr"
+            f"{'y' if hydrated == 1 else 'ies'} from local cache",
+            flush=True,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -333,16 +453,15 @@ def _email_envelope(
 class TwilioAdapter:
     """Polls Twilio's Messages API for inbound texts on one channel.
 
-    ``channel`` is ``"sms"`` (``thread: "msg"``) or ``"whatsapp"``. A sender
-    allowlist is mandatory: when sharing a hosted number, this keeps the local
-    CM from ingesting (and replying to) that deployment's real inbound.
+    ``channel`` is ``"sms"`` (``thread: "msg"``) or ``"whatsapp"``. Twilio is
+    polled locally, but ownership/routing stays with local Orchestra via the
+    same resolve endpoints used by hosted adapters.
     """
 
-    def __init__(self, channel: str, number: str, allowlist: set[str]) -> None:
+    def __init__(self, channel: str, number: str) -> None:
         self.name = channel
         self._channel = channel
         self._number = number
-        self._allowlist = allowlist
         self._wa = channel == "whatsapp"
         self._client = None
         self.poll_interval = float(_env("COMMS_BRIDGE_POLL_SECONDS", "10"))
@@ -358,10 +477,10 @@ class TwilioAdapter:
 
     def configured(self) -> bool:
         sid, tok = self._creds()
-        return bool(sid and tok and self._number and self._allowlist)
+        return bool(sid and tok and self._number)
 
     def describe(self) -> str:
-        return f"{self._channel}<{self._number}> allow={sorted(self._allowlist)}"
+        return f"{self._channel}<{self._number}>"
 
     def _twilio_number(self) -> str:
         return f"whatsapp:{self._number}" if self._wa else self._number
@@ -401,24 +520,16 @@ class TwilioAdapter:
                     seen.add(msg.sid)
                     continue
             sender = self._strip(msg.from_ or "")
-            if sender not in self._allowlist:
+            route = self._resolve_route(sender)
+            if route is None:
+                seen.add(msg.sid)
                 continue
             if self._wa and self._is_call_permission_response(msg):
-                envelope = self._call_permission_envelope(msg, sender)
-                if envelope is None:
-                    seen.add(msg.sid)
-                    print(
-                        "[bridge] whatsapp call permission response missing "
-                        f"ButtonPayload from={sender!r}; skipped",
-                        flush=True,
-                    )
-                    continue
+                envelope = self._call_permission_envelope(msg, sender, route)
                 self._record_call_permission(sender, msg)
             else:
-                envelope = self._envelope(msg, sender)
+                envelope = self._envelope(msg, sender, route)
             _post("/local/comms/envelope", envelope)
-            if self._wa:
-                self._touch_inbound_window(sender)
             seen.add(msg.sid)
             delivered += 1
             print(
@@ -440,10 +551,71 @@ class TwilioAdapter:
         )
         return str(payload or "").strip()
 
-    def _call_permission_envelope(self, msg, sender: str) -> dict | None:
-        button_payload = self._button_payload(msg)
-        if button_payload not in {"ACCEPTED", "REJECTED"}:
+    def _resolve_route(self, sender: str) -> dict | None:
+        headers = _orchestra_admin_headers()
+        if headers is None:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: ORCHESTRA_ADMIN_KEY missing",
+                flush=True,
+            )
             return None
+
+        platform = "whatsapp" if self._wa else "phone"
+        try:
+            response = requests.get(
+                f"{_orchestra_base_url()}/admin/{platform}/resolve",
+                params={"pool_number": self._number, "sender": sender},
+                headers=headers,
+                timeout=10,
+            )
+        except Exception as exc:
+            print(
+                f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
+                flush=True,
+            )
+            return None
+
+        if response.status_code == 404:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: no local route",
+                flush=True,
+            )
+            return None
+
+        try:
+            response.raise_for_status()
+            route = response.json()
+        except Exception as exc:
+            print(
+                f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
+                flush=True,
+            )
+            return None
+
+        action = route.get("action")
+        if action:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: action={action}",
+                flush=True,
+            )
+            return None
+
+        assistant_id = route.get("assistant_id")
+        if assistant_id is None:
+            print(
+                f"[bridge] {self._channel} from={sender!r} skipped: missing assistant_id",
+                flush=True,
+            )
+            return None
+
+        return {
+            "assistant_id": assistant_id,
+            "role": route.get("role") or "contact",
+        }
+
+    def _call_permission_envelope(self, msg, sender: str, route: dict) -> dict:
+        button_payload = self._button_payload(msg)
+        _, event_payload = _call_permission_status(button_payload)
         return {
             "thread": "whatsapp",
             "event": {
@@ -453,8 +625,10 @@ class TwilioAdapter:
                 "from_number": sender,
                 "to_number": self._number,
                 "body": msg.body or "",
-                "payload": button_payload,
+                "payload": event_payload,
                 "attachments": [],
+                "assistant_id": route["assistant_id"],
+                "role": route["role"],
             },
         }
 
@@ -463,17 +637,7 @@ class TwilioAdapter:
         if headers is None:
             return
         button_payload = self._button_payload(msg)
-        if button_payload == "ACCEPTED":
-            status = "accepted"
-        elif button_payload == "REJECTED":
-            status = "rejected"
-        else:
-            print(
-                "[bridge] whatsapp call permission update skipped for unknown "
-                f"ButtonPayload={button_payload!r} from={sender!r}",
-                flush=True,
-            )
-            return
+        status, _ = _call_permission_status(button_payload)
         try:
             response = requests.post(
                 f"{_orchestra_base_url()}/admin/whatsapp/call-permission",
@@ -482,10 +646,21 @@ class TwilioAdapter:
                     "pool_number": self._number,
                     "contact_number": sender,
                     "status": status,
+                    "source": "selfhost_bridge",
                 },
                 timeout=10,
             )
             response.raise_for_status()
+            try:
+                response_payload = response.json()
+            except Exception:
+                response_payload = None
+            _cache_call_permission(
+                pool_number=self._number,
+                contact_number=sender,
+                status=status,
+                response_payload=response_payload,
+            )
             print(
                 f"[bridge] whatsapp call permission {status} from={sender!r}",
                 flush=True,
@@ -493,30 +668,7 @@ class TwilioAdapter:
         except Exception as exc:
             print(f"[bridge] whatsapp call permission update failed: {exc}", flush=True)
 
-    def _touch_inbound_window(self, sender: str) -> None:
-        """Tell Orchestra an inbound arrived so the WhatsApp 24h free-form window
-        opens for this (pool, sender).
-
-        The hosted adapter resolves every inbound via Orchestra, which records
-        ``last_inbound_at``; self-host delivers inbound by polling and dispatches
-        routing locally, so this best-effort call exists purely for that
-        side-effect. It never blocks ingest — a failed touch only means the next
-        reply may fall back to a template.
-        """
-        headers = _orchestra_admin_headers()
-        if headers is None:
-            return
-        try:
-            requests.get(
-                f"{_orchestra_base_url()}/admin/whatsapp/resolve",
-                params={"pool_number": self._number, "sender": sender},
-                headers=headers,
-                timeout=10,
-            )
-        except Exception as exc:  # best-effort: never block inbound forwarding
-            print(f"[bridge] whatsapp window touch failed: {exc}", flush=True)
-
-    def _envelope(self, msg, sender: str) -> dict:
+    def _envelope(self, msg, sender: str, route: dict) -> dict:
         thread = "whatsapp" if self._wa else "msg"
         return {
             "thread": thread,
@@ -526,6 +678,8 @@ class TwilioAdapter:
                 "to_number": self._number if self._wa else (msg.to or ""),
                 "body": msg.body or "",
                 "attachments": [],
+                "assistant_id": route["assistant_id"],
+                "role": route["role"],
             },
         }
 
@@ -537,22 +691,8 @@ class TwilioAdapter:
 
 def _build_adapters() -> list:
     adapters: list = [GmailAdapter()]
-    allowlist = {
-        n.strip() for n in _env("COMMS_BRIDGE_TWILIO_ALLOWLIST").split(",") if n.strip()
-    }
-    twilio_configured = bool(_env("TWILIO_ACCOUNT_SID") and _env("TWILIO_AUTH_TOKEN"))
-    if twilio_configured and not allowlist:
-        print(
-            "[bridge] WARNING: Twilio creds present but COMMS_BRIDGE_TWILIO_ALLOWLIST "
-            "is empty — SMS/WhatsApp inbound disabled so the local CM cannot react "
-            "to the shared number's real traffic. Set it to your test sender(s).",
-            file=sys.stderr,
-            flush=True,
-        )
-    adapters.append(TwilioAdapter("sms", _env("COMMS_BRIDGE_SMS_NUMBER"), allowlist))
-    adapters.append(
-        TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER"), allowlist),
-    )
+    adapters.append(TwilioAdapter("sms", _env("COMMS_BRIDGE_SMS_NUMBER")))
+    adapters.append(TwilioAdapter("whatsapp", _env("COMMS_BRIDGE_WHATSAPP_NUMBER")))
     return [a for a in adapters if a.configured()]
 
 
@@ -563,6 +703,7 @@ def main() -> None:
     if not adapters:
         print("[bridge] no channels configured — nothing to poll; exiting", flush=True)
         return
+    _hydrate_call_permission_cache()
     print(
         f"[bridge] polling {', '.join(a.describe() for a in adapters)} -> "
         f"{_ingress_url()}; forwarding items newer than "
@@ -571,8 +712,12 @@ def main() -> None:
     )
     seen: dict[str, set[str]] = {a.name: set() for a in adapters}
     next_poll_at: dict[str, float] = {a.name: 0 for a in adapters}
+    next_permission_hydration_at = time.time() + 60
     while True:
         now = time.time()
+        if now >= next_permission_hydration_at:
+            _hydrate_call_permission_cache()
+            next_permission_hydration_at = now + 60
         for adapter in adapters:
             if now < next_poll_at[adapter.name]:
                 continue

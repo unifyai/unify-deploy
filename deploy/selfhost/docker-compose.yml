@@ -264,6 +264,7 @@ services:
     environment:
       SELF_HOST: "1"
       NEXT_PUBLIC_SELF_HOST: "1"
+      NEXT_PUBLIC_CONSOLE_DEBUG: "true"
       SELF_HOST_RUNTIME_MODE: compose
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://127.0.0.1:3000}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}

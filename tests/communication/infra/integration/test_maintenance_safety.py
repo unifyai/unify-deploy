@@ -143,6 +143,7 @@ def _cleanup_job(batch_api, job_name: str):
         pass
 
 
+@pytest.mark.merge_gate
 @pytest.mark.timeout(300)
 def test_maintenance_does_not_kill_active_container_with_stale_done_jobs(
     batch_api,
@@ -323,6 +324,7 @@ def test_maintenance_sweep_preserves_fresh_container(
         replenish_pool()
 
 
+@pytest.mark.merge_gate
 @pytest.mark.timeout(120)
 def test_maintenance_deletes_stale_done_jobs(
     batch_api,

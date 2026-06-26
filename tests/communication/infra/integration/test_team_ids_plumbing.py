@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from tests.infra.integration.local_stack_orchestra_helpers import (
+from tests.communication.infra.integration.local_stack_orchestra_helpers import (
     create_organization,
     create_team,
     delete_subscription,

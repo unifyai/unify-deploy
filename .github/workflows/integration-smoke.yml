@@ -1,0 +1,188 @@
+name: Integration smoke
+run-name: >-
+  ${{
+    github.event_name == 'pull_request' && 'Integration smoke (staging → main gate)' ||
+    github.event_name == 'push' && 'Integration smoke (commit)' ||
+    'Integration smoke (manual)'
+  }}
+
+# Representative live integration gate for staging -> main.
+#
+# Runs the minimal `-m merge_gate` subset of tests/communication/infra/integration
+# against the REAL staging stack (Comms App, Adapters, the `unity` GKE cluster,
+# GCE pool VMs, internal Orchestra, Pub/Sub). It is the "is the core product
+# healthy?" check we want green before promoting staging to main.
+#
+# Why a dedicated self-hosted runner: these tests call internal Orchestra
+# (https://internal.example.com) and the private-node `unity`
+# cluster's API server. A GitHub-hosted runner on the public internet cannot
+# reach either, so the job runs on a runner that lives inside the cluster (see
+# deploy/k8s/ci-runner/). The runner pod mounts the comm-sa key for GCE/Pub/Sub
+# and uses in-cluster config for the Kubernetes API.
+#
+# Cost discipline: every merge_gate test cleans up its own resources in a
+# finally block, the integration conftest reaps any leftover test assistants at
+# session end, and the always() cleanup step below deletes anything recorded in
+# CI_CREATED_ASSISTANTS_FILE (covering a hard-killed run) and fires the staging
+# reconcile endpoints. The result is leak-neutral on both success and failure.
+#
+# Triggers: a [run-integration] marker on any push, every staging -> main pull
+# request (the release gate), and manual dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_live_run:
+        description: "Type RUN_LIVE to acknowledge this exercises real staging infra"
+        required: true
+        type: string
+  push:
+    branches:
+    - '**'
+  pull_request:
+    branches:
+    - main
+
+permissions:
+  contents: read
+
+# Share one group across the push and pull_request events for the same source
+# branch so a [run-integration] push and its staging -> main PR don't double-run.
+# Do NOT cancel in progress: cancelling mid-test would skip the per-test finally
+# blocks and leak staging resources. Queue instead.
+concurrency:
+  group: integration-smoke-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  merge-gate:
+    name: Integration smoke
+    # Self-hosted runner living inside the `unity` GKE cluster (staging
+    # namespace). See deploy/k8s/ci-runner/README.md for provisioning.
+    runs-on: [self-hosted, unity-cluster, staging]
+    timeout-minutes: 90
+    # Run on: manual dispatch, a [run-integration] push, or a staging -> main PR.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-integration]')) ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'staging')
+    env:
+      # Target the real staging deployment.
+      TEST_NAMESPACE: staging
+      TEST_GKE_CLUSTER: unity
+      TEST_GKE_REGION: us-central1
+      TEST_VM_ZONE: us-central1-a
+      TEST_GCP_PROJECT_ID: gcp-project-runtime
+      TEST_VM_PROJECT_ID: gcp-project-vms
+      TEST_ORCHESTRA_URL: https://internal.example.com/v0
+      TEST_COMMS_APP_URL: ${{ secrets.UNITY_COMMS_URL }}
+      TEST_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
+      # A dedicated, long-lived deployed (is_local=false, non-desktop) staging
+      # assistant the wakeup/VM tests reuse. Its runtime is cleaned every run;
+      # the assistant row itself is intentionally persistent.
+      TEST_ASSISTANT_ID: ${{ vars.TEST_ASSISTANT_ID }}
+      # Auth: secrets for Orchestra + the Unify user, GCP key for GCE/Pub/Sub.
+      ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
+      UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+      # comm-sa key mounted into the runner pod (see deploy/k8s/ci-runner).
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/comm-sa/key.json
+      # Records every test assistant created this run so the always() cleanup can
+      # delete any whose own teardown was skipped (e.g. a hard-killed run).
+      CI_CREATED_ASSISTANTS_FILE: ${{ github.workspace }}/.ci-created-assistants.txt
+    steps:
+    - name: Acknowledge live run (manual)
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        if [[ "${{ inputs.confirm_live_run }}" != "RUN_LIVE" ]]; then
+          echo "Refusing live integration smoke: confirm_live_run must be RUN_LIVE" >&2
+          exit 1
+        fi
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Reset created-assistants ledger
+      run: rm -f "$CI_CREATED_ASSISTANTS_FILE"
+
+    - name: Activate GCP service account
+      run: |
+        gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+        gcloud config set project "$TEST_GCP_PROJECT_ID"
+
+    - name: Configure git for private repos
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+      env:
+        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+
+    - name: Install dependencies
+      run: |
+        # The merge_gate integration tests drive the deployed stack over HTTP and
+        # the Kubernetes/GCE/Pub-Sub clients; they do not import the first-party
+        # unity/unify/unillm SDKs. Install only the unity-deploy package, its core
+        # dependencies (which already include the kubernetes + google-cloud
+        # clients the tests use) and pytest. This avoids building the heavy SDKs
+        # via uv sync, which is unnecessary for this subset.
+        uv venv
+        uv pip install -e . pytest pytest-asyncio pytest-env
+
+    - name: Run merge-gate subset
+      id: run-tests
+      run: |
+        set +e
+        # --confcutdir keeps pytest from loading the repo-root tests/conftest.py,
+        # which imports the unity/unify runtimes we intentionally did not install.
+        # The integration conftest under this directory is self-contained.
+        .venv/bin/python -m pytest -vs \
+          -m merge_gate \
+          --confcutdir=tests/communication/infra/integration \
+          tests/communication/infra/integration \
+          --ignore=tests/communication/infra/integration/contracts
+        exit_code=$?
+        echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+        exit "$exit_code"
+
+    - name: Reap leaked test assistants
+      if: always()
+      continue-on-error: true
+      run: |
+        # Backstop for a run that died before per-test/session cleanup ran:
+        # delete every assistant we recorded creating. DELETE is idempotent, so
+        # already-cleaned ids simply 404. This frees the assistant row, its
+        # Pub/Sub topic, and any assigned disk/VM.
+        if [[ -s "$CI_CREATED_ASSISTANTS_FILE" ]]; then
+          sort -u "$CI_CREATED_ASSISTANTS_FILE" | while read -r aid; do
+            [[ -z "$aid" ]] && continue
+            echo "Reaping assistant $aid"
+            curl -sS -o /dev/null -w "  -> %{http_code}\n" \
+              -X DELETE "$TEST_ORCHESTRA_URL/assistant/$aid" \
+              -H "Authorization: Bearer $UNIFY_KEY" || true
+          done
+        else
+          echo "No created-assistant ledger entries to reap."
+        fi
+
+    - name: Reconcile staging runtime
+      if: always()
+      continue-on-error: true
+      run: |
+        # Idempotent staging reconcile (same endpoints the hourly crons hit):
+        # drop excess idle jobs and reconcile orphaned VMs / stale done jobs.
+        for path in "/scheduled/jobs/cleanup" "/scheduled/infra/maintenance"; do
+          echo "POST $TEST_ADAPTERS_URL$path"
+          curl -sS -o /dev/null -w "  -> %{http_code}\n" \
+            -X POST "$TEST_ADAPTERS_URL$path" \
+            -H "Authorization: Bearer $ORCHESTRA_ADMIN_KEY" || true
+        done
+
+    - name: Upload integration logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-smoke-logs-${{ github.run_id }}
+        path: |
+          logs/
+          ${{ github.workspace }}/.ci-created-assistants.txt
+        if-no-files-found: ignore
+        retention-days: 14

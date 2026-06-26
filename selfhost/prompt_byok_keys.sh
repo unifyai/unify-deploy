@@ -384,7 +384,7 @@ prompt_tts_provider() {
 }
 
 _calls_enabled() {
-  case "${SELF_HOST_CALLS_ENABLED:-0}" in
+  case "${SELF_HOST_CALLS_ENABLED:-1}" in
     1 | true | TRUE | yes | YES | on | ON) return 0 ;;
     *) return 1 ;;
   esac
@@ -455,14 +455,14 @@ prompt_to_file() {
 }
 
 prompt_call_support() {
-  # Opt-in: phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go
-  # to the self-host state dir (never unity/.env), so they are loaded only when
-  # SELF_HOST_CALLS_ENABLED is set. No-op otherwise.
+  # Phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go to the
+  # self-host state dir (never unity/.env). No-op only when calls are explicitly
+  # disabled.
   _calls_enabled || return 0
   local file
   file="$(livekit_cloud_file)"
   echo ""
-  echo -e "${BOLD}Phone & WhatsApp calls (opt-in) — LiveKit Cloud SIP${NC}"
+  echo -e "${BOLD}Phone & WhatsApp calls — LiveKit Cloud SIP${NC}"
   echo "  Inbound calls bridge Twilio -> LiveKit Cloud SIP (the local dev LiveKit"
   echo "  used for browser meet has no SIP). Create a LiveKit Cloud project at"
   echo "  https://cloud.livekit.io, enable SIP, and paste its credentials."

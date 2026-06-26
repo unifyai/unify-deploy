@@ -26,7 +26,7 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
-from tests.infra.integration.pubsub_auth import (
+from tests.communication.infra.integration.pubsub_auth import (
     build_pubsub_publisher_client,
     build_pubsub_subscriber_client,
     client_credential_context,
@@ -485,6 +485,11 @@ def pytest_configure(config):
         "markers",
         "slow: long-running tests (VM provision, etc.) — deselect with -m 'not slow'",
     )
+    config.addinivalue_line(
+        "markers",
+        "merge_gate: minimal representative subset run live against staging to gate "
+        "staging -> main merges",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -492,6 +497,25 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
     setattr(item, f"rep_{report.when}", report)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Reap any test assistants whose own per-test teardown was skipped.
+
+    Per-test ``finally`` blocks already delete the assistants they create; this
+    is a best-effort backstop for assistants left behind when a test process is
+    interrupted between creation and its own cleanup. It never raises so it
+    cannot mask the real session outcome.
+    """
+
+    leftover = sorted(_created_test_assistant_ids)
+    if not leftover:
+        return
+    for agent_id in leftover:
+        try:
+            _delete_test_assistant(agent_id, runtime_timeout=30)
+        except Exception as exc:  # pragma: no cover - defensive backstop
+            print(f"[Teardown] Session-end reap failed for {agent_id}: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -2401,6 +2425,35 @@ def _admin_record_to_data(a: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Created-assistant tracking
+#
+# Every test assistant created through _create_test_assistant is recorded so a
+# session-end backstop (and, in CI, an out-of-process cleanup step) can delete
+# any assistant whose own per-test teardown was skipped — e.g. when the runner
+# is hard-killed mid-test. Leaked assistants keep a Pub/Sub topic (and possibly
+# a disk/VM) alive, so reaping them keeps recurring gate runs cost-neutral.
+# ---------------------------------------------------------------------------
+
+CI_CREATED_ASSISTANTS_FILE = os.getenv("CI_CREATED_ASSISTANTS_FILE", "")
+_created_test_assistant_ids: set[str] = set()
+
+
+def _register_created_test_assistant(agent_id: str) -> None:
+    """Record a freshly created test assistant for end-of-session reaping."""
+
+    agent_id = str(agent_id).strip()
+    if not agent_id:
+        return
+    _created_test_assistant_ids.add(agent_id)
+    if CI_CREATED_ASSISTANTS_FILE:
+        try:
+            with open(CI_CREATED_ASSISTANTS_FILE, "a", encoding="utf-8") as handle:
+                handle.write(f"{agent_id}\n")
+        except OSError as exc:
+            print(f"[Teardown] Could not record created assistant {agent_id}: {exc}")
+
+
 def _create_test_assistant(
     index: int,
     *,
@@ -2456,6 +2509,8 @@ def _create_test_assistant(
         f"Failed to fetch admin record for {agent_id}: "
         f"{admin_resp.status_code} {admin_resp.text}"
     )
+
+    _register_created_test_assistant(agent_id)
 
     admin_info = admin_resp.json()["info"]
     a = admin_info[0] if isinstance(admin_info, list) else admin_info

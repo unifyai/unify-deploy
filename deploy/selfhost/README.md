@@ -238,10 +238,10 @@ bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 
 `selfhost/stack.sh up` is intentionally scratch-first because that is the normal
 developer loop. It stops any previous source stack, clears stale durable tmux
-state, starts the local services, resets the self-host owner + Coordinator state,
-rewrites the runtime credential files under `~/.unity`, seeds the `Builtins`
-catalogues, starts one Coordinator runtime, runs smoke checks, and verifies
-`http://localhost:3000/account`.
+state, purges the local Orchestra database, clears stale runtime identity files
+under `~/.unity`, starts the local services, creates a fresh self-host owner +
+Coordinator, seeds the `Builtins` catalogues, starts one Coordinator runtime,
+runs smoke checks, and verifies `http://localhost:3000/account`.
 
 Use `bash selfhost/stack.sh resume` only when you deliberately want to preserve
 the current local chat/onboarding/project history. `bash selfhost/stack.sh down
@@ -261,11 +261,11 @@ Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
 data, E2E tests) and is not the way to run the product locally — `unity stack
 up` invokes it with `--self-host` for you.
 
-### Phone & WhatsApp calls (opt-in, source install)
+### Phone & WhatsApp calls (source install)
 
 Browser/Console voice (Unify Meet) works out of the box via the local dev
-LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are opt-in
-because they need two things the default poll-only stack deliberately avoids:
+LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are part of
+the default self-host source stack and need two additional pieces:
 
 - A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
   URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
@@ -276,7 +276,7 @@ because they need two things the default poll-only stack deliberately avoids:
   worker connects outbound to the cloud room, so only the HTTP webhook is
   tunneled — no SIP/RTP tunneling.
 
-Enable it:
+Configure the LiveKit Cloud SIP side once, then start the stack:
 
 ```bash
 # 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
@@ -285,26 +285,30 @@ Enable it:
 #      LIVEKIT_API_KEY=...
 #      LIVEKIT_API_SECRET=...
 #      LIVEKIT_SIP_URI=<project>.sip.livekit.cloud
-# 3. Turn calls on and start the stack:
-export SELF_HOST_CALLS_ENABLED=1
+# 3. Start the stack:
 bash selfhost/stack.sh up
 ```
 
-On `up` (when enabled) the stack: installs `cloudflared`, starts the tunnel,
+On `up` the stack: installs `cloudflared`, starts the tunnel,
 ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
 (`selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
-(`selfhost/sync_comms_webhooks.py --set-voice`). `stack.sh down --full` reverts
-the voice webhook and stops the tunnel.
+(`selfhost/sync_comms_webhooks.py --set-voice`). If any required call setup
+step fails, startup stops rather than leaving a broken inbound-call path.
+`stack.sh down --full` reverts the voice webhook and stops the tunnel.
+
+For a deliberately text-only local stack, set `SELF_HOST_CALLS_ENABLED=0`.
 
 Caveats:
 
 - **Single-owner voice number.** A number has one `VoiceUrl`, so only one
-  developer can own the shared localhost voice number's calls at a time (unlike
-  the allowlist-shared SMS/WhatsApp text polling). `down --full` reverts it.
+  developer can own the shared localhost voice number's calls at a time. SMS and
+  WhatsApp text stay poll-only locally, and local Orchestra resolves ownership
+  before the bridge forwards anything to the local Coordinator. `down --full`
+  reverts the voice webhook.
 - cloudflared quick tunnels get a fresh URL each run; the voice webhook is
   re-synced automatically on `up` and whenever the tunnel restarts.
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio
-  account; the voice-app attach is best-effort and logs a warning otherwise.
+  account.
 
 ## Builtins Artifacts
 

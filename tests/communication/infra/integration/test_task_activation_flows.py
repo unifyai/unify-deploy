@@ -113,22 +113,28 @@ def _create_remote_task_assistant(batch_api) -> dict[str, Any]:
         desktop_mode=None,
     )
     assistant_id = str(assistant["assistant_id"])
-    response = requests.patch(
-        f"{ORCHESTRA_URL}/assistant/{assistant_id}/config",
-        json={"is_local": False},
-        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=30,
-    )
-    assert response.status_code == 200, (
-        f"Failed to switch assistant {assistant_id} to the deployed runtime lane: "
-        f"{response.status_code} {response.text}"
-    )
-    expire_test_assistant_records(assistant_id)
-    cleanup_assistant_jobs(
-        batch_api,
-        [assistant_id],
-        context="task-activation-setup",
-    )
+    try:
+        response = requests.patch(
+            f"{ORCHESTRA_URL}/assistant/{assistant_id}/config",
+            json={"is_local": False},
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"Failed to switch assistant {assistant_id} to the deployed runtime "
+            f"lane: {response.status_code} {response.text}"
+        )
+        expire_test_assistant_records(assistant_id)
+        cleanup_assistant_jobs(
+            batch_api,
+            [assistant_id],
+            context="task-activation-setup",
+        )
+    except Exception:
+        # The assistant already exists on Orchestra; delete it before
+        # re-raising so a setup failure never leaks a paid runtime resource.
+        _delete_test_assistant(assistant_id, batch_api)
+        raise
     return assistant
 
 
@@ -147,6 +153,7 @@ def _scheduled_task_entries(
         "name": f"Integration scheduled task {task_id}",
         "description": "Quietly start this work when it becomes due.",
         "status": "scheduled",
+        "priority": "normal",
         "_user_id": str(assistant_data["user_id"]),
         "_assistant_id": str(assistant_data["assistant_id"]),
         "schedule": {
@@ -398,6 +405,7 @@ def _assert_no_outbound_messages(
 class TestTaskActivationFlows:
     """Real staging user-flow tests for scheduled, triggered, and offline tasks."""
 
+    @pytest.mark.merge_gate
     def test_scheduled_due_wakes_sleeping_assistant_with_startup_reason_and_stays_silent(
         self,
         batch_api,
@@ -731,6 +739,7 @@ class TestTaskActivationFlows:
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)
 
+    @pytest.mark.merge_gate
     def test_offline_scheduled_task_does_not_wake_runtime(
         self,
         batch_api,

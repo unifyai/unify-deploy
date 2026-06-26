@@ -162,16 +162,13 @@ self_host_ensure_comms_bridge() {
   self_host_ensure_state_dir
 
   # Email channel keys off the comms SA + Coordinator mailbox; Twilio channels
-  # key off TWILIO_* + the Coordinator numbers + an explicit sender allowlist
-  # (all inherited from the exported env). TWILIO_* are already in the env.
-  # ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY let the bridge open the WhatsApp 24h
-  # free-form window in Orchestra on inbound (best-effort), mirroring the hosted
-  # adapter; without them every Coordinator reply falls back to a template.
+  # key off TWILIO_* + the Coordinator numbers. ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY
+  # keep local routing identical to hosted adapters: every inbound sender is
+  # resolved by Orchestra before the bridge forwards it to the local CM.
   GMAIL_BRIDGE_MAILBOX="${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" \
     GMAIL_BRIDGE_SA_FILE="$(self_host_comms_sa_file)" \
     COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${UNITY_COORDINATOR_PHONE:-}}" \
     COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${UNITY_COORDINATOR_WHATSAPP_NUMBER:-}}" \
-    COMMS_BRIDGE_TWILIO_ALLOWLIST="${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" \
     ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     nohup "$py" "$script" >>"$log_file" 2>&1 &
@@ -683,7 +680,9 @@ self_host_runtime_doctor_line() {
     local _bridge_channels=""
     [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
       && _bridge_channels="email"
-    if [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${COMMS_BRIDGE_TWILIO_ALLOWLIST:-}" ]]; then
+    if [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${TWILIO_AUTH_TOKEN:-}" \
+      && -n "${ORCHESTRA_ADMIN_KEY:-}" \
+      && ( -n "${COMMS_BRIDGE_SMS_NUMBER:-}" || -n "${COMMS_BRIDGE_WHATSAPP_NUMBER:-}" ) ]]; then
       _bridge_channels="${_bridge_channels:+$_bridge_channels,}sms,whatsapp"
     fi
     if self_host_comms_bridge_is_running; then

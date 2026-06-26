@@ -8,6 +8,7 @@ Invariants covered: INV-9, INV-10, INV-11, INV-12
 """
 
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
@@ -31,22 +32,28 @@ _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 pytestmark = [pytest.mark.integration]
 
 
+@pytest.mark.merge_gate
 @pytest.mark.invariant("INV-9", "INV-10")
 def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
-    """Assigning a pool VM sets correct GCE labels and metadata.
+    """Assigning a pool VM sets correct GCE labels for the requesting binding.
 
     Verifies:
-    - VM labels: pool-role=assigned, assistant-id=<test_id>
-    - VM metadata: unify-key is set (non-empty)
+    - VM labels: pool-role=assigned, assistant-id=<test_id>, binding-id=<binding>
+
+    VM assignment is binding-scoped: the assign request carries the binding the
+    VM is claimed for, and the claimed VM is stamped with that binding-id label.
     """
     require_gce(gce_client)
     assistant_id = test_id
+    binding_id = f"test-binding-{uuid.uuid4().hex[:12]}"
+    vm_name = None
 
     try:
         resp = comms.post(
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "unify_apikey": "test-api-key-for-integration",
                 "vm_type": "ubuntu",
             },
@@ -55,7 +62,8 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
             resp.status_code == 200
         ), f"VM assign failed: {resp.status_code} {resp.text}"
         result = resp.json()
-        assert result.get("vm_name"), "Response should include vm_name"
+        vm_name = result.get("vm_name")
+        assert vm_name, "Response should include vm_name"
         assert result.get("hostname"), "Response should include hostname"
 
         assigned = poll(
@@ -70,9 +78,18 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
         labels = dict(vm.labels or {})
         assert labels.get("pool-role") == "assigned"
         assert labels.get("assistant-id") == assistant_id.lower().replace("_", "-")
+        assert labels.get("binding-id") == binding_id
 
     finally:
-        comms.post("/infra/vm/pool/release", json={"assistant_id": assistant_id})
+        if vm_name:
+            comms.post(
+                "/infra/vm/pool/release",
+                json={
+                    "assistant_id": assistant_id,
+                    "binding_id": binding_id,
+                    "vm_name": vm_name,
+                },
+            )
 
 
 @pytest.mark.invariant("INV-11")

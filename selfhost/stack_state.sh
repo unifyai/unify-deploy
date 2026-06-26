@@ -71,6 +71,7 @@ data = {
     "console_env": {
         "SELF_HOST": "1",
         "NEXT_PUBLIC_SELF_HOST": "1",
+        "NEXT_PUBLIC_CONSOLE_DEBUG": "true",
         "NEXTAUTH_URL": f"http://localhost:{env('CONSOLE_PORT', '3000')}",
         "ORCHESTRA_URL": f"http://127.0.0.1:{env('ORCHESTRA_PORT', '8000')}",
         "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
