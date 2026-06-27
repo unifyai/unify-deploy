@@ -499,7 +499,7 @@ prompt_call_support() {
   echo "  Twilio dials into LiveKit Cloud SIP for the media leg."
   echo "  Stored in $file (chmod 600, never committed)."
   prompt_to_file "LiveKit SIP URI" "LIVEKIT_SIP_URI" \
-    "SIP domain, e.g. <project>.sip.livekit.cloud" "$file"
+    "Exact SIP host from the LiveKit Cloud dashboard — usually a DIFFERENT subdomain than the WSS URL (e.g. abcd1234.sip.livekit.cloud), do not derive it from LIVEKIT_URL" "$file"
   echo ""
 }
 

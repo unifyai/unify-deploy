@@ -20,6 +20,7 @@ from livekit.api import (
     WebhookReceiver,
 )
 from livekit.protocol.sip import (
+    DeleteSIPDispatchRuleRequest,
     ListSIPDispatchRuleRequest,
     ListSIPInboundTrunkRequest,
     SIPDispatchRule,
@@ -263,7 +264,9 @@ async def ensure_phone_dispatch_rule(
                 return
             # Stale rule for this trunk (room_name changed) — delete it.
             await livekit_api.sip.delete_sip_dispatch_rule(
-                r.sip_dispatch_rule_id,
+                DeleteSIPDispatchRuleRequest(
+                    sip_dispatch_rule_id=r.sip_dispatch_rule_id,
+                ),
             )
 
         await livekit_api.sip.create_sip_dispatch_rule(
@@ -353,7 +356,9 @@ async def delete_sip_dispatch_rule(dispatch_rule_id: str | None) -> None:
         return
     livekit_api = get_livekit_api()
     try:
-        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
+        await livekit_api.sip.delete_sip_dispatch_rule(
+            DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=dispatch_rule_id),
+        )
         print(f"[SIP] Deleted dispatch rule {dispatch_rule_id}")
     except Exception as e:
         print(f"[SIP] Failed to delete dispatch rule {dispatch_rule_id}: {e}")
