@@ -217,10 +217,7 @@ self_host_export_livekit_backend() {
 }
 
 self_host_livekit_cloud_url_configured() {
-  case "${LIVEKIT_URL:-}" in
-    "" | ws://localhost* | ws://127.* | http://localhost* | http://127.*) return 1 ;;
-    *) return 0 ;;
-  esac
+  [[ -n "${LIVEKIT_URL:-}" ]]
 }
 
 self_host_livekit_media_configured() {

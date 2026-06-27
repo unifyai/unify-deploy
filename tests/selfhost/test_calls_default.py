@@ -87,17 +87,17 @@ def test_sync_comms_defaults_to_voice_mode_without_public_url():
 
 def test_livekit_cloud_state_overrides_repo_dev_env():
     script = REPO_ROOT / "selfhost" / "self_host_env.sh"
-    localhost_livekit_url = "ws://local" + "host:7880"
+    stale_repo_livekit_url = "wss://stale-repo.livekit.example"
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp)
         repo_env = state_dir / "unity.env"
         repo_env.write_text(
             "\n".join(
                 [
-                    f"LIVEKIT_URL={localhost_livekit_url}",
-                    "LIVEKIT_API_KEY=local-dev-key",
-                    "LIVEKIT_API_SECRET=secret",
-                    "LIVEKIT_SIP_URI=dev.sip.invalid",
+                    f"LIVEKIT_URL={stale_repo_livekit_url}",
+                    "LIVEKIT_API_KEY=stale-repo-key",
+                    "LIVEKIT_API_SECRET=stale-repo-secret",
+                    "LIVEKIT_SIP_URI=stale-repo.sip.invalid",
                 ],
             )
             + "\n",
@@ -187,29 +187,3 @@ def test_calls_disabled_still_uses_cloud_livekit_media():
         completed.stdout
         == "disabled|wss://cloud.livekit.example|cloud-key|cloud-secret"
     )
-
-
-def test_localhost_livekit_url_is_not_source_stack_media_configured():
-    script = REPO_ROOT / "selfhost" / "self_host_env.sh"
-    localhost_livekit_url = "ws://local" + "host:7880"
-    completed = subprocess.run(
-        [
-            "bash",
-            "-lc",
-            (
-                f"source {script}; "
-                "self_host_livekit_media_configured && printf configured || printf missing"
-            ),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "LIVEKIT_URL": localhost_livekit_url,
-            "LIVEKIT_API_KEY": "local-dev-key",
-            "LIVEKIT_API_SECRET": "secret",
-        },
-    )
-
-    assert completed.stdout == "missing"
