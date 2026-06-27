@@ -10,8 +10,6 @@ set -euo pipefail
 
 # Matches get_local_root() in unity/file_manager/settings.py (~/Unity/Local).
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
-SELF_HOST_COORDINATOR_VOICE_PROVIDER="${SELF_HOST_COORDINATOR_VOICE_PROVIDER:-elevenlabs}"
-SELF_HOST_COORDINATOR_VOICE_ID="${SELF_HOST_COORDINATOR_VOICE_ID:-iP95p4xoKVk53GoZ742B}"
 # Shared Coordinator contact identities, dedicated per deployment mode so that
 # staging/production traffic never collides with localhost. Each mode owns a
 # distinct WhatsApp number, SMS/voice number, and email mailbox:
@@ -303,10 +301,6 @@ append_self_host_unity_runtime_env() {
       "UNIFY_LOG_DIR=${UNIFY_LOG_DIR:-$_unity_repo_root/logs/unify}"
       "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_unity_repo_root/logs/unillm}"
     )
-  fi
-
-  if [[ "${VOICE_PROVIDER:-}" == "elevenlabs" && -z "${VOICE_ID:-}" ]]; then
-    _target_array+=("VOICE_ID=$SELF_HOST_COORDINATOR_VOICE_ID")
   fi
 
   self_host_export_livekit_backend

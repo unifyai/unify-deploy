@@ -121,6 +121,11 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.db.models.coordinator_voice import (
+    COORDINATOR_DEFAULT_VOICE_ID,
+    COORDINATOR_DEFAULT_VOICE_PROVIDER,
+    ensure_coordinator_voice_row,
+)
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_DESKTOP_MODE,
     COORDINATOR_DEFAULT_FIRST_NAME,
@@ -215,7 +220,7 @@ def reset_owner_onboarding(session, owner_id: str) -> None:
     session.flush()
 
 
-def reset_coordinator_profile(coordinator: Assistant) -> None:
+def reset_coordinator_profile(session, coordinator: Assistant) -> None:
     coordinator.first_name = COORDINATOR_DEFAULT_FIRST_NAME
     coordinator.surname = None
     coordinator.job_title = COORDINATOR_DEFAULT_JOB_TITLE
@@ -231,8 +236,11 @@ def reset_coordinator_profile(coordinator: Assistant) -> None:
     coordinator.max_parallel = None
     coordinator.last_followup_sent_at = None
     coordinator.inactivity_followup_opted_out = False
-    coordinator.voice_id = None
-    coordinator.voice_provider = None
+    # Restore the default voice (and its preset row, since reset purges voices)
+    # so a fresh onboarding has a real voice; it stays fully selectable.
+    ensure_coordinator_voice_row(session, coordinator.user_id)
+    coordinator.voice_id = COORDINATOR_DEFAULT_VOICE_ID
+    coordinator.voice_provider = COORDINATOR_DEFAULT_VOICE_PROVIDER
     coordinator.is_local = False
 
 
@@ -447,7 +455,7 @@ with SessionLocal() as session:
     if owner is not None:
         reset_owner_onboarding(session, owner.id)
         coordinator, _ = create_personal_coordinator(session, owner.id)
-        reset_coordinator_profile(coordinator)
+        reset_coordinator_profile(session, coordinator)
         default_tasks = DefaultTasksSeeder.seed(session, user_id=str(owner.id))
     session.commit()
 
