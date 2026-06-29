@@ -22,7 +22,7 @@ import random
 
 import httpx
 import pytest
-import unify
+import unisdk
 
 from tests.settings import SETTINGS
 from unity.manager_registry import ManagerRegistry
@@ -94,8 +94,8 @@ def pytest_runtest_setup(item):
 def unify_project():
     """Activate a Unify project once per session (single API call)."""
     project = SETTINGS.test_project_name
-    unify.activate(project)
-    unify.set_context(project, relative=False, skip_create=True)
+    unisdk.activate(project)
+    unisdk.set_context(project, relative=False, skip_create=True)
     return project
 
 

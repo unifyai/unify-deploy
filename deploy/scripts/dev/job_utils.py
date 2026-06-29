@@ -129,7 +129,7 @@ def _find_latest_job_entry(
     email: str | None = None,
 ):
     """Return the log entry for the latest matching job, or exit."""
-    import unify
+    import unisdk
 
     shared_key = os.environ.get("SHARED_UNIFY_KEY")
     if not shared_key:
@@ -146,12 +146,12 @@ def _find_latest_job_entry(
             sys.exit(1)
 
         info("Resolving identity from UNIFY_KEY...")
-        user_info = unify.get_user_basic_info(api_key=unify_key)
+        user_info = unisdk.get_user_basic_info(api_key=unify_key)
         email = user_info["email"]
         info(f"Authenticated as {user_info['first']} {user_info['last']} ({email})")
 
     info(f"Searching for latest '{namespace}' job...")
-    logs = unify.get_logs(
+    logs = unisdk.get_logs(
         project="AssistantJobs",
         context="startup_events",
         filter=f"user_email == '{email}'",

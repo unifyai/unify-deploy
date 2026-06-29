@@ -103,7 +103,7 @@ def test_activate_unify_context_uses_explicit_identity(monkeypatch) -> None:
     monkeypatch.setenv("UNIFY_PROJECT_NAME", "ProjectFromEnv")
     monkeypatch.setenv("USER_ID", "wrong-user")
     monkeypatch.setenv("ASSISTANT_ID", "wrong-assistant")
-    monkeypatch.setitem(sys.modules, "unify", fake_unify)
+    monkeypatch.setitem(sys.modules, "unisdk", fake_unify)
 
     activate_unify_context(user_id="alice", assistant_id="42")
 

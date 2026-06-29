@@ -17,7 +17,7 @@ import time
 import traceback
 
 import requests
-import unify
+import unisdk
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ CONTEXT = "startup_events"
 def ensure_project_exists(api_key: str) -> None:
     """Create the AssistantJobs project if it doesn't already exist."""
     try:
-        unify.create_project(PROJECT_NAME, api_key=api_key)
+        unisdk.create_project(PROJECT_NAME, api_key=api_key)
     except Exception:
         log.exception("Error ensuring project exists")
 
@@ -53,9 +53,9 @@ def get_assistant_logs(
 ) -> list:
     """Fetch AssistantJobs log entries matching *filter_expr*.
 
-    Returns a list of ``unify.Log`` objects.
+    Returns a list of ``unisdk.Log`` objects.
     """
-    return unify.get_logs(
+    return unisdk.get_logs(
         project=PROJECT_NAME,
         context=CONTEXT,
         filter=filter_expr,
@@ -64,9 +64,9 @@ def get_assistant_logs(
     )
 
 
-def create_assistant_log(api_key: str, **entries) -> "unify.Log":
+def create_assistant_log(api_key: str, **entries) -> "unisdk.Log":
     """Create a new AssistantJobs audit log entry."""
-    return unify.log(
+    return unisdk.log(
         project=PROJECT_NAME,
         context=CONTEXT,
         api_key=api_key,

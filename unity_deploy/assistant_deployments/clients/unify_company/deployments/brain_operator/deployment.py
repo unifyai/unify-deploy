@@ -167,7 +167,7 @@ def get_deployment() -> DeploymentSpec:
         # ``X_OAUTH_TOKENS_<USER>``, ``FIREFLIES_API_KEY``, ``LEMLIST_API_KEY``,
         # ``GOOGLE_SERVICE_ACCOUNT_KEY_FILE``, ``BRAIN_WHATSAPP_DEFAULT_RECIPIENT``)
         # are written into the SecretManager out-of-band.  ``brain`` defaults
-        # ``UNIFY_PROJECT`` to ``Brain`` via ``os.environ.setdefault``.
+        # ``UNISDK_PROJECT`` to ``Brain`` via ``os.environ.setdefault``.
         secrets=[],
         knowledge={
             "BrainOperator/JobOwnership": {

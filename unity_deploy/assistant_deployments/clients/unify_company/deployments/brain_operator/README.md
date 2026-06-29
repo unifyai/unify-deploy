@@ -79,7 +79,7 @@ runtime's `SecretManager`:
 | Var | Purpose |
 |---|---|
 | `UNIFY_KEY` | Used by brain entrypoints to read/write Orchestra. |
-| `UNIFY_PROJECT` | Defaults to `Brain`. |
+| `UNISDK_PROJECT` | Defaults to `Brain`. |
 | `UNITY_COMMS_URL` | Used by `brain.outbound.whatsapp.send`. |
 | `FIREFLIES_API_KEY` | Used by `brain.sync.fireflies`. |
 | `LEMLIST_API_KEY` | Used by the evergreen outbound wrappers. |

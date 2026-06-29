@@ -292,13 +292,13 @@ append_self_host_unity_runtime_env() {
       "$_unity_repo_root/logs/unillm" 2>/dev/null || true
     _target_array+=(
       "UNITY_OTEL=${UNITY_OTEL:-true}"
-      "UNIFY_OTEL=${UNIFY_OTEL:-true}"
+      "UNISDK_OTEL=${UNISDK_OTEL:-true}"
       "UNILLM_OTEL=${UNILLM_OTEL:-true}"
       "UNITY_OTEL_LOG_DIR=$_otel_log_dir"
-      "UNIFY_OTEL_LOG_DIR=${UNIFY_OTEL_LOG_DIR:-$_otel_log_dir}"
+      "UNISDK_OTEL_LOG_DIR=${UNISDK_OTEL_LOG_DIR:-$_otel_log_dir}"
       "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
       "UNITY_LOG_DIR=${UNITY_LOG_DIR:-$_unity_repo_root/logs/unity}"
-      "UNIFY_LOG_DIR=${UNIFY_LOG_DIR:-$_unity_repo_root/logs/unify}"
+      "UNISDK_LOG_DIR=${UNISDK_LOG_DIR:-$_unity_repo_root/logs/unify}"
       "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_unity_repo_root/logs/unillm}"
     )
   fi

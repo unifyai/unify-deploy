@@ -12,6 +12,7 @@ FIRST_PARTY = {
     "orchestra",
     "orchestra-core",
     "unify",
+    "unisdk",
     "unillm",
     "unity",
     "unity-deploy",

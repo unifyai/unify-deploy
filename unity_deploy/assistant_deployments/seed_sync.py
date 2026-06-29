@@ -15,7 +15,7 @@ import logging
 from time import perf_counter
 from typing import Any, Callable, TYPE_CHECKING
 
-import unify
+import unisdk
 
 from unity.common.hierarchical_logger import ICONS
 from unity.guidance_manager.types.guidance import Guidance
@@ -73,17 +73,17 @@ class SeedMetaStore:
         if self._ctx is not None:
             return self._ctx
 
-        active = unify.get_active_context()["read"]
+        active = unisdk.get_active_context()["read"]
         self._ctx = f"{active}/SeedData/Meta"
         try:
-            unify.create_context(self._ctx)
+            unisdk.create_context(self._ctx)
         except Exception:
             pass
         return self._ctx
 
     def get_hash(self, manager_key: str) -> str:
         ctx = self._ensure_ctx()
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=ctx,
             filter=f"manager_key == '{manager_key}'",
             limit=1,
@@ -94,20 +94,20 @@ class SeedMetaStore:
 
     def set_hash(self, manager_key: str, seed_hash: str) -> None:
         ctx = self._ensure_ctx()
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             context=ctx,
             filter=f"manager_key == '{manager_key}'",
             limit=1,
         )
         if logs:
-            unify.update_logs(
+            unisdk.update_logs(
                 logs=[logs[0].id],
                 context=ctx,
                 entries=[{"seed_hash": seed_hash}],
                 overwrite=True,
             )
         else:
-            unify.log(context=ctx, manager_key=manager_key, seed_hash=seed_hash)
+            unisdk.log(context=ctx, manager_key=manager_key, seed_hash=seed_hash)
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         keys = list_secret_keys()
         result = []
         for name in keys:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 context=sm._ctx,
                 filter=f"name == '{name}'",
                 limit=1,
@@ -599,10 +599,10 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
     if not rows:
         return False
 
-    active = unify.get_active_context()["read"]
+    active = unisdk.get_active_context()["read"]
     ctx = f"{active}/{_INTEGRATION_REGISTRY_CONTEXT_LEAF}"
     try:
-        unify.create_context(ctx)
+        unisdk.create_context(ctx)
     except Exception:
         pass
 
@@ -611,7 +611,7 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
 
     def get_existing() -> list[dict]:
         try:
-            existing_logs = unify.get_logs(context=ctx, limit=1000)
+            existing_logs = unisdk.get_logs(context=ctx, limit=1000)
         except Exception:
             return []
         existing: list[dict] = []
@@ -626,7 +626,7 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
         return existing
 
     def create(rec: dict) -> Any:
-        unify.log(
+        unisdk.log(
             context=ctx,
             **{k: v for k, v in rec.items() if not k.startswith("_")},
         )
@@ -639,7 +639,7 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
         if log_id is None:
             create(rec)
             return None
-        unify.update_logs(
+        unisdk.update_logs(
             logs=[log_id],
             context=ctx,
             entries=[{k: v for k, v in rec.items() if not k.startswith("_")}],
@@ -648,7 +648,7 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
         return None
 
     def delete(log_id: int) -> Any:
-        unify.delete_logs(context=ctx, logs=log_id)
+        unisdk.delete_logs(context=ctx, logs=log_id)
         return None
 
     return sync_seed_data(

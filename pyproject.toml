@@ -79,7 +79,7 @@ lint = [
 ]
 dev = [
     "unity",
-    "unify",
+    "unisdk",
     "unillm",
     "pre-commit>=4.0.1",
     "pytest>=9.0.2",
@@ -90,7 +90,7 @@ dev = [
 
 [tool.uv.sources]
 unity = { path = "../unify", editable = true }
-unify = { path = "../unisdk", editable = true }
+unisdk = { path = "../unisdk", editable = true }
 unillm = { path = "../unillm", editable = true }
 
 [tool.pyright]
