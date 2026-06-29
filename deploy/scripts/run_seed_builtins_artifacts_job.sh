@@ -222,7 +222,7 @@ job_flags=(
   "--max-retries=0"
   "--service-account=${job_service_account}"
   "--set-env-vars=ORCHESTRA_URL=${orchestra_url},UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
-  "--update-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,UNIFY_KEY=GLOBAL_UNIFY_KEY:latest"
+  "--update-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,UNIFY_KEY=ORCHESTRA_ADMIN_KEY:latest"
 )
 if gcloud --project "$unity_project" run jobs describe "$job_name" --region "$unity_region" >/dev/null 2>&1; then
   gcloud --project "$unity_project" run jobs update "$job_name" "${job_flags[@]}"

@@ -47,11 +47,11 @@ bash /Users/djl11/unity-deploy/selfhost/stack.sh up --durable
 
 The durable launcher owns a `tmux` session named `unity-stack`, waits for the
 stack-ready marker, verifies Console over HTTP, and prints attach/stop commands.
-This keeps Console, Orchestra, LiveKit, the Unity gateway, and the Coordinator
-runtime out of the Cursor shell job's process group, so they keep running after
-the agent command exits. A plain `stack.sh up` is fine from a long-lived human
-terminal, but agents should not emulate persistence with `nohup`, backgrounded
-subshells, or sleep loops.
+This keeps Console, Orchestra, the Unity gateway, the Coordinator runtime, and
+the managed call tunnel out of the Cursor shell job's process group, so they keep
+running after the agent command exits. A plain `stack.sh up` is fine from a
+long-lived human terminal, but agents should not emulate persistence with
+`nohup`, backgrounded subshells, or sleep loops.
 
 ## Safe Checks While The Stack Is Running
 
@@ -93,4 +93,20 @@ bash /Users/djl11/unity-deploy/selfhost/stack.sh dev-env
 The important invariant is that Console is started by the harness with the same
 ports and topology as the rest of the stack: `SELF_HOST=1`,
 `ORCHESTRA_URL=http://127.0.0.1:8000`, gateway/adapters on `8001`, Pub/Sub on
-`8085`, and LiveKit on `7880`.
+`8085`, and LiveKit Cloud credentials from the self-host state file.
+
+## Owner States
+
+The source stack has two valid local ownership states:
+
+- **Pre-signup infra-ready:** Console, Orchestra, Pub/Sub, gateway, and call
+  tunnel are running, but there is no user, Coordinator, or CM runtime yet.
+  Register in Console to create the single local owner.
+- **Post-signup runtime-ready:** the UI-created owner has one personal
+  Coordinator, and `~/.unity/coordinator-runtime.json` plus
+  `~/.unity/self-host-owner.json` point at that same user/assistant pair.
+
+No setup or reset path should create a placeholder owner. Duplicate Coordinator
+rows are a repair condition; run `bash /Users/djl11/unity-deploy/selfhost/stack.sh
+reset --yes` to preserve the real owner if one exists, or return to pre-signup
+when no owner exists.

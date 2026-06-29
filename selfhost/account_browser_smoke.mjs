@@ -99,7 +99,22 @@ async function main() {
 
   const ownerFile = selfHostOwnerFilePath();
   if (!fs.existsSync(ownerFile)) {
-    log('INFO', `Authenticated account browser smoke skipped: missing ${ownerFile}`);
+    const browser = await launchBrowser();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${consoleOrigin}/login`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30_000,
+      });
+      await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
+      const bodyText = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
+      if (!/create|account|sign up|register/i.test(bodyText)) {
+        throw new Error('Pre-signup login page did not show account creation copy');
+      }
+      log('OK', `Pre-signup browser smoke passed: ${consoleOrigin}/login`);
+    } finally {
+      await browser.close();
+    }
     return;
   }
 

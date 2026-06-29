@@ -394,7 +394,7 @@ def _purge_local_orchestra() -> None:
 
 
 def _bootstrap_self_host(urls: LocalStackUrls) -> None:
-    """Provision the self-host owner and coordinator on a fresh local Orchestra DB."""
+    """Seed self-host platform defaults on a fresh local Orchestra DB."""
 
     orchestra_repo = _resolve_sibling_repo("orchestra")
     bootstrap_script = orchestra_repo / "scripts" / "bootstrap_self_host.sh"
@@ -407,7 +407,7 @@ def _bootstrap_self_host(urls: LocalStackUrls) -> None:
     env["SELF_HOST"] = "1"
     env["PUBSUB_EMULATOR_HOST"] = urls.pubsub_emulator_host
     env.setdefault("GCP_PROJECT_ID", urls.gcp_project_id)
-    print(f"Bootstrapping self-host owner via {bootstrap_script}...")
+    print(f"Bootstrapping self-host platform defaults via {bootstrap_script}...")
     subprocess.run(
         ["bash", str(bootstrap_script)],
         cwd=orchestra_repo,
@@ -1479,8 +1479,9 @@ def managed_local_stack(local_stack_urls) -> ManagedLocalStack:
     """Ensure a fresh local self-host stack for ``local_stack`` tests.
 
     When ``LOCAL_STACK_NO_AUTO`` is unset, runs ``stack down``, ``orchestra
-    local.sh purge``, ``stack up``, and self-host bootstrap so credentials and
-    DB state always match. Runs ``stack down`` on session teardown unless
+    local.sh purge``, ``stack up``, and platform bootstrap. Credential-dependent
+    tests require an explicit ``UNIFY_KEY`` because the self-host owner is now
+    created only through the UI. Runs ``stack down`` on session teardown unless
     ``LOCAL_STACK_LEAVE_RUNNING=1``.
     """
 
@@ -1496,9 +1497,9 @@ def managed_local_stack(local_stack_urls) -> ManagedLocalStack:
         unify_key = os.getenv("UNIFY_KEY", bootstrap.get("api_key", "")).strip()
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", DEFAULT_LOCAL_ADMIN_KEY).strip()
         if not unify_key:
-            raise RuntimeError(
-                "Fresh local stack has no UNIFY_KEY in env or bootstrap output "
-                f"({SELF_HOST_BOOTSTRAP_PATH}, {SELF_HOST_CREDENTIALS_PATH})",
+            pytest.skip(
+                "UNIFY_KEY required for credentialed local stack integration tests; "
+                "register in Console or export a UI-created owner's key",
             )
         _apply_local_stack_credentials(unify_key=unify_key, admin_key=admin_key)
         _wait_for_local_stack(

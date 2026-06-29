@@ -239,9 +239,18 @@ bash selfhost/stack.sh up     # fresh redeploy from scratch, then smoke-test
 `selfhost/stack.sh up` is intentionally scratch-first because that is the normal
 developer loop. It stops any previous source stack, clears stale durable tmux
 state, purges the local Orchestra database, clears stale runtime identity files
-under `~/.unity`, starts the local services, creates a fresh self-host owner +
-Coordinator, seeds the `Builtins` catalogues, starts one Coordinator runtime,
-runs smoke checks, and verifies `http://localhost:3000/account`.
+under `~/.unity`, and starts the local services. On a fresh install this leaves
+the stack in a pre-signup state; create the local owner in Console, then Console
+starts the single Coordinator runtime for that user.
+
+There are two expected states:
+
+- **Pre-signup:** infra is running, but no user or Coordinator exists yet.
+- **Post-signup:** the single UI-created owner has one personal Coordinator, and
+  the local runtime state files point at that same owner/Coordinator pair.
+
+Setup never provisions a placeholder owner. If duplicate owners or Coordinators
+appear, reset back to the real owner (or pre-signup if no owner exists yet).
 
 Use `bash selfhost/stack.sh resume` only when you deliberately want to preserve
 the current local chat/onboarding/project history. `bash selfhost/stack.sh down
@@ -254,7 +263,7 @@ bash selfhost/stack.sh up
 ```
 
 That path repairs the common local sharp edges: stale `coordinator-runtime.json`,
-a stale `unity-stack` tmux session, a missing `Builtins` project, or a stopped
+a stale `unity-stack` tmux session, missing Builtins catalogue rows, or a stopped
 Unity gateway.
 
 Console's own `scripts/local.sh` is an internal dev/test harness (seeded dev
@@ -263,20 +272,21 @@ up` invokes it with `--self-host` for you.
 
 ### Phone & WhatsApp calls (source install)
 
-Browser/Console voice (Unify Meet) works out of the box via the local dev
-LiveKit server. Real **inbound/outbound phone and WhatsApp calls** are part of
-the default self-host source stack and need two additional pieces:
+Browser/Console voice (Unify Meet), Unity voice workers, room APIs, and real
+**inbound/outbound phone and WhatsApp calls** use one LiveKit Cloud project in
+the source stack. This keeps the localhost app code local while treating media
+transport like the other BYOK services.
 
 - A **public webhook**: a call is synchronous (Twilio POSTs the number's voice
   URL and needs TwiML back in seconds), so it cannot be polled like SMS/WhatsApp
   text. `stack.sh` runs a managed `cloudflared` tunnel to the local CM ingress
   and points the localhost number's `VoiceUrl` at it. Text stays poll-only.
-- **LiveKit Cloud SIP**: the local `livekit-server --dev` has no SIP service, so
-  the Twilio↔LiveKit media leg uses a LiveKit Cloud project. The local agent
-  worker connects outbound to the cloud room, so only the HTTP webhook is
-  tunneled — no SIP/RTP tunneling.
+- **LiveKit Cloud**: Console mints browser tokens for the cloud room, the local
+  Unity worker connects outbound to the same project, and Twilio uses LiveKit
+  Cloud SIP for the phone media leg. Only the HTTP webhook is tunneled — no
+  SIP/RTP tunneling from the laptop.
 
-Configure the LiveKit Cloud SIP side once, then start the stack:
+Configure the LiveKit Cloud side once, then start the stack:
 
 ```bash
 # 1. Create a LiveKit Cloud project (https://cloud.livekit.io), enable SIP.
@@ -296,7 +306,8 @@ ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
 step fails, startup stops rather than leaving a broken inbound-call path.
 `stack.sh down --full` reverts the voice webhook and stops the tunnel.
 
-For a deliberately text-only local stack, set `SELF_HOST_CALLS_ENABLED=0`.
+For a deliberately text-only local stack, set `SELF_HOST_CALLS_ENABLED=0`; browser
+Meet still uses the LiveKit Cloud media credentials.
 
 Caveats:
 
@@ -312,10 +323,10 @@ Caveats:
 
 ## Builtins Artifacts
 
-The compose bootstrap creates the shared `Builtins` project and seeds the core
-Unity artifacts used by self-hosted assistants. Provider-backed integration
-artifacts, such as Composio app/tool rows, are explicit because they require the
-provider credential for the selected backend.
+The bootstrap creates a system-owned `Builtins` project and seeds the core Unity
+artifacts used by self-hosted assistants before any user signs up. Provider-backed
+integration artifacts, such as Composio app/tool rows, are explicit because they
+require the provider credential for the selected backend.
 
 For development source installs, run the direct worker path from the local
 `orchestra` checkout after Postgres and Orchestra migrations are available:
@@ -342,12 +353,16 @@ completed batches instead of falling back to the inline API path.
 - ~12 GB RAM recommended (desktop + CM + ML deps)
 - Multi-GB disk for image pulls
 
-## LiveKit / voice (compose)
+## LiveKit / voice
 
-Voice uses LiveKit in `--dev` mode with ports `7880` (WS), `7881` (TCP fallback), and `7882/udp` mapped to the host. If browser calls fail on macOS Docker Desktop, confirm these ports are reachable and not blocked by a firewall. See `deploy/selfhost/LIVEKIT_COMPOSE.md` for validation steps.
+Compose and source installs both use LiveKit Cloud for browser Meet, Unity voice
+workers, room APIs, and SIP. Set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and
+`LIVEKIT_API_SECRET` in the compose `.env`; set `LIVEKIT_SIP_URI` when phone or
+WhatsApp calls are enabled. The bundle does not ship or start a local
+media server.
 
 ## Architecture
 
-See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, LiveKit, gateway, Console, CM supervisor, desktop, and Caddy proxy.
+See `deploy/selfhost/docker-compose.yml` for the full service graph: Postgres, Orchestra, Pub/Sub emulator, gateway, Console, CM supervisor, desktop, and Caddy proxy.
 
 Entrypoint scripts (`cm-entrypoint.sh`, `desktop-entrypoint.sh`, `publish-desktop-ready.sh`, `ensure-pubsub-topics.sh`) ship inside the `unity-selfhost` and `unity-desktop-selfhost` images. After changing them, rebuild and publish those images — editing copies under `~/.unity/` does not affect running containers.

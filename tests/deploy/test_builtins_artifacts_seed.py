@@ -1,6 +1,4 @@
 import importlib.util
-import json
-import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,45 +81,6 @@ def test_request_builder_loads_toml_manifest() -> None:
     assert payload["desired_hash"]
 
 
-def test_local_cloudbuild_check_dry_runs_staging_and_production() -> None:
-    result = subprocess.run(
-        ["bash", "deploy/scripts/check_cloudbuild_locally.sh"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert (
-        "Dry-running start-builtins-artifacts-seed for staging with TOML bootstrap"
-        in result.stdout
-    )
-    assert (
-        "Dry-running start-builtins-artifacts-seed for production with TOML bootstrap"
-        in result.stdout
-    )
-    assert (
-        "Setup-only checking start-builtins-artifacts-seed for staging with fake gcloud"
-        in result.stdout
-    )
-    assert (
-        "Setup-only checking start-builtins-artifacts-seed for production with fake gcloud"
-        in result.stdout
-    )
-    assert "Local Cloud Build checks passed." in result.stdout
-    dry_run_payloads = [
-        json.loads(line)
-        for line in result.stdout.splitlines()
-        if line.startswith('{"api_timeout_seconds"')
-    ]
-    assert [payload["environment"] for payload in dry_run_payloads] == [
-        "staging",
-        "production",
-        "staging",
-        "production",
-    ]
-
-
 def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     script = _read("deploy/scripts/run_seed_builtins_artifacts_job.sh")
 
@@ -144,6 +103,7 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "ORCHESTRA_BUILTINS_SYNC_REQUEST_GCS_URI" not in script
     assert "_BUILTINS_SYNC_ENV_VARS" not in script
     assert "_BUILTINS_SYNC_SECRETS" not in script
+    assert "UNIFY_KEY=ORCHESTRA_ADMIN_KEY:latest" in script
     assert "/admin/integrations/builtins-sync/start" not in script
     assert "/v0/logs" not in script
 

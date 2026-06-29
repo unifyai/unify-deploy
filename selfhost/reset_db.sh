@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reset the local self-host database to the post-signup owner + Coordinator state.
+# Reset the local self-host database to the manual owner state, or pre-signup when no owner exists.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -27,8 +27,9 @@ while [[ $# -gt 0 ]]; do
       cat <<EOF
 Usage: $(basename "$0") [--yes] [--keep-runtime]
 
-Deletes local self-host user/org/assistant/project history while preserving the
-self-host owner login, API key, platform defaults, and the personal Coordinator.
+Deletes local self-host org/assistant/project history. If a manually-created
+owner exists, preserves that owner, API key, and personal Coordinator. If no
+owner exists yet, returns to pre-signup platform defaults with no users.
 
 Options:
   --yes           Run without an interactive confirmation prompt.
@@ -120,6 +121,11 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.db.models.coordinator_voice import (
+    COORDINATOR_DEFAULT_VOICE_ID,
+    COORDINATOR_DEFAULT_VOICE_PROVIDER,
+    ensure_coordinator_voice_row,
+)
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_DESKTOP_MODE,
     COORDINATOR_DEFAULT_FIRST_NAME,
@@ -128,10 +134,8 @@ from orchestra.services.coordinator_service import (
     create_personal_coordinator,
 )
 from orchestra.services.self_host_bootstrap import (
-    SELF_HOST_OWNER_EMAIL,
     ensure_platform_billing_defaults,
     ensure_provider_integration_backends,
-    run_self_host_bootstrap,
 )
 from orchestra.settings import settings
 
@@ -216,7 +220,7 @@ def reset_owner_onboarding(session, owner_id: str) -> None:
     session.flush()
 
 
-def reset_coordinator_profile(coordinator: Assistant) -> None:
+def reset_coordinator_profile(session, coordinator: Assistant) -> None:
     coordinator.first_name = COORDINATOR_DEFAULT_FIRST_NAME
     coordinator.surname = None
     coordinator.job_title = COORDINATOR_DEFAULT_JOB_TITLE
@@ -232,29 +236,50 @@ def reset_coordinator_profile(coordinator: Assistant) -> None:
     coordinator.max_parallel = None
     coordinator.last_followup_sent_at = None
     coordinator.inactivity_followup_opted_out = False
-    coordinator.voice_id = None
-    coordinator.voice_provider = None
+    # Restore the default voice (and its preset row, since reset purges voices)
+    # so a fresh onboarding has a real voice; it stays fully selectable.
+    ensure_coordinator_voice_row(session, coordinator.user_id)
+    coordinator.voice_id = COORDINATOR_DEFAULT_VOICE_ID
+    coordinator.voice_provider = COORDINATOR_DEFAULT_VOICE_PROVIDER
     coordinator.is_local = False
 
 
-def resolve_reset_owner(session) -> User:
+def runtime_api_key() -> str:
+    state_dir = Path(
+        os.environ.get("SELF_HOST_STATE_DIR")
+        or os.environ.get("UNITY_HOME")
+        or Path.home() / ".unity",
+    )
+    runtime_file = Path(
+        os.environ.get("SELF_HOST_COORDINATOR_RUNTIME_FILE")
+        or state_dir / "coordinator-runtime.json",
+    )
+    if not runtime_file.exists():
+        return ""
+    try:
+        data = json.loads(runtime_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    return (data.get("apiKey") or data.get("api_key") or "").strip()
+
+
+def resolve_owner_by_api_key(session, api_key: str) -> User | None:
+    if not api_key:
+        return None
+    return session.scalar(
+        select(User)
+        .join(ApiKey, ApiKey.user_id == User.id)
+        .where(ApiKey.key == api_key),
+    )
+
+
+def resolve_reset_owner(session) -> User | None:
     if reset_api_key:
-        owner = session.scalar(
-            select(User)
-            .join(ApiKey, ApiKey.user_id == User.id)
-            .where(ApiKey.key == reset_api_key),
-        )
+        owner = resolve_owner_by_api_key(session, reset_api_key)
         if owner is None:
             raise RuntimeError("SELF_HOST_RESET_API_KEY does not match a local user")
         return owner
-
-    owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
-    if owner is None:
-        run_self_host_bootstrap(SessionLocal)
-        owner = session.scalar(select(User).where(User.email == SELF_HOST_OWNER_EMAIL))
-    if owner is None:
-        raise RuntimeError(f"Self-host owner {SELF_HOST_OWNER_EMAIL} was not bootstrapped")
-    return owner
+    return resolve_owner_by_api_key(session, runtime_api_key())
 
 
 with SessionLocal() as session:
@@ -265,28 +290,38 @@ with SessionLocal() as session:
 with SessionLocal() as session:
     owner = resolve_reset_owner(session)
 
-    coordinator = session.scalar(
-        select(Assistant).where(
-            Assistant.user_id == owner.id,
-            Assistant.organization_id.is_(None),
-            Assistant.is_coordinator.is_(True),
-        ),
-    )
-    if coordinator is None:
-        coordinator, _ = create_personal_coordinator(session, owner.id)
-        session.flush()
+    coordinator = None
+    keep_assistant_id = None
+    if owner is not None:
+        coordinator = session.scalar(
+            select(Assistant).where(
+                Assistant.user_id == owner.id,
+                Assistant.organization_id.is_(None),
+                Assistant.is_coordinator.is_(True),
+            ),
+        )
+        if coordinator is None:
+            coordinator, _ = create_personal_coordinator(session, owner.id)
+            session.flush()
+        keep_assistant_id = int(coordinator.agent_id)
 
-    keep_assistant_id = int(coordinator.agent_id)
     assistant_ids = [
         int(value)
         for value in session.scalars(select(Assistant.agent_id)).all()
-        if int(value) != keep_assistant_id
+        if keep_assistant_id is None or int(value) != keep_assistant_id
     ]
     organization_ids = [int(value) for value in session.scalars(select(Organization.id)).all()]
-    non_owner_user_ids = [
+    user_ids_to_delete = [
         str(value)
-        for value in session.scalars(select(User.id).where(User.id != owner.id)).all()
+        for value in session.scalars(
+            select(User.id) if owner is None else select(User.id).where(User.id != owner.id),
+        ).all()
     ]
+    all_user_ids = (
+        user_ids_to_delete
+        if owner is None
+        else [str(owner.id), *user_ids_to_delete]
+    )
 
     team_ids = [
         int(row[0])
@@ -302,7 +337,7 @@ with SessionLocal() as session:
         "assistant_ids": assistant_ids,
         "organization_ids": organization_ids,
         "team_ids": team_ids,
-        "all_user_ids": [owner.id, *non_owner_user_ids],
+        "all_user_ids": all_user_ids,
     }
 
     protected_tables = {
@@ -348,24 +383,53 @@ with SessionLocal() as session:
         ),
     ).rowcount or 0
     deleted_assistants = session.execute(
-        text("DELETE FROM assistants WHERE agent_id <> :keep_assistant_id"),
-        {"keep_assistant_id": keep_assistant_id},
+        text(
+            "DELETE FROM assistants"
+            if keep_assistant_id is None
+            else "DELETE FROM assistants WHERE agent_id <> :keep_assistant_id",
+        ),
+        {} if keep_assistant_id is None else {"keep_assistant_id": keep_assistant_id},
     ).rowcount or 0
-    reset_coordinator_profile(coordinator)
     session.flush()
+    deleted_api_keys = 0
+    if user_ids_to_delete:
+        deleted_api_keys = session.execute(
+            text('DELETE FROM api_key WHERE user_id IN :user_ids').bindparams(
+                bindparam("user_ids", expanding=True),
+            ),
+            {"user_ids": user_ids_to_delete},
+        ).rowcount or 0
+        if "email_account" in existing_tables:
+            session.execute(
+                text('DELETE FROM email_account WHERE user_id IN :user_ids').bindparams(
+                    bindparam("user_ids", expanding=True),
+                ),
+                {"user_ids": user_ids_to_delete},
+            )
+        if "onboarding_status" in existing_tables:
+            session.execute(
+                text('DELETE FROM onboarding_status WHERE user_id IN :user_ids').bindparams(
+                    bindparam("user_ids", expanding=True),
+                ),
+                {"user_ids": user_ids_to_delete},
+            )
     deleted_voices = 0
     if "voices" in existing_tables:
         deleted_voices = session.execute(
             text('DELETE FROM voices WHERE user_id IN :voice_user_ids').bindparams(
                 bindparam("voice_user_ids", expanding=True),
             ),
-            {"voice_user_ids": values["all_user_ids"] or ["__none__"]},
+            {"voice_user_ids": all_user_ids or ["__none__"]},
         ).rowcount or 0
     deleted_organizations = session.execute(text("DELETE FROM organization")).rowcount or 0
-    deleted_users = session.execute(
-        text('DELETE FROM "user" WHERE id <> :owner_id'),
-        {"owner_id": owner.id},
-    ).rowcount or 0
+    deleted_users = 0
+    if user_ids_to_delete:
+        deleted_users = session.execute(
+            text('DELETE FROM "user" WHERE id IN :user_ids').bindparams(
+                bindparam("user_ids", expanding=True),
+            ),
+            {"user_ids": user_ids_to_delete},
+        ).rowcount or 0
 
     session.execute(
         text(
@@ -385,40 +449,48 @@ with SessionLocal() as session:
         ),
     )
 
-    reset_owner_onboarding(session, owner.id)
-    coordinator, _ = create_personal_coordinator(session, owner.id)
-    reset_coordinator_profile(coordinator)
-    default_tasks = DefaultTasksSeeder.seed(session, user_id=str(owner.id))
+    default_tasks = None
+    if owner is not None:
+        reset_owner_onboarding(session, owner.id)
+        coordinator, _ = create_personal_coordinator(session, owner.id)
+        reset_coordinator_profile(session, coordinator)
+        default_tasks = DefaultTasksSeeder.seed(session, user_id=str(owner.id))
     session.commit()
 
 with SessionLocal() as session:
     owner = resolve_reset_owner(session)
-    coordinator = session.scalar(
-        select(Assistant).where(
-            Assistant.user_id == owner.id,
-            Assistant.organization_id.is_(None),
-            Assistant.is_coordinator.is_(True),
-        ),
-    )
-    api_key = (
-        session.scalar(
-            select(ApiKey.key).where(
-                ApiKey.user_id == owner.id,
-                ApiKey.organization_id.is_(None),
+    coordinator = None
+    api_key = None
+    billing_account = None
+    if owner is not None:
+        coordinator = session.scalar(
+            select(Assistant).where(
+                Assistant.user_id == owner.id,
+                Assistant.organization_id.is_(None),
+                Assistant.is_coordinator.is_(True),
             ),
         )
-        or reset_api_key
-    )
-    billing_account = session.get(BillingAccount, owner.billing_account_id)
+        api_key = (
+            session.scalar(
+                select(ApiKey.key).where(
+                    ApiKey.user_id == owner.id,
+                    ApiKey.organization_id.is_(None),
+                ),
+            )
+            or reset_api_key
+        )
+        billing_account = session.get(BillingAccount, owner.billing_account_id)
     payload = {
         "ok": True,
-        "user_id": owner.id,
-        "email": owner.email,
+        "pre_signup": owner is None,
+        "user_id": owner.id if owner is not None else None,
+        "email": owner.email if owner is not None else None,
         "api_key": api_key,
-        "coordinator_agent_id": coordinator.agent_id,
+        "coordinator_agent_id": coordinator.agent_id if coordinator is not None else None,
         "deleted_assistants": int(deleted_assistants),
         "deleted_organizations": int(deleted_organizations),
         "deleted_users": int(deleted_users),
+        "deleted_api_keys": int(deleted_api_keys),
         "deleted_voices": int(deleted_voices),
         "deleted_projects": int(deleted_projects),
         "deleted_scoped_rows": int(deleted_rows),
@@ -426,20 +498,24 @@ with SessionLocal() as session:
         "credits": normalize_json(billing_account.credits if billing_account else None),
     }
     state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("UNITY_HOME") or Path.home() / ".unity")
-    write_json_file(
-        state_dir / "coordinator-runtime.json",
-        {
-            "apiKey": api_key,
-            "coordinatorAgentId": str(coordinator.agent_id),
-        },
-    )
-    write_json_file(
-        state_dir / "self-host-owner.json",
-        {
-            "userId": str(owner.id),
-            "email": owner.email,
-            "name": owner_display_name(owner),
-        },
-    )
+    if owner is not None and coordinator is not None and api_key:
+        write_json_file(
+            state_dir / "coordinator-runtime.json",
+            {
+                "apiKey": api_key,
+                "coordinatorAgentId": str(coordinator.agent_id),
+            },
+        )
+        write_json_file(
+            state_dir / "self-host-owner.json",
+            {
+                "userId": str(owner.id),
+                "email": owner.email,
+                "name": owner_display_name(owner),
+            },
+        )
+    else:
+        for filename in ("coordinator-runtime.json", "self-host-owner.json", "runtime-state.json"):
+            (state_dir / filename).unlink(missing_ok=True)
     print(json.dumps(payload, sort_keys=True))
 PY

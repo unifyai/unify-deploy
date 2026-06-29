@@ -454,17 +454,29 @@ prompt_to_file() {
   log_success "Wrote $var to $file"
 }
 
-prompt_call_support() {
-  # Phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The creds go to the
-  # self-host state dir (never unity/.env). No-op only when calls are explicitly
-  # disabled.
-  _calls_enabled || return 0
+import_shell_livekit_keys() {
+  local file key val
+  file="$(livekit_cloud_file)"
+  for key in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET LIVEKIT_SIP_URI; do
+    val="${!key:-}"
+    [[ -z "$val" ]] && continue
+    if ! file_has_key "$file" "$key"; then
+      upsert_file_kv "$file" "$key" "$val"
+      log_success "Imported $key from environment into $file"
+    fi
+  done
+}
+
+prompt_livekit_cloud_media() {
+  # The source stack uses LiveKit Cloud for browser Meet and phone media. Keep
+  # these creds in the self-host state dir so repo .env files cannot split the
+  # browser token issuer from the Unity voice worker.
   local file
   file="$(livekit_cloud_file)"
   echo ""
-  echo -e "${BOLD}Phone & WhatsApp calls — LiveKit Cloud SIP${NC}"
-  echo "  Inbound calls bridge Twilio -> LiveKit Cloud SIP (the local dev LiveKit"
-  echo "  used for browser meet has no SIP). Create a LiveKit Cloud project at"
+  echo -e "${BOLD}LiveKit Cloud (required for browser calls)${NC}"
+  echo "  Browser Meet and phone media use the same LiveKit Cloud project."
+  echo "  Create a LiveKit Cloud project at"
   echo "  https://cloud.livekit.io, enable SIP, and paste its credentials."
   echo "  Stored in $file (chmod 600, never committed)."
   prompt_to_file "LiveKit Cloud URL" "LIVEKIT_URL" \
@@ -473,8 +485,21 @@ prompt_call_support() {
     "From LiveKit Cloud project settings" "$file"
   prompt_to_file "LiveKit API Secret" "LIVEKIT_API_SECRET" \
     "From LiveKit Cloud project settings" "$file"
+  echo ""
+}
+
+prompt_call_support() {
+  # Phone/WhatsApp calls bridge Twilio -> LiveKit Cloud SIP. The SIP domain
+  # lives beside the media creds. No-op only when calls are explicitly disabled.
+  _calls_enabled || return 0
+  local file
+  file="$(livekit_cloud_file)"
+  echo ""
+  echo -e "${BOLD}Phone & WhatsApp calls — LiveKit Cloud SIP${NC}"
+  echo "  Twilio dials into LiveKit Cloud SIP for the media leg."
+  echo "  Stored in $file (chmod 600, never committed)."
   prompt_to_file "LiveKit SIP URI" "LIVEKIT_SIP_URI" \
-    "SIP domain, e.g. <project>.sip.livekit.cloud" "$file"
+    "Exact SIP host from the LiveKit Cloud dashboard — usually a DIFFERENT subdomain than the WSS URL (e.g. abcd1234.sip.livekit.cloud), do not derive it from LIVEKIT_URL" "$file"
   echo ""
 }
 
@@ -498,6 +523,7 @@ mark_byok_configured() {
 
 run_non_interactive_byok() {
   import_shell_env_keys
+  import_shell_livekit_keys
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
@@ -506,6 +532,8 @@ run_non_interactive_byok() {
     "DEEPGRAM_API_KEY" \
     "Lets Twin hear you on browser calls. Free tier: https://console.deepgram.com"
   prompt_tts_provider
+  prompt_livekit_cloud_media
+  prompt_call_support
   sync_anticaptcha_keys
   mark_byok_configured
   log_success "BYOK keys synced (non-interactive)"
@@ -543,12 +571,13 @@ main() {
   echo -e "${BOLD}BYOK setup${NC} — provider keys for chat, voice, and tools"
   echo ""
   echo "  Required:  LLM key (OpenAI, Anthropic, or DeepSeek)"
-  echo "  Voice:     Deepgram + Cartesia/ElevenLabs (browser calls)"
+  echo "  Voice:     LiveKit Cloud + Deepgram + Cartesia/ElevenLabs"
   echo "  Optional:  Tavily (web search), AntiCaptcha (computer use)"
   echo "  Optional:  Composio (third-party app integrations)"
   echo ""
 
   import_shell_env_keys
+  import_shell_livekit_keys
   prompt_llm_key
   ensure_embedding_search_key
   ensure_default_chat_model
@@ -557,6 +586,7 @@ main() {
     "DEEPGRAM_API_KEY" \
     "Lets Twin hear you on browser calls. Free tier: https://console.deepgram.com"
   prompt_tts_provider
+  prompt_livekit_cloud_media
 
   echo ""
   if has_env_value DEEPGRAM_API_KEY && { has_env_value CARTESIA_API_KEY || has_env_value ELEVEN_API_KEY; }; then
