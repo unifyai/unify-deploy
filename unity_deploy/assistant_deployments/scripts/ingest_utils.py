@@ -73,10 +73,10 @@ def default_pipeline_config_path(client: str, deployment: str = "v1") -> str:
 # ---------------------------------------------------------------------------
 
 _SDK_NOISE_PREFIXES = (
-    "unify_requests",
-    "unify",
+    "unisdk_requests",
+    "unisdk",
     "unillm",
-    "UnifyAsyncLogger",
+    "UnisdkAsyncLogger",
     "httpx",
     "httpcore",
     "urllib3",
@@ -173,7 +173,7 @@ def activate_project(
     """
     if overwrite:
         try:
-            from unify import delete_project
+            from unisdk import delete_project
 
             delete_project(project_name)
             logger.info("Deleted existing project '%s'", project_name)

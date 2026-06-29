@@ -13,7 +13,7 @@ import re
 os.environ.pop("SKIP_UNITY_TEST_INIT", None)
 
 import pytest
-import unify
+import unisdk
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def _integration_sync_context(unify_project, request):
     nodeid = re.sub(r"[^A-Za-z0-9_/-]+", "_", nodeid)
     nodeid = re.sub(r"/+", "/", nodeid).strip("/")
     ctx = f"{unify_project}/{nodeid}/unassigned/unassigned"
-    unify.set_context(ctx, relative=False, skip_create=True)
+    unisdk.set_context(ctx, relative=False, skip_create=True)
     ManagerRegistry.clear()
     ContextRegistry.clear()
     try:
@@ -35,6 +35,6 @@ def _integration_sync_context(unify_project, request):
         ManagerRegistry.clear()
         ContextRegistry.clear()
         try:
-            unify.unset_context()
+            unisdk.unset_context()
         except Exception:
             pass

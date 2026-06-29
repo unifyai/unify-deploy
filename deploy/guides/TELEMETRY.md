@@ -249,7 +249,7 @@ Label values (7 steps):
 | **Type** | Gauge |
 | **Labels** | — |
 | **Description** | Cluster-wide count of assistant jobs with `running==True` at the moment the metric is sampled. |
-| **Recorded by** | `assistant_jobs.py` → `_record_running_job_count()` (queries `unify.get_logs()` with `filter="running == 'true'"`) |
+| **Recorded by** | `assistant_jobs.py` → `_record_running_job_count()` (queries `unisdk.get_logs()` with `filter="running == 'true'"`) |
 | **Triggered at** | Immediately after `log_job_startup()` updates the record, and immediately after `mark_job_done()` clears the record |
 
 ### Metrics Lifecycle

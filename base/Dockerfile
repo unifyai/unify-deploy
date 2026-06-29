@@ -141,10 +141,10 @@ ENV TOKENIZERS_PARALLELISM=false
 
 # Logging: Unity emoji logs to terminal, unify/unillm quiet (file traces only)
 ENV UNITY_TERMINAL_LOG=true
-ENV UNIFY_TERMINAL_LOG=false
+ENV UNISDK_TERMINAL_LOG=false
 ENV UNILLM_TERMINAL_LOG=false
 ENV UNITY_LOG_DIR=/var/log/unity
-ENV UNIFY_LOG_DIR=/var/log/unify
+ENV UNISDK_LOG_DIR=/var/log/unify
 ENV UNILLM_LOG_DIR=/var/log/unillm
 ENV MAGNITUDE_LOG_DIR=/var/log/magnitude
 ENV MAGNITUDE_DEBUG=true

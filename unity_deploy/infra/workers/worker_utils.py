@@ -627,10 +627,10 @@ def activate_unify_context(
 
     Steps (matching ``unity.init`` order):
 
-    1. ``unify.activate(project_name)``  (once per process)
+    1. ``unisdk.activate(project_name)``  (once per process)
     2. Reset the SDK context via ``unset_context()`` to prevent the
        relative-join accumulation bug across sequential messages.
-    3. ``unify.set_context("{user_id}/{assistant_id}")``  — idempotent,
+    3. ``unisdk.set_context("{user_id}/{assistant_id}")``  — idempotent,
        tolerates concurrent creation.
     4. ``ContextRegistry.clear()`` + ``setup_for_managers(managers)`` —
        purge stale cached paths and provision only the contexts the
@@ -652,7 +652,7 @@ def activate_unify_context(
         the ``ContextRegistry`` is cleared but no contexts are created;
         downstream managers will still resolve lazily on first access.
     """
-    import unify as _unify
+    import unisdk as _unify
 
     from unity.common.context_registry import ContextRegistry
 

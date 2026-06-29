@@ -66,7 +66,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import unify
+import unisdk
 
 from unity.syntax_highlight import highlight_code_blocks
 
@@ -186,10 +186,10 @@ def query_assistant_jobs(job_name: str) -> dict | None:
     """Query the AssistantJobs project for this job.
 
     Returns the log entries dict if found, None otherwise.
-    Uses the same unify.get_logs() pattern as debug_logger.py.
+    Uses the same unisdk.get_logs() pattern as debug_logger.py.
     """
     try:
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             project="AssistantJobs",
             context="startup_events",
             filter=f"job_name == '{job_name}'",

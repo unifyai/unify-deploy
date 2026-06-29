@@ -2,11 +2,11 @@ import os
 from pathlib import Path
 
 # Maps the Python package name (left of the uv source entry) to the GitHub repo
-# / sibling-folder name (which match each other). The package names are kept as
-# `unity`/`unify` while the repos were renamed to `unify`/`unisdk`.
+# / sibling-folder name (which match each other). The brain package name is
+# `unity` while its repo is `unify`; the SDK package and repo are both `unisdk`.
 FIRST_PARTY_REPOS = {
     "unity": "unify",
-    "unify": "unisdk",
+    "unisdk": "unisdk",
     "unillm": "unillm",
 }
 

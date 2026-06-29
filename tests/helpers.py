@@ -1,4 +1,4 @@
-import unify
+import unisdk
 import functools
 import inspect
 import sys
@@ -186,7 +186,7 @@ def _log_test_combined(
 ) -> None:
     """Log test duration, LLM I/O, and settings to the Combined context."""
     try:
-        unify.log(
+        unisdk.log(
             context="Combined",
             test_fpath=test_fpath,
             tags=get_session_tags(),
@@ -316,7 +316,7 @@ def _upload_trace_to_context(
             return  # No spans after filtering
 
         # Detach from trace context to avoid recursive span creation.
-        # Without this, each unify.log() call generates ~26 Orchestra spans,
+        # Without this, each unisdk.log() call generates ~26 Orchestra spans,
         # turning a 600-span upload into 15,000+ additional spans.
         try:
             from opentelemetry import context
@@ -329,13 +329,13 @@ def _upload_trace_to_context(
             # Create the Trace context with explicit field types
             trace_ctx = f"{test_ctx}/Trace"
             try:
-                unify.create_context(trace_ctx)
+                unisdk.create_context(trace_ctx)
             except Exception:
                 pass  # Context may already exist
 
             # Create fields with explicit types (idempotent)
             try:
-                unify.create_fields(context=trace_ctx, fields=_TRACE_FIELDS)
+                unisdk.create_fields(context=trace_ctx, fields=_TRACE_FIELDS)
             except Exception:
                 pass  # Fields may already exist
 
@@ -356,7 +356,7 @@ def _upload_trace_to_context(
                 for span in spans
             ]
             try:
-                unify.create_logs(context=trace_ctx, entries=entries)
+                unisdk.create_logs(context=trace_ctx, entries=entries)
             except Exception:
                 pass  # Best-effort logging
         finally:
@@ -426,7 +426,7 @@ class _TestContext:
         NOTE:
         Unify context management is handled centrally in tests/conftest.py
         (pytest_runtest_setup/teardown) so it wraps fixture setup + teardown.
-        Doing unify.set_context()/unset_context() here (inside the test call
+        Doing unisdk.set_context()/unset_context() here (inside the test call
         phase) can cause flaky cross-test interference when fixtures create
         or clear managers that delete contexts.
         """
@@ -746,7 +746,7 @@ def is_scenario_seeded(
 
     # Check for transcripts - scenario is only fully seeded if both exist
     try:
-        logs = unify.get_logs(context=transcript_context, limit=1)
+        logs = unisdk.get_logs(context=transcript_context, limit=1)
         return bool(logs)
     except Exception:
         # If we can't check transcripts, fall back to contacts-only check

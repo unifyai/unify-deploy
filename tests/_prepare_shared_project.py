@@ -37,29 +37,29 @@ PROJECT = "UnityDeployTests"
 def prepare_shared_project() -> None:
     """Prepare the shared UnityDeployTests project and Combined context."""
     try:
-        import unify
+        import unisdk
     except ImportError:
         print(
-            "Error: 'unify' package not found. Ensure the virtualenv is active.",
+            "Error: 'unisdk' package not found. Ensure the virtualenv is active.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     # 1. Activate/create project (idempotent - does not overwrite if exists)
     try:
-        unify.activate(PROJECT, overwrite=False)
+        unisdk.activate(PROJECT, overwrite=False)
     except Exception as e:
         # Tolerate activation failures (e.g., project already active in another process)
         print(f"Note: Project activation returned: {e}", file=sys.stderr)
 
-    unify.set_user_logging(False)
+    unisdk.set_user_logging(False)
 
     # 2. Ensure Combined context with fields (idempotent)
-    unify.create_context("Combined")
+    unisdk.create_context("Combined")
 
     # Ensure fields exist (idempotent - create_fields tolerates existing fields)
     try:
-        unify.create_fields(
+        unisdk.create_fields(
             context="Combined",
             fields={
                 "test_fpath": {"type": "str", "mutable": True},

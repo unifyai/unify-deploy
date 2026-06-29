@@ -276,15 +276,15 @@ is_random_projects_mode() {
 # ---------------------------------------------------------------------------
 delete_shared_project() {
   local phase="$1"  # "start" or "exit"
-  echo "Deleting project '${UNIFY_PROJECT:-UnityDeployTests}'..."
+  echo "Deleting project '${UNISDK_PROJECT:-UnityDeployTests}'..."
   "$VENV_PY" - << 'PYEOF'
 import os
 import sys
 try:
-    import unify
-    project_name = os.environ.get("UNIFY_PROJECT", "UnityDeployTests")
+    import unisdk
+    project_name = os.environ.get("UNISDK_PROJECT", "UnityDeployTests")
     try:
-        unify.delete_project(project_name, missing_ok=False)
+        unisdk.delete_project(project_name, missing_ok=False)
         print(f"Deleted project '{project_name}'")
     except Exception:
         print(f"Project '{project_name}' did not exist, skipping deletion")
@@ -334,8 +334,8 @@ build_env_exports() {
   if ! is_var_in_env_overrides "UNITY_OTEL"; then
     exports="$exports UNITY_OTEL=true"
   fi
-  if ! is_var_in_env_overrides "UNIFY_OTEL"; then
-    exports="$exports UNIFY_OTEL=true"
+  if ! is_var_in_env_overrides "UNISDK_OTEL"; then
+    exports="$exports UNISDK_OTEL=true"
   fi
   if ! is_var_in_env_overrides "UNILLM_OTEL"; then
     exports="$exports UNILLM_OTEL=true"
@@ -346,8 +346,8 @@ build_env_exports() {
   if ! is_var_in_env_overrides "UNITY_OTEL_LOG_DIR"; then
     exports="$exports UNITY_OTEL_LOG_DIR=$otel_log_dir"
   fi
-  if ! is_var_in_env_overrides "UNIFY_OTEL_LOG_DIR"; then
-    exports="$exports UNIFY_OTEL_LOG_DIR=$otel_log_dir"
+  if ! is_var_in_env_overrides "UNISDK_OTEL_LOG_DIR"; then
+    exports="$exports UNISDK_OTEL_LOG_DIR=$otel_log_dir"
   fi
   if ! is_var_in_env_overrides "UNILLM_OTEL_LOG_DIR"; then
     exports="$exports UNILLM_OTEL_LOG_DIR=$otel_log_dir"
@@ -470,7 +470,7 @@ else
   if is_env_truthy "UNIFY_TESTS_DELETE_PROJ_ON_START"; then
     delete_shared_project "start"
   fi
-  echo "Preparing shared project '${UNIFY_PROJECT:-UnityDeployTests}'..."
+  echo "Preparing shared project '${UNISDK_PROJECT:-UnityDeployTests}'..."
   if [[ -f "$SCRIPT_DIR/_prepare_shared_project.py" ]]; then
     "$VENV_PY" "$SCRIPT_DIR/_prepare_shared_project.py"
   else

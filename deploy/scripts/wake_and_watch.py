@@ -56,7 +56,7 @@ load_dotenv()
 os.environ["ORCHESTRA_URL"] = ORCHESTRA_URLS[ENV]
 
 import requests
-import unify
+import unisdk
 
 SHARED_UNIFY_KEY = os.environ["SHARED_UNIFY_KEY"]
 
@@ -97,12 +97,12 @@ def resolve_assistant_id() -> str:
         sys.exit(1)
 
     info("Resolving assistant from UNIFY_KEY...")
-    user_info = unify.get_user_basic_info(api_key=unify_key)
+    user_info = unisdk.get_user_basic_info(api_key=unify_key)
     info(
         f"Authenticated as {user_info['first']} {user_info['last']} ({user_info['email']})",
     )
 
-    assistants = unify.list_assistants(api_key=unify_key)
+    assistants = unisdk.list_assistants(api_key=unify_key)
     if not assistants:
         error("No assistants found for this account.")
         sys.exit(1)
@@ -122,7 +122,7 @@ def resolve_assistant_id() -> str:
 
 def resolve_user_email() -> str:
     unify_key = os.environ.get("UNIFY_KEY")
-    user_info = unify.get_user_basic_info(api_key=unify_key)
+    user_info = unisdk.get_user_basic_info(api_key=unify_key)
     return user_info["email"]
 
 
@@ -183,7 +183,7 @@ def get_existing_job_names(user_email: str) -> set[str]:
     namespace_suffix = f"-{ENV}"
     names = set()
     try:
-        logs = unify.get_logs(
+        logs = unisdk.get_logs(
             project="AssistantJobs",
             context="startup_events",
             filter=f"user_email == '{user_email}'",
@@ -218,7 +218,7 @@ def wait_for_new_job(
         info(f"Waiting for container to start... ({elapsed}s)")
 
         try:
-            logs = unify.get_logs(
+            logs = unisdk.get_logs(
                 project="AssistantJobs",
                 context="startup_events",
                 filter=f"user_email == '{user_email}'",
