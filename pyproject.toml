@@ -89,18 +89,18 @@ dev = [
 ]
 
 [tool.uv.sources]
-unity = { path = "../unity", editable = true }
-unify = { path = "../unify", editable = true }
+unity = { path = "../unify", editable = true }
+unify = { path = "../unisdk", editable = true }
 unillm = { path = "../unillm", editable = true }
 
 [tool.pyright]
-extraPaths = ["../unity", "../unify", "../unillm", "."]
+extraPaths = ["../unify", "../unisdk", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.basedpyright]
-extraPaths = ["../unity", "../unify", "../unillm", "."]
+extraPaths = ["../unify", "../unisdk", "../unillm", "."]
 venvPath = "."
 venv = ".venv"
 reportMissingImports = "warning"
