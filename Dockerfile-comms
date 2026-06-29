@@ -14,7 +14,7 @@ WORKDIR /app
 # Configure git to use GITHUB_TOKEN for private repo authentication
 RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-# Clone and install unillm + unifyai (private dependencies).
+# Clone and install unillm + unisdk (private dependencies).
 RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unify && \
     pip install --no-cache-dir /tmp/unify
