@@ -39,7 +39,7 @@ RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "htt
 # Install PyTorch CPU-only first (smaller and faster for containers)
 RUN uv pip install --system --no-cache torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# Clone unify and unillm repos (no PyPI releases; pyproject.toml references ../unify and ../unillm)
+# Clone unify and unillm repos (no PyPI releases; pyproject.toml references ../unisdk and ../unillm)
 # Branch logic mirrors CI: main→main, non-main branches→staging.
 # DEP_REPOS_SHA is set at build time to the latest commit SHAs of unify+unillm;
 # changing it busts the Docker layer cache so stale clones are never reused.
@@ -47,7 +47,7 @@ RUN uv pip install --system --no-cache torch torchvision torchaudio --index-url 
 ARG DEP_REPOS_SHA=unknown
 RUN echo "dep_repos_sha=${DEP_REPOS_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
-    git clone --depth 1 --branch $DEP_BRANCH https://github.com/unifyai/unify.git /unify && \
+    git clone --depth 1 --branch $DEP_BRANCH https://github.com/unifyai/unisdk.git /unisdk && \
     git clone --depth 1 --branch $DEP_BRANCH https://github.com/unifyai/unillm.git /unillm
 
 # Clone and build magnitude before COPY so this expensive layer is cached when
