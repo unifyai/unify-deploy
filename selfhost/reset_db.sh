@@ -390,8 +390,6 @@ with SessionLocal() as session:
         ),
         {} if keep_assistant_id is None else {"keep_assistant_id": keep_assistant_id},
     ).rowcount or 0
-    if coordinator is not None:
-        reset_coordinator_profile(coordinator)
     session.flush()
     deleted_api_keys = 0
     if user_ids_to_delete:
