@@ -11,7 +11,7 @@ COPY deploy/scripts/job-watcher/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN DEP_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
-    git clone --depth 1 --branch $DEP_BRANCH https://${GITHUB_TOKEN}@github.com/unifyai/unify.git /tmp/unify && \
+    git clone --depth 1 --branch $DEP_BRANCH https://${GITHUB_TOKEN}@github.com/unifyai/unisdk.git /tmp/unify && \
     pip install --no-cache-dir /tmp/unify && \
     rm -rf /tmp/unify
 
