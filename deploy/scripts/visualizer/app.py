@@ -255,7 +255,7 @@ def get_session_summary(job_name: str):
     sd = _session_dir(job_name)
 
     llm_dir = sd / "pod_logs" / "unillm"
-    api_dir = sd / "pod_logs" / "unify"
+    api_dir = sd / "pod_logs" / "unisdk"
     llm_count = len(list(llm_dir.glob("*.txt"))) if llm_dir.is_dir() else 0
     api_count = len(list(api_dir.glob("*.json"))) if api_dir.is_dir() else 0
 
@@ -303,14 +303,14 @@ def get_llm_call_detail(job_name: str, filename: str):
 @app.get("/api/sessions/{job_name}/api-calls")
 def get_api_calls(job_name: str):
     sd = _session_dir(job_name)
-    calls = _cached_api_calls(str(sd / "pod_logs" / "unify"))
+    calls = _cached_api_calls(str(sd / "pod_logs" / "unisdk"))
     return {"calls": calls, "total": len(calls)}
 
 
 @app.get("/api/sessions/{job_name}/api-calls/{filename:path}")
 def get_api_call_detail(job_name: str, filename: str):
     sd = _session_dir(job_name)
-    fp = sd / "pod_logs" / "unify" / filename
+    fp = sd / "pod_logs" / "unisdk" / filename
     if not fp.exists():
         raise HTTPException(404, f"API call not found: {filename}")
     return parse_api_call(fp)

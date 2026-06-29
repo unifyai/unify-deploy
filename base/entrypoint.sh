@@ -123,7 +123,7 @@ on_signal() {
 trap on_signal SIGTERM SIGINT
 
 # Create log directories for file-based traces in background
-mkdir -p /var/log/unity /var/log/unify /var/log/unillm &
+mkdir -p /var/log/unity /var/log/unisdk /var/log/unillm &
 
 # Announce where logs will be preserved after shutdown
 if [ ! -z "$UNITY_CONVERSATION_JOB_NAME" ]; then
