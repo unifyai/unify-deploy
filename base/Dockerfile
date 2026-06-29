@@ -144,7 +144,7 @@ ENV UNITY_TERMINAL_LOG=true
 ENV UNISDK_TERMINAL_LOG=false
 ENV UNILLM_TERMINAL_LOG=false
 ENV UNITY_LOG_DIR=/var/log/unity
-ENV UNISDK_LOG_DIR=/var/log/unify
+ENV UNISDK_LOG_DIR=/var/log/unisdk
 ENV UNILLM_LOG_DIR=/var/log/unillm
 ENV MAGNITUDE_LOG_DIR=/var/log/magnitude
 ENV MAGNITUDE_DEBUG=true
@@ -156,10 +156,10 @@ RUN mkdir -p /root/.vnc && chmod 777 /root /root/.vnc && \
 
 # Create non-root user for runtime
 RUN useradd -m -u 1000 unity && \
-    mkdir -p /var/log/unity /var/log/unify /var/log/unillm /var/log/magnitude /home/unity/.cache /home/unity/.config && \
+    mkdir -p /var/log/unity /var/log/unisdk /var/log/unillm /var/log/magnitude /home/unity/.cache /home/unity/.config && \
     mkdir -p /run/dbus && chmod 777 /run/dbus && \
     mkdir -p /tmp/runtime-unity && chown unity:unity /tmp/runtime-unity && chmod 700 /tmp/runtime-unity && \
-    chown -R unity:unity /app /var/log/unity /var/log/unify /var/log/unillm /var/log/magnitude && \
+    chown -R unity:unity /app /var/log/unity /var/log/unisdk /var/log/unillm /var/log/magnitude && \
     cp -r /root/.cache/ms-playwright /home/unity/.cache/ms-playwright && \
     cp -r /root/.config/xfce4 /home/unity/.config/xfce4 2>/dev/null || true && \
     chown -R unity:unity /home/unity/.cache /home/unity/.config

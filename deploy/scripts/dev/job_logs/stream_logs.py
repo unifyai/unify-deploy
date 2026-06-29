@@ -305,7 +305,7 @@ def _fetch_file(
 
 _CONTAINER_LOG_DIRS = (
     "/var/log/unillm",
-    "/var/log/unify",
+    "/var/log/unisdk",
     "/var/log/unity",
     "/var/log/magnitude",
 )
