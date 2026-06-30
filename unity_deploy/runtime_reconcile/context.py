@@ -7,7 +7,7 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unity.session_details import SessionDetails
+    from unify.session_details import SessionDetails
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ def activate_runtime_context(identity: RuntimeIdentity) -> None:
 
     os.environ["UNIFY_KEY"] = identity.api_key
 
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
     from unity_deploy.infra.workers.worker_utils import activate_unify_context
 
     current_assistant_id = str(SESSION_DETAILS.assistant.agent_id or "")

@@ -7,8 +7,8 @@ The schema **composes** the existing FM and DM type hierarchies without
 modifying them:
 
 * FM types (``ParseConfig``, ``IngestConfig``, ``EmbeddingsConfig``, etc.)
-  from :mod:`unity.file_manager.types.config`.
-* DM types (``PostIngestConfig``) from :mod:`unity.data_manager.types.ingest`.
+  from :mod:`unify.file_manager.types.config`.
+* DM types (``PostIngestConfig``) from :mod:`unify.data_manager.types.ingest`.
 
 It adds two new models to represent the source-file / table structure that
 was previously scattered across ``source_files`` and ``dm_contexts``:
@@ -34,8 +34,8 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from unity.data_manager.types.ingest import PostIngestConfig
-from unity.file_manager.types.config import (
+from unify.data_manager.types.ingest import PostIngestConfig
+from unify.file_manager.types.config import (
     CostLedgerConfig,
     DiagnosticsConfig,
     EmbeddingsConfig,

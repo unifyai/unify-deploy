@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.common.pipeline import IngestRequested
-from unity.common.pipeline.types import (
+from unify.common.pipeline import IngestRequested
+from unify.common.pipeline.types import (
     DmBinding,
     FileParseResult,
     FmBinding,
@@ -594,7 +594,7 @@ async def _run_completion_gate_message(
 @pytest.mark.asyncio
 async def test_completion_gate_nacks_when_checkpoint_short(monkeypatch) -> None:
     """A short checkpoint must block success and nack for a resume."""
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from unify.common.pipeline.work_queue import RetryWorkItem
 
     infra, item, events, captured, ack = await _run_completion_gate_message(
         monkeypatch,
@@ -643,7 +643,7 @@ async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> 
         def ingest(self, *args, **kwargs):
             return None
 
-    import unity.data_manager as data_manager_module
+    import unify.data_manager as data_manager_module
 
     monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
 
@@ -794,13 +794,13 @@ def test_release_tracked_job_leases_is_scoped_by_job_prefix() -> None:
 @pytest.mark.asyncio
 async def test_dm_mode_reraises_retry_on_surrender(monkeypatch) -> None:
     """A captured surrender error must re-raise RetryWorkItem (not finalize)."""
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from unify.common.pipeline.work_queue import RetryWorkItem
 
     class _DataManager:
         def ingest(self, *args, **kwargs):
             return None
 
-    import unity.data_manager as data_manager_module
+    import unify.data_manager as data_manager_module
 
     monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
 
@@ -1116,7 +1116,7 @@ def test_merge_table_config_threads_context():
 # ---------------------------------------------------------------------------
 
 
-from unity.common.pipeline.types import CsvFileHandle, XlsxSheetHandle
+from unify.common.pipeline.types import CsvFileHandle, XlsxSheetHandle
 
 
 def test_stage_csv_handle_with_gs_uri(tmp_path) -> None:
@@ -1302,7 +1302,7 @@ async def _asyncio_sleep(seconds: float) -> None:
 # _make_checkpoint_callback with cancellation
 # ---------------------------------------------------------------------------
 
-from unity.common.pipeline import PipelineCancelled
+from unify.common.pipeline import PipelineCancelled
 
 
 def test_checkpoint_callback_raises_on_cancellation(tmp_path) -> None:

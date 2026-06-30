@@ -10,7 +10,7 @@ Mirrors employment_hero/local.py.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -40,7 +40,7 @@ async def query_local_webex_meetings(
             "freshness": {"is_fresh": True, "threshold_seconds": 1800},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -100,7 +100,7 @@ async def query_local_webex_recordings(
             "freshness": {"is_fresh": True},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -168,7 +168,7 @@ async def query_local_webex_transcripts(
             ),
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -225,7 +225,7 @@ async def query_local_webex_rooms(
             "freshness": {"is_fresh": True},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -269,7 +269,7 @@ async def query_local_webex_people(
             "freshness": {"is_fresh": True},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
         safe_filter,
@@ -336,7 +336,7 @@ async def query_local_webex_meetings_with_hubspot_contacts(
             "freshness": {"meetings": {"is_fresh": True}},
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._local_helpers import (
         freshness,
     )

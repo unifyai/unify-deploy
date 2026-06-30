@@ -10,7 +10,7 @@ Mirrors employment_hero/sync.py.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -294,7 +294,7 @@ async def probe_webex_tier(force: bool = False, mock: bool = True) -> dict:
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._config import (
         get_webex_config,
     )

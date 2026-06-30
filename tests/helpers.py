@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, List
 
 if TYPE_CHECKING:
-    from unity.contact_manager.contact_manager import ContactManager
-    from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.events.event_bus import EVENT_BUS
-from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+    from unify.contact_manager.contact_manager import ContactManager
+    from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.events.event_bus import EVENT_BUS
+from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
 from tests.settings import SETTINGS
 
@@ -37,7 +37,7 @@ def get_session_tags() -> List[str]:
 # ---------- CURSOR DEBUG LOGGER --------------------------------
 # Re-export the leaf logger from the production module to keep a single
 # grep-able function name while avoiding circular imports in production code.
-from unity.common.debug import CURSOR_DEBUG_LOG  # noqa: E402,F401
+from unify.common.debug import CURSOR_DEBUG_LOG  # noqa: E402,F401
 
 
 # ---------- helper -------------------------------------------------
@@ -141,7 +141,7 @@ def _get_llm_io_dir() -> Path | None:
         logs/unillm/{datetime}_{socket_name}/{session_id}/
     """
     try:
-        from unity.logger import SESSION_ID
+        from unify.logger import SESSION_ID
     except ImportError:
         return None
 

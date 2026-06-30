@@ -169,7 +169,7 @@ def activate_project(
 ) -> None:
     """Activate a Unify project for ingestion.
 
-    Calls ``unity.init()`` and optionally deletes/recreates the project.
+    Calls ``unify.init()`` and optionally deletes/recreates the project.
     """
     if overwrite:
         try:
@@ -182,13 +182,13 @@ def activate_project(
 
     os.environ.setdefault("UNIFY_PROJECT_NAME", project_name)
 
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
 
     SESSION_DETAILS.populate_from_env()
 
-    import unity
+    import unify
 
-    unity.init(project_name=project_name, overwrite=overwrite)
+    unify.init(project_name=project_name, overwrite=overwrite)
     logger.info(
         "Activated project '%s' (context: %s/%s)",
         project_name,
@@ -272,7 +272,7 @@ def create_pipeline_reporter(
 
     Returns a ``(reporter, run_dir)`` tuple.
     """
-    from unity.file_manager.managers.utils.progress import (
+    from unify.file_manager.managers.utils.progress import (
         CompositeReporter,
         ConsoleReporter,
         NoOpReporter,

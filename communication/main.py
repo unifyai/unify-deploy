@@ -1,10 +1,10 @@
 """Comms-app FastAPI entrypoint.
 
 Thin shell that composes communication's private SaaS routers and
-startup hooks on top of the unity.gateway aggregator. The 10
+startup hooks on top of the unify.gateway aggregator. The 10
 external-channel routers (social, phone, gmail, outlook, email,
 whatsapp, teams, sharepoint, unillm, discord) are mounted by
-``unity.gateway.app.create_app()`` from ``unity.gateway.channels.*``;
+``unify.gateway.app.create_app()`` from ``unify.gateway.channels.*``;
 this module only adds:
 
 * The /infra/* routers (K8s Job control + SSH tunnel + VM-self
@@ -16,8 +16,8 @@ this module only adds:
   ``common.metrics.setup_metrics`` (unchanged).
 
 The Discord bot-pool sync + health-check loop is owned by
-unity.gateway's built-in lifespan
-(``unity.gateway.channels.discord.bot_manager``); no
+unify.gateway's built-in lifespan
+(``unify.gateway.channels.discord.bot_manager``); no
 communication-side bot_manager exists anymore.
 
 Auth wiring:
@@ -53,17 +53,17 @@ from communication.infra.views import (
     tunnel_router,
     vm_self_router,
 )
-from unity.gateway.app import ExtraRouter, create_app
-from unity.gateway.context import GatewayContext, default_public_url_provider
-from unity.gateway.credentials import EnvCredentialStore
-from unity.gateway.envelope_sink import (
+from unify.gateway.app import ExtraRouter, create_app
+from unify.gateway.context import GatewayContext, default_public_url_provider
+from unify.gateway.credentials import EnvCredentialStore
+from unify.gateway.envelope_sink import (
     OutboundTransportEnvelopeSink,
     default_topic_suffix,
 )
-from unity.gateway.outbound_pubsub import PubSubOutboundTransport
-from unity.gateway.runtime import RuntimeActivation
-from unity.gateway.scheduler import LocalScheduler
-from unity.gateway.storage import LocalDiskStorage
+from unify.gateway.outbound_pubsub import PubSubOutboundTransport
+from unify.gateway.runtime import RuntimeActivation
+from unify.gateway.scheduler import LocalScheduler
+from unify.gateway.storage import LocalDiskStorage
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)

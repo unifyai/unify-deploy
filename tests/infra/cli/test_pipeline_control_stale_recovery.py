@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from unity.common.pipeline.types import (
+from unify.common.pipeline.types import (
     FileParseResult,
     InlineRowsHandle,
     IngestCheckpoint,

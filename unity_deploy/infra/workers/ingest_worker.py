@@ -10,14 +10,14 @@ Two ingestion flavours are supported, driven by
 
 - **FM mode** (``ingestion_mode="fm"``): activates a Unify context
   derived from ``msg.fm_binding``, instantiates a
-  :class:`unity.file_manager.managers.file_manager.FileManager`, and
+  :class:`unify.file_manager.managers.file_manager.FileManager`, and
   delegates the work to
-  :func:`unity.file_manager.managers.utils.executor.fm_process_plan`.
+  :func:`unify.file_manager.managers.utils.executor.fm_process_plan`.
   The resulting rows land under ``Files/{alias}/{storage_id}/...`` with
   a proper ``FileRecords`` entry.
 
 - **DM mode** (``ingestion_mode="dm"``): drives
-  :func:`unity.common.pipeline.ingest_artifacts` directly over the
+  :func:`unify.common.pipeline.ingest_artifacts` directly over the
   plan's ``table_inputs``, issuing
   ``DataManager.ingest(ctx, None, table_input_handle=handle, ...)`` per
   table.  No ``FileRecords`` entry is created.
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
-from unity.common.pipeline import (
+from unify.common.pipeline import (
     ArtifactWorkItem,
     CancellationCheck,
     IngestPlan,
@@ -45,9 +45,9 @@ from unity.common.pipeline import (
     PipelineInstrumentation,
     ingest_artifacts,
 )
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.run_ledger import PipelineStageManifest
-from unity.common.pipeline.types import (
+from unify.common.pipeline._utils import utc_now_iso
+from unify.common.pipeline.run_ledger import PipelineStageManifest
+from unify.common.pipeline.types import (
     AttachmentCallback,
     CsvFileHandle,
     IngestBinding,
@@ -57,9 +57,9 @@ from unity.common.pipeline.types import (
     TableInputHandle,
     XlsxSheetHandle,
 )
-from unity.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
-from unity.common.context_registry import ContextRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
+from unify.common.context_registry import ContextRegistry
+from unify.session_details import SESSION_DETAILS
 
 from .assistant_key_resolver import ResolvedAssistant, resolve_assistant
 from unity_deploy.infra.gcp.artifact_store import (
@@ -691,7 +691,7 @@ async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[ResolvedAssis
        subsequent Unify SDK call -- including any deep inside
        :class:`DataManager` / :class:`FileManager` -- picks it up.
        The SDK contract is env-based (see
-       ``unity.session_details.SessionDetails.unify_key`` which falls
+       ``unify.session_details.SessionDetails.unify_key`` which falls
        back to ``os.environ.get("UNIFY_KEY", "")`` on every read), so
        this ``os.environ`` write is load-bearing and cannot be
        replaced by a pydantic-settings update.
@@ -1512,12 +1512,12 @@ async def _run_fm_mode_inner(
     is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
-    from unity.data_manager import DataManager
-    from unity.file_manager.filesystem_adapters.local_adapter import (
+    from unify.data_manager import DataManager
+    from unify.file_manager.filesystem_adapters.local_adapter import (
         LocalFileSystemAdapter,
     )
-    from unity.file_manager.managers.file_manager import FileManager
-    from unity.file_manager.managers.utils.executor import fm_process_plan
+    from unify.file_manager.managers.file_manager import FileManager
+    from unify.file_manager.managers.utils.executor import fm_process_plan
 
     activate_unify_context(
         user_id=fm_binding.user_id,
@@ -1618,7 +1618,7 @@ def _build_fm_config_from_plan(plan: IngestPlan):
     columns and descriptions via config lookups) picks them up without
     any changes to the FM internals.
     """
-    from unity.file_manager.types.config import (
+    from unify.file_manager.types.config import (
         BusinessContextsConfig,
         EmbeddingsConfig,
         FileBusinessContextSpec,
@@ -1726,7 +1726,7 @@ async def _run_dm_mode(
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
     Constructs one ``ArtifactWorkItem`` per table in the plan, then
-    drives :func:`unity.common.pipeline.ingest_artifacts` with a DM
+    drives :func:`unify.common.pipeline.ingest_artifacts` with a DM
     ``ingest_fn`` that calls ``dm.ingest(ctx, None,
     table_input_handle=handle, ...)``.  Streaming is preserved --
     ``dm.ingest`` pulls batches from the handle itself rather than
@@ -1772,8 +1772,8 @@ async def _run_dm_mode_inner(
     should_surrender: Callable[[], bool] | None = None,
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
-    from unity.data_manager import DataManager
-    from unity.file_manager.types.config import FilePipelineConfig
+    from unify.data_manager import DataManager
+    from unify.file_manager.types.config import FilePipelineConfig
 
     # DM dispatches are assistant-scoped too: they still ingest into an
     # explicit DataManager context, but Orchestra key resolution and
@@ -1835,7 +1835,7 @@ async def _run_dm_mode_inner(
 
         post_ingest_config = None
         if meta.post_ingest:
-            from unity.data_manager.types.ingest import PostIngestConfig
+            from unify.data_manager.types.ingest import PostIngestConfig
 
             post_ingest_config = PostIngestConfig.model_validate(meta.post_ingest)
 

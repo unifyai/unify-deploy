@@ -12,8 +12,8 @@ import time
 from kubernetes import client as k8s_client, config as k8s_config, watch
 from kubernetes.client.rest import ApiException
 
-from unity.deploy_runtime import BootstrapSecretRecord, JobAssignmentRecord
-from unity.settings import SETTINGS
+from unify.deploy_runtime import BootstrapSecretRecord, JobAssignmentRecord
+from unify.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 

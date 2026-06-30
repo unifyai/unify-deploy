@@ -5,7 +5,7 @@ from pathlib import Path
 # / sibling-folder name (which match each other). The brain package name is
 # `unity` while its repo is `unify`; the SDK package and repo are both `unisdk`.
 FIRST_PARTY_REPOS = {
-    "unity": "unify",
+    "unify": "unify",
     "unisdk": "unisdk",
     "unillm": "unillm",
 }

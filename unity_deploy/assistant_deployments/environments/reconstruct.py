@@ -13,12 +13,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from unity.common.hierarchical_logger import ICONS
+from unify.common.hierarchical_logger import ICONS
 
 from .types.environment import Environment
 
 if TYPE_CHECKING:
-    from unity.actor.environments.base import BaseEnvironment
+    from unify.actor.environments.base import BaseEnvironment
 
 logger = logging.getLogger(__name__)
 _ICON = ICONS.get("assistant_deployments", "")
@@ -139,7 +139,7 @@ def reconstruct(env_def: Environment) -> "BaseEnvironment":
     package directory, imports the entry module, and resolves the
     ``module:attribute`` path to a ``BaseEnvironment`` instance.
     """
-    from unity.actor.environments.base import BaseEnvironment
+    from unify.actor.environments.base import BaseEnvironment
 
     if env_def.dependencies:
         ensure_dependencies(env_def.dependencies)

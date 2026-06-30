@@ -29,9 +29,9 @@ from tests.assistant_deployments.integrations.integration_test_helpers import (
     build_implementations_for_integration,
     discover_all_function_dirs,
 )
-from unity.common.context_registry import ContextRegistry
-from unity.function_manager.execution_env import create_base_globals
-from unity.function_manager.function_manager import FunctionManager
+from unify.common.context_registry import ContextRegistry
+from unify.function_manager.execution_env import create_base_globals
+from unify.function_manager.function_manager import FunctionManager
 
 # ---------------------------------------------------------------------------
 # Per-integration execution configuration

@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from unity.common.hierarchical_logger import ICONS
+from unify.common.hierarchical_logger import ICONS
 
 logger = logging.getLogger(__name__)
 _ICON = ICONS.get("assistant_deployments", "")

@@ -121,7 +121,7 @@ def _duplicate_defer_seconds(expires_at: str) -> int:
 async def main() -> None:
     import argparse
 
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from unify.common.pipeline.work_queue import RetryWorkItem
 
     from .ingest_worker import handle_ingest_message
     from .pipeline_events import record_worker_event

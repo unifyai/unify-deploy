@@ -9,10 +9,10 @@ from typing import Any
 
 from google.cloud import pubsub_v1
 
-from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.artifact_store import ArtifactStore
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity.common.pipeline.work_queue import (
+from unify.common.pipeline._utils import utc_now_iso
+from unify.common.pipeline.artifact_store import ArtifactStore
+from unify.common.pipeline.retry_policy import ResilientRequestPolicy
+from unify.common.pipeline.work_queue import (
     ReceivedWorkItem,
     WorkQueueMessage,
 )

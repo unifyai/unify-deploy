@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar, TYPE_CHECKING
 
-from unity.guidance_manager.types.guidance import Guidance
-from unity.secret_manager.types import Secret
+from unify.guidance_manager.types.guidance import Guidance
+from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 
 if TYPE_CHECKING:
-    from unity.actor.environments.base import BaseEnvironment
+    from unify.actor.environments.base import BaseEnvironment
     from unity_deploy.assistant_deployments.deployment_types import (
         DeploymentMapping,
         DeploymentSpec,
@@ -59,7 +59,7 @@ class ResolvedAssistantDeployment:
 
     Seeded into the ``Integrations/Manifests`` DataManager context by
     ``_sync_integration_registry`` and consumed at runtime by
-    ``unity.integration_status`` to compute which integrations have working
+    ``unify.integration_status`` to compute which integrations have working
     credentials.  See ``integrations/loader.py:_build_registry_row``."""
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)

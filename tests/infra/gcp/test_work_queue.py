@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
+from unify.common.pipeline.retry_policy import ResilientRequestPolicy
 from unity_deploy.infra.gcp.work_queue import PubSubWorkQueue
 
 

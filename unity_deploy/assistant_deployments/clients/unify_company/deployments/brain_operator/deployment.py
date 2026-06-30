@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unity.guidance_manager.types.guidance import Guidance
+from unify.guidance_manager.types.guidance import Guidance
 
 from unity_deploy.assistant_deployments.clients.unify_company._brain_operator import (
     brain_operator_assistant_id,

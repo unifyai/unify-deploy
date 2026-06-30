@@ -42,7 +42,7 @@ Unity compose installer — requires Docker only.
 
 Options:
   --dir PATH            Install directory (default: ~/.unity)
-  --no-cli              Skip unity CLI shim
+  --no-cli              Skip unify CLI shim
   --non-interactive     Import keys from environment; skip prompts
 EOF
       exit 0
@@ -213,7 +213,7 @@ create_compose_cli() {
     fetch_remote "selfhost/compose-cli.sh" "$compose_cli"
   fi
   mkdir -p "$CLI_DIR"
-  local shim="$CLI_DIR/unity"
+  local shim="$CLI_DIR/unify"
   cat > "$shim" <<EOF
 #!/usr/bin/env bash
 set -e
@@ -240,29 +240,29 @@ if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
     builtins-sync) shift || true; exec bash "\$COMPOSE_CLI" builtins-sync "\$@" ;;
     setup)
       echo "Compose install is already configured at \$UNITY_HOME" >&2
-      echo "Edit \$UNITY_HOME/.env for keys, then run: unity restart" >&2
+      echo "Edit \$UNITY_HOME/.env for keys, then run: unify restart" >&2
       exit 0 ;;
     help|-h|--help)
       cat <<'USAGE'
-unity — Docker Compose self-host control
+unify — Docker Compose self-host control
 
-  unity                    Start the stack (alias: unity up, unity stack up)
-  unity down               Stop the Console UI; runtime keeps running
-  unity down --full        Stop every service
-  unity restart            Recreate containers after editing ~/.unity/.env
-  unity status             Show container status
-  unity logs [service...]  Follow logs (optionally for specific services)
-  unity pull               Pull the latest images
-  unity doctor             Check Docker, keys, and service health
-  unity integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
-  unity builtins-sync      Retry the Builtins catalogue seed (background)
+  unify                    Start the stack (alias: unify up, unify stack up)
+  unify down               Stop the Console UI; runtime keeps running
+  unify down --full        Stop every service
+  unify restart            Recreate containers after editing ~/.unity/.env
+  unify status             Show container status
+  unify logs [service...]  Follow logs (optionally for specific services)
+  unify pull               Pull the latest images
+  unify doctor             Check Docker, keys, and service health
+  unify integrations-sync  Sync the Composio app catalog (needs COMPOSIO_API_KEY)
+  unify builtins-sync      Retry the Builtins catalogue seed (background)
 
-Edit keys in ~/.unity/.env, then run: unity restart
+Edit keys in ~/.unity/.env, then run: unify restart
 USAGE
       exit 0 ;;
     *)
-      echo "unity: unknown command '\$cmd'" >&2
-      echo "Run 'unity help' to see available commands." >&2
+      echo "unify: unknown command '\$cmd'" >&2
+      echo "Run 'unify help' to see available commands." >&2
       exit 1 ;;
   esac
 fi
@@ -271,7 +271,7 @@ echo "Compose stack not found. Re-run the installer." >&2
 exit 1
 EOF
   chmod +x "$shim"
-  log_ok "Installed unity CLI at $shim"
+  log_ok "Installed unify CLI at $shim"
 }
 
 # Compose gives the caller's shell environment precedence over --env-file
@@ -309,14 +309,14 @@ verify_orchestra_seed() {
     fi
     sleep 2
   done
-  log_warn "orchestra-seed status unclear — run: unity stack doctor"
+  log_warn "orchestra-seed status unclear — run: unify stack doctor"
 }
 
 start_composio_catalog_sync() {
   if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
     return 0
   fi
-  log_info "Composio integration catalogue sync runs via unity-builtins-seed (watch: unity stack logs unity-builtins-seed)"
+  log_info "Composio integration catalogue sync runs via unity-builtins-seed (watch: unify stack logs unity-builtins-seed)"
 }
 
 pull_and_start() {
@@ -355,12 +355,12 @@ main() {
   echo ""
   log_ok "Installation complete"
   echo ""
-  echo "  Daily driver:  unity / unity stack up"
-  echo "  UI off:        unity stack down"
-  echo "  Stop all:      unity stack down --full"
-  echo "  Edit keys:     \$UNITY_HOME/.env  then  unity restart"
+  echo "  Daily driver:  unify / unify stack up"
+  echo "  UI off:        unify stack down"
+  echo "  Stop all:      unify stack down --full"
+  echo "  Edit keys:     \$UNITY_HOME/.env  then  unify restart"
   if grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
-    echo "  Integrations:  catalog sync runs in background (~30 min); unity stack doctor"
+    echo "  Integrations:  catalog sync runs in background (~30 min); unify stack doctor"
   fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
     echo ""
@@ -369,7 +369,7 @@ main() {
     echo "       https://github.com/unifyai/unify-desktop-assistant/releases"
     echo "    2. Menu bar app → Settings → paste your API key (from Console → Connect your desktop)"
     echo "    3. Approve Screen Sharing when prompted; wait for green status"
-    echo "    4. Console → Connect your desktop → link your Mac → unity restart"
+    echo "    4. Console → Connect your desktop → link your Mac → unify restart"
     echo "    Full guide: \$UNITY_HOME/README.md"
   fi
   echo ""

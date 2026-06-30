@@ -19,8 +19,8 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from unity.logger import LOGGER
-from unity.common.hierarchical_logger import ICONS
+from unify.logger import LOGGER
+from unify.common.hierarchical_logger import ICONS
 from unity_deploy.runtime.assistant_jobs_api import (
     create_assistant_log,
     ensure_project_exists,
@@ -29,11 +29,11 @@ from unity_deploy.runtime.assistant_jobs_api import (
     release_pool_vm,
     stop_assistant_session,
 )
-from unity.conversation_manager.metrics import (
+from unify.conversation_manager.metrics import (
     session_duration as _m_session_dur,
 )
-from unity.session_details import SESSION_DETAILS
-from unity.settings import SETTINGS
+from unify.session_details import SESSION_DETAILS
+from unify.settings import SETTINGS
 
 # Track whether AssistantJobs project has been verified/created
 _project_verified = False

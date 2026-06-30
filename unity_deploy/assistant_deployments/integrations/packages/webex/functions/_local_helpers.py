@@ -1,6 +1,6 @@
 """Local-query helpers for the Webex package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`unify.function_manager.custom_functions.collect_custom_functions`
 skips this file (it's library code, not a registered tool).  Imported
 from inside ``query_local_webex_*`` function bodies so FunctionManager's
 isolation rule is preserved.
@@ -36,7 +36,7 @@ async def freshness(object_type: str) -> dict:
     object.  Threshold is the configured per-object cadence × 2 unless
     ``WEBEX_LOCAL_FRESHNESS_THRESHOLD_SECONDS`` is set.
     """
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.webex.functions._config import (
         get_webex_config,
     )

@@ -43,7 +43,7 @@ async def sync_matterport_view_stats(
             },
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._client import (
         matterport_graphql,
     )

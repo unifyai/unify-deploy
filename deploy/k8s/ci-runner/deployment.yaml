@@ -1,4 +1,3 @@
----
 # Self-hosted GitHub Actions runner that executes the `Integration smoke` merge
 # gate from inside the `unity` cluster, so it can reach internal Orchestra and
 # the cluster API server. One persistent replica is enough — the gate runs only
@@ -46,7 +45,7 @@ spec:
         - name: RUNNER_SCOPE
           value: "repo"
         - name: REPO_URL
-          value: "https://github.com/unifyai/unity-deploy"
+          value: "https://github.com/unifyai/unify-deploy"
         - name: RUNNER_NAME_PREFIX
           value: "unity-cluster-staging"
         - name: LABELS

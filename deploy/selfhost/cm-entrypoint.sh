@@ -146,7 +146,7 @@ start_cm() {
 
   build_cm_env "$unify_key" "$agent_id"
   log "Starting ConversationManager for assistant ${agent_id}..."
-  python3 -m unity.conversation_manager.main &
+  python3 -m unify.conversation_manager.main &
   CM_PID=$!
 }
 

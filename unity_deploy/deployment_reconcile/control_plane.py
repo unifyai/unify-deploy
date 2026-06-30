@@ -345,7 +345,7 @@ def _post_communication_json(path: str, payload: dict[str, Any]) -> dict[str, An
     """POST an admin-authenticated JSON payload to Communication."""
 
     import httpx
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     comms_url = (
         os.environ.get("UNITY_COMMS_URL")

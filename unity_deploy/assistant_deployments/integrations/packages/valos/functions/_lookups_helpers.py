@@ -1,6 +1,6 @@
 """Internal helpers for the data-lookup tools in ``lookups.py``.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`unify.function_manager.custom_functions.collect_custom_functions`
 skips this file.  Holds pure data-shaping utilities used by ``valos_geocode``
 to normalise responses from each upstream geocoder (OS Names, OS Places,
 postcodes.io, Nominatim) into a single uniform shape.

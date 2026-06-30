@@ -58,7 +58,7 @@ def _dispatch_dm(
     """Publish one ParseRequested per source_file with DM-mode binding.
 
     Uploads each source file to GCS via
-    :func:`unity.common.pipeline.publish_parse_request`, which also
+    :func:`unify.common.pipeline.publish_parse_request`, which also
     enforces the ``one file per ParseRequested`` invariant that Tier-2
     parallelism depends on.
 
@@ -75,8 +75,8 @@ def _dispatch_dm(
     assistant whose Orchestra-bound api key authorizes the ingest via
     ``GET /v0/admin/assistant?agent_id=...``.
     """
-    from unity.common.pipeline import DispatchTarget, publish_parse_request
-    from unity.common.pipeline.types import DmBinding
+    from unify.common.pipeline import DispatchTarget, publish_parse_request
+    from unify.common.pipeline.types import DmBinding
     from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
     settings = GcpPipelineSettings()
@@ -379,8 +379,8 @@ def main() -> int:
     )
     verbosity = args.verbosity or config.diagnostics.verbosity
 
-    from unity.file_manager.managers.utils.progress import create_progress_event
-    from unity.common.pipeline import (
+    from unify.file_manager.managers.utils.progress import create_progress_event
+    from unify.common.pipeline import (
         ArtifactWorkItem,
         InlineRowsHandle,
         PipelineInstrumentation,
@@ -392,8 +392,8 @@ def main() -> int:
     # Step 1: Parse source files
     # ------------------------------------------------------------------ #
 
-    from unity.file_manager.file_parsers import FileParser
-    from unity.file_manager.file_parsers.types.contracts import (
+    from unify.file_manager.file_parsers import FileParser
+    from unify.file_manager.file_parsers.types.contracts import (
         FileParseRequest,
         FileParseResult,
     )
@@ -474,7 +474,7 @@ def main() -> int:
     # Step 2: Ingest each ExtractedTable via DataManager.ingest()
     # ------------------------------------------------------------------ #
 
-    from unity.data_manager.data_manager import DataManager
+    from unify.data_manager.data_manager import DataManager
 
     dm = DataManager()
 
@@ -513,7 +513,7 @@ def main() -> int:
 
     # Record parse costs
     if instrumentation.has_cost_tracking:
-        from unity.file_manager.managers.utils.executor import (
+        from unify.file_manager.managers.utils.executor import (
             _extract_parse_cost_metrics,
         )
 
@@ -526,7 +526,7 @@ def main() -> int:
     job = None
     job_store = None
     if args.job_tracking:
-        from unity.common.pipeline import (
+        from unify.common.pipeline import (
             DeploymentBundle,
             DeploymentBundleArtifact,
             DeploymentIdentity,
@@ -535,7 +535,7 @@ def main() -> int:
             DeploymentIngestionJob,
             DeploymentObservabilityRefs,
         )
-        from unity.common.pipeline._utils import utc_now_iso
+        from unify.common.pipeline._utils import utc_now_iso
 
         deploy_root = run_dir / ".deployments"
         bundle_store = LocalDeploymentBundleStore(deploy_root)
@@ -832,7 +832,7 @@ def main() -> int:
 
     # Finalize deployment job tracking
     if job is not None and job_store is not None:
-        from unity.common.pipeline._utils import utc_now_iso
+        from unify.common.pipeline._utils import utc_now_iso
 
         job.status = "error" if failed_tables > 0 else "success"
         job.finished_at = utc_now_iso()

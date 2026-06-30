@@ -17,8 +17,8 @@ import logging
 import os
 import socket
 
-from unity.logger import LOGGER
-from unity.common.hierarchical_logger import ICONS
+from unify.logger import LOGGER
+from unify.common.hierarchical_logger import ICONS
 
 from opentelemetry import metrics
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter

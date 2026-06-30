@@ -3,7 +3,7 @@
 Every module here exposes :func:`@custom_function`-decorated
 coroutines that thinly wrap brain entrypoints.  ``FunctionManager``
 discovers them at assistant boot via
-``unity.function_manager.custom_functions.collect_custom_functions``;
+``unify.function_manager.custom_functions.collect_custom_functions``;
 the resulting ``Functions/Compositional.function_id`` values are what
 ``brain.scheduled.install`` stamps onto the ``Tasks.entrypoint`` field
 so the deterministic offline-dispatcher can call them.

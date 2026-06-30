@@ -20,7 +20,7 @@ logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 import sys
 from pathlib import Path
 
-# Ensure repo root is in sys.path so we can import unity.
+# Ensure repo root is in sys.path so we can import unify.
 # This script is invoked directly by parallel_run.sh, not via pytest
 # which handles path setup automatically.
 _repo_root = Path(__file__).resolve().parent.parent
@@ -73,16 +73,16 @@ def prepare_shared_project() -> None:
         # Tolerate field creation errors (may already exist)
         pass
 
-    # Pre-create assistant-derived contexts via unity.init() to avoid races
-    # when parallel pytest sessions (xdist, tmux, CI) all call unity.init()
+    # Pre-create assistant-derived contexts via unify.init() to avoid races
+    # when parallel pytest sessions (xdist, tmux, CI) all call unify.init()
     try:
-        import unity
+        import unify
 
-        unity.init(PROJECT)
+        unify.init(PROJECT)
     except Exception as e:
         # Tolerate if contexts already exist (another process created them)
         if "already exists" not in str(e).lower():
-            print(f"Note: unity.init() returned: {e}", file=sys.stderr)
+            print(f"Note: unify.init() returned: {e}", file=sys.stderr)
 
     print(f"Prepared shared project '{PROJECT}'")
 

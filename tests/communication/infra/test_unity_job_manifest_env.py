@@ -188,7 +188,7 @@ def test_unity_image_hash_label_matches_image_tag() -> None:
 
 
 def test_staging_deploy_env_activates_both_gateway_transports() -> None:
-    """Staging Jobs must opt in to both ``unity.gateway`` transports.
+    """Staging Jobs must opt in to both ``unify.gateway`` transports.
 
     Pins the staging-soak configuration described in
     ``unity/gateway/PHASES.md`` (Phase A.bis). Activating these env

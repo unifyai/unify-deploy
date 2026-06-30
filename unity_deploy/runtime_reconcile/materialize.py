@@ -120,7 +120,7 @@ def _enabled_integration_source_dirs() -> tuple[list[Path], list[Path]] | None:
     """
 
     try:
-        from unity.integration_status import get_enabled_integrations
+        from unify.integration_status import get_enabled_integrations
     except Exception:
         logger.warning(
             "Runtime reconcile could not import integration status; "
@@ -164,11 +164,11 @@ def materialize_runtime_state(
 ) -> RuntimeStateResult:
     """Apply side-effectful runtime state for a resolved assistant deployment."""
 
-    from unity.function_manager.custom_functions import (
+    from unify.function_manager.custom_functions import (
         collect_functions_from_directories,
         collect_venvs_from_directories,
     )
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.seed_sync import sync_all_seed_data
 
     revision = revision or compute_runtime_state_fingerprint(resolved)

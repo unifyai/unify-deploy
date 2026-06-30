@@ -261,7 +261,7 @@ class TestSecretsAssistantLevel:
 
 class TestCustomFunctionCollection:
     def test_collect_from_empty_dir(self, tmp_path):
-        from unity.function_manager.custom_functions import (
+        from unify.function_manager.custom_functions import (
             collect_custom_functions,
         )
 
@@ -271,14 +271,14 @@ class TestCustomFunctionCollection:
         assert result == {}
 
     def test_collect_ignores_underscore_prefixed_files(self, tmp_path):
-        from unity.function_manager.custom_functions import (
+        from unify.function_manager.custom_functions import (
             collect_custom_functions,
         )
 
         fn_dir = tmp_path / "functions"
         fn_dir.mkdir()
         (fn_dir / "_private.py").write_text(
-            "from unity.function_manager.custom import custom_function\n"
+            "from unify.function_manager.custom import custom_function\n"
             "@custom_function()\n"
             "async def hidden() -> int:\n"
             "    return 1\n",

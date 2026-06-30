@@ -14,8 +14,8 @@ import pytest
 import yaml
 
 from tests.helpers import _handle_project
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.guidance_manager.types.guidance import Guidance
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.integrations.loader import (
     LoadedIntegration,
     _load_guidance,
@@ -25,8 +25,8 @@ from unity_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     SecretSchema,
 )
-from unity.secret_manager.secret_manager import SecretManager
-from unity.secret_manager.types import Secret
+from unify.secret_manager.secret_manager import SecretManager
+from unify.secret_manager.types import Secret
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -161,7 +161,7 @@ fi
 # row was left stale at "running"). Matching on non-empty is rename-proof.
 if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
     echo "⬥ Starting offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
-    python3 -m unity.task_scheduler.offline_runner
+    python3 -m unify.task_scheduler.offline_runner
     exit $?
 fi
 
@@ -192,7 +192,7 @@ sleep 3
 
 # Start the main application
 echo "⬥ Starting convo manager..."
-python3 unity/conversation_manager/main.py &
+python3 unify/conversation_manager/main.py &
 MAIN_PID=$!
 echo "⬥ Main application started with PID: $MAIN_PID"
 
