@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 
 def _run_evergreen(tick_name: str, params: dict[str, Any]) -> dict[str, Any]:

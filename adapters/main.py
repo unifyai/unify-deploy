@@ -3675,7 +3675,7 @@ async def teams_notification_processor(request: Request):
         ]
 
         # Resolve the sender asymmetry between comms (name-fallback
-        # tolerant) and unity.comms_manager (email-exact).  If we
+        # tolerant) and unify.comms_manager (email-exact).  If we
         # matched a real contact but the only email we had was our
         # synthetic ``{id}@teams`` placeholder, rewrite ``sender`` to
         # the contact's real email so downstream email-keyed lookups

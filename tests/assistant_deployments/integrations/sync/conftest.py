@@ -19,8 +19,8 @@ import unisdk
 @pytest.fixture(autouse=True)
 def _integration_sync_context(unify_project, request):
     """Set a per-test base context for real manager sync tests."""
-    from unity.common.context_registry import ContextRegistry
-    from unity.manager_registry import ManagerRegistry
+    from unify.common.context_registry import ContextRegistry
+    from unify.manager_registry import ManagerRegistry
 
     nodeid = request.node.nodeid.replace("::", "/").replace("[", "/").replace("]", "")
     nodeid = re.sub(r"[^A-Za-z0-9_/-]+", "_", nodeid)

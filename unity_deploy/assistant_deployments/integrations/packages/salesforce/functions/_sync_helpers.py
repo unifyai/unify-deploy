@@ -1,6 +1,6 @@
 """Sync-orchestrator helpers + per-object field specs for the Salesforce package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`unify.function_manager.custom_functions.collect_custom_functions`
 skips this file (it's library code, not a registered tool).  All sibling
 files import from here inside their function bodies to satisfy
 FunctionManager's isolation rule — registered modules are not allowed
@@ -165,7 +165,7 @@ async def load_sync_state() -> dict:
     """Read the per-object watermark map from DataManager.  Returns an
     empty dict on the first run before any state row has been written.
     """
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -178,7 +178,7 @@ async def load_sync_state() -> dict:
 async def load_sync_state_rows() -> list:
     """Same as ``load_sync_state`` but returns the raw row list (stable
     shape for the public ``get_salesforce_sync_state``)."""
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -190,7 +190,7 @@ async def load_sync_state_rows() -> list:
 async def load_latest_run() -> dict | None:
     """Most recent ``sync_runs`` row, or ``None`` when no runs have been
     recorded yet."""
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -329,7 +329,7 @@ async def query_local_table(
             "_mock": True,
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     kwargs: dict = {"limit": limit, "order_by": order_by}

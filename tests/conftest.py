@@ -25,7 +25,7 @@ import pytest
 import unisdk
 
 from tests.settings import SETTINGS
-from unity.manager_registry import ManagerRegistry
+from unify.manager_registry import ManagerRegistry
 
 _logger = logging.getLogger(__name__)
 

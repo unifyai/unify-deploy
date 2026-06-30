@@ -214,7 +214,7 @@ def main() -> int:
     # ``canonical_destination`` is the single source of truth for the
     # "personal" / "team:<id>" grammar: it returns ``None`` for personal
     # and ``"team:<id>"`` for shared, raising on anything else.
-    from unity.common.context_registry import ContextRegistry
+    from unify.common.context_registry import ContextRegistry
 
     try:
         args.destination = ContextRegistry.canonical_destination(args.destination)
@@ -354,13 +354,13 @@ def _dispatch(
 
     from google.cloud import storage
 
-    from unity.common.pipeline import DispatchTarget, publish_parse_request
-    from unity.common.pipeline.deployment.types import (
+    from unify.common.pipeline import DispatchTarget, publish_parse_request
+    from unify.common.pipeline.deployment.types import (
         DeploymentBundleRef,
         DeploymentIngestionJob,
         DispatchManifest,
     )
-    from unity.common.pipeline.types import DmBinding, FmBinding
+    from unify.common.pipeline.types import DmBinding, FmBinding
     from unity_deploy.infra.gcp.artifact_store import GcsArtifactStore
     from unity_deploy.infra.gcp.deployment_stores import GcsDeploymentJobStore
     from unity_deploy.infra.gcp.settings import GcpPipelineSettings

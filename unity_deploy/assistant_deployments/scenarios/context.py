@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Awaitable
 
-from unity.common.pipeline.types import IngestBinding
+from unify.common.pipeline.types import IngestBinding
 
 from unity_deploy.infra.workers.assistant_key_resolver import (
     ResolvedAssistant,

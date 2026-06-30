@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     import argparse
 
-    from unity.common.pipeline.work_queue import RetryWorkItem
+    from unify.common.pipeline.work_queue import RetryWorkItem
 
     from .pipeline_events import record_worker_event
     from .parse_worker import handle_parse_message

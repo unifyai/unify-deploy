@@ -16,7 +16,7 @@ Two cross-joins:
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 
 @custom_function()
@@ -46,7 +46,7 @@ async def link_matterport_model_to_unit(
     if mock:
         return {"link": record, "_mock": True}
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     try:
@@ -80,7 +80,7 @@ async def lookup_matterport_model_for_unit(
             ],
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     safe = str(unit_id).replace("'", "''")
@@ -127,7 +127,7 @@ async def correlate_matterport_views_to_hubspot_leads(
             ],
         }
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
     event_filter_clauses: list[str] = []

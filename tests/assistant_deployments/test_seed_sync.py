@@ -13,7 +13,7 @@ from unity_deploy.assistant_deployments.seed_sync import (
     _sync_guidance,
     sync_seed_data,
 )
-from unity.guidance_manager.types.guidance import Guidance
+from unify.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ class TestSyncSeedData:
                 raise AssertionError("delete_guidance should not be called")
 
         fake = FakeGuidanceManager()
-        from unity.manager_registry import ManagerRegistry
+        from unify.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,
@@ -306,7 +306,7 @@ class TestSyncSeedData:
                 raise AssertionError("builtins must not be deleted")
 
         fake = FakeGuidanceManager()
-        from unity.manager_registry import ManagerRegistry
+        from unify.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,
@@ -343,7 +343,7 @@ class TestSyncSeedData:
                 raise AssertionError("update_contact should not be called")
 
         fake = FakeContactManager()
-        from unity.manager_registry import ManagerRegistry
+        from unify.manager_registry import ManagerRegistry
 
         monkeypatch.setattr(
             ManagerRegistry,

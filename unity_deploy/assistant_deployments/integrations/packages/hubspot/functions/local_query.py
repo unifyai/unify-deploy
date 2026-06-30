@@ -6,7 +6,7 @@ freshness allows.  See ``guidance/local_vs_live.md`` for the heuristic.
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 
 @custom_function()

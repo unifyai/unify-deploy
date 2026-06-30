@@ -1,6 +1,6 @@
 """Internal CQC Syndication client + care-home matching for the Valos package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`unify.function_manager.custom_functions.collect_custom_functions`
 skips this file.  Sibling function modules import from here inside their
 function bodies to satisfy FunctionManager's isolation rule.
 

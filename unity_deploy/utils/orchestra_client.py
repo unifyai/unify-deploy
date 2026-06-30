@@ -1,6 +1,6 @@
 """Thin HTTP client for Orchestra admin endpoints.
 
-Uses ``SETTINGS`` from :mod:`unity.settings` for the base URL and admin
+Uses ``SETTINGS`` from :mod:`unify.settings` for the base URL and admin
 bearer token — the same pydantic-settings singleton that
 ``assistant_key_resolver.py`` and the rest of the codebase already
 depend on.  Follows the httpx pattern established there: typed errors,
@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from unity.settings import SETTINGS
+from unify.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 

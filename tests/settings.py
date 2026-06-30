@@ -4,7 +4,7 @@ tests/settings.py
 
 Test environment settings using pydantic-settings.
 
-TestingSettings inherits all production settings from unity.settings.ProductionSettings
+TestingSettings inherits all production settings from unify.settings.ProductionSettings
 and adds test-only configuration. This mirrors the structure of unity/settings.py.
 
 IMPORTANT: SETTINGS is a lazy proxy to avoid import-order issues. When test
@@ -26,8 +26,8 @@ os.environ.setdefault("UNILLM_CACHE_DIR", str(_REPO_ROOT))
 from pydantic import Field
 from pydantic.fields import computed_field
 
-from unity.memory_manager.settings import MemorySettings
-from unity.settings import ProductionSettings
+from unify.memory_manager.settings import MemorySettings
+from unify.settings import ProductionSettings
 
 if TYPE_CHECKING:
     from typing import Any
@@ -71,7 +71,7 @@ class TestingSettings(ProductionSettings):
     # Local Orchestra Settings
     # ─────────────────────────────────────────────────────────────────────────
     LOCAL_ORCHESTRA_BRANCH: str = (
-        # Git branch for local orchestra (default: auto-detect from unity branch)
+        # Git branch for local orchestra (default: auto-detect from unify branch)
         "staging"  # IMPORTANT: Currently hard-coded to staging, but should DELETE once staging becomes the true unity dev branch!
     )
 

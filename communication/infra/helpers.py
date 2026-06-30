@@ -440,7 +440,7 @@ def build_unity_job_manifest(
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)
     if deploy_env == "staging":
-        # Activate the new unity.gateway transports on staging Jobs
+        # Activate the new unify.gateway transports on staging Jobs
         # so the extracted Ingress + Outbound code paths get exercised
         # against real Pub/Sub traffic before any production cutover.
         # Production Jobs continue using the legacy inline

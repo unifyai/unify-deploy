@@ -68,7 +68,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import unisdk
 
-from unity.syntax_highlight import highlight_code_blocks
+from unify.syntax_highlight import highlight_code_blocks
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 

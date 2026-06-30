@@ -35,8 +35,8 @@ from common.task_destination import assistant_has_task_destination
 # Single source of truth for the offline-runner subprocess contract.
 # Imported from Unity so the hosted K8s job and the local in-process
 # subprocess produce identical env-var dicts and run-keys for the same
-# attempt. See unity.task_scheduler.offline_runner_contract for details.
-from unity.task_scheduler.offline_runner_contract import (
+# attempt. See unify.task_scheduler.offline_runner_contract for details.
+from unify.task_scheduler.offline_runner_contract import (
     build_offline_run_key as _build_offline_run_key_shared,
     build_offline_runner_env as _build_offline_runner_env_shared,
 )
@@ -819,7 +819,7 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     """Build a stable idempotency key for one offline execution attempt.
 
     Thin adapter over the shared
-    :func:`unity.task_scheduler.offline_runner_contract.build_offline_run_key`
+    :func:`unify.task_scheduler.offline_runner_contract.build_offline_run_key`
     so the hosted K8s path and the local in-process path produce
     identical keys for the same attempt. If those keys ever diverged
     Orchestra's create-or-adopt path would fail to deduplicate
@@ -872,7 +872,7 @@ def _build_offline_runner_env(
 
     1. The task-specific UNITY_OFFLINE_TASK_* + ASSISTANT_ID vars from
        Unity's shared
-       :func:`unity.task_scheduler.offline_runner_contract.build_offline_runner_env`
+       :func:`unify.task_scheduler.offline_runner_contract.build_offline_runner_env`
        — same source of truth the local in-process dispatcher uses. If
        this drifts, the hosted K8s job and the local subprocess would
        see different field shapes for the same task; the shared module

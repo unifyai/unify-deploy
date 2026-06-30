@@ -42,7 +42,7 @@ def test_dispatch_fm_passes_table_config_and_document_only_files(monkeypatch):
             message_id=f"msg-{len(calls)}",
         )
 
-    import unity.common.pipeline as pipeline
+    import unify.common.pipeline as pipeline
 
     monkeypatch.setattr(
         pipeline,

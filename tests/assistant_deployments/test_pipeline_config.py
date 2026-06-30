@@ -23,7 +23,7 @@ from unity_deploy.assistant_deployments.types.pipeline_config import (
     SourceTableSpec,
     build_table_config_for_source_file,
 )
-from unity.data_manager.types.ingest import (
+from unify.data_manager.types.ingest import (
     AutoDerivedColumn,
     ExplicitDerivedColumn,
     PostIngestConfig,

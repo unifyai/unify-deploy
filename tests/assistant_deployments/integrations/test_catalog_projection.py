@@ -64,17 +64,17 @@ def test_sync_native_catalog_seeds_builtins_app_rows(monkeypatch) -> None:
         calls.append(kwargs)
         return True
 
-    unity_module = ModuleType("unity")
-    integrations_module = ModuleType("unity.integrations")
-    builtins_catalog_module = ModuleType("unity.integrations.builtins_catalog")
+    unity_module = ModuleType("unify")
+    integrations_module = ModuleType("unify.integrations")
+    builtins_catalog_module = ModuleType("unify.integrations.builtins_catalog")
     builtins_catalog_module.seed_builtin_integrations = fake_seed_builtin_integrations
     integrations_module.builtins_catalog = builtins_catalog_module
     unity_module.integrations = integrations_module
-    monkeypatch.setitem(sys.modules, "unity", unity_module)
-    monkeypatch.setitem(sys.modules, "unity.integrations", integrations_module)
+    monkeypatch.setitem(sys.modules, "unify", unity_module)
+    monkeypatch.setitem(sys.modules, "unify.integrations", integrations_module)
     monkeypatch.setitem(
         sys.modules,
-        "unity.integrations.builtins_catalog",
+        "unify.integrations.builtins_catalog",
         builtins_catalog_module,
     )
 

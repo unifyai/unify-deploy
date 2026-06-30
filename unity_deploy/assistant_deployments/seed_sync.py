@@ -17,9 +17,9 @@ from typing import Any, Callable, TYPE_CHECKING
 
 import unisdk
 
-from unity.common.hierarchical_logger import ICONS
-from unity.guidance_manager.types.guidance import Guidance
-from unity.secret_manager.types import Secret
+from unify.common.hierarchical_logger import ICONS
+from unify.guidance_manager.types.guidance import Guidance
+from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.integrations.catalog_projection import (
     sync_integrations,
 )
@@ -262,7 +262,7 @@ def sync_seed_data(
 def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
     if not records:
         return False
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     cm = ManagerRegistry.get_contact_manager()
     filter_contacts = _manager_api(cm, "filter_contacts")
@@ -300,7 +300,7 @@ def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
 def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
     if not records:
         return False
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     gm = ManagerRegistry.get_guidance_manager()
     filter_guidance = _manager_api(gm, "filter")
@@ -366,7 +366,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     source_records = [r for r in records if (r.value or "").strip()]
     if not source_records:
         return False
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     sm = ManagerRegistry.get_secret_manager()
     list_secret_keys = _manager_api(sm, "list_secret_keys")
@@ -424,7 +424,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
 def _sync_blacklist(records: list[dict], meta: SeedMetaStore) -> bool:
     if not records:
         return False
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     bm = ManagerRegistry.get_blacklist_manager()
     filter_blacklist = _manager_api(bm, "filter_blacklist")
@@ -487,7 +487,7 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
     """
     if not tables:
         return False
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     km = ManagerRegistry.get_knowledge_manager()
     tables_overview = _manager_api(km, "tables_overview")
@@ -586,8 +586,8 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
     .. note::
 
        As of the May-2026 cleanup, the **runtime no longer reads this
-       registry**.  :mod:`unity.integration_status` consults disk
-       discovery directly (see ``unity.integration_status.discovery``) so
+       registry**.  :mod:`unify.integration_status` consults disk
+       discovery directly (see ``unify.integration_status.discovery``) so
        the runtime sees the same set of packages on registered and
        non-registered assistants alike.  This sync is now telemetry-only:
        it preserves a per-deployment record of which integrations were

@@ -136,7 +136,7 @@ def materialize_snapshot(
 ) -> list[str]:
     """Write normalized snapshot tables to configured DataManager contexts."""
     if data_manager is None:
-        from unity.manager_registry import ManagerRegistry
+        from unify.manager_registry import ManagerRegistry
 
         data_manager = ManagerRegistry.get_data_manager()
 
@@ -179,7 +179,7 @@ def write_alert_outbox(
     if not alerts:
         return []
     if data_manager is None:
-        from unity.manager_registry import ManagerRegistry
+        from unify.manager_registry import ManagerRegistry
 
         data_manager = ManagerRegistry.get_data_manager()
 
@@ -290,7 +290,7 @@ async def run_scenario_tick(
             raise ValueError(
                 "user_id and assistant_id are required for mutating scenario runs",
             )
-        from unity.data_manager.data_manager import DataManager
+        from unify.data_manager.data_manager import DataManager
 
         identity = ScenarioIdentity(
             user_id=user_id,

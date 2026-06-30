@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 
 from google.cloud import storage
 
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
+from unify.common.pipeline.retry_policy import ResilientRequestPolicy
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from unity.common.pipeline.cost_ledger import PipelineCostLedger
+    from unify.common.pipeline.cost_ledger import PipelineCostLedger
 
 from .settings import GcsArtifactStoreSettings
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class GcsRunLedger:
     """GCS-backed run ledger writing stage/file/run manifests as JSONL.
 
-    Implements the ``RunLedger`` protocol from unity.  Buffers writes
+    Implements the ``RunLedger`` protocol from unify.  Buffers writes
     in memory and flushes periodically or on explicit ``flush()`` /
     ``close()`` calls to keep GCS round-trips manageable while still
     providing near-real-time visibility.
@@ -102,7 +102,7 @@ class GcsRunLedger:
 class GcsCostLedger:
     """GCS-backed cost ledger writing the final cost ledger as JSON.
 
-    Implements the ``CostLedger`` protocol from unity.
+    Implements the ``CostLedger`` protocol from unify.
     """
 
     def __init__(

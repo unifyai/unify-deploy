@@ -66,7 +66,7 @@ adapters = [
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
 
-[project.entry-points."unity.deploy_runtime"]
+[project.entry-points."unify.deploy_runtime"]
 enterprise = "unity_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
@@ -78,7 +78,7 @@ lint = [
     "autoflake>=2.3.1",
 ]
 dev = [
-    "unity",
+    "unify",
     "unisdk",
     "unillm",
     "pre-commit>=4.0.1",
@@ -89,7 +89,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-unity = { path = "../unify", editable = true }
+unify = { path = "../unify", editable = true }
 unisdk = { path = "../unisdk", editable = true }
 unillm = { path = "../unillm", editable = true }
 

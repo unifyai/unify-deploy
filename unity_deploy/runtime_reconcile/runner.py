@@ -9,7 +9,7 @@ import threading
 from time import perf_counter
 from typing import TYPE_CHECKING
 
-from unity.logger import LOGGER as logger
+from unify.logger import LOGGER as logger
 from unity_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
 from unity_deploy.runtime_reconcile.context import (
     RuntimeIdentity,
@@ -20,7 +20,7 @@ from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
 from unity_deploy.timing import log_startup_timing
 
 if TYPE_CHECKING:
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from unify.conversation_manager.conversation_manager import ConversationManager
 
 
 @dataclass(frozen=True)

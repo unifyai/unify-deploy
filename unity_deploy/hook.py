@@ -25,13 +25,13 @@ import os
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
-from unity.logger import LOGGER as logger
+from unify.logger import LOGGER as logger
 from unity_deploy.timing import log_startup_timing
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
 
 if TYPE_CHECKING:
-    from unity.conversation_manager.conversation_manager import ConversationManager
-    from unity.session_details import SessionDetails
+    from unify.conversation_manager.conversation_manager import ConversationManager
+    from unify.session_details import SessionDetails
 
 
 @contextmanager

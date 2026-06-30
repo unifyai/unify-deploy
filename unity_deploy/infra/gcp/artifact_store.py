@@ -16,10 +16,10 @@ from urllib.parse import urlparse
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
-from unity.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
-from unity.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity.common.pipeline.row_streaming import iter_table_input_rows
-from unity.common.pipeline.types import (
+from unify.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
+from unify.common.pipeline.retry_policy import ResilientRequestPolicy
+from unify.common.pipeline.row_streaming import iter_table_input_rows
+from unify.common.pipeline.types import (
     IngestCheckpoint,
     InlineRowsHandle,
     ObjectStoreArtifactHandle,

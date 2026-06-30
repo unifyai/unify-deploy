@@ -1,6 +1,6 @@
 """Pay-related helpers for the Employment Hero package.
 
-Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_custom_functions`
+Underscore-prefixed so :func:`unify.function_manager.custom_functions.collect_custom_functions`
 skips this file (it's library code, not a registered tool).  Imported
 from inside ``sync_employmenthero_pay`` and friends so FunctionManager's
 isolation rule is preserved.

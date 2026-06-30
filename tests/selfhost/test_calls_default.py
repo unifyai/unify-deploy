@@ -90,7 +90,7 @@ def test_livekit_cloud_state_overrides_repo_dev_env():
     stale_repo_livekit_url = "wss://stale-repo.livekit.example"
     with tempfile.TemporaryDirectory() as tmp:
         state_dir = Path(tmp)
-        repo_env = state_dir / "unity.env"
+        repo_env = state_dir / "unify.env"
         repo_env.write_text(
             "\n".join(
                 [

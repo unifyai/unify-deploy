@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from unity.guidance_manager.types.guidance import Guidance
+from unify.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.integrations.discovery import (
     _load_manifest,
 )
@@ -29,7 +29,7 @@ from unity_deploy.assistant_deployments.integrations.validation import (
 )
 from unity_deploy.assistant_deployments.scenarios.loader import load_scenario
 from unity_deploy.assistant_deployments.scenarios.types import ScenarioSpec
-from unity.secret_manager.types import Secret
+from unify.secret_manager.types import Secret
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class LoadedIntegration:
 
     Populated when the manifest has at least one capability or any secrets.
     Consumed downstream by ``_sync_integration_registry`` (deploy time) and
-    ``unity.integration_status`` (runtime).  All list/dict values are
+    ``unify.integration_status`` (runtime).  All list/dict values are
     JSON-stringified to keep the DataManager schema scalar-only.
     """
 
@@ -150,7 +150,7 @@ def _build_registry_row(manifest: IntegrationManifest) -> dict:
     .. note::
 
        Post-May-2026 cleanup: the runtime side
-       (:mod:`unity.integration_status`) reads disk discovery directly,
+       (:mod:`unify.integration_status`) reads disk discovery directly,
        not these persisted rows.  This row exists for telemetry — a
        per-deployment record of which integrations were declared — and
        for any future read paths that explicitly want the deployment's

@@ -135,7 +135,7 @@ def sync_integrations(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not apps:
         return None
 
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from unify.integrations.builtins_catalog import seed_builtin_integrations
 
     changed = seed_builtin_integrations(
         apps=apps,
