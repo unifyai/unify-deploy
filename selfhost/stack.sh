@@ -184,10 +184,10 @@ cmd_doctor() {
 
   if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
     local unity_py="$UNITY_REPO_PATH/.venv/bin/python"
-    if "$unity_py" -c "import unity.gateway" &>/dev/null; then
-      log_success "Unity venv + unity.gateway OK"
+    if "$unity_py" -c "import unify.gateway" &>/dev/null; then
+      log_success "Unity venv + unify.gateway OK"
     else
-      log_error "unity.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
+      log_error "unify.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
       ok=false
     fi
   else
