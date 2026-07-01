@@ -96,11 +96,17 @@ async def store_google_tokens(
     new_secrets: dict,
     api_key: str,
     granted_scopes: str = "",
+    account_email: str = "",
 ) -> bool:
     """Upsert Google OAuth tokens (and granted scopes) as assistant secrets.
 
     See ``common.orchestra_secrets._upsert_assistant_secrets`` for the
     PUT-then-POST upsert semantics.
+
+    ``account_email`` is the connected account's own mailbox address. It is
+    persisted as ``GOOGLE_ACCOUNT_EMAIL`` so the Console and runtime can
+    distinguish the user's connected mailbox from the assistant's managed
+    platform mailbox.
     """
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")
@@ -116,6 +122,8 @@ async def store_google_tokens(
     }
     if granted_scopes:
         secrets_to_store["GOOGLE_GRANTED_SCOPES"] = granted_scopes
+    if account_email:
+        secrets_to_store["GOOGLE_ACCOUNT_EMAIL"] = account_email
 
     return await _upsert_assistant_secrets(
         assistant_id=assistant_id,

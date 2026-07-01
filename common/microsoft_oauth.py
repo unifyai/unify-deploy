@@ -70,6 +70,7 @@ async def store_microsoft_tokens(
     api_key: str,
     granted_scopes: str = "",
     source: str = "",
+    account_email: str = "",
 ) -> bool:
     """Upsert Microsoft OAuth tokens (and granted scopes) as assistant secrets.
 
@@ -110,6 +111,8 @@ async def store_microsoft_tokens(
         secrets_to_store["MICROSOFT_GRANTED_SCOPES"] = granted_scopes
     if source:
         secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
+    if account_email:
+        secrets_to_store["MICROSOFT_ACCOUNT_EMAIL"] = account_email
 
     return await _upsert_assistant_secrets(
         assistant_id=assistant_id,

@@ -113,6 +113,31 @@ Four projects, split to isolate workloads and GCE API rate limits.
 
 **Why VMs are a separate project:** GKE Autopilot Node Auto-Provisioning consumes the per-project `compute.instances.insert` rate limit. Co-locating assistant-VM creation with a GKE NAP burst historically exhausted the limit and 500'd the hiring flow. Separating the pool into `gcp-project-vms` gives each its own budget.
 
+### ⚠️ gcloud region/zone cheat-sheet — read this before running any `gcloud` command
+
+Almost everything here is **regional or zonal**, and several `gcloud` surfaces **default to the wrong location and return stale or empty results without erroring**. Mis-reading that output ("the build never ran", "that service doesn't exist", "wrong project") is the single most common recurring mistake. **Always pass the location flag from the table below.**
+
+**The #1 trap — Cloud Build is regional and the `global` default lies.** Every trigger and build for **both** `gcp-project-runtime` and `gcp-project-saas` lives in **`us-central1`**. With no `--region`, `gcloud builds …` queries `global`, where:
+- `gcp-project-runtime` → **empty / months-stale** (you'll see only old builds and wrongly conclude the push didn't trigger anything).
+- `gcp-project-saas` → shows **only `landing-page`**, silently hiding every `orchestra` and `console` build.
+
+✅ Always: `gcloud builds list --project=<P> --region=us-central1 …` — and the same `--region=us-central1` on `gcloud builds describe`, `gcloud builds log`, `gcloud builds triggers list`, and `gcloud builds triggers run`.
+
+| Resource | gcloud surface | Required location flag |
+|---|---|---|
+| **Cloud Build** — all triggers + builds, **both** projects | `gcloud builds …` | **`--region=us-central1`** (never `global`) |
+| GKE cluster `unity` (`gcp-project-runtime`) | `gcloud container clusters …` | `--region=us-central1` |
+| Cloud Run comms/adapters/link-tracker (`gcp-project-runtime`) | `gcloud run …` | `--region=us-central1` |
+| Cloud Run `orchestra`(+`-staging`), `landing-page`(+`-staging`), `saas-web-app` (Console **prod**) (`gcp-project-saas`) | `gcloud run …` | `--region=europe-west1` |
+| Cloud Run `saas-web-app-redesign-staging` (Console **staging**) (`gcp-project-saas`) | `gcloud run …` | `--region=us-central1` ⚠️ (differs from Console prod) |
+| Cloud SQL `prod-ssd` / `staging-ssd` (`gcp-project-saas`) | `gcloud sql …` / proxy | `europe-west3` |
+| Compute tunnel VMs (`gcp-project-runtime`) | `gcloud compute …` | zone `us-central1-a` |
+| Pool VMs (`gcp-project-vms`) | `gcloud compute …` | zones `us-central1-f` (Ubuntu) / `-a` |
+| Cloud DNS zone `unifyai` (`gcp-project-dns`) | `gcloud dns …` | global (no flag) |
+| Secret Manager (all projects) | `gcloud secrets …` | global — `--project` only, no region |
+
+The org GitHub variable `GCP_LOCATION=europe-west1` is **only** the saas **Cloud Run** default — it does **not** apply to Cloud Build (`us-central1`) or to the `gcp-project-runtime` runtime project. When a resource "doesn't exist" or a build "is missing", suspect a wrong/`global` location **before** suspecting a wrong project.
+
 ---
 
 ## 4. Live resource inventory (canonical names)
@@ -265,7 +290,7 @@ Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_A
 
 ### Cloud Build (image build + GKE deploy)
 
-Triggers fire on branch pushes; the GitHub connection is `github-unifyai` (`gcp-project-runtime/us-central1`).
+Triggers fire on branch pushes; the GitHub connection is `github-unifyai` (`gcp-project-runtime/us-central1`). **All triggers and builds live in `us-central1`** — `gcloud builds {list,describe,log,triggers list}` **must** pass `--region=us-central1`, or the `global` default returns stale/empty results (see the [region cheat-sheet in §3](#3-gcp-project-map)).
 
 | Branch | Trigger | Image | Env |
 |---|---|---|---|

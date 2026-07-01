@@ -4575,6 +4575,7 @@ async def microsoft_oauth_callback(request: Request):
         api_key=api_key,
         granted_scopes=granted_scopes,
         source=token_source,
+        account_email=user_email,
     )
 
     # ------------------------------------------------------------------
@@ -4812,6 +4813,7 @@ async def google_oauth_callback(request: Request):
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=granted_scopes,
+        account_email=user_email,
     )
 
     actions = state_data.get("actions", {})
