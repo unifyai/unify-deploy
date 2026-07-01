@@ -52,8 +52,8 @@ def _whatsapp_call_permission_status(button_payload: str) -> tuple[str, str]:
     return "unknown_interaction", "UNKNOWN"
 
 
-def _redact_email(email: str) -> str:
-    if "@" in email:
+def _redact_email(email: str | None) -> str:
+    if email and "@" in email:
         return f"***@{email.split('@', 1)[1]}"
     return "***"
 
