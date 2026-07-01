@@ -72,7 +72,6 @@ uv run unity_deploy/assistant_deployments/scripts/ingest_fm.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--parallel` | off | Ingest tables in parallel |
-| `--skip-all-context` | off | Skip `add_to_all_context` |
 | `--chunk-size` | per-table | Override rows-per-chunk |
 | `--tables` | all | Only ingest listed tables (substring match) |
 

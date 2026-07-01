@@ -231,11 +231,6 @@ def main() -> int:
         help="Disable the companion *_unify.log SDK log file",
     )
     parser.add_argument(
-        "--skip-all-context",
-        action="store_true",
-        help="Skip add_to_all_context (faster bulk load; add references later)",
-    )
-    parser.add_argument(
         "--chunk-size",
         type=int,
         default=None,
@@ -704,7 +699,6 @@ def main() -> int:
                             ),
                             "chunk_size": chunk_size,
                             "infer_untyped": infer_untyped,
-                            "skip_all_context": args.skip_all_context,
                             "post_ingest_config": post_ingest_config,
                             "col_descs": col_descs,
                             "chunk_callback": _make_chunk_callback(lp, label),
@@ -747,7 +741,6 @@ def main() -> int:
                     embed_strategy=p["embed_strategy"],
                     chunk_size=p["chunk_size"],
                     infer_untyped_fields=p["infer_untyped"],
-                    add_to_all_context=not p["skip_all_context"],
                     post_ingest=p["post_ingest_config"],
                     on_task_complete=p["chunk_callback"],
                     expected_total_rows=item.row_count,
