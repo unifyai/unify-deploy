@@ -5638,9 +5638,20 @@ def scheduled_jobs_cleanup():
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
-def scheduled_jobs_expire_stale(max_age_hours: int = 12):
-    """Stop stale assistant runtimes (utility — use /scheduled/infra/maintenance for cron)."""
-    result = expire_all_stale_jobs(max_age_hours=max_age_hours)
+def scheduled_jobs_expire_stale(
+    max_age_hours: int = 12,
+    assistant_id: str | None = None,
+):
+    """Stop stale assistant runtimes (utility — use /scheduled/infra/maintenance for cron).
+
+    ``assistant_id`` scopes the sweep to a single assistant. Callers that pass a
+    small ``max_age_hours`` (e.g. tests forcing everything stale) must scope to
+    their own assistant so the sweep cannot reclaim unrelated live runtimes.
+    """
+    result = expire_all_stale_jobs(
+        max_age_hours=max_age_hours,
+        assistant_id=assistant_id,
+    )
     try:
         orphan_resp = requests.post(
             f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
