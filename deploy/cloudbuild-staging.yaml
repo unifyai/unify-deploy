@@ -4,6 +4,9 @@ steps:
   id: 'guard'
   entrypoint: 'bash'
   args: ['deploy/scripts/cloudbuild/concurrency_guard.sh', '${_REGION}']
+  env:
+  - 'BUILD_ID=${BUILD_ID}'
+  - 'PROJECT_ID=${PROJECT_ID}'
   waitFor: ['-']
 
   # Resolve the canonical Unity (brain) SHA that identifies the overlay image.
@@ -360,6 +363,8 @@ steps:
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'configure-adapters-schedulers'
   entrypoint: bash
+  env:
+  - 'PROJECT_ID=${PROJECT_ID}'
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
   - '-c'

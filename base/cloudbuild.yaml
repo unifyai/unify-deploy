@@ -5,6 +5,9 @@ steps:
   id: 'guard'
   entrypoint: 'bash'
   args: ['deploy/scripts/cloudbuild/concurrency_guard.sh', '${_REGION}']
+  env:
+  - 'BUILD_ID=${BUILD_ID}'
+  - 'PROJECT_ID=${PROJECT_ID}'
   waitFor: ['-']
 
   # Clone Unity and overlay the mirrored hosted deploy assets from this repo.
