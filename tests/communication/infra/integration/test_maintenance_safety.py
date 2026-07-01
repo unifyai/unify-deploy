@@ -66,11 +66,23 @@ def has_session_crd(k8s_clients) -> bool:
         return False
 
 
-def _fire_stale_job_sweep(max_age_hours: int = 12) -> dict:
-    """Trigger only the stale-job expiry step of infra-maintenance."""
+def _fire_stale_job_sweep(
+    max_age_hours: int = 12,
+    assistant_id: str | None = None,
+) -> dict:
+    """Trigger only the stale-job expiry step of infra-maintenance.
+
+    ``assistant_id`` scopes the sweep to a single assistant. Any test that
+    forces staleness with ``max_age_hours=0`` MUST pass its own assistant id:
+    the sweep lists jobs across the shared namespace, so an unscoped
+    ``max_age_hours=0`` would reclaim every live twin as collateral.
+    """
+    params = {"max_age_hours": max_age_hours}
+    if assistant_id is not None:
+        params["assistant_id"] = assistant_id
     resp = requests.post(
         f"{ADAPTERS_URL}/scheduled/jobs/expire-stale",
-        params={"max_age_hours": max_age_hours},
+        params=params,
         headers=_ADMIN_HEADERS,
         timeout=60,
     )
@@ -157,8 +169,9 @@ def test_maintenance_does_not_kill_active_container_with_stale_done_jobs(
       1. Create a test assistant and start a container.
       2. Wait for the container to reach ``running`` status.
       3. Inject a fake stale ``done``-labeled job for the same assistant.
-      4. Fire the stale-job sweep with ``max_age_hours=0`` so the
-         injected done job (created seconds ago) is treated as stale.
+      4. Fire the stale-job sweep with ``max_age_hours=0`` (scoped to this
+         test's assistant so it cannot touch real twins) so the injected
+         done job (created seconds ago) is treated as stale.
       5. Assert the live container is still running and the session is
          still Active (not Stopped/Released).
       6. Assert the stale done job was cleaned up.
@@ -210,7 +223,7 @@ def test_maintenance_does_not_kill_active_container_with_stale_done_jobs(
         assert _job_exists(batch_api, stale_job_name)
         print(f"[Setup] Injected stale done job: {stale_job_name}")
 
-        result = _fire_stale_job_sweep(max_age_hours=0)
+        result = _fire_stale_job_sweep(max_age_hours=0, assistant_id=agent_id)
         print(f"[Sweep] Result: {result}")
 
         assert not _job_exists(
@@ -333,7 +346,8 @@ def test_maintenance_deletes_stale_done_jobs(
     """Stale done jobs must be deleted by the sweep, not just logged.
 
     Injects two fake ``done``-labeled jobs, fires the sweep with
-    ``max_age_hours=0`` to treat them as stale, then asserts both
+    ``max_age_hours=0`` scoped to the ``test-maintenance-cleanup`` assistant
+    (so real twins are untouched) to treat them as stale, then asserts both
     are gone from the K8s API server.
     """
     stale_names = [
@@ -349,7 +363,10 @@ def test_maintenance_deletes_stale_done_jobs(
             assert _job_exists(batch_api, name), f"Setup failed: {name} not created"
         print(f"\n[Setup] Injected {len(stale_names)} stale done jobs")
 
-        result = _fire_stale_job_sweep(max_age_hours=0)
+        result = _fire_stale_job_sweep(
+            max_age_hours=0,
+            assistant_id="test-maintenance-cleanup",
+        )
         print(f"[Sweep] Result: {result}")
 
         for name in stale_names:

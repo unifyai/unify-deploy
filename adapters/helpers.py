@@ -286,6 +286,40 @@ def update_phone_call_session(payload: dict) -> dict | None:
     return resp.json()
 
 
+def assistant_has_active_call(assistant_id: str) -> bool:
+    """Report whether an assistant currently has a live or pending PSTN call.
+
+    Best-effort guard used by infra maintenance so a stale-job sweep never
+    tears down a runtime that is mid-call. A lookup failure is treated as
+    "active" on purpose: it is safer to defer cleanup for one cycle than to
+    stop a possibly on-call runtime, and the next sweep re-checks.
+    """
+    try:
+        resp = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/phone/active-call",
+            params={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.info(
+            "[assistant_has_active_call] lookup failed for %s "
+            "(treating as active): %s",
+            assistant_id,
+            exc,
+        )
+        return True
+    if resp.status_code != 200:
+        logger.info(
+            "[assistant_has_active_call] lookup returned %s for %s "
+            "(treating as active)",
+            resp.status_code,
+            assistant_id,
+        )
+        return True
+    return bool(resp.json().get("active", False))
+
+
 def get_whatsapp_call_session(
     provider_call_sid: str,
     provider: str = "twilio",
@@ -781,7 +815,87 @@ def check_valid_contact(
     return default_contacts, False, None
 
 
-def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
+def _sanitize_assistant_label(value: str) -> str:
+    """Normalize an assistant id to the form used on the K8s ``assistant-id`` label."""
+    return value.strip().lower().replace("_", "-")
+
+
+def classify_stale_running(
+    stale_running: list[dict],
+    session_states: dict[str, dict],
+) -> tuple[dict[str, str], list[str], list[str]]:
+    """Decide the fate of each stale *running* job. Pure: no IO.
+
+    For every stale running job, use the pre-read session state to choose one of
+    three outcomes:
+
+    - **stop** the owning session — the job is still the session's current
+      binding, the session is non-terminal, is not already stopping, and the
+      assistant has no live/pending call. Returned in ``assistants_to_stop``
+      (``{assistant_id: job_name}``).
+    - **safe-delete** the job directly — no session owns it anymore (missing,
+      terminal, or bound to a different job), or the job carries no usable
+      assistant id. Returned in ``safe_delete_names``.
+    - **defer** — leave it for a later sweep: inspection failed, the session is
+      already stopping, or the assistant is on a live call (never tear down a
+      runtime mid-call). Returned in ``deferred_names``.
+
+    Returns ``(assistants_to_stop, safe_delete_names, deferred_names)``.
+    """
+    assistants_to_stop: dict[str, str] = {}
+    safe_delete_names: list[str] = []
+    deferred_names: list[str] = []
+    for job in stale_running:
+        job_name = str(job.get("job_name") or "")
+        assistant_id = str(job.get("assistant_id") or "")
+        if not job_name:
+            continue
+        if not assistant_id or assistant_id == "unknown":
+            safe_delete_names.append(job_name)
+            continue
+
+        session_state = session_states.get(assistant_id, {})
+        if session_state.get("missing"):
+            safe_delete_names.append(job_name)
+            continue
+        if session_state.get("inspection_failed"):
+            deferred_names.append(job_name)
+            continue
+
+        bound_job = str(session_state.get("bound_job", "") or "")
+        if bound_job != job_name:
+            safe_delete_names.append(job_name)
+            continue
+        if session_state.get("terminal"):
+            safe_delete_names.append(job_name)
+            continue
+        if session_state.get("desired_state") == "Stopped":
+            logger.info(
+                "[expire_all_stale_jobs] Session %s already stopping stale job %s",
+                assistant_id,
+                job_name,
+            )
+            deferred_names.append(job_name)
+            continue
+        if session_state.get("has_active_call"):
+            logger.info(
+                "[expire_all_stale_jobs] Session %s has a live call; "
+                "deferring stale job %s instead of stopping",
+                assistant_id,
+                job_name,
+            )
+            deferred_names.append(job_name)
+            continue
+
+        assistants_to_stop[assistant_id] = job_name
+        deferred_names.append(job_name)
+    return assistants_to_stop, safe_delete_names, deferred_names
+
+
+def expire_all_stale_jobs(
+    max_age_hours: int = 24,
+    assistant_id: str | None = None,
+) -> dict:
     """Clean up stale K8s Job objects and stop genuinely stale runtimes.
 
     Stale ``done`` jobs (finished, pod gone) are deleted — their logs are
@@ -790,8 +904,13 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     Stale ``running`` jobs (active >max_age_hours) stay session-owned. If a
     stale Job is still the current binding of an AssistantSession, maintenance
     asks Comms to stop the session and lets the controller tear the runtime
-    down. Direct Job deletion is reserved for stale ``done`` Jobs and stale
+    down. A session whose assistant is on a live/pending call is deferred, never
+    stopped. Direct Job deletion is reserved for stale ``done`` Jobs and stale
     running Jobs that are no longer the current binding of any session.
+
+    ``assistant_id`` scopes the sweep to a single assistant. Small
+    ``max_age_hours`` values (which treat every job as stale) must always be
+    paired with a scope so the sweep cannot reclaim unrelated live runtimes.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
@@ -819,6 +938,14 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         return {"total_running": 0, "expired": 0, "error": str(e)}
 
     all_jobs = resp.json().get("jobs", [])
+
+    if assistant_id is not None:
+        scope = _sanitize_assistant_label(assistant_id)
+        all_jobs = [
+            j
+            for j in all_jobs
+            if _sanitize_assistant_label(str(j.get("assistant_id") or "")) == scope
+        ]
 
     stale = []
     for job in all_jobs:
@@ -942,6 +1069,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
                     )
                     or "Running",
                     "terminal": phase in {"Released", "Failed"},
+                    "has_active_call": assistant_has_active_call(aid),
                 }
             except Exception as exc:
                 logger.info(
@@ -956,43 +1084,12 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             with ThreadPoolExecutor(max_workers=len(stale_aids)) as executor:
                 session_states = dict(executor.map(_read_session_state, stale_aids))
 
-        safe_delete_running_names: list[str] = []
-        assistants_to_stop: dict[str, str] = {}
-        for job in stale_running:
-            job_name = str(job.get("job_name") or "")
-            assistant_id = str(job.get("assistant_id") or "")
-            if not job_name:
-                continue
-            if not assistant_id or assistant_id == "unknown":
-                safe_delete_running_names.append(job_name)
-                continue
-
-            session_state = session_states.get(assistant_id, {})
-            if session_state.get("missing"):
-                safe_delete_running_names.append(job_name)
-                continue
-            if session_state.get("inspection_failed"):
-                deferred_jobs.append(job_name)
-                continue
-
-            bound_job = str(session_state.get("bound_job", "") or "")
-            if bound_job != job_name:
-                safe_delete_running_names.append(job_name)
-                continue
-            if session_state.get("terminal"):
-                safe_delete_running_names.append(job_name)
-                continue
-            if session_state.get("desired_state") == "Stopped":
-                logger.info(
-                    "[expire_all_stale_jobs] Session %s already stopping stale job %s",
-                    assistant_id,
-                    job_name,
-                )
-                deferred_jobs.append(job_name)
-                continue
-
-            assistants_to_stop[assistant_id] = job_name
-            deferred_jobs.append(job_name)
+        (
+            assistants_to_stop,
+            safe_delete_running_names,
+            classified_deferred,
+        ) = classify_stale_running(stale_running, session_states)
+        deferred_jobs.extend(classified_deferred)
 
         def _stop_bound_session(item: tuple[str, str]):
             """Ask Comms to stop the session that still owns a stale job."""

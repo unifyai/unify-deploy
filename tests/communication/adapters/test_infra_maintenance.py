@@ -81,3 +81,113 @@ def test_scheduled_jobs_create_passes_extra_demand(client, app_module):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     mock_replenish.assert_called_once_with(refresh=False, extra_demand=2)
+
+
+class TestClassifyStaleRunning:
+    """Fate decision for stale running jobs (pure helper, real inputs)."""
+
+    @staticmethod
+    def _job(name: str, assistant_id: str) -> dict:
+        return {"job_name": name, "assistant_id": assistant_id}
+
+    def test_session_on_live_call_is_deferred_not_stopped(self):
+        """A bound, healthy, on-call session must never be torn down mid-call."""
+        from adapters.helpers import classify_stale_running
+
+        job = self._job("unity-job-2693", "2693")
+        to_stop, safe_delete, deferred = classify_stale_running(
+            [job],
+            {
+                "2693": {
+                    "bound_job": "unity-job-2693",
+                    "desired_state": "Running",
+                    "terminal": False,
+                    "has_active_call": True,
+                },
+            },
+        )
+        assert to_stop == {}
+        assert safe_delete == []
+        assert deferred == ["unity-job-2693"]
+
+    def test_bound_idle_session_is_stopped(self):
+        """The same session with no live call is the stop candidate."""
+        from adapters.helpers import classify_stale_running
+
+        job = self._job("unity-job-2693", "2693")
+        to_stop, safe_delete, deferred = classify_stale_running(
+            [job],
+            {
+                "2693": {
+                    "bound_job": "unity-job-2693",
+                    "desired_state": "Running",
+                    "terminal": False,
+                    "has_active_call": False,
+                },
+            },
+        )
+        assert to_stop == {"2693": "unity-job-2693"}
+        assert safe_delete == []
+
+    def test_already_stopping_session_is_deferred(self):
+        from adapters.helpers import classify_stale_running
+
+        job = self._job("unity-job-5", "5")
+        to_stop, safe_delete, deferred = classify_stale_running(
+            [job],
+            {
+                "5": {
+                    "bound_job": "unity-job-5",
+                    "desired_state": "Stopped",
+                    "terminal": False,
+                    "has_active_call": False,
+                },
+            },
+        )
+        assert to_stop == {}
+        assert deferred == ["unity-job-5"]
+
+    def test_orphaned_and_terminal_jobs_are_safe_deleted(self):
+        from adapters.helpers import classify_stale_running
+
+        jobs = [
+            self._job("unity-job-missing", "10"),
+            self._job("unity-job-terminal", "11"),
+            self._job("unity-job-rebound", "12"),
+            self._job("unity-job-noid", "unknown"),
+        ]
+        to_stop, safe_delete, deferred = classify_stale_running(
+            jobs,
+            {
+                "10": {"missing": True},
+                "11": {
+                    "bound_job": "unity-job-terminal",
+                    "terminal": True,
+                    "has_active_call": False,
+                },
+                "12": {
+                    "bound_job": "unity-job-current",
+                    "terminal": False,
+                    "has_active_call": False,
+                },
+            },
+        )
+        assert to_stop == {}
+        assert set(safe_delete) == {
+            "unity-job-missing",
+            "unity-job-terminal",
+            "unity-job-rebound",
+            "unity-job-noid",
+        }
+
+    def test_inspection_failure_is_deferred(self):
+        from adapters.helpers import classify_stale_running
+
+        job = self._job("unity-job-7", "7")
+        to_stop, safe_delete, deferred = classify_stale_running(
+            [job],
+            {"7": {"inspection_failed": True}},
+        )
+        assert to_stop == {}
+        assert safe_delete == []
+        assert deferred == ["unity-job-7"]
