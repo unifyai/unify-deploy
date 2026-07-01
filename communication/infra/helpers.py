@@ -389,6 +389,7 @@ def build_unity_job_manifest(
             "LIVEKIT_SIP_URI",
             "LIVEKIT_URL",
             "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
             "ORCHESTRA_ADMIN_KEY",
             "SHARED_UNIFY_KEY",
             "TAVILY_API_KEY",

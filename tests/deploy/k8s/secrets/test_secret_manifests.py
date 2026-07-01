@@ -31,6 +31,17 @@ def test_external_secret_targets_match_namespace() -> None:
         assert doc["spec"]["secretStoreRef"]["name"] == "unity-gcp-secret-manager"
 
 
+def test_openrouter_key_maps_from_secret_manager() -> None:
+    doc = _load_yaml("unity-secrets-external-secret_staging.yaml")
+    entries = [
+        item
+        for item in doc["spec"]["data"]
+        if item["secretKey"] == "OPENROUTER_API_KEY"
+    ]
+    assert len(entries) == 1
+    assert entries[0]["remoteRef"]["key"] == "OPENROUTER_API_KEY"
+
+
 def test_tavily_key_maps_from_secret_manager() -> None:
     doc = _load_yaml("unity-secrets-external-secret_staging.yaml")
     tavily_entries = [

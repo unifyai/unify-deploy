@@ -134,6 +134,7 @@ def _print_env(assistant: dict, user: dict, api_key: str, deploy_env: str):
         "LIVEKIT_API_KEY=",
         "LIVEKIT_API_SECRET=",
         "OPENAI_API_KEY=",
+        "OPENROUTER_API_KEY=",
         "ANTHROPIC_API_KEY=",
         f"USER_ID={_v(assistant.get('user_id'))}",
         f"UNIFY_KEY={api_key}",
