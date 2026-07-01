@@ -276,6 +276,36 @@ steps:
     run_cloud_run_with_retry route_canonical_traffic
   waitFor: ['Deploy Unity Comms App']
 
+  # Refresh the idle job pool so new pods are stamped from THIS build's
+  # comms revision. The job manifest (build_unity_job_manifest -- which
+  # secrets/env land in each pod) is produced by whatever comms revision
+  # currently serves /infra/job/create, so this must run only after
+  # route-canonical-traffic has cut 100% of traffic to the new revision.
+  # Running it earlier (or letting the parallel unity-deploy build's
+  # refresh win the race) stamps the pool from the previous revision and
+  # silently drops manifest changes.
+- name: 'gcr.io/cloud-builders/curl'
+  id: 'refresh-idle-jobs'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -e
+    ADAPTERS=https://${_ADAPTERS_HOST}
+    AUTH="Authorization: Bearer $$ORCHESTRA_ADMIN_KEY"
+
+    echo "Refreshing idle jobs against the newly-live comms revision..."
+    curl -sf -X POST -H "$${AUTH}" "$${ADAPTERS}/scheduled/jobs/create?refresh=true" && echo
+
+    echo "Waiting 120s for jobs to register as idle..."
+    sleep 120
+
+    echo "Cleaning up stale idle jobs..."
+    curl -sf -X POST -H "$${AUTH}" "$${ADAPTERS}/scheduled/jobs/cleanup" && echo
+    echo "Idle job refresh complete."
+  secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  waitFor: ['route-canonical-traffic']
+
 # Options
 options:
   substitutionOption: ALLOW_LOOSE
@@ -301,6 +331,8 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
+  - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
+    env: 'ORCHESTRA_ADMIN_KEY'
 
 # Timeout
 timeout: '1200s'  # 20 minutes

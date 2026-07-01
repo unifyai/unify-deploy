@@ -147,7 +147,16 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['apply-unity-external-secrets', 'upload-sha']
 
-  # Refresh idle containers so they pick up the new image
+  # Refresh idle containers so they pick up the new unity runtime image.
+  # This build owns the refresh for the unity-image path: a push to the
+  # unity (brain) repo rebuilds the image and updates the GCS image hash
+  # here, but does NOT trigger the comms build, so the pool must be
+  # refreshed from this build. It is manifest-safe on that path because
+  # the comms revision (which stamps pod env via build_unity_job_manifest)
+  # is unchanged. When a unity-deploy push changes the manifest itself,
+  # the comms build's own post-traffic-cutover refresh is authoritative;
+  # do NOT remove that one as "duplicate" -- this step runs in parallel
+  # with the comms deploy and can predate its traffic cutover.
 - name: 'gcr.io/cloud-builders/curl'
   id: 'refresh-idle-jobs'
   entrypoint: 'bash'
