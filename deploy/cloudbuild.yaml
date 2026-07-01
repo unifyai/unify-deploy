@@ -530,7 +530,11 @@ steps:
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
-  machineType: 'E2_HIGHCPU_8'
+  # The orchestrator builds overlay + comms + adapters + session-controller in
+  # parallel on one machine. When a concurrent unity (brain) change busts every
+  # image's cache at once, four heavy pip/clone builds run simultaneously, so we
+  # size for that worst case rather than the common cache-hit path.
+  machineType: 'E2_HIGHCPU_32'
 
 substitutions:
   _REGION: 'us-central1'
