@@ -1,47 +1,124 @@
 steps:
-  # Build thin enterprise overlay on top of the Unity base image.
-  # _BASE_IMAGE is passed by the upstream Unity build trigger via substitution override.
-  # Falls back to unity-base:latest if triggered directly.
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'build-image'
+  # Drop duplicate-webhook / superseded runs of this trigger before any work.
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'guard'
+  entrypoint: 'bash'
+  args: ['deploy/scripts/cloudbuild/concurrency_guard.sh', '${_REGION}']
+  env:
+  - 'BUILD_ID=${BUILD_ID}'
+  - 'PROJECT_ID=${PROJECT_ID}'
+  waitFor: ['-']
+
+  # Resolve the canonical Unity (brain) SHA that identifies the overlay image.
+  # A unity (brain) push passes _UNITY_SHA explicitly via the base-build chain;
+  # a direct unity-deploy push leaves it empty, so we fall back to the brain SHA
+  # baked into unity-base:latest (published by the base build to GCS).
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'resolve-unity-sha'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
+    set -euo pipefail
+    SHA="${_UNITY_SHA}"
+    if [ -z "$$SHA" ]; then
+      SHA="$$(gsutil cat gs://bucket/unity_base_sha.txt)"
+    fi
+    if [ -z "$$SHA" ]; then
+      echo "Could not resolve Unity brain SHA" >&2
+      exit 1
+    fi
+    echo "$$SHA" > /workspace/unity_sha.txt
+    echo "Unity brain SHA: $$SHA"
+  waitFor: ['guard']
+
+  # --- Image builds (parallel) --------------------------------------------
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-overlay'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    SHA="$$(cat /workspace/unity_sha.txt)"
     echo "Base image: ${_BASE_IMAGE}"
+    echo "Unity SHA:  $$SHA"
     echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       --build-arg BRAIN_REF=${_BRAIN_REF} \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest .
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:latest .
   secretEnv: ['GITHUB_TOKEN']
+  waitFor: ['resolve-unity-sha']
 
-  # Fail the deployment before pushing if the worker image does not include
-  # the maintenance CLI commands referenced by the Kubernetes CronJobs.
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-comms'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest || true
+    UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/main | awk '{print $$1}')
+    echo "Cache-busting comms unity layer with UNITY_SHA=$$UNITY_SHA"
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=main \
+      --build-arg UNITY_SHA=$$UNITY_SHA \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest .
+  secretEnv: ['GITHUB_TOKEN']
+  waitFor: ['guard']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-adapters'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest || true
+    UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/main | awk '{print $$1}')
+    echo "Cache-busting adapters unity layer with UNITY_SHA=$$UNITY_SHA"
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+      --build-arg BRANCH_NAME=main \
+      --build-arg UNITY_SHA=$$UNITY_SHA \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest .
+  secretEnv: ['GITHUB_TOKEN']
+  waitFor: ['guard']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    DOCKER_BUILDKIT=1 docker build -f scripts/assistant-session-controller/Dockerfile \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_SC_IMAGE}:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_SC_IMAGE}:latest .
+  waitFor: ['guard']
+
 - name: 'gcr.io/cloud-builders/docker'
   id: 'smoke-pipeline-cli'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
-    docker run --rm \
-      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
-    docker run --rm \
-      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control reconcile-stale --help >/dev/null
-    docker run --rm \
-      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control recover-stale --help >/dev/null
-    docker run --rm \
-      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
-  waitFor: ['build-image']
+    set -euo pipefail
+    SHA="$$(cat /workspace/unity_sha.txt)"
+    IMG="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA"
+    for cmd in reconcile-dlq reconcile-stale recover-stale worker-refresh-check; do
+      docker run --rm "$$IMG" python -m unity_deploy.infra.cli.pipeline_control "$$cmd" --help >/dev/null
+    done
+  waitFor: ['build-overlay']
 
-  # Fetch public Unity integration manifests for the integrations artifact job.
 - name: 'gcr.io/cloud-builders/git'
   id: 'fetch-unity-integration-manifests'
   entrypoint: 'bash'
@@ -50,26 +127,54 @@ steps:
   - '-c'
   - |
     set -euo pipefail
+    SHA="$$(cat /workspace/unity_sha.txt)"
     git clone --depth 1 --branch main https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-manifest-src
-    if [ -n "${_UNITY_SHA}" ] && git -C /workspace/unity-manifest-src fetch --depth 1 origin "${_UNITY_SHA}"; then
+    if git -C /workspace/unity-manifest-src fetch --depth 1 origin "$$SHA"; then
       git -C /workspace/unity-manifest-src checkout --detach FETCH_HEAD
     fi
     cp -R /workspace/unity-manifest-src/deploy/integrations /workspace/integration-manifests
-  waitFor: ['-']
+  waitFor: ['resolve-unity-sha']
 
-  # Push Docker Image (SHA and latest tags in parallel)
+  # --- Image pushes -------------------------------------------------------
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'push-sha-tag'
+  id: 'push-overlay'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
-    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}
+    set -euo pipefail
+    SHA="$$(cat /workspace/unity_sha.txt)"
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:latest
   waitFor: ['smoke-pipeline-cli']
 
-  # Start all Builtins artifact seeding asynchronously. Core artifacts
-  # (functions/guidance) run from the Unity image; provider integration artifacts
-  # run from the Orchestra service image and materialize into Builtins contexts.
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-comms'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA}
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest
+  waitFor: ['build-comms']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-adapters'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA}
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest
+  waitFor: ['build-adapters']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-session-controller'
+  args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_SC_IMAGE}']
+  waitFor: ['build-session-controller']
+
 - name: 'gcr.io/cloud-builders/gcloud'
   id: 'start-builtins-artifacts-seed'
   entrypoint: 'bash'
@@ -77,33 +182,62 @@ steps:
   - '-c'
   - |
     set -euo pipefail
+    SHA="$$(cat /workspace/unity_sha.txt)"
     bash deploy/scripts/run_seed_builtins_artifacts_job.sh \
       --environment production \
       --manifest /workspace/integration-manifests/bootstrap.production.toml \
-      --unity-image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      --unity-image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA" \
       --async
-  waitFor: ['fetch-unity-integration-manifests', 'push-sha-tag']
+  waitFor: ['fetch-unity-integration-manifests', 'push-overlay']
 
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'push-latest-tag'
+  # --- Digest gates -------------------------------------------------------
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'gate-comms'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
-    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest
-  waitFor: ['smoke-pipeline-cli']
+    set -euo pipefail
+    NEED="$$(bash deploy/scripts/cloudbuild/cloud_run_deploy_needed.sh \
+      ${_COMMS_SERVICE} ${_REGION} \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA})"
+    if [ "$$NEED" = "changed" ]; then
+      touch /workspace/deploy_comms
+      echo "comms image changed -> will deploy"
+    else
+      echo "comms image unchanged -> skipping comms deploy"
+    fi
+  waitFor: ['push-comms']
 
-  # Upload SHA to Cloud Storage
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'gate-adapters'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    NEED="$$(bash deploy/scripts/cloudbuild/cloud_run_deploy_needed.sh \
+      ${_ADAPTERS_SERVICE} ${_REGION} \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA})"
+    if [ "$$NEED" = "changed" ]; then
+      touch /workspace/deploy_adapters
+      echo "adapters image changed -> will deploy"
+    else
+      echo "adapters image unchanged -> skipping adapters deploy"
+    fi
+  waitFor: ['push-adapters']
+
+  # --- Overlay rollout (always) -------------------------------------------
 - name: 'gcr.io/cloud-builders/gsutil'
   id: 'upload-sha'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
-    echo ${SHORT_SHA} | gsutil cp - gs://bucket/image_hash.txt
-  waitFor: ['push-latest-tag']
+    set -euo pipefail
+    cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash.txt
+  waitFor: ['push-overlay']
 
-  # One-time cluster bootstrap: deploy/scripts/kubernetes/install_external_secrets_operator.sh
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'apply-unity-external-secrets'
   entrypoint: 'bash'
@@ -116,11 +250,8 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['push-sha-tag']
+  waitFor: ['push-overlay']
 
-  # Reconcile deploy-time control-plane state before any deploy step wakes Unity
-  # containers. Runtime seed/function sync runs per assistant after wake with
-  # that assistant's UNIFY_KEY.
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'reconcile-deployment'
   entrypoint: 'bash'
@@ -128,12 +259,12 @@ steps:
   - '-c'
   - |
     set -eu
+    SHA="$$(cat /workspace/unity_sha.txt)"
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
-
     bash deploy/scripts/run_deployment_reconcile_job.sh \
       --environment production \
       --namespace production \
-      --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA" \
       --orchestra-url "${_ORCHESTRA_URL}" \
       --unity-comms-url "${_UNITY_COMMS_URL}" \
       --planes control-plane \
@@ -144,53 +275,103 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['apply-unity-external-secrets', 'upload-sha']
 
-  # Refresh idle containers so they pick up the new unity runtime image.
-  # This build owns the refresh for the unity-image path: a push to the
-  # unity (brain) repo rebuilds the image and updates the GCS image hash
-  # here, but does NOT trigger the comms build, so the pool must be
-  # refreshed from this build. It is manifest-safe on that path because
-  # the comms revision (which stamps pod env via build_unity_job_manifest)
-  # is unchanged. When a unity-deploy push changes the manifest itself,
-  # the comms build's own post-deploy refresh is authoritative; do NOT
-  # remove that one as "duplicate" -- this step runs in parallel with the
-  # comms deploy and can predate its traffic cutover.
-- name: 'gcr.io/cloud-builders/curl'
-  id: 'refresh-idle-jobs'
+  # --- Session controller + comms rollout (gated on comms image change) ----
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-session-controller'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
-    set -e
-    ADAPTERS=https://service.a.run.app
-    AUTH="Authorization: Bearer $$ORCHESTRA_ADMIN_KEY"
+    set -eu
+    [ -f /workspace/deploy_comms ] || { echo "comms unchanged; skipping session controller deploy"; exit 0; }
+    gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
+    kubectl apply -f k8s/assistant-session-controller/crd.yaml
+    kubectl wait --for=condition=Established crd/assistantsessions.infra.unify.ai --timeout=120s
+    sed "s|image:.*${_SC_IMAGE}.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_SC_IMAGE}:${SHORT_SHA}|" \
+      k8s/assistant-session-controller/deployment.yaml | kubectl apply -f -
+    kubectl rollout status deployment/assistant-session-controller -n production --timeout=300s
+  waitFor: ['push-session-controller', 'gate-comms']
 
-    echo "Refreshing idle jobs with new image..."
-    curl -sf -X POST -H "$${AUTH}" "$${ADAPTERS}/scheduled/jobs/create?refresh=true" && echo
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'deploy-comms'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    [ -f /workspace/deploy_comms ] || { echo "comms unchanged; skipping comms deploy"; exit 0; }
+    source deploy/scripts/cloudbuild/cloud_run_lib.sh
+    run_cloud_run_with_retry repair_traffic_state ${_COMMS_SERVICE} ${_REGION} \
+      || echo "Traffic repair skipped; deploy will create a fresh revision"
+    run_cloud_run_with_retry gcloud run deploy ${_COMMS_SERVICE} \
+      --platform=managed \
+      --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
+      --region=${_REGION} \
+      --allow-unauthenticated \
+      --min-instances=1 \
+      --memory=2Gi \
+      --update-env-vars=DEPLOY_ENV=production,GCP_PROJECT_ID=${PROJECT_ID},UNITY_GKE_CLUSTER_NAME=${_CLUSTER},UNITY_COORDINATOR_EMAIL_ADDRESS=${_UNITY_COORDINATOR_EMAIL_ADDRESS} \
+      --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --set-secrets=GCP_SA_KEY=gcp-sa-key:latest,LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,LIVEKIT_SIP_URI=LIVEKIT_SIP_URI:latest,LIVEKIT_URL=LIVEKIT_URL:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_API_SECRET=TWILIO_API_SECRET:latest,TWILIO_API_SID=TWILIO_API_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,TWIML_SIP_PASSWORD=TWIML_SIP_PASSWORD:latest,TWIML_SIP_USERNAME=TWIML_SIP_USERNAME:latest,UNIFY_KEY=UNIFY_KEY:latest,ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,TWILIO_VERIFICATION_NUMBER=TWILIO_VERIFICATION_NUMBER:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,TWILIO_WA_ACCOUNT_SID=TWILIO_WA_ACCOUNT_SID:latest,TWILIO_WA_AUTH_TOKEN=TWILIO_WA_AUTH_TOKEN:latest,OAUTH_STATE_SIGNING_KEY=OAUTH_STATE_SIGNING_KEY:latest,MS365_ADMIN_TENANT_ID=MS365_ADMIN_TENANT_ID:latest,MS365_ADMIN_CLIENT_ID=MS365_ADMIN_CLIENT_ID:latest,MS365_ADMIN_CLIENT_SECRET=MS365_ADMIN_CLIENT_SECRET:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,MS365_BYOD_CLIENT_ID=MS365_BYOD_CLIENT_ID:latest,MS365_BYOD_CLIENT_SECRET=MS365_BYOD_CLIENT_SECRET:latest,OUTLOOK_WEBHOOK_SECRET=OUTLOOK_WEBHOOK_SECRET:latest,TEAMS_WEBHOOK_SECRET=TEAMS_WEBHOOK_SECRET:latest \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID} \
+      --quiet
+    run_cloud_run_with_retry route_canonical_traffic ${_COMMS_SERVICE} ${_REGION} ${BUILD_ID}
+  waitFor: ['push-comms', 'deploy-session-controller']
 
-    echo "Waiting 120s for jobs to register as idle..."
-    sleep 120
+  # --- Adapters rollout (gated on adapters image change) -------------------
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'deploy-adapters'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    [ -f /workspace/deploy_adapters ] || { echo "adapters unchanged; skipping adapters deploy"; exit 0; }
+    source deploy/scripts/cloudbuild/cloud_run_lib.sh
+    run_cloud_run_with_retry repair_traffic_state ${_ADAPTERS_SERVICE} ${_REGION} \
+      || echo "Traffic repair skipped; deploy will create a fresh revision"
+    run_cloud_run_with_retry gcloud run deploy ${_ADAPTERS_SERVICE} \
+      --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA} \
+      --region=${_REGION} \
+      --platform=managed \
+      --allow-unauthenticated \
+      --min-instances=1 \
+      --max-instances=100 \
+      --concurrency=80 \
+      --memory=2Gi \
+      --cpu=1 \
+      --timeout=300 \
+      --cpu-boost \
+      --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=production,UNITY_COORDINATOR_EMAIL_ADDRESS=${_UNITY_COORDINATOR_EMAIL_ADDRESS},PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
+      --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --set-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,SHARED_UNIFY_KEY=SHARED_UNIFY_KEY:latest,GCP_SA_KEY=gcp-sa-key:latest,TWILIO_ACCOUNT_SID=TWILIO_ACCOUNT_SID:latest,TWILIO_AUTH_TOKEN=TWILIO_AUTH_TOKEN:latest,LIVEKIT_SIP_URI=LIVEKIT_SIP_URI:latest,LIVEKIT_URL=LIVEKIT_URL:latest,LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,UNITY_ADAPTERS_URL=UNITY_ADAPTERS_URL_PRODUCTION:latest,ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME=ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME_PRODUCTION:latest,OUTLOOK_WEBHOOK_SECRET=OUTLOOK_WEBHOOK_SECRET:latest,TEAMS_WEBHOOK_SECRET=TEAMS_WEBHOOK_SECRET:latest,TWILIO_WA_AUTH_TOKEN=TWILIO_WA_AUTH_TOKEN:latest,TWILIO_WA_ACCOUNT_SID=TWILIO_WA_ACCOUNT_SID:latest,OAUTH_STATE_SIGNING_KEY=OAUTH_STATE_SIGNING_KEY:latest,MS365_ADMIN_TENANT_ID=MS365_ADMIN_TENANT_ID:latest,MS365_ADMIN_CLIENT_ID=MS365_ADMIN_CLIENT_ID:latest,MS365_ADMIN_CLIENT_SECRET=MS365_ADMIN_CLIENT_SECRET:latest,GOOGLE_OAUTH_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID:latest,GOOGLE_OAUTH_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET:latest,MS365_BYOD_CLIENT_ID=MS365_BYOD_CLIENT_ID:latest,MS365_BYOD_CLIENT_SECRET=MS365_BYOD_CLIENT_SECRET:latest,SLACK_SIGNING_SECRET=SLACK_SIGNING_SECRET_PROD:latest \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}
+    run_cloud_run_with_retry route_canonical_traffic ${_ADAPTERS_SERVICE} ${_REGION} ${BUILD_ID}
+  waitFor: ['push-adapters', 'gate-adapters']
 
-    echo "Cleaning up stale idle jobs..."
-    curl -sf -X POST -H "$${AUTH}" "$${ADAPTERS}/scheduled/jobs/cleanup" && echo
-    echo "Idle job refresh complete."
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'configure-adapters-schedulers'
+  entrypoint: bash
+  env:
+  - 'PROJECT_ID=${PROJECT_ID}'
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  waitFor: ['reconcile-deployment']
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    [ -f /workspace/deploy_adapters ] || { echo "adapters unchanged; skipping scheduler config"; exit 0; }
+    bash deploy/scripts/cloudbuild/configure_adapters_schedulers.sh production ${_REGION} ${_ADAPTERS_SERVICE}
+  waitFor: ['deploy-adapters']
 
-  # Refresh pipeline workers so parse/ingest pods pick up the new image.
-  # Mirrors refresh-idle-jobs above for the adapter Cloud Run jobs;
-  # workers run in GKE rather than Cloud Run, so we reconcile via
-  # kubectl:
-  #   - `kubectl apply` re-applies any manifest drift (HPA target,
-  #     PDB budget, resource limits) whenever the YAML changes.
-  #   - `kubectl rollout restart` forces pods to restart even when
-  #     the pod-template spec is byte-identical (which is the common
-  #     case, because the manifest pins the :latest tag and the SHA
-  #     lives in the image itself).
-  # Runs in parallel with refresh-idle-jobs (no dependency between
-  # them). We wait for the newly-created ReplicaSet to become
-  # available, but deliberately do not wait for old worker pods to
-  # finish termination because long graceful drains should not block
-  # the deploy after replacement capacity is serving.
+  # --- Single idle-pool refresh (authoritative) ---------------------------
+- name: 'gcr.io/cloud-builders/curl'
+  id: 'refresh-idle-jobs'
+  entrypoint: 'bash'
+  args: ['deploy/scripts/cloudbuild/refresh_idle_pool.sh', '${_ADAPTERS_HOST}']
+  secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  waitFor: ['deploy-comms', 'upload-sha', 'reconcile-deployment']
+
+  # --- Pipeline workers refresh (overlay image) ---------------------------
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'refresh-pipeline-workers'
   entrypoint: 'bash'
@@ -198,11 +379,8 @@ steps:
   - '-c'
   - |
     set -eu
-    # The cloud-builders/kubectl image only auto-runs
-    # `gcloud container clusters get-credentials` via its default
-    # entrypoint wrapper. We override entrypoint to `bash`, so we
-    # have to fetch credentials ourselves or kubectl falls back to
-    # talking to localhost:8080 and every apply fails.
+    SHA="$$(cat /workspace/unity_sha.txt)"
+    OVERLAY="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA"
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
 
     latest_replicaset() {
@@ -279,7 +457,7 @@ steps:
     }
 
     worker_refresh_check() {
-      pod="unity-worker-refresh-check-${SHORT_SHA}"
+      pod="unity-worker-refresh-check-$$SHA"
       extra_args="$$*"
       kubectl delete pod "$$pod" -n production --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
       echo "Checking pipeline state..."
@@ -292,7 +470,7 @@ steps:
         --restart=Never \
         --pod-running-timeout=5m \
         --overrides='{"spec":{"serviceAccountName":"unity-pipeline-worker"}}' \
-        --image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+        --image="$$OVERLAY" \
         --env="UNITY_GCP_PIPELINE_ENVIRONMENT=production" \
         --env="UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts" \
         --env="UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}" \
@@ -312,10 +490,10 @@ steps:
     kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml -l environment=production
     kubectl apply -f deploy/k8s/workers/stale-reconciler-cronjob.yaml -l environment=production
     kubectl set image cronjob/unity-pipeline-dlq-reconciler \
-      dlq-reconciler="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      dlq-reconciler="$$OVERLAY" \
       -n production
     kubectl set image cronjob/unity-pipeline-stale-reconciler \
-      stale-reconciler="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      stale-reconciler="$$OVERLAY" \
       -n production
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
@@ -333,7 +511,6 @@ steps:
     previous_ingest_rs="$$(latest_replicaset unity-ingest-worker production || true)"
 
     echo "Triggering rolling restart to pick up new image..."
-    # The apply above guarantees the Deployments exist before restart.
     kubectl rollout restart deployment/unity-parse-worker -n production
     kubectl rollout restart deployment/unity-ingest-worker -n production
 
@@ -353,18 +530,30 @@ steps:
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  machineType: 'E2_HIGHCPU_8'
 
 substitutions:
   _REGION: 'us-central1'
-  _REPOSITORY: 'unity'
   _CLUSTER: 'unity'
   _FORCE_WORKER_REFRESH: 'false'
-  _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
+  _OVERLAY_REPO: 'unity'
+  _OVERLAY_IMAGE: 'unity'
+  _COMMS_REPO: 'unity-comms-app-repo'
+  _COMMS_SERVICE: 'unity-comms-app'
+  _SC_IMAGE: 'assistant-session-controller'
+  _ADAPTERS_REPO: 'unity-adapters-repo'
+  _ADAPTERS_SERVICE: 'unity-adapters'
+  _COMMS_HOST: 'service.a.run.app'
+  _ADAPTERS_HOST: 'service.a.run.app'
+  _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/unity/unity-base:latest'
+  # Empty on a direct unity-deploy push; set by the base-build chain on a unity
+  # (brain) push. resolve-unity-sha falls back to the published base SHA.
   _UNITY_SHA: ''
   _ORCHESTRA_URL: 'https://api.unify.ai/v0'
   _UNITY_COMMS_URL: 'https://service.a.run.app'
-  # Brain commit / branch installed into the image.  Pin to a SHA in
-  # production triggers; staging may track the ``main`` branch.
+  _UNITY_COORDINATOR_EMAIL_ADDRESS: 'twin@unify.ai'
+  # Brain commit / branch installed into the overlay image. Production pins a SHA
+  # via the trigger substitution; defaults to main.
   _BRAIN_REF: 'main'
 
 availableSecrets:
@@ -374,4 +563,4 @@ availableSecrets:
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
 
-timeout: '3600s'
+timeout: '4800s'
