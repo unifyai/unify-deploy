@@ -58,6 +58,15 @@ def test_no_envFrom_bulk_secret_or_configmap_injection() -> None:
         assert "envFrom" not in container
 
 
+def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
+    manifest = build_unity_job_manifest(job_name="openrouter-key-staging")
+    entry = _env_by_name(manifest)["OPENROUTER_API_KEY"]
+    assert entry["valueFrom"]["secretKeyRef"] == {
+        "name": "unity-secrets",
+        "key": "OPENROUTER_API_KEY",
+    }
+
+
 def test_orchestra_admin_key_sourced_from_unity_secrets() -> None:
     manifest = build_unity_job_manifest(job_name="orch-admin-key-staging")
     entry = _env_by_name(manifest)["ORCHESTRA_ADMIN_KEY"]

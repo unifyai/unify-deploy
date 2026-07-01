@@ -1,4 +1,15 @@
 steps:
+  # Drop duplicate-webhook / superseded runs of this trigger before doing any
+  # work (Cloud Build has no native concurrency control).
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'guard'
+  entrypoint: 'bash'
+  args: ['deploy/scripts/cloudbuild/concurrency_guard.sh', '${_REGION}']
+  env:
+  - 'BUILD_ID=${BUILD_ID}'
+  - 'PROJECT_ID=${PROJECT_ID}'
+  waitFor: ['-']
+
   # Clone Unity and overlay the mirrored hosted deploy assets from this repo.
 - name: 'gcr.io/cloud-builders/git'
   id: 'clone-unity'
@@ -23,7 +34,7 @@ steps:
     cp -R /workspace/unity-public-deploy/integrations /workspace/unity-src/deploy/integrations
     echo "Using Unity SHA: $$(cat /workspace/unity_sha.txt)"
   secretEnv: ['GITHUB_TOKEN']
-  waitFor: ['-']
+  waitFor: ['guard']
 
   # Pull previous image for Docker layer cache (may not exist on first run)
 - name: 'gcr.io/cloud-builders/docker'
@@ -88,6 +99,19 @@ steps:
   id: 'push-latest-tag'
   args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest']
   waitFor: ['build-image']
+
+  # Publish the brain SHA baked into unity-base:latest so a direct unity-deploy
+  # push (which does not run this base build) can resolve the canonical overlay
+  # identity instead of tagging with the unity-deploy commit.
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'publish-unity-base-sha'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/unity_base_sha.txt
+  waitFor: ['push-latest-tag']
 
   # Build job-watcher image from the cloned Unity source plus mirrored private assets.
 - name: 'gcr.io/cloud-builders/docker'

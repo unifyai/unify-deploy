@@ -14,27 +14,38 @@ run the private bridge flow:
 | **staging** | `unity-staging` (inline, fires on `unity@staging` push) | `unity-base-staging-private` (reads `unity-deploy/base/cloudbuild-staging.yaml`) | `unity-deploy-staging` |
 | **production** | `unity-production-private-bridge` (inline, fires on `unity@main` push) | `unity-base-production-private` (reads `unity-deploy/base/cloudbuild.yaml`) | `unity-deploy` |
 
-## Comms App Bridge
+## Consolidated deploy orchestrator (comms + adapters folded in)
 
 The hosted comms Cloud Run service (`unity-comms-app{,-staging}`) bundles
 `unity.gateway` -- it clones `unity` inside `Dockerfile-comms` and composes on
-top of `unity.gateway.app.create_app()`. The base/overlay chain above only
-rebuilds the assistant Job image, so a `unity` change to the gateway code would
-otherwise not reach the comms service until the next `unity-deploy` push. A
-second, path-scoped bridge closes that gap:
+top of `unity.gateway.app.create_app()`.
 
-| Environment | Comms bridge trigger | Fires on | Path filter | Runs |
-|-------------|----------------------|----------|-------------|------|
-| **staging** | `unity-comms-bridge-staging` (inline, from `unity-comms-staging-bridge.yaml`) | `unity@staging` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-staging-unity-deploy` |
-| **production** | `unity-comms-bridge-production` (inline, from `unity-comms-production-bridge.yaml`) | `unity@main` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-unity-deploy` |
+The overlay build is now a single **orchestrator** per environment
+(`deploy/cloudbuild-staging.yaml` / `deploy/cloudbuild.yaml`, triggers
+`unity-deploy-staging` / `unity-deploy`) that:
 
-The path filter (`includedFiles`) keeps the comms service from rebuilding on
-every `unity` push -- only communication-relevant changes fan out. The comms
-build self-resolves the latest `unity@{staging,main}` head via `git ls-remote`
-at build start (the `UNITY_SHA` cache-buster in `cloudbuild/unity-comms-app*.yaml`),
-so the bridge only needs to *run* the comms trigger -- no SHA threading. The
-adapters service (`unity-adapters{,-staging}`) does **not** bundle `unity` and
-is deliberately excluded.
+- runs a concurrency guard first (`deploy/scripts/cloudbuild/concurrency_guard.sh`)
+  to cancel duplicate-webhook and superseded builds of the same trigger;
+- builds overlay + comms + adapters + session-controller in parallel;
+- deploys only services whose image digest changed (comms/adapters gate via
+  `cloud_run_deploy_needed.sh`; the overlay always deploys because its image
+  tracks the whole `unity-deploy` source);
+- runs exactly one idle-pool refresh (`refresh_idle_pool.sh`) after the comms
+  revision takes traffic and the GCS image hash is updated.
+
+Because the orchestrator always rebuilds comms, a `unity` gateway change reaches
+comms via the `unity-staging`/`unity-*-private-bridge` -> base -> overlay chain
+with no separate comms bridge. The former per-service triggers
+(`unity-comms-app{,-staging}-unity-deploy`, `unity-adapters{,-staging}-unity-deploy`,
+`unity-comms-bridge-{staging,production}`) and their standalone configs
+(`cloudbuild/unity-comms-app{,-staging}.yaml`, `cloudbuild/adapters{,-staging}.yaml`,
+`unity-comms-*-bridge.yaml`) are retired. The adapters service does **not**
+bundle `unity`.
+
+The overlay image identity (`_UNITY_SHA`) is the Unity brain SHA: passed by the
+base-build chain on a `unity` push, or resolved on a direct `unity-deploy` push
+from `gs://bucket/unity_base_sha{,_staging}.txt` (published by the base
+build). The orchestrator is the sole writer of `gs://bucket/image_hash{,_staging}.txt`.
 
 The original `unity` trigger (which used to build directly from
 `unity/deploy/cloudbuild.yaml` on the public repo) has been retired -- its

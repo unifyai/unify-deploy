@@ -330,6 +330,7 @@ append_self_host_unity_runtime_env() {
     ANTICAPTCHA_KEY \
     UNIFY_MODEL \
     OPENAI_API_KEY \
+    OPENROUTER_API_KEY \
     ANTHROPIC_API_KEY \
     DEEPSEEK_API_KEY \
     DEEPGRAM_API_KEY \
