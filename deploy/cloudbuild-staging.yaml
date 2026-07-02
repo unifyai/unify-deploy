@@ -237,16 +237,6 @@ steps:
   waitFor: ['push-adapters']
 
   # --- Overlay rollout (always: the overlay image tracks unity-deploy source) --
-- name: 'gcr.io/cloud-builders/gsutil'
-  id: 'upload-sha'
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    set -euo pipefail
-    cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash_staging.txt
-  waitFor: ['push-overlay']
-
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'apply-unity-external-secrets'
   entrypoint: 'bash'
@@ -284,7 +274,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['apply-unity-external-secrets', 'upload-sha']
+  waitFor: ['apply-unity-external-secrets']
 
   # --- Session controller + comms rollout (gated on comms image change) ----
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -351,7 +341,7 @@ steps:
       --concurrency=80 \
       --memory=2Gi \
       --cpu=1 \
-      --timeout=300 \
+      --timeout=600 \
       --cpu-boost \
       --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,ORCHESTRA_URL=${_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_COMMS_HOST},UNITY_COORDINATOR_EMAIL_ADDRESS=${_UNITY_COORDINATOR_EMAIL_ADDRESS},PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
       --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
@@ -374,16 +364,29 @@ steps:
     bash deploy/scripts/cloudbuild/configure_adapters_schedulers.sh staging ${_REGION} ${_ADAPTERS_SERVICE}
   waitFor: ['deploy-adapters']
 
+  # Publish the canonical overlay hash immediately before idle-pool refresh so
+  # the session controller does not claim against a new hash while stale idle
+  # jobs still exist.
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'upload-sha'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash_staging.txt
+  waitFor: ['deploy-comms', 'reconcile-deployment']
+
   # --- Single idle-pool refresh (authoritative) ---------------------------
-  # Runs after the comms revision has taken traffic (manifest-safe) and after
-  # the GCS image hash update (new pods pull the new overlay). This is the only
-  # idle-pool refresh in the system.
+  # Runs after comms has taken traffic (manifest-safe), adapters are live,
+  # and the GCS image hash has been updated. This is the only idle-pool refresh
+  # in the system.
 - name: 'gcr.io/cloud-builders/curl'
   id: 'refresh-idle-jobs'
   entrypoint: 'bash'
   args: ['deploy/scripts/cloudbuild/refresh_idle_pool.sh', '${_ADAPTERS_HOST}']
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  waitFor: ['deploy-comms', 'upload-sha', 'reconcile-deployment']
+  waitFor: ['upload-sha', 'deploy-adapters']
 
   # --- Pipeline workers refresh (overlay image) ---------------------------
 - name: 'gcr.io/cloud-builders/kubectl'

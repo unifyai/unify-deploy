@@ -129,12 +129,14 @@ def _store_refreshed_oauth_secrets(
             endpoint,
             json={"secret_value": secret_value},
             headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
         )
         if response.status_code == 404:
             response = requests.post(
                 base_endpoint,
                 json={"secret_name": secret_name, "secret_value": secret_value},
                 headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
             )
         if response.status_code not in (200, 201):
             logger.error(
@@ -4875,6 +4877,93 @@ async def google_oauth_callback(request: Request):
 # =============================================================================
 
 
+def _list_scheduled_assistants(
+    *,
+    from_fields: str | None = None,
+    require_secret_names: str | None = None,
+    secret_names: str | None = None,
+    limit: int | None = None,
+    timeout: float = 120.0,
+    retries: int = 2,
+    backoff: float = 1.0,
+    caller: str = "",
+) -> list[dict]:
+    """Fetch assistants from Orchestra ``/admin/assistant`` for a scheduled job.
+
+    The scheduled token/watch jobs fan out over the whole fleet, so the fleet
+    fetch must stay cheap and resilient. This keeps the payload small
+    (``from_fields`` plus optional provider/secret scoping) and adds an explicit
+    timeout with bounded retry/backoff.
+
+    Optional scoping (ignored gracefully by an older Orchestra):
+    - ``require_secret_names``: only assistants that have one of these secrets
+      (e.g. ``MICROSOFT_REFRESH_TOKEN``) -- cuts the fleet to the relevant
+      provider.
+    - ``secret_names``: only include these secret keys in each ``secrets`` map.
+    - ``limit``: page via ``offset`` (with a dedup guard so an Orchestra that
+      ignores pagination cannot loop forever).
+
+    Raises ``RuntimeError`` if every attempt fails so callers surface a 500.
+    """
+    base_params: dict[str, str] = {}
+    if from_fields:
+        base_params["from_fields"] = from_fields
+    if require_secret_names:
+        base_params["require_secret_names"] = require_secret_names
+    if secret_names:
+        base_params["secret_names"] = secret_names
+
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    tag = f"[{caller}] " if caller else ""
+
+    def _get_page(params: dict) -> list[dict]:
+        last_error = "unknown error"
+        for attempt in range(1 + retries):
+            try:
+                resp = requests.get(
+                    f"{SETTINGS.orchestra_url}/admin/assistant",
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("info", [])
+                last_error = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                logger.warning(
+                    f"{tag}/admin/assistant returned {resp.status_code} "
+                    f"(attempt {attempt + 1}/{1 + retries})",
+                )
+            except Exception as e:
+                last_error = str(e)
+                logger.error(
+                    f"{tag}/admin/assistant error "
+                    f"(attempt {attempt + 1}/{1 + retries}): {e}",
+                )
+            if attempt < retries:
+                time.sleep(backoff * (2**attempt))
+        raise RuntimeError(f"Failed to list assistants: {last_error}")
+
+    if limit is None:
+        return _get_page(dict(base_params))
+
+    # Offset pagination with a dedup guard: an older Orchestra that ignores
+    # limit/offset returns the full list every page, so stop once a page adds no
+    # new agent_ids rather than looping forever.
+    out: list[dict] = []
+    seen: set = set()
+    offset = 0
+    while True:
+        page = _get_page({**base_params, "limit": str(limit), "offset": str(offset)})
+        new_rows = [a for a in page if a.get("agent_id") not in seen]
+        for a in new_rows:
+            seen.add(a.get("agent_id"))
+        out.extend(new_rows)
+        if len(page) < limit or not new_rows:
+            break
+        offset += limit
+    return out
+
+
 @app.post("/scheduled/email-watches", dependencies=[Depends(require_admin_key)])
 def scheduled_email_watches(payload: ScheduledPayload):
     """
@@ -4887,24 +4976,26 @@ def scheduled_email_watches(payload: ScheduledPayload):
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
-    # Fetch all assistants with their secrets
+    # Fetch assistants scoped to what watch renewal needs (email + provider);
+    # secrets are not requested so Orchestra skips loading them.
     if not payload.test:
         try:
-            response = requests.get(
-                f"{SETTINGS.orchestra_url}/admin/assistant",
-                headers={"Authorization": f"Bearer {admin_key}"},
+            all_assistants = _list_scheduled_assistants(
+                from_fields="agent_id,email,email_provider",
+                limit=200,
+                timeout=120,
+                caller="email-watches",
             )
-            if response.status_code != 200:
-                return Response(
-                    content=f"Failed to get assistants: {response.text}",
-                    status_code=500,
-                )
-            all_assistants = response.json().get("info", [])
         except Exception as e:
             logger.error(f"Failed to get assistants: {e}")
             return Response(content=f"Failed to get assistants: {e}", status_code=500)
     else:
-        all_assistants = [{"email": "default-test-assistant@unify.ai", "secrets": {}}]
+        all_assistants = [
+            {
+                "email": "default-test-assistant@unify.ai",
+                "email_provider": "google_workspace",
+            },
+        ]
 
     logger.info(f"Processing {len(all_assistants)} assistants for email watch renewal")
 
@@ -4917,14 +5008,9 @@ def scheduled_email_watches(payload: ScheduledPayload):
         if is_unity_coordinator_email_address(email):
             continue
 
-        # Determine provider from the assistant record.  Fall back to
-        # token-sniffing for assistants that predate the email_provider field.
-        email_provider = assistant.get("email_provider")
-        if not email_provider:
-            has_ms_token = bool(
-                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
-            )
-            email_provider = "microsoft_365" if has_ms_token else "google_workspace"
+        # Provider comes from the assistant record; rows without it default to
+        # Gmail (the historical default before per-assistant provider tracking).
+        email_provider = assistant.get("email_provider") or "google_workspace"
 
         use_outlook = email_provider == "microsoft_365"
 
@@ -5117,18 +5203,23 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
-    # Get all assistants in a single call (no params = all assistants)
+    # Fetch only assistants that actually have a Microsoft refresh token, with
+    # just the secret keys this job needs, paginated and retried. Scoping is
+    # ignored gracefully by an older Orchestra (falls back to the from_fields
+    # payload).
     try:
-        response = requests.get(
-            f"{SETTINGS.orchestra_url}/admin/assistant",
-            headers={"Authorization": f"Bearer {admin_key}"},
+        all_assistants = _list_scheduled_assistants(
+            from_fields="agent_id,email,api_key,secrets",
+            require_secret_names="MICROSOFT_REFRESH_TOKEN",
+            secret_names=(
+                "MICROSOFT_ACCESS_TOKEN,MICROSOFT_REFRESH_TOKEN,"
+                "MICROSOFT_TOKEN_SOURCE,MICROSOFT_GRANTED_SCOPES,"
+                "AZURE_TENANT_ID,AZURE_CLIENT_ID,AZURE_CLIENT_SECRET"
+            ),
+            limit=200,
+            timeout=120,
+            caller="microsoft-tokens",
         )
-        if response.status_code != 200:
-            return Response(
-                content=f"Failed to get assistants: {response.text}",
-                status_code=500,
-            )
-        all_assistants = response.json().get("info", [])
     except Exception as e:
         logger.error(f"Failed to get assistants: {e}")
         return Response(content=f"Failed to get assistants: {e}", status_code=500)
@@ -5171,6 +5262,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                     "grant_type": "refresh_token",
                     "scope": refresh_scope,
                 },
+                timeout=30,
             )
 
             if token_resp.status_code != 200:
@@ -5261,16 +5353,14 @@ def scheduled_google_tokens(payload: ScheduledPayload):
         )
 
     try:
-        response = requests.get(
-            f"{SETTINGS.orchestra_url}/admin/assistant",
-            headers={"Authorization": f"Bearer {admin_key}"},
+        all_assistants = _list_scheduled_assistants(
+            from_fields="agent_id,email,api_key,secrets",
+            require_secret_names="GOOGLE_REFRESH_TOKEN",
+            secret_names="GOOGLE_ACCESS_TOKEN,GOOGLE_REFRESH_TOKEN",
+            limit=200,
+            timeout=120,
+            caller="google-tokens",
         )
-        if response.status_code != 200:
-            return Response(
-                content=f"Failed to get assistants: {response.text}",
-                status_code=500,
-            )
-        all_assistants = response.json().get("info", [])
     except Exception as e:
         logger.error(f"Failed to get assistants: {e}")
         return Response(content=f"Failed to get assistants: {e}", status_code=500)
@@ -5302,6 +5392,7 @@ def scheduled_google_tokens(payload: ScheduledPayload):
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
+                timeout=30,
             )
 
             if token_resp.status_code != 200:
@@ -5382,16 +5473,12 @@ def scheduled_teams_watches(payload: ScheduledPayload):
 
     if not payload.test:
         try:
-            response = requests.get(
-                f"{SETTINGS.orchestra_url}/admin/assistant",
-                headers={"Authorization": f"Bearer {admin_key}"},
+            all_assistants = _list_scheduled_assistants(
+                from_fields="agent_id,email,email_provider",
+                limit=200,
+                timeout=120,
+                caller="teams-watches",
             )
-            if response.status_code != 200:
-                return Response(
-                    content=f"Failed to get assistants: {response.text}",
-                    status_code=500,
-                )
-            all_assistants = response.json().get("info", [])
         except Exception as e:
             logger.error(f"Failed to get assistants: {e}")
             return Response(content=f"Failed to get assistants: {e}", status_code=500)
@@ -5399,7 +5486,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         all_assistants = [
             {
                 "email": "default-test-assistant@unify.ai",
-                "secrets": {"MICROSOFT_ACCESS_TOKEN": "test"},
+                "email_provider": "microsoft_365",
             },
         ]
 
@@ -5418,12 +5505,9 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         if not email:
             continue
 
-        secrets = assistant.get("secrets", {})
-        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
-
-        email_provider = assistant.get("email_provider")
-        if not email_provider:
-            email_provider = "microsoft_365" if access_token else "google_workspace"
+        # Provider comes from the assistant record; rows without it default to
+        # Gmail and are skipped (Teams is Microsoft 365 only).
+        email_provider = assistant.get("email_provider") or "google_workspace"
         if email_provider != "microsoft_365":
             continue
 

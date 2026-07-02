@@ -9,6 +9,7 @@ from typing import Any
 import requests
 
 from common.metrics import ORCHESTRA_GET_ASSISTANT_DURATION
+from common.coordinator_voice import resolve_runtime_voice
 from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,12 @@ def _local_assistant_data() -> dict[str, Any]:
 
 
 def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
+    is_coordinator = assistant.get("is_coordinator", False)
+    voice_provider, voice_id = resolve_runtime_voice(
+        is_coordinator=is_coordinator,
+        voice_provider=assistant.get("voice_provider"),
+        voice_id=assistant.get("voice_id"),
+    )
     return {
         "assistant_id": _runtime_str(assistant["agent_id"]),
         "deploy_env": assistant.get("deploy_env"),
@@ -92,8 +99,8 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "user_number": assistant["user_phone"] or "",
         "user_whatsapp_number": assistant.get("user_whatsapp_number") or "",
         "user_email": assistant["user_email"] or "",
-        "voice_provider": _runtime_str(assistant["voice_provider"]),
-        "voice_id": _runtime_str(assistant["voice_id"]),
+        "voice_provider": voice_provider,
+        "voice_id": voice_id,
         "secrets": assistant.get("secrets", {}),
         "desktop_mode": _resolve_desktop_mode(assistant),
         "user_desktops": assistant.get("user_desktops", []),
