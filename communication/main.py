@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 from fastapi import Depends
 
 from common.metrics import setup_metrics
+from common.coordinator_voice import resolve_runtime_voice
 from common.settings import SETTINGS
 from communication.dependencies import auth_admin_key
 from communication.infra.helpers import setup_kubernetes_client
@@ -95,6 +96,13 @@ class CommunicationInfraRuntimeActivator:
                 detail="missing-assistant-metadata",
             )
 
+        is_coordinator = bool(assistant.get("is_coordinator"))
+        voice_provider, voice_id = resolve_runtime_voice(
+            is_coordinator=is_coordinator,
+            voice_provider=assistant.get("voice_provider"),
+            voice_id=assistant.get("voice_id"),
+        )
+
         payload = {
             "api_key": assistant.get("api_key") or SETTINGS.shared_unify_key,
             "medium": medium or reason,
@@ -119,8 +127,8 @@ class CommunicationInfraRuntimeActivator:
             "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number")
             or "",
             "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id") or "",
-            "voice_provider": assistant.get("voice_provider") or "",
-            "voice_id": assistant.get("voice_id") or "",
+            "voice_provider": voice_provider,
+            "voice_id": voice_id,
             "desktop_mode": assistant.get("desktop_mode") or "none",
             "desktop_url": assistant.get("desktop_url") or "",
             "user_desktops": json.dumps(assistant.get("user_desktops") or []),

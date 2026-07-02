@@ -30,6 +30,7 @@ from common.metrics import (
     UNITY_JOBS_IDLE,
 )
 from common.assistant_lookup import get_assistant
+from common.coordinator_voice import resolve_runtime_voice
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1171,6 +1172,11 @@ def _build_start_job_request_data(
     user_desktops = assistant.get("user_desktops", [])
     is_coordinator = assistant.get("is_coordinator", False)
     demo_id = assistant.get("demo_id", None)
+    voice_provider, voice_id = resolve_runtime_voice(
+        is_coordinator=is_coordinator,
+        voice_provider=assistant.get("voice_provider"),
+        voice_id=assistant.get("voice_id"),
+    )
     data = {
         "api_key": _runtime_str(api_key),
         "medium": _runtime_str(medium),
@@ -1202,8 +1208,8 @@ def _build_start_job_request_data(
         "assistant_slack_bot_user_id": _runtime_str(
             assistant.get("assistant_slack_bot_user_id"),
         ),
-        "voice_provider": _runtime_str(assistant["voice_provider"]),
-        "voice_id": _runtime_str(assistant["voice_id"]),
+        "voice_provider": _runtime_str(voice_provider),
+        "voice_id": _runtime_str(voice_id),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
