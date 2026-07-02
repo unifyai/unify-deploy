@@ -5124,7 +5124,8 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
         response = requests.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
             headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=60,
+            params={"from_fields": "agent_id,email,api_key,secrets"},
+            timeout=120,
         )
         if response.status_code != 200:
             return Response(
@@ -5268,7 +5269,8 @@ def scheduled_google_tokens(payload: ScheduledPayload):
         response = requests.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
             headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=60,
+            params={"from_fields": "agent_id,email,api_key,secrets"},
+            timeout=120,
         )
         if response.status_code != 200:
             return Response(
