@@ -170,6 +170,16 @@ CronJobs (prod + staging): `unity-failed-pod-gc` (*/10), `unity-pipeline-dlq-rec
 
 **Service accounts:** `comm-sa@` (all assistant pods + cluster services run as this), `unity-pipeline-worker@` + legacy `unity-pipeline-worker@`, `link-tracker-sa@`, `external-secrets-reader@`. `comm-sa` IAM is hand-managed; required roles include `roles/monitoring.metricWriter`, `roles/logging.logWriter`, `roles/pubsub.editor`, and `roles/compute.admin` + `roles/secretmanager.admin` in `gcp-project-vms`.
 
+**`comm-sa` Workspace domain-wide delegation** (Google Admin → Security → API controls → Domain-wide delegation; client ID `115203909972265828958`): authorize exactly these OAuth scopes (comma-separated when editing the client):
+
+- `https://www.googleapis.com/auth/admin.directory.user`
+- `https://www.googleapis.com/auth/gmail.send`
+- `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/gmail.modify`
+- `https://www.googleapis.com/auth/gmail.settings.basic` — Gmail send-as display names for platform twin mailboxes (`deploy/scripts/set_workspace_twin_gmail_identities.py`)
+
+After adding a scope, wait a few minutes for propagation, then run `python3 deploy/scripts/set_workspace_twin_gmail_identities.py` to sync T-W1N names on `twin@` / `staging-twin@` / `local-twin@`.
+
 **Pub/Sub:** infra topics `unity-ingest`, `unity-parse`, `unity-dead-letter` (+`-staging`); per-assistant `unity-<id>[-staging]` (new) and `unity-<id>[-staging]` (legacy) ⚠️. ~1,590 topics / ~6,222 subs total, ~84% still `unity-*`.
 
 **Secret Manager (names):** `UNITY_ADAPTERS_URL{,_PREVIEW,_STAGING}`, `UNITY_COMMS_URL{,_PREVIEW,_STAGING}` ⚠️, `UNITY_ADAPTERS_URL_{PRODUCTION,STAGING}`, plus provider/integration secrets (`ANTHROPIC_API_KEY`, `LIVEKIT_*`, `TWILIO_*`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `VM_WILDCARD_FULLCHAIN/PRIVKEY`, `gcp-sa-key`, `github-pat`, `DEVBOT_GITHUB_TOKEN`, …). Cluster runtime secret = `unity-secrets` (see §7).
