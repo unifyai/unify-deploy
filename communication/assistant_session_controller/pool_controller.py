@@ -5,6 +5,8 @@ import os
 import time
 from typing import Any
 
+import requests
+
 from common.settings import SETTINGS
 from communication.infra.assistant_sessions import (
     assistant_session_desired_state,
@@ -26,6 +28,64 @@ WATCH_NAMESPACE = os.environ.get("WATCH_NAMESPACE", SETTINGS.default_namespace)
 POOL_CONTROLLER_INTERVAL_SECONDS = float(
     os.environ.get("POOL_CONTROLLER_INTERVAL_SECONDS", "10"),
 )
+MIN_IDLE_JOBS = int(os.environ.get("UNITY_MIN_IDLE_JOBS", "3"))
+_IMAGE_HASH_LABEL = "unity-image-hash"
+
+
+def _get_current_image_hash() -> str | None:
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    try:
+        response = requests.get(
+            f"{SETTINGS.comms_url}/infra/image",
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        commit_hash = response.json().get("commit_hash")
+        return commit_hash.strip() if commit_hash else None
+    except Exception:
+        logger.exception("Failed to fetch current image hash from comms")
+        return None
+
+
+def _count_idle_jobs_by_hash(current_hash: str) -> tuple[int, int]:
+    """Return ``(matching, total)`` idle Unity jobs for the current environment."""
+
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    response = requests.get(
+        f"{SETTINGS.comms_url}/infra/jobs",
+        params={
+            "label_selector": "app=unity,unity-status=idle",
+            "hours": 24,
+        },
+        headers=headers,
+        timeout=10,
+    )
+    response.raise_for_status()
+    jobs = response.json().get("jobs", [])
+    total = 0
+    matching = 0
+    for job in jobs:
+        job_name = job.get("job_name", "")
+        if SETTINGS.env_suffix:
+            if not job_name.endswith(SETTINGS.env_suffix):
+                continue
+        elif job_name.endswith("-staging"):
+            continue
+        total += 1
+        if job.get("labels", {}).get(_IMAGE_HASH_LABEL) == current_hash:
+            matching += 1
+    return matching, total
+
+
+def _unity_job_replenish_extra_demand(pending_jobs: int) -> int:
+    current_hash = _get_current_image_hash()
+    if not current_hash:
+        return pending_jobs
+
+    matching, _total = _count_idle_jobs_by_hash(current_hash)
+    hash_deficit = max(0, MIN_IDLE_JOBS - matching)
+    return max(pending_jobs, hash_deficit)
 
 
 def _list_sessions(custom_api, namespace: str) -> list[dict[str, Any]]:
@@ -84,22 +144,25 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
     demand = pending_vm_demand(sessions)
     results: dict[str, Any] = {}
     try:
+        job_extra_demand = _unity_job_replenish_extra_demand(pending_jobs)
         replenish_scheduled = (
             schedule_idle_job_pool_replenishment(
-                extra_demand=pending_jobs,
+                extra_demand=job_extra_demand,
                 source="controller.pool_reconcile",
             )
-            if pending_jobs > 0
+            if job_extra_demand > 0
             else False
         )
         results["unity_jobs"] = {
             "pending_sessions": pending_jobs,
+            "replenish_extra_demand": job_extra_demand,
             "replenish_scheduled": replenish_scheduled,
         }
         emit_observability_event(
             "controller.job_pool.reconcile",
             namespace=namespace,
             pending_sessions=pending_jobs,
+            replenish_extra_demand=job_extra_demand,
             replenish_scheduled=replenish_scheduled,
         )
     except Exception as exc:  # pragma: no cover - safety net for live loop

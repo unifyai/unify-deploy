@@ -619,7 +619,12 @@ def test_replenish_idle_pool_honors_extra_demand(
 ):
     mock_get_unity_jobs_inventory.return_value = {
         "running": [{"job_name": "running-1"}],
-        "idle": [{"job_name": "idle-1"}],
+        "idle": [
+            {
+                "job_name": "idle-1",
+                "labels": {"unity-status": "idle", "unity-image-hash": "abc123"},
+            },
+        ],
     }
     mock_get_target_idle_count.return_value = SimpleNamespace(
         target=3,
@@ -641,6 +646,7 @@ def test_replenish_idle_pool_honors_extra_demand(
     assert mock_requests_post.call_count == 3
 
 
+@patch("adapters.helpers._fetch_current_image_hash", return_value=None)
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.get_target_idle_count")
 @patch("adapters.helpers.get_unity_jobs_inventory")
@@ -648,6 +654,7 @@ def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
     mock_get_unity_jobs_inventory,
     mock_get_target_idle_count,
     mock_requests_get,
+    _mock_fetch_hash,
 ):
     mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
     mock_get_target_idle_count.return_value = SimpleNamespace(target=0)
@@ -658,12 +665,224 @@ def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
     result = cleanup_idle_pool()
 
     assert result["deleted"] == 0
+    assert result["deleted_stale_hash"] == 0
+    assert result["deleted_quota"] == 0
     assert result["running"] == 0
     mock_requests_get.assert_called_once()
     assert (
         mock_requests_get.call_args.kwargs["params"]["hours"]
         == SETTINGS.job_inventory_lookback_hours
     )
+
+
+def _idle_job(job_name: str, image_hash: str | None = "abc123") -> dict:
+    labels = {"unity-status": "idle"}
+    if image_hash is not None:
+        labels["unity-image-hash"] = image_hash
+    return {"job_name": job_name, "labels": labels, "resource_version": "1"}
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+@patch("adapters.helpers._fetch_current_image_hash", return_value="newhash")
+def test_replenish_idle_pool_creates_jobs_when_only_stale_idle_exist(
+    _mock_fetch_hash,
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    mock_requests_post,
+):
+    mock_get_unity_jobs_inventory.return_value = {
+        "running": [],
+        "idle": [
+            _idle_job(f"unity-2026-01-01-00-00-00-stale{i}", "oldhash")
+            for i in range(6)
+        ],
+    }
+    mock_get_target_idle_count.return_value = SimpleNamespace(
+        target=3,
+        demand_exceeds_floor=True,
+    )
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(return_value={"commit_hash": "newhash"}),
+    )
+    mock_requests_post.return_value = MagicMock(
+        json=MagicMock(return_value={"status": "dispatched"}),
+    )
+
+    result = replenish_idle_pool()
+
+    assert result["mode"] == "fill-demand"
+    assert result["created"] == 3
+    assert result["matching"] == 0
+    assert result["stale"] == 6
+    assert mock_requests_post.call_count == 3
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+@patch("adapters.helpers._fetch_current_image_hash", return_value="newhash")
+def test_replenish_idle_pool_counts_only_matching_idle_jobs(
+    _mock_fetch_hash,
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    mock_requests_post,
+):
+    mock_get_unity_jobs_inventory.return_value = {
+        "running": [],
+        "idle": [
+            _idle_job("unity-2026-01-01-00-00-00-match", "newhash"),
+            *[
+                _idle_job(f"unity-2026-01-01-00-00-00-stale{i}", "oldhash")
+                for i in range(3)
+            ],
+        ],
+    }
+    mock_get_target_idle_count.return_value = SimpleNamespace(
+        target=3,
+        demand_exceeds_floor=True,
+    )
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(return_value={"commit_hash": "newhash"}),
+    )
+    mock_requests_post.return_value = MagicMock(
+        json=MagicMock(return_value={"status": "dispatched"}),
+    )
+
+    result = replenish_idle_pool()
+
+    assert result["created"] == 2
+    assert result["matching"] == 1
+    assert result["stale"] == 3
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+@patch("adapters.helpers._fetch_current_image_hash", return_value="newhash")
+def test_replenish_idle_pool_refresh_creates_full_target(
+    _mock_fetch_hash,
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    mock_requests_post,
+):
+    mock_get_unity_jobs_inventory.return_value = {
+        "running": [],
+        "idle": [_idle_job("unity-2026-01-01-00-00-00-stale", "oldhash")],
+    }
+    mock_get_target_idle_count.return_value = SimpleNamespace(
+        target=3,
+        demand_exceeds_floor=True,
+    )
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(return_value={"commit_hash": "newhash"}),
+    )
+    mock_requests_post.return_value = MagicMock(
+        json=MagicMock(return_value={"status": "dispatched"}),
+    )
+
+    result = replenish_idle_pool(refresh=True)
+
+    assert result["mode"] == "refresh"
+    assert result["created"] == 3
+    assert mock_requests_post.call_count == 3
+
+
+@patch("adapters.helpers._delete_idle_jobs")
+@patch("adapters.helpers._fetch_current_image_hash", return_value="newhash")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_cleanup_idle_pool_deletes_stale_hash_jobs_first(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    _mock_fetch_hash,
+    mock_delete_idle_jobs,
+):
+    mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
+    mock_get_target_idle_count.return_value = SimpleNamespace(target=1)
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "jobs": [
+                    {
+                        "job_name": "unity-2026-01-01-00-00-00-stale",
+                        "labels": {
+                            "unity-status": "idle",
+                            "unity-image-hash": "oldhash",
+                        },
+                        "resource_version": "1",
+                    },
+                    {
+                        "job_name": "unity-2026-01-01-00-00-00-match",
+                        "labels": {
+                            "unity-status": "idle",
+                            "unity-image-hash": "newhash",
+                        },
+                        "resource_version": "2",
+                    },
+                ],
+            },
+        ),
+    )
+
+    result = cleanup_idle_pool()
+
+    assert result["deleted_stale_hash"] == 1
+    assert result["deleted_quota"] == 0
+    assert result["retained"] == 1
+    stale_delete_call = mock_delete_idle_jobs.call_args_list[0].args[0]
+    assert stale_delete_call == {
+        "unity-2026-01-01-00-00-00-stale": "1",
+    }
+
+
+@patch("adapters.helpers._delete_idle_jobs")
+@patch("adapters.helpers._fetch_current_image_hash", return_value=None)
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_cleanup_idle_pool_skips_stale_pass_without_current_hash(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    _mock_fetch_hash,
+    mock_delete_idle_jobs,
+):
+    mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
+    mock_get_target_idle_count.return_value = SimpleNamespace(target=0)
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "jobs": [
+                    {
+                        "job_name": "unity-2026-01-01-00-00-00-old",
+                        "labels": {
+                            "unity-status": "idle",
+                            "unity-image-hash": "oldhash",
+                        },
+                        "resource_version": "1",
+                    },
+                ],
+            },
+        ),
+    )
+
+    result = cleanup_idle_pool()
+
+    assert result["deleted_stale_hash"] == 0
+    assert mock_delete_idle_jobs.call_count == 1
+    assert mock_delete_idle_jobs.call_args.args[0] == {
+        "unity-2026-01-01-00-00-00-old": "1",
+    }
 
 
 @patch("adapters.helpers.requests.post")

@@ -28,6 +28,7 @@ _replenish_last_started_at = 0.0
 def request_idle_job_pool_replenishment(
     *,
     extra_demand: int = 0,
+    refresh: bool = False,
     source: str,
 ) -> dict[str, Any]:
     """Ask adapters to replenish idle Unity jobs for product demand.
@@ -47,9 +48,12 @@ def request_idle_job_pool_replenishment(
     """
 
     normalized_extra_demand = max(0, int(extra_demand))
+    params: dict[str, int | str] = {"extra_demand": normalized_extra_demand}
+    if refresh:
+        params["refresh"] = "true"
     response = requests.post(
         f"{SETTINGS.adapters_url}/scheduled/jobs/create",
-        params={"extra_demand": normalized_extra_demand},
+        params=params,
         headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         timeout=IDLE_JOB_POOL_REPLENISH_TIMEOUT_SECONDS,
     )
@@ -68,13 +72,19 @@ def request_idle_job_pool_replenishment(
     return result
 
 
-def _run_scheduled_replenishment(*, extra_demand: int, source: str) -> None:
+def _run_scheduled_replenishment(
+    *,
+    extra_demand: int,
+    refresh: bool,
+    source: str,
+) -> None:
     """Execute one scheduled replenish request and release the scheduler lock."""
 
     global _replenish_inflight
     try:
         request_idle_job_pool_replenishment(
             extra_demand=extra_demand,
+            refresh=refresh,
             source=source,
         )
     except Exception as exc:  # pragma: no cover - safety net for background thread
@@ -93,6 +103,7 @@ def _run_scheduled_replenishment(*, extra_demand: int, source: str) -> None:
 def schedule_idle_job_pool_replenishment(
     *,
     extra_demand: int = 0,
+    refresh: bool = False,
     source: str,
     min_interval_seconds: float = IDLE_JOB_POOL_REPLENISH_MIN_INTERVAL_SECONDS,
 ) -> bool:
@@ -131,6 +142,7 @@ def schedule_idle_job_pool_replenishment(
     _REPLENISH_EXECUTOR.submit(
         _run_scheduled_replenishment,
         extra_demand=normalized_extra_demand,
+        refresh=refresh,
         source=source,
     )
     emit_observability_event(

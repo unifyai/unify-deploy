@@ -92,6 +92,11 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     )
     monkeypatch.setattr(
         pool_controller,
+        "_get_current_image_hash",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        pool_controller,
         "schedule_idle_job_pool_replenishment",
         lambda extra_demand, source: job_replenish_calls.append(
             (extra_demand, source),
@@ -106,7 +111,51 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     assert trim_calls == ["windows"]
     assert result["unity_jobs"] == {
         "pending_sessions": 1,
+        "replenish_extra_demand": 1,
         "replenish_scheduled": True,
     }
     assert result["ubuntu"]["pending_sessions"] == 2
     assert result["windows"]["pending_sessions"] == 0
+
+
+def test_reconcile_pool_once_schedules_replenish_for_hash_deficit(monkeypatch):
+    job_replenish_calls = []
+
+    class FakeCustomApi:
+        def list_namespaced_custom_object(self, **_kwargs):
+            return {"items": []}
+
+    monkeypatch.setattr(
+        pool_controller,
+        "_get_current_image_hash",
+        lambda: "newhash",
+    )
+    monkeypatch.setattr(
+        pool_controller,
+        "_count_idle_jobs_by_hash",
+        lambda _current_hash: (0, 6),
+    )
+    monkeypatch.setattr(
+        pool_controller,
+        "replenish_pool",
+        lambda vm_type, extra_demand=0: {"vm_type": vm_type},
+    )
+    monkeypatch.setattr(pool_controller, "trim_pool", lambda vm_type: None)
+    monkeypatch.setattr(
+        pool_controller,
+        "emit_observability_event",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pool_controller,
+        "schedule_idle_job_pool_replenishment",
+        lambda extra_demand, source, refresh=False: job_replenish_calls.append(
+            (extra_demand, source, refresh),
+        )
+        or True,
+    )
+
+    result = pool_controller.reconcile_pool_once(FakeCustomApi(), "staging")
+
+    assert job_replenish_calls == [(3, "controller.pool_reconcile", False)]
+    assert result["unity_jobs"]["replenish_extra_demand"] == 3

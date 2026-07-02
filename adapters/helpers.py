@@ -1430,6 +1430,52 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     return inventory
 
 
+_IMAGE_HASH_LABEL = "unity-image-hash"
+
+
+def _idle_job_matches_env(job_name: str) -> bool:
+    if SETTINGS.env_suffix:
+        return job_name.endswith(SETTINGS.env_suffix)
+    return not job_name.endswith("-staging")
+
+
+def _fetch_current_image_hash(headers: dict | None = None) -> str | None:
+    """Return the canonical overlay hash from comms (same source as job creation)."""
+    request_headers = headers or {
+        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+    }
+    try:
+        response = requests.get(
+            f"{SETTINGS.comms_url}/infra/image",
+            headers=request_headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        commit_hash = response.json().get("commit_hash")
+        return commit_hash.strip() if commit_hash else None
+    except Exception as exc:
+        logger.warning("Failed to fetch current image hash: %s", exc)
+        return None
+
+
+def _partition_idle_by_hash(
+    idle_jobs: list[dict],
+    current_hash: str | None,
+) -> tuple[list[dict], list[dict]]:
+    if not current_hash:
+        return idle_jobs, []
+
+    matching: list[dict] = []
+    stale: list[dict] = []
+    for job in idle_jobs:
+        job_hash = job.get("labels", {}).get(_IMAGE_HASH_LABEL)
+        if job_hash == current_hash:
+            matching.append(job)
+        else:
+            stale.append(job)
+    return matching, stale
+
+
 def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     """Core logic for idle job pool replenishment.
 
@@ -1449,7 +1495,16 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     """
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
-    current_idle_count = len(inventory["idle"])
+    idle_jobs = inventory["idle"]
+    current_idle_count = len(idle_jobs)
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    current_hash = _fetch_current_image_hash(headers)
+    matching_idle_jobs, stale_idle_jobs = _partition_idle_by_hash(
+        idle_jobs,
+        current_hash,
+    )
+    matching_idle_count = len(matching_idle_jobs)
+    stale_idle_count = len(stale_idle_jobs)
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count)
 
@@ -1460,25 +1515,32 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     if refresh:
         num_to_create = effective_target
     elif extra_demand > 0:
-        num_to_create = max(0, effective_target - current_idle_count)
+        num_to_create = max(0, effective_target - matching_idle_count)
     elif not pool_target.demand_exceeds_floor:
         num_to_create = 1
     else:
-        num_to_create = max(0, effective_target - current_idle_count)
+        num_to_create = max(0, effective_target - matching_idle_count)
+
+    pool_counts = {
+        "current": current_idle_count,
+        "matching": matching_idle_count,
+        "stale": stale_idle_count,
+    }
 
     if num_to_create == 0:
         UNITY_JOBS_RUNNING.set(running_count)
         UNITY_JOBS_IDLE.set(current_idle_count)
         logger.info(
             "Idle pool is healthy "
-            f"(current: {current_idle_count}, target: {effective_target}, "
+            f"(current: {current_idle_count}, matching: {matching_idle_count}, "
+            f"stale: {stale_idle_count}, target: {effective_target}, "
             f"extra_demand: {extra_demand}). No jobs created.",
         )
         return {
             "status": "healthy",
-            "current": current_idle_count,
             "target": effective_target,
             "extra_demand": extra_demand,
+            **pool_counts,
         }
 
     mode = (
@@ -1494,13 +1556,14 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     )
     logger.info(
         f"[{mode}] Creating {num_to_create} idle jobs "
-        f"(current: {current_idle_count}, target: {effective_target}, "
+        f"(current: {current_idle_count}, matching: {matching_idle_count}, "
+        f"stale: {stale_idle_count}, target: {effective_target}, "
         f"extra_demand: {extra_demand})...",
     )
-    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
-    response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
-    commit_hash = response.json()["commit_hash"]
-    image = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{commit_hash}"
+    if current_hash is None:
+        response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
+        current_hash = response.json()["commit_hash"]
+    image = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{current_hash}"
 
     def _create_single_job():
         try:
@@ -1526,8 +1589,42 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
         "created": len(created_jobs),
         "target": effective_target,
         "extra_demand": extra_demand,
+        **pool_counts,
         "details": created_jobs,
     }
+
+
+def _delete_idle_jobs(
+    idle_jobs: dict[str, str | None],
+    headers: dict,
+) -> None:
+    def _delete_single_job(job_name, resource_version):
+        data = {"job_name": job_name}
+        if resource_version is not None:
+            data["resource_version"] = resource_version
+        resp = requests.delete(
+            f"{SETTINGS.comms_url}/infra/job/delete",
+            data=data,
+            headers=headers,
+        )
+        if resp.status_code == 409:
+            logger.info(
+                f"Skipped deleting {job_name}: job changed since listing (409 Conflict)",
+            )
+        elif resp.status_code != 200:
+            logger.warning(
+                f"Failed to delete {job_name}: {resp.status_code} {resp.text}",
+            )
+
+    if not idle_jobs:
+        return
+
+    with ThreadPoolExecutor(max_workers=len(idle_jobs)) as pool:
+        futures = [
+            pool.submit(_delete_single_job, name, rv) for name, rv in idle_jobs.items()
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
 def cleanup_idle_pool() -> dict:
@@ -1544,22 +1641,30 @@ def cleanup_idle_pool() -> dict:
     UNITY_JOBS_IDLE.set(idle_count)
     target_retain = get_target_idle_count(running_count).target
 
-    # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{SETTINGS.comms_url}/infra/jobs",
         params=_job_inventory_params("app=unity,unity-status=idle"),
         headers=headers,
     )
     jobs = resp.json()
-    idle_jobs = {
-        job["job_name"]: job.get("resource_version")
-        for job in jobs["jobs"]
-        if (
-            job["job_name"].endswith(SETTINGS.env_suffix)
-            if SETTINGS.env_suffix
-            else not job["job_name"].endswith("-staging")
-        )
+    env_idle_jobs = [
+        job for job in jobs["jobs"] if _idle_job_matches_env(job["job_name"])
+    ]
+
+    current_hash = _fetch_current_image_hash(headers)
+    matching_jobs, stale_jobs = _partition_idle_by_hash(env_idle_jobs, current_hash)
+    stale_to_delete = {
+        job["job_name"]: job.get("resource_version") for job in stale_jobs
     }
+    if stale_to_delete:
+        logger.info(
+            "Cleanup: deleting %s stale-hash idle jobs (current hash: %s)",
+            len(stale_to_delete),
+            current_hash or "unknown",
+        )
+        _delete_idle_jobs(stale_to_delete, headers)
+
+    idle_jobs = {job["job_name"]: job.get("resource_version") for job in matching_jobs}
 
     # Classify idle jobs by age into three buckets
     very_new_idle_jobs = []  # < 1 min: always retained, exempt from quota
@@ -1601,44 +1706,22 @@ def cleanup_idle_pool() -> dict:
     logger.info(
         f"Cleanup: retain={len(retain)} "
         f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
-        f"target={target_retain}), delete={len(to_delete)}, running={running_count}",
+        f"target={target_retain}), delete_quota={len(to_delete)}, "
+        f"delete_stale_hash={len(stale_to_delete)}, running={running_count}",
     )
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
     logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
 
-    def _delete_single_job(job_name, resource_version):
-        data = {"job_name": job_name}
-        if resource_version is not None:
-            data["resource_version"] = resource_version
-        resp = requests.delete(
-            f"{SETTINGS.comms_url}/infra/job/delete",
-            data=data,
-            headers=headers,
-        )
-        if resp.status_code == 409:
-            logger.info(
-                f"Skipped deleting {job_name}: job changed since listing (409 Conflict)",
-            )
-        elif resp.status_code != 200:
-            logger.warning(
-                f"Failed to delete {job_name}: {resp.status_code} {resp.text}",
-            )
-
-    if to_delete:
-        with ThreadPoolExecutor(max_workers=len(to_delete)) as pool:
-            futures = [
-                pool.submit(_delete_single_job, name, rv)
-                for name, rv in to_delete.items()
-            ]
-            for f in as_completed(futures):
-                f.result()
+    _delete_idle_jobs(to_delete, headers)
 
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(len(retain))
 
     return {
         "retained": len(retain),
-        "deleted": len(to_delete),
+        "deleted": len(to_delete) + len(stale_to_delete),
+        "deleted_stale_hash": len(stale_to_delete),
+        "deleted_quota": len(to_delete),
         "target": target_retain,
         "running": running_count,
     }
