@@ -129,12 +129,14 @@ def _store_refreshed_oauth_secrets(
             endpoint,
             json={"secret_value": secret_value},
             headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
         )
         if response.status_code == 404:
             response = requests.post(
                 base_endpoint,
                 json={"secret_name": secret_name, "secret_value": secret_value},
                 headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
             )
         if response.status_code not in (200, 201):
             logger.error(
@@ -5122,6 +5124,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
         response = requests.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
             headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=60,
         )
         if response.status_code != 200:
             return Response(
@@ -5171,6 +5174,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                     "grant_type": "refresh_token",
                     "scope": refresh_scope,
                 },
+                timeout=30,
             )
 
             if token_resp.status_code != 200:
@@ -5264,6 +5268,7 @@ def scheduled_google_tokens(payload: ScheduledPayload):
         response = requests.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
             headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=60,
         )
         if response.status_code != 200:
             return Response(
@@ -5302,6 +5307,7 @@ def scheduled_google_tokens(payload: ScheduledPayload):
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
+                timeout=30,
             )
 
             if token_resp.status_code != 200:
