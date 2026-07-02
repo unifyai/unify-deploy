@@ -340,7 +340,7 @@ steps:
       --concurrency=80 \
       --memory=2Gi \
       --cpu=1 \
-      --timeout=300 \
+      --timeout=600 \
       --cpu-boost \
       --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=production,UNITY_COORDINATOR_EMAIL_ADDRESS=${_UNITY_COORDINATOR_EMAIL_ADDRESS},PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
       --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
