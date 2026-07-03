@@ -24,7 +24,7 @@
 #                                   poll-only; voice -> tunnel when calls enabled)
 #
 # Environment:
-#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unity siblings
+#   UNIFY_STACK_ROOT          Parent dir with orchestra/console/unify siblings
 #   OPENAI_API_KEY / ANTHROPIC_API_KEY  Required for Coordinator chat
 #   DEEPGRAM_API_KEY / CARTESIA_API_KEY Required for browser calls (prompted by unity setup)
 #   SELF_HOST_CALLS_ENABLED=0 Disable inbound/outbound phone & WhatsApp calls.
@@ -36,9 +36,11 @@
 set -euo pipefail
 
 # This script lives in unity-deploy/selfhost/. The self-host stack orchestrates
-# the sibling unity, console, and orchestra checkouts located under
+# the sibling unify, console, and orchestra checkouts located under
 # UNIFY_STACK_ROOT (defaults to the parent of unity-deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=default_repo_paths.sh
+source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
@@ -46,7 +48,8 @@ STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
+UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNITY_REPO_PATH
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 

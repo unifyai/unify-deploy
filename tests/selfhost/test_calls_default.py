@@ -9,15 +9,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _sibling_unity_local_sh() -> Path | None:
-    """Resolve the sibling unity checkout's scripts/local.sh, if present."""
+def _sibling_unify_local_sh() -> Path | None:
+    """Resolve the sibling unify checkout's scripts/local.sh, if present."""
     stack_root = os.environ.get("UNIFY_STACK_ROOT")
     roots = [Path(stack_root)] if stack_root else []
     roots.append(REPO_ROOT.parent)
     for root in roots:
-        candidate = root / "unity" / "scripts" / "local.sh"
-        if candidate.is_file():
-            return candidate
+        for repo_name in ("unify", "unity"):
+            candidate = root / repo_name / "scripts" / "local.sh"
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -25,9 +26,9 @@ def test_gateway_launch_forwards_tunnel_url_for_call_callbacks():
     """The gateway places Twilio call callbacks, so it must receive the
     cloudflared tunnel URL + local-comms mode; otherwise Twilio gets
     unreachable localhost callbacks and outbound calls fail on answer."""
-    local_sh = _sibling_unity_local_sh()
+    local_sh = _sibling_unify_local_sh()
     if local_sh is None:
-        pytest.skip("sibling unity checkout not available")
+        pytest.skip("sibling unify checkout not available")
 
     text = local_sh.read_text(encoding="utf-8")
     start = text.index("start_gateway()")

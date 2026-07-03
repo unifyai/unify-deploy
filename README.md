@@ -397,7 +397,6 @@ unity_deploy/
 
 Setup:
 ```bash
-git clone git@github.com:unifyai/unity.git
 git clone git@github.com:unifyai/unify.git
 git clone git@github.com:unifyai/unillm.git
 git clone git@github.com:unifyai/unity-deploy.git

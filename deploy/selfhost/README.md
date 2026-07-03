@@ -227,7 +227,7 @@ Workspace files live at `~/Unity/Local` (bind-mounted into CM and desktop contai
 ## Developer source install
 
 Run the full stack from sibling source checkouts (for internal development).
-Lay out `unity`, `unify`, `unillm`, `console`, `orchestra`, and `unity-deploy`
+Lay out `unify`, `unillm`, `console`, `orchestra`, and `unity-deploy`
 as siblings under one root (`UNIFY_STACK_ROOT`, defaults to the parent of
 `unity-deploy`), then drive everything from this repo's `selfhost/` scripts:
 

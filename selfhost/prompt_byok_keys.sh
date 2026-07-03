@@ -14,9 +14,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-_looks_like_unity_repo() {
+_looks_like_unify_repo() {
   local dir="$1"
-  [[ -d "$dir" && -f "$dir/pyproject.toml" && -d "$dir/unity" ]]
+  [[ -d "$dir" && -f "$dir/pyproject.toml" && -d "$dir/unify" ]]
 }
 
 resolve_unity_repo() {
@@ -30,25 +30,31 @@ resolve_unity_repo() {
     return 0
   fi
   candidate="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-  if _looks_like_unity_repo "$candidate"; then
+  if _looks_like_unify_repo "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
   candidate="$(pwd -P)"
-  if _looks_like_unity_repo "$candidate"; then
+  if _looks_like_unify_repo "$candidate"; then
     printf '%s' "$candidate"
     return 0
   fi
-  if [[ -n "${UNIFY_STACK_ROOT:-}" && -d "$UNIFY_STACK_ROOT/unity" ]]; then
-    printf '%s' "$UNIFY_STACK_ROOT/unity"
-    return 0
+  if [[ -n "${UNIFY_STACK_ROOT:-}" ]]; then
+    if [[ -d "$UNIFY_STACK_ROOT/unify" ]]; then
+      printf '%s' "$UNIFY_STACK_ROOT/unify"
+      return 0
+    fi
+    if [[ -d "$UNIFY_STACK_ROOT/unity" ]]; then
+      printf '%s' "$UNIFY_STACK_ROOT/unity"
+      return 0
+    fi
   fi
-  printf '%s' "${UNITY_HOME:-$HOME/.unity}/unity"
+  printf '%s' "${UNITY_HOME:-$HOME/.unity}/unify"
 }
 
 UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
 UNITY_REPO="$(resolve_unity_repo)"
-if _looks_like_unity_repo "$UNITY_REPO"; then
+if _looks_like_unify_repo "$UNITY_REPO"; then
   UNITY_HOME="$(cd "$UNITY_REPO/.." && pwd -P)"
 fi
 ENV_FILE="${UNITY_ENV_FILE:-$UNITY_REPO/.env}"
