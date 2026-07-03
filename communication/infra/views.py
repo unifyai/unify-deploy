@@ -39,6 +39,7 @@ from .assistant_sessions import (
     BINDING_ID_LABEL as SESSION_BINDING_ID_LABEL,
     BINDING_ID_ANNOTATION,
     DESIRED_STATE_STOPPED,
+    DESIRED_STATE_RUNNING,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_RELEASE_COMPLETE,
     SESSION_REF_ANNOTATION,
@@ -73,6 +74,8 @@ from .assistant_sessions import (
     released_binding,
     resolve_current_binding_vm_ref,
     session_binding,
+    session_desktop_mode,
+    session_desktop_required,
     vm_refs_match,
 )
 from .idle_job_pool import schedule_idle_job_pool_replenishment
@@ -202,6 +205,25 @@ async def _publish_desktop_ready(
 router = APIRouter()
 router.include_router(task_activation_router)
 router.include_router(dashboard_actions_router)
+
+
+def _parse_desktop_required_form(
+    raw_desktop_required: str,
+    desktop_mode: str,
+) -> bool | None:
+    """Parse optional desktop_required override from /infra/job/start form data."""
+
+    cleaned = str(raw_desktop_required or "").strip().lower()
+    if not cleaned:
+        return None
+    if cleaned in {"true", "1", "yes"}:
+        return True
+    if cleaned in {"false", "0", "no"}:
+        return False
+    raise HTTPException(
+        status_code=400,
+        detail="desktop_required must be true or false when provided",
+    )
 
 
 def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
@@ -1016,6 +1038,7 @@ async def start_job(
     voice_id: str = Form(""),
     desktop_mode: str = Form("none"),
     desktop_url: str = Form(""),
+    desktop_required: str = Form(""),
     user_desktops: str = Form(""),
     is_coordinator: str = Form("false"),
     demo_id: str = Form(""),
@@ -1257,6 +1280,10 @@ async def start_job(
             desktop_mode=desktop_mode,
             startup_secret_ref=secret_name,
             activation_id=activation_id,
+            desktop_required=_parse_desktop_required_form(
+                desktop_required,
+                desktop_mode,
+            ),
         )
         try:
             session = await asyncio.to_thread(
@@ -1318,6 +1345,10 @@ async def start_job(
                 desktop_mode=desktop_mode,
                 startup_secret_ref=secret_name,
                 activation_id=activation_id,
+                desktop_required=_parse_desktop_required_form(
+                    desktop_required,
+                    desktop_mode,
+                ),
             )
             try:
                 session = await asyncio.to_thread(
@@ -3135,6 +3166,52 @@ async def prune_terminal_assistant_sessions(
         "skip_reasons": dict(skip_reasons),
         "delete_errors": delete_errors,
     }
+
+
+@router.post("/runtime/{assistant_id}/request-desktop")
+async def request_desktop_binding_endpoint(assistant_id: str):
+    """Promote a voice-only activation to require managed desktop binding.
+
+    Used after a voice call reaches ``ready_to_speak`` so VM assignment and
+    file sync run off the call-connect critical path.
+    """
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="AssistantSession not found")
+
+    desktop_mode = session_desktop_mode(session)
+    if desktop_mode not in ("ubuntu", "windows"):
+        return {"accepted": False, "reason": "desktop_not_configured"}
+
+    if session_desktop_required(session):
+        return {"accepted": True, "reason": "already_required"}
+
+    if assistant_session_desired_state(session) != DESIRED_STATE_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail="AssistantSession is not in Running desired state",
+        )
+
+    await asyncio.to_thread(
+        patch_assistant_session_spec,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+        desktop_required=True,
+    )
+    emit_observability_event(
+        "infra.desktop_binding.requested",
+        assistant_id=assistant_id,
+        session_name=assistant_session_name(assistant_id),
+        desktop_mode=desktop_mode,
+    )
+    return {"accepted": True, "reason": "promoted"}
 
 
 @router.get("/runtime/{assistant_id}")

@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import json
 import os
 import re
@@ -1163,6 +1164,7 @@ def _build_start_job_request_data(
     medium: str,
     *,
     wake_reasons: list[dict] | None = None,
+    desktop_required: bool | None = None,
 ) -> dict[str, str]:
     """Build the `/infra/job/start` form payload for one activation request."""
 
@@ -1231,7 +1233,30 @@ def _build_start_job_request_data(
     }
     if wake_reasons:
         data["wake_reasons"] = json.dumps(wake_reasons)
+    if desktop_required is not None:
+        data["desktop_required"] = "true" if desktop_required else "false"
     return data
+
+
+VOICE_CALL_ACTIVATION_CHANNELS = frozenset(
+    {"phone", "whatsapp_call", "unify_meet"},
+)
+
+
+def call_activation_defers_desktop_binding(
+    channel: str,
+    assistant: dict | None = None,
+) -> bool:
+    """Return whether a voice-call wake can defer managed desktop binding.
+
+    Phone, WhatsApp voice, and Unify Meet do not need the Ubuntu/Windows VM on
+    the activation critical path. Desktop binding is promoted once the voice
+    agent is ready to speak.
+    """
+    if channel not in VOICE_CALL_ACTIVATION_CHANNELS:
+        return False
+    desktop_mode = _resolve_desktop_mode(assistant or {})
+    return desktop_mode in ("ubuntu", "windows")
 
 
 def dispatch_unity_start_intent(
@@ -1239,6 +1264,7 @@ def dispatch_unity_start_intent(
     medium: str,
     *,
     wake_reasons: list[dict] | None = None,
+    desktop_required: bool | None = None,
     timeout_seconds: float = START_INTENT_DISPATCH_TIMEOUT_SECONDS,
 ) -> requests.Response | None:
     """Dispatch `/infra/job/start` and return the observed edge response."""
@@ -1257,12 +1283,18 @@ def dispatch_unity_start_intent(
             assistant,
             medium,
             wake_reasons=wake_reasons,
+            desktop_required=desktop_required,
         ),
         timeout=timeout_seconds,
     )
 
 
-def start_unity_job(assistant: dict, medium: str) -> None:
+def start_unity_job(
+    assistant: dict,
+    medium: str,
+    *,
+    desktop_required: bool | None = None,
+) -> None:
     """Best-effort low-latency dispatch of activation intent to comms.
 
     Adapters intentionally stop waiting after a tiny edge timeout so webhook
@@ -1279,6 +1311,7 @@ def start_unity_job(assistant: dict, medium: str) -> None:
         response = dispatch_unity_start_intent(
             assistant,
             medium,
+            desktop_required=desktop_required,
             timeout_seconds=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
         )
         if response is None:
@@ -1781,6 +1814,7 @@ def build_webhook_context(
     ensure_job: bool = True,
     force_start: bool = False,
     assistant_data: dict = None,
+    desktop_required: bool | None = None,
 ):
     """Build a shared context for webhooks.
 
@@ -1865,9 +1899,22 @@ def build_webhook_context(
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
+    effective_desktop_required = desktop_required
+    if effective_desktop_required is None and call_activation_defers_desktop_binding(
+        channel,
+        assistant_data,
+    ):
+        effective_desktop_required = False
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
+        _WEBHOOK_BG_POOL.submit(
+            partial(
+                start_unity_job,
+                assistant_data,
+                channel,
+                desktop_required=effective_desktop_required,
+            ),
+        )
         activation_intent_scheduled = True
         legacy_is_job_running = True
 

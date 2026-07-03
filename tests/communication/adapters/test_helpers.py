@@ -484,6 +484,38 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert call_kwargs["data"]["desktop_mode"] == "ubuntu"
 
 
+def test_call_activation_defers_desktop_binding():
+    from adapters.helpers import call_activation_defers_desktop_binding
+
+    assistant = {"desktop_mode": "ubuntu"}
+    assert call_activation_defers_desktop_binding("unify_meet", assistant)
+    assert call_activation_defers_desktop_binding("phone", assistant)
+    assert call_activation_defers_desktop_binding("whatsapp_call", assistant)
+    assert not call_activation_defers_desktop_binding("email", assistant)
+    assert not call_activation_defers_desktop_binding(
+        "unify_meet",
+        {"desktop_mode": "none"},
+    )
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_includes_desktop_required_override(mock_post):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data()
+    assistant_data["desktop_mode"] = "ubuntu"
+
+    dispatch_unity_start_intent(
+        assistant_data,
+        "unify_meet",
+        desktop_required=False,
+    )
+
+    assert mock_post.call_args.kwargs["data"]["desktop_required"] == "false"
+
+
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
 def test_dispatch_unity_start_intent_encodes_team_ids_for_form(mock_post):

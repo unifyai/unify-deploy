@@ -1134,8 +1134,10 @@ def build_assistant_session_spec(
     desired_state: str = DESIRED_STATE_RUNNING,
     image_override: str | None = None,
     service_urls: dict[str, str] | None = None,
+    desktop_required: bool | None = None,
 ) -> dict[str, Any]:
-    desktop_required = desktop_mode in ("windows", "ubuntu")
+    if desktop_required is None:
+        desktop_required = desktop_mode in ("windows", "ubuntu")
     spec: dict[str, Any] = {
         "assistantId": str(assistant_id),
         "userId": str(user_id),
@@ -1309,6 +1311,7 @@ def patch_assistant_session_spec(
     assistant_id: str,
     *,
     desired_state: str | None = None,
+    desktop_required: bool | None = None,
 ) -> dict[str, Any]:
     """Patch controller-consumed AssistantSession spec fields."""
 
@@ -1316,6 +1319,8 @@ def patch_assistant_session_spec(
     spec_patch: dict[str, Any] = {}
     if desired_state is not None:
         spec_patch["desiredState"] = desired_state
+    if desktop_required is not None:
+        spec_patch["desktop"] = {"required": desktop_required}
     if not spec_patch:
         raise ValueError("patch_assistant_session_spec requires at least one field")
 
