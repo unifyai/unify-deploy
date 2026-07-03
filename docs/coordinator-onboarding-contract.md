@@ -73,16 +73,19 @@ a step is done:
   contact, an app connection, a Tasks row).
 
 Workspace demos (`workspace-mailbox`, `workspace-drive`, `workspace-calendar`)
-are the deliberate exception: they are **multi-part tasks that never
-auto-complete**. A single tagged summary must not mark a mailbox demo done when
-the task also requires sending a reply. Instead:
+are the deliberate exception: they **never auto-complete**. The checklist does
+not detect the demo work from any transcript row, so completion is always an
+explicit brain action. Instead:
 
 1. The user clicks the demo row → Orchestra emits `workspace_demo_requested`.
-2. Twin performs the *whole* task with its own tools (for the mailbox: summarise
-   **and** send the reply).
+2. Twin performs the demo task with its own tools: read the relevant area and
+   deliver one short summary as a single `unify_message` (for the mailbox,
+   summarise the recent mail). Any reply, tidy-up, or flag Twin offers
+   afterwards is an optional follow-up and never gates completion.
 3. Twin marks the step done explicitly by calling `set_onboarding_task_state`,
    which PATCHes `onboarding_step_completion` on `/assistant/{id}/state`. The
-   step id is recorded in `manually_completed_step_ids`.
+   step id is recorded in `manually_completed_step_ids`. The demo is not
+   finished until this call is made.
 4. When that PATCH lands and onboarding is active, Orchestra emits
    `onboarding_step_completed` carrying the freshly-derived render. Unity
    refreshes its progress model from the attached render but does **not** run an
