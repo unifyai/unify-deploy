@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 NO_DESKTOP_MODE = "none"
 COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 ASSISTANT_LOOKUP_TIMEOUT_SECONDS = 30
+ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
+    "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
+    "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
+    "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
+    "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
+    "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
+    "assistant_discord_bot_id,age,nationality,about,job_title,timezone"
+)
 
 
 def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:
@@ -119,16 +127,25 @@ def get_assistant(
     email_address: str | None = None,
     phone_number: str | None = None,
     assistant_id: str | None = None,
+    *,
+    from_fields: str | None = None,
 ) -> dict[str, Any]:
     """Return assistant/user runtime configuration from Orchestra."""
 
-    params = {}
-    if email_address:
-        params["email"] = email_address
-    if phone_number:
-        params["phone"] = phone_number
+    params: dict[str, str] = {}
     if assistant_id:
         params["agent_id"] = assistant_id
+    elif email_address:
+        normalized_email = email_address.strip().lower()
+        if normalized_email == SETTINGS.unity_coordinator_email_address.strip().lower():
+            return {**_local_assistant_data(), "assistant_id": None}
+        params["email"] = email_address
+        params["from_fields"] = from_fields or ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    elif phone_number:
+        params["phone"] = phone_number
+        params["from_fields"] = from_fields or ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    elif from_fields:
+        params["from_fields"] = from_fields
 
     email_check = email_address or ""
     phone_check = phone_number or ""

@@ -1,4 +1,8 @@
-from common.assistant_lookup import _assistant_payload
+from common.assistant_lookup import (
+    ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
+    _assistant_payload,
+    get_assistant,
+)
 
 
 def test_assistant_payload_coerces_nullable_runtime_strings():
@@ -61,3 +65,48 @@ def test_assistant_payload_coerces_nullable_runtime_strings():
     assert payload["voice_id"] == ""
     assert payload["self_contact_id"] == 0
     assert payload["boss_contact_id"] == 1
+
+
+def test_get_assistant_skips_universal_coordinator_email_lookup(monkeypatch):
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.unity_coordinator_email_address",
+        "staging-twin@unify.ai",
+    )
+
+    def fail_get(*_args, **_kwargs):
+        raise AssertionError("Orchestra should not be called for universal email")
+
+    monkeypatch.setattr("common.assistant_lookup.requests.get", fail_get)
+
+    result = get_assistant(email_address="staging-twin@unify.ai")
+
+    assert result["assistant_id"] is None
+
+
+def test_get_assistant_passes_from_fields_for_email_lookup(monkeypatch):
+    calls = []
+
+    class Response:
+        def json(self):
+            return {"detail": "not found"}
+
+    def fake_get(url, *, params, headers, timeout=None):
+        calls.append({"params": params})
+        return Response()
+
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_url",
+        "https://api.test",
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_admin_key",
+        "admin-key",
+    )
+    monkeypatch.setattr("common.assistant_lookup.requests.get", fake_get)
+
+    get_assistant(email_address="byod@example.com")
+
+    assert calls[0]["params"] == {
+        "email": "byod@example.com",
+        "from_fields": ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
+    }

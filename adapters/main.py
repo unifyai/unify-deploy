@@ -4516,7 +4516,18 @@ async def microsoft_oauth_callback(request: Request):
                 status_code=400,
             )
 
-        assistant = get_assistant(email_address=assistant_email)
+        raw_assistant_id = state_data.get("assistant_id")
+        if raw_assistant_id:
+            assistant = get_assistant(assistant_id=str(raw_assistant_id))
+        elif is_unity_coordinator_email_address(assistant_email):
+            return Response(
+                content=(
+                    "Ambiguous universal contact lookup; pass assistant_id in OAuth state."
+                ),
+                status_code=400,
+            )
+        else:
+            assistant = get_assistant(email_address=assistant_email)
         if not assistant or not assistant.get("assistant_id"):
             return Response(
                 content=f"Assistant not found for email: {assistant_email}",
