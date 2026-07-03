@@ -60,6 +60,39 @@ The attached render is what makes Unity's prompt state current immediately after
 the click. Without it, the agent can speak from stale progress and skip the
 section framing that explains why the step exists.
 
+## Step Completion: Derived vs Explicit
+
+Most steps complete by *derivation* — Orchestra reads durable state and decides
+a step is done:
+
+- Communication reference-quiz steps derive from assistant-authored transcript
+  rows on the channel's outbound mediums (see
+  `_CHANNEL_TO_OUTBOUND_MEDIUMS`). Unity tags those outbounds with onboarding
+  metadata so the row Orchestra reads is attributable.
+- Connect/Tasks steps derive from the resulting account state (a workspace
+  contact, an app connection, a Tasks row).
+
+Workspace demos (`workspace-mailbox`, `workspace-drive`, `workspace-calendar`)
+are the deliberate exception: they are **multi-part tasks that never
+auto-complete**. A single tagged summary must not mark a mailbox demo done when
+the task also requires sending a reply. Instead:
+
+1. The user clicks the demo row → Orchestra emits `workspace_demo_requested`.
+2. Twin performs the *whole* task with its own tools (for the mailbox: summarise
+   **and** send the reply).
+3. Twin marks the step done explicitly by calling `set_onboarding_task_state`,
+   which PATCHes `onboarding_step_completion` on `/assistant/{id}/state`. The
+   step id is recorded in `manually_completed_step_ids`.
+4. When that PATCH lands and onboarding is active, Orchestra emits
+   `onboarding_step_completed` carrying the freshly-derived render. Unity
+   refreshes its progress model from the attached render but does **not** run an
+   extra acknowledgement turn — the brain already messaged the user on the turn
+   that made the completion call.
+
+`manual_completion_block_reason` in the graph is the single gate for which steps
+accept an explicit completion PATCH. Communication rows and other auto-derived
+triggers remain blocked; the three workspace demos are allowed.
+
 ## Prompt Precedence
 
 Unity has three turn classes:
