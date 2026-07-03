@@ -7,7 +7,8 @@
 
 scenario_id: brain_jobs_v0
 name: Brain scheduled jobs (v0)
-description: Generated from the brain.scheduled registry.  Re-run `brain scheduled export-scenario` after changing any BrainScheduledJob declaration.  Activated by the brain_operator deployment via ScenarioActivation.
+description: Generated from the brain.scheduled registry.  Re-run `brain scheduled export-scenario` after changing any BrainScheduledJob
+  declaration.  Activated by the brain_operator deployment via ScenarioActivation.
 client: ''
 deployment: ''
 integration:
@@ -308,7 +309,8 @@ tasks:
   activation:
     entrypoint_function: run_smartlead_reply_processor
     task_name: SmartLead reply processor
-    task_description: Drain queued SmartLead reply jobs, classify inbound replies, send or flag the appropriate response, and leave no-op when the queue is empty.
+    task_description: Drain queued SmartLead reply jobs, classify inbound replies, send or flag the appropriate response,
+      and leave no-op when the queue is empty.
     visibility_policy: silent_by_default
     recurrence_hint: triggered_by_smartlead_webhook
   delivery:
@@ -326,7 +328,9 @@ tasks:
   activation:
     entrypoint_function: run_youtube_browser_extraction
     task_name: YouTube influencer email extraction
-    task_description: Drain the YouTube influencer-channel list through the browser-driven About-modal email extractor. Each capture appends to data/influencers/youtube/browser_emails.jsonl; on completion the runner regenerates channels_outreach.csv.  Fires once when the external trigger 'influencers.youtube.extract' is dispatched.
+    task_description: Drain the YouTube influencer-channel list through the browser-driven About-modal email extractor. Each
+      capture appends to data/influencers/youtube/browser_emails.jsonl; on completion the runner regenerates channels_outreach.csv.  Fires
+      once when the external trigger 'influencers.youtube.extract' is dispatched.
     visibility_policy: silent_by_default
     recurrence_hint: trigger_only
   delivery:
@@ -344,7 +348,15 @@ tasks:
   activation:
     entrypoint_function: run_x_reply_bot_session
     task_name: 'X reply bot: every 30 min, one personalised reply'
-    task_description: "Every 30 minutes, run one automated X reply session as the operator's personal handle. Discovers fresh (last ~60 min) root posts from search queries + a watchlist where `unity` is genuinely relevant, ranks them for early-reply value (recency + author reach + velocity, penalising posts that already have many replies), and posts at most max_per_session (default 1) short, personalised replies explaining how unity handles that exact problem differently. An LLM relevance gate declines when unity isn't a real fit, every reply is unique (human voice), links route through r.unify.ai, and state in data/influencers/x/reply_bot/ dedupes tweets/authors and enforces the daily_cap. Fully automated — no review gate; the operator audits via sessions.jsonl + the X app and tunes the config/prompt over time. NOT the social-post reposting tick — that broadcasts our own commentary on others' work; this replies directly under other people's posts."
+    task_description: "Every 30 minutes, run one automated X reply session as the operator's personal handle. Discovers fresh\
+      \ (last ~60 min) root posts from search queries + a watchlist where `droid` is genuinely relevant, ranks them for early-reply\
+      \ value (recency + author reach + velocity, penalising posts that already have many replies), and posts at most max_per_session\
+      \ (default 1) short, personalised replies explaining how droid handles that exact problem differently. An LLM relevance\
+      \ gate declines when droid isn't a real fit, every reply is unique (human voice), links route through r.unify.ai, and\
+      \ state in data/influencers/x/reply_bot/ dedupes tweets/authors and enforces the daily_cap. Fully automated \u2014 no\
+      \ review gate; the operator audits via sessions.jsonl + the X app and tunes the config/prompt over time. NOT the social-post\
+      \ reposting tick \u2014 that broadcasts our own commentary on others' work; this replies directly under other people's\
+      \ posts."
     visibility_policy: silent_by_default
     recurrence_hint: every_30_minutes
   delivery:
@@ -362,7 +374,15 @@ tasks:
   activation:
     entrypoint_function: run_x_dm_campaign_session
     task_name: 'X DM outreach: one personalised DM per ~30 min'
-    task_description: "Every 30 minutes, send at most one personalised cold-outreach DM from the operator's handle to the next account on the real-influencer shortlist (_real_targets_shortlist.csv). A CodeActActor researches the target (their recent posts + their work via primitives.web) and writes a genuine, specific DM pointing at the unity demo — or skips when there's no real hook. Self-throttling and built to run for months unattended: a warm-up ramp (15->40/day) plus a daily cap bound volume, sends are deduped across every campaign send-log (never DM anyone twice), closed-DM accounts are skipped, and the whole thing is idempotent/resumable so a missed or doubled tick is harmless. When the current shortlist is exhausted it simply no-ops until new targets are added by the reply bot / engagement archaeology. Cold automated DMs are the highest-risk X automation, so the cadence is deliberately a trickle, far below X's technical cap."
+    task_description: "Every 30 minutes, send at most one personalised cold-outreach DM from the operator's handle to the\
+      \ next account on the real-influencer shortlist (_real_targets_shortlist.csv). A CodeActActor researches the target\
+      \ (their recent posts + their work via primitives.web) and writes a genuine, specific DM pointing at the droid demo\
+      \ \u2014 or skips when there's no real hook. Self-throttling and built to run for months unattended: a warm-up ramp\
+      \ (15->40/day) plus a daily cap bound volume, sends are deduped across every campaign send-log (never DM anyone twice),\
+      \ closed-DM accounts are skipped, and the whole thing is idempotent/resumable so a missed or doubled tick is harmless.\
+      \ When the current shortlist is exhausted it simply no-ops until new targets are added by the reply bot / engagement\
+      \ archaeology. Cold automated DMs are the highest-risk X automation, so the cadence is deliberately a trickle, far below\
+      \ X's technical cap."
     visibility_policy: silent_by_default
     recurrence_hint: every_30_minutes
   delivery:
@@ -380,12 +400,14 @@ tasks:
   activation:
     entrypoint_function: run_hackernews_digest_to_whatsapp
     task_name: HackerNews daily digest -> WhatsApp
-    task_description: Scrape news.ycombinator.com via ComputerPrimitives, summarise the top stories, and send the digest to the operator's WhatsApp number registered with the brain_operator assistant. Recipient resolved from the BRAIN_WHATSAPP_DEFAULT_RECIPIENT env var when the tick fires without an explicit recipient_phone.
+    task_description: Scrape news.ycombinator.com via ComputerPrimitives, summarise the top stories, and send the digest to
+      the operator's WhatsApp number registered with the brain_operator assistant. Recipient resolved from the BRAIN_WHATSAPP_DEFAULT_RECIPIENT
+      env var when the tick fires without an explicit recipient_phone.
     visibility_policy: silent_by_default
     recurrence_hint: daily_07_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.unity_outreach.hackernews_daily
+- id: intel.droid_outreach.hackernews_daily
   enabled: true
   execution_mode: offline
   schedule:
@@ -396,14 +418,18 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_unity_outreach_hackernews_daily
-    task_name: 'Unity outreach: HackerNews discovery + draft'
-    task_description: "Algolia-search HN for Unity-relevant threads (OpenClaw, HermesAgent, AI coworker, agent memory, agent steering, interruptible agent, voice agent realtime, etc.) over the past 12 weeks. Score each against the cached Unity relevance brief, draft a minimal 'maybe X could be useful?' reply for the top candidates, and persist to data/intel/unity_outreach/candidates/<date>/hackernews/review/. Optionally emits Discord review cards when UNIFY_DISCORD_REVIEW_WEBHOOK is set, so the operator can approve via ✅/❌ before the post step ships. NO comments are posted by this tick — it stops at draft."
+    entrypoint_function: run_droid_outreach_hackernews_daily
+    task_name: 'Droid outreach: HackerNews discovery + draft'
+    task_description: "Algolia-search HN for Droid-relevant threads (OpenClaw, HermesAgent, AI coworker, agent memory, agent\
+      \ steering, interruptible agent, voice agent realtime, etc.) over the past 12 weeks. Score each against the cached Droid\
+      \ relevance brief, draft a minimal 'maybe X could be useful?' reply for the top candidates, and persist to data/intel/droid_outreach/candidates/<date>/hackernews/review/.\
+      \ Optionally emits Discord review cards when UNIFY_DISCORD_REVIEW_WEBHOOK is set, so the operator can approve via \u2705\
+      /\u274C before the post step ships. NO comments are posted by this tick \u2014 it stops at draft."
     visibility_policy: silent_by_default
     recurrence_hint: daily_08_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.unity_outreach.reddit_daily
+- id: intel.droid_outreach.reddit_daily
   enabled: true
   execution_mode: offline
   schedule:
@@ -414,14 +440,17 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_unity_outreach_reddit_daily
-    task_name: 'Unity outreach: Reddit discovery + draft'
-    task_description: Walk the configured Reddit subs (openclaw, hermesagent, LocalLLaMA, selfhosted, LangChain, AI_Agents, LLMDevs, LocalLLM, MachineLearning, voiceassistants) and the Unity-relevant sitewide keyword queries. Score each thread against the Unity relevance brief, draft a minimal reply for the top candidates, persist to data/intel/unity_outreach/candidates/<date>/reddit/review/. Emits Discord review cards when configured. NO comments posted by this tick.
+    entrypoint_function: run_droid_outreach_reddit_daily
+    task_name: 'Droid outreach: Reddit discovery + draft'
+    task_description: Walk the configured Reddit subs (openclaw, hermesagent, LocalLLaMA, selfhosted, LangChain, AI_Agents,
+      LLMDevs, LocalLLM, MachineLearning, voiceassistants) and the Droid-relevant sitewide keyword queries. Score each thread
+      against the Droid relevance brief, draft a minimal reply for the top candidates, persist to data/intel/droid_outreach/candidates/<date>/reddit/review/.
+      Emits Discord review cards when configured. NO comments posted by this tick.
     visibility_policy: silent_by_default
     recurrence_hint: daily_09_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.unity_outreach.discord_daily_summary
+- id: intel.droid_outreach.discord_daily_summary
   enabled: true
   execution_mode: offline
   schedule:
@@ -432,9 +461,12 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_unity_outreach_discord_daily_summary
-    task_name: 'Unity outreach: Discord daily summary'
-    task_description: Aggregate today's data/intel/unity_outreach/candidates/<date>/{hackernews,reddit}/posted/ records into a single Discord digest embed-list and POST to the channel configured by UNIFY_DISCORD_DIGEST_WEBHOOK. One embed per comment shipped, linking to the live thread + scoring rationale. Writes an OutboundAction even on no-op days so the daily ritual is auditable.
+    entrypoint_function: run_droid_outreach_discord_daily_summary
+    task_name: 'Droid outreach: Discord daily summary'
+    task_description: Aggregate today's data/intel/droid_outreach/candidates/<date>/{hackernews,reddit}/posted/ records into
+      a single Discord digest embed-list and POST to the channel configured by UNIFY_DISCORD_DIGEST_WEBHOOK. One embed per
+      comment shipped, linking to the live thread + scoring rationale. Writes an OutboundAction even on no-op days so the
+      daily ritual is auditable.
     visibility_policy: silent_by_default
     recurrence_hint: daily_18_00_europe_london
   delivery:
@@ -452,7 +484,14 @@ tasks:
   activation:
     entrypoint_function: run_social_post_discover_draft
     task_name: 'X post: discover + draft (every 12h)'
-    task_description: "Runs twice daily (07:30 + 19:30) to feed the ~2-posts/day cadence — one review batch per ~12h window. Discovers recent agentic-AI items (HackerNews + Arxiv via API, plus the operator's X 'For You' feed via the browser) as quote-post candidates, gates them on traction + agentic relevance, then runs a CodeActActor to research each top candidate (clone/grep the repo, read the public discussion) and draft a quote-post of the source tweet — pure commentary, one strong grounded opinion, no self-promotion. Applies the r.unify.ai link tracker and persists to data/intel/social_post/candidates/<date>/x/review/, emitting a Discord review card per candidate when UNIFY_DISCORD_REVIEW_WEBHOOK is set. NO tweet is posted by this tick — it stops at draft + review; the operator approves the single best card in the window."
+    task_description: "Runs twice daily (07:30 + 19:30) to feed the ~2-posts/day cadence \u2014 one review batch per ~12h\
+      \ window. Discovers recent agentic-AI items (HackerNews + Arxiv via API, plus the operator's X 'For You' feed via the\
+      \ browser) as quote-post candidates, gates them on traction + agentic relevance, then runs a CodeActActor to research\
+      \ each top candidate (clone/grep the repo, read the public discussion) and draft a quote-post of the source tweet \u2014\
+      \ pure commentary, one strong grounded opinion, no self-promotion. Applies the r.unify.ai link tracker and persists\
+      \ to data/intel/social_post/candidates/<date>/x/review/, emitting a Discord review card per candidate when UNIFY_DISCORD_REVIEW_WEBHOOK\
+      \ is set. NO tweet is posted by this tick \u2014 it stops at draft + review; the operator approves the single best card\
+      \ in the window."
     visibility_policy: silent_by_default
     recurrence_hint: twice_daily_07_30_and_19_30_europe_london
   delivery:
@@ -470,7 +509,13 @@ tasks:
   activation:
     entrypoint_function: run_social_post_post_approved
     task_name: 'X post: hourly poll approvals + publish'
-    task_description: "Hourly check (REST poll — the bot receives no push events): read ✅/❌ reactions and any thread/inline-reply revisions on the Discord review cards, move review/ records to approved/ or rejected/, then drain data/intel/social_post/candidates/<date>/x/approved/ and publish each via the X API (XClient.create_tweet) from the operator's personal handle, moving shipped records to posted/ and stamping the tweet URL. v1 review-gate policy: only operator-approved items are posted, so an empty approved/ is a no-op. Also runs the daily OAuth2 token keepalive so the refresh chain never lapses, and posts a Discord digest of what shipped. daily_post_limit caps posts PER RUN at 1 so approvals trickle out at most one per hour."
+    task_description: "Hourly check (REST poll \u2014 the bot receives no push events): read \u2705/\u274C reactions and any\
+      \ thread/inline-reply revisions on the Discord review cards, move review/ records to approved/ or rejected/, then drain\
+      \ data/intel/social_post/candidates/<date>/x/approved/ and publish each via the X API (XClient.create_tweet) from the\
+      \ operator's personal handle, moving shipped records to posted/ and stamping the tweet URL. v1 review-gate policy: only\
+      \ operator-approved items are posted, so an empty approved/ is a no-op. Also runs the daily OAuth2 token keepalive so\
+      \ the refresh chain never lapses, and posts a Discord digest of what shipped. daily_post_limit caps posts PER RUN at\
+      \ 1 so approvals trickle out at most one per hour."
     visibility_policy: silent_by_default
     recurrence_hint: hourly
   delivery:
@@ -488,7 +533,12 @@ tasks:
   activation:
     entrypoint_function: run_social_post_now
     task_name: 'Daily X post: post now (reactive)'
-    task_description: "Reactive 'post about something on X now' trigger. Fires the same discovery + drafting + Discord-review-card flow as the 07:30 schedule, on demand, when the operator asks to post on X now. Discovers cool recent agentic-AI items (Arxiv + HN via API, X / LinkedIn 'For You' via the Unity browser), scores against the cached Unity relevance brief, drafts one short subtly-Unity-relevant post, and emits a Discord review card. Still review-gated: the tweet ships via the post-approved tick once the operator reacts ✅. Fires when the external trigger 'intel.social_post.x_post_now' is dispatched."
+    task_description: "Reactive 'post about something on X now' trigger. Fires the same discovery + drafting + Discord-review-card\
+      \ flow as the 07:30 schedule, on demand, when the operator asks to post on X now. Discovers cool recent agentic-AI items\
+      \ (Arxiv + HN via API, X / LinkedIn 'For You' via the Droid browser), scores against the cached Droid relevance brief,\
+      \ drafts one short subtly-Droid-relevant post, and emits a Discord review card. Still review-gated: the tweet ships\
+      \ via the post-approved tick once the operator reacts \u2705. Fires when the external trigger 'intel.social_post.x_post_now'\
+      \ is dispatched."
     visibility_policy: silent_by_default
     recurrence_hint: trigger_only
   delivery:

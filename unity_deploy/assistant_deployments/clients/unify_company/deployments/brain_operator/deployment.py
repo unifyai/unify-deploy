@@ -202,6 +202,31 @@ def get_deployment() -> DeploymentSpec:
                         "wrapper": "run_youtube_browser_extraction",
                         "module": "brain.influencers.youtube.runner",
                     },
+                    {
+                        "job_id": "intel.droid_outreach.hackernews_daily",
+                        "wrapper": "run_droid_outreach_hackernews_daily",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.droid_outreach.reddit_daily",
+                        "wrapper": "run_droid_outreach_reddit_daily",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.droid_outreach.discord_daily_summary",
+                        "wrapper": "run_droid_outreach_discord_daily_summary",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.social_post.x_discover_draft",
+                        "wrapper": "run_social_post_discover_draft",
+                        "module": "brain.intel.social_post",
+                    },
+                    {
+                        "job_id": "intel.social_post.x_post_approved",
+                        "wrapper": "run_social_post_post_approved",
+                        "module": "brain.intel.social_post",
+                    },
                 ],
             },
         },

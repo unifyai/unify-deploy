@@ -53,6 +53,12 @@ this deployment's assistant id.
 | `outbound.smartlead.reply_processor` | `outbound.run_smartlead_reply_processor` |
 | `influencers.youtube.extract` | `influencers.run_youtube_browser_extraction` |
 | `intel.hackernews.daily_digest` | `intel.run_hackernews_digest_to_whatsapp` |
+| `intel.droid_outreach.hackernews_daily` | `intel.run_droid_outreach_hackernews_daily` |
+| `intel.droid_outreach.reddit_daily` | `intel.run_droid_outreach_reddit_daily` |
+| `intel.droid_outreach.discord_daily_summary` | `intel.run_droid_outreach_discord_daily_summary` |
+| `intel.social_post.x_discover_draft` | `intel.run_social_post_discover_draft` |
+| `intel.social_post.x_post_approved` | `intel.run_social_post_post_approved` |
+| `intel.social_post.x_post_now` | `intel.run_social_post_now` |
 
 ## Scenario activation
 
