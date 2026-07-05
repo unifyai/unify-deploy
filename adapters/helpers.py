@@ -1969,6 +1969,11 @@ def create_conference_response(conference_name, with_status=False, ringback=True
     LiveKit SIP/agent leg, or a human who answered our call — wait in silence
     so ring audio never plays into the LiveKit room or at someone who already
     picked up.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
     """
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
@@ -1979,6 +1984,7 @@ def create_conference_response(conference_name, with_status=False, ringback=True
             startConferenceOnEnter=True,
             endConferenceOnExit=True,
             muted=False,
+            beep=False,
             wait_url=wait_url,
             status_callback=f"{SETTINGS.comms_url}/phone/conference-status",
             status_callback_event="end",
@@ -1989,6 +1995,7 @@ def create_conference_response(conference_name, with_status=False, ringback=True
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
+        beep=False,
         wait_url=wait_url,
     )
     return resp_user
