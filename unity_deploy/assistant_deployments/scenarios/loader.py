@@ -248,7 +248,14 @@ def materialise_scenario_activations(
             # template's literal value.
             target["scenario_id"] = scenario_id
 
-            task["enabled"] = activation.tasks_enabled
+            # Respect per-task ``enabled`` in the template AND the activation
+            # toggle.  A job declared ``enabled: false`` in brain (e.g.
+            # social.* while the pipeline is still being wired) must stay off
+            # even when ``tasks_enabled=True`` on staging.
+            template_enabled = task.get("enabled", True)
+            if not isinstance(template_enabled, bool):
+                template_enabled = True
+            task["enabled"] = template_enabled and activation.tasks_enabled
 
             # Synthesise per-activation task ids when the template uses
             # a placeholder.  Otherwise leave the template's id alone —

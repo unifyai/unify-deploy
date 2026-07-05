@@ -637,6 +637,36 @@ class TestUnifyCompanyRouting:
         assert resolve_from_deployments(org_id=123) is not None
         assert resolve_from_deployments(org_id=5) is None
 
+    def test_brain_operator_targets_production_assistant(self, monkeypatch):
+        uc = self._reload_unify_company(monkeypatch, "https://api.unify.ai/v0")
+        targets = uc._MAPPING.targets
+        brain_targets = [
+            t for t in targets if t.deployment == "brain_operator"
+        ]
+        assert len(brain_targets) == 1
+        assert brain_targets[0].scope_id == "1406"
+
+    def test_brain_operator_skipped_on_staging(self, monkeypatch):
+        uc = self._reload_unify_company(
+            monkeypatch,
+            "https://internal.example.com/v0",
+        )
+        brain_targets = [
+            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
+        ]
+        assert brain_targets == []
+
+    def test_brain_operator_resolves_on_production_assistant_only(self, monkeypatch):
+        self._reload_unify_company(
+            monkeypatch,
+            "https://api.unify.ai/v0",
+        )
+        matched = resolve_from_deployments(assistant_id=1406)
+        assert matched is not None
+        assert {g.title for g in matched.guidance} >= {"Brain operator role definition"}
+
+        assert resolve_from_deployments(assistant_id=2108) is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TestScopeRouting — org-wide, user-wide, assistant-specific coexistence

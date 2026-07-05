@@ -543,6 +543,80 @@ tasks:
     recurrence_hint: trigger_only
   delivery:
     phase: real_delivery
+- id: social.ideate_and_generate
+  enabled: false
+  execution_mode: offline
+  schedule:
+    type: cron
+    cron: 0 9 * * *
+  target:
+    assistant_id: ''
+    scenario_id: brain_jobs_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_social_ideate_and_generate
+    task_name: 'Social: ideate + generate next post'
+    task_description: Pitch a fresh on-brand Instagram/TikTok concept, generate the media (image, or video storyboard for
+      the first gate), caption it, and post a Discord review card.
+    visibility_policy: silent_by_default
+    recurrence_hint: recurring
+  delivery:
+    phase: real_delivery
+- id: social.poll_reviews
+  enabled: false
+  execution_mode: offline
+  schedule:
+    type: cron
+    cron: '*/15 * * * *'
+  target:
+    assistant_id: ''
+    scenario_id: brain_jobs_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_social_poll_reviews
+    task_name: 'Social: poll Discord review reactions'
+    task_description: "Read \u2705/\u274C on social review cards and advance the two-gate machine (storyboard -> render, review\
+      \ -> approved/rejected)."
+    visibility_policy: silent_by_default
+    recurrence_hint: recurring
+  delivery:
+    phase: real_delivery
+- id: social.render_storyboards
+  enabled: false
+  execution_mode: offline
+  schedule:
+    type: cron
+    cron: 0 * * * *
+  target:
+    assistant_id: ''
+    scenario_id: brain_jobs_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_social_render_storyboards
+    task_name: 'Social: render approved storyboards'
+    task_description: Render videos whose storyboards were approved (gate 1), then post the final review card (gate 2).
+    visibility_policy: silent_by_default
+    recurrence_hint: recurring
+  delivery:
+    phase: real_delivery
+- id: social.publish_approved
+  enabled: false
+  execution_mode: live
+  schedule:
+    type: cron
+    cron: 0 12 * * *
+  target:
+    assistant_id: ''
+    scenario_id: brain_jobs_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_social_publish_approved
+    task_name: 'Social: publish approved posts'
+    task_description: Post every operator-approved asset to its target platforms (Instagram/TikTok), then move it to posted/.
+    visibility_policy: silent_by_default
+    recurrence_hint: recurring
+  delivery:
+    phase: real_delivery
 metadata:
   owner: brain
   documentation: docs/operations/scheduled-jobs.md

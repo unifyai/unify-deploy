@@ -26,4 +26,16 @@ RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "htt
     uv pip install --system --no-cache -e /app/brain && \
     git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
+# --- brain.social (Instagram/TikTok auto-publish) -----------------------
+# The social pipeline's media generation drives marketing/images +
+# marketing/videos, which need ffmpeg + a few extra Python deps. Those jobs
+# ship DISABLED (see brain/social/scheduled_jobs.py) and on-pod generation
+# also needs a writable scratch dir + media hosting, so the install is left
+# commented until the pipeline is turned on. Uncomment to enable:
+#
+# USER root
+# RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+#     rm -rf /var/lib/apt/lists/*
+# RUN uv pip install --system --no-cache replicate elevenlabs Pillow
+
 USER unity

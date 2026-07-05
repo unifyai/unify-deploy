@@ -17,6 +17,8 @@ Modules:
 * ``influencers`` — YouTube browser-extraction one-shot trigger.
 * ``intel`` — HackerNews-via-browser daily digest to WhatsApp
   (canonical example of a browser-driven scheduled job).
+* ``social`` — Instagram/TikTok auto-publish pipeline (exported to
+  ``brain_jobs_v0.yaml`` but ships ``enabled: false`` until armed).
 
 Underscore-prefixed modules (none today) would be library-only and
 skipped by FunctionManager's discovery sweep.
