@@ -1360,7 +1360,9 @@ async def twilio_whatsapp_call_webhook(request: Request):
         resp_user = create_conference_response(conference_name)
 
         wa_client = get_twilio_wa_client()
-        sip_twiml = str(create_conference_response(conference_name))
+        # No ringback on the agent leg: if it lands in the conference first,
+        # wait audio would play straight into the LiveKit room.
+        sip_twiml = str(create_conference_response(conference_name, ringback=False))
         call = wa_client.calls.create(
             to=sip_uri,
             from_=pool_number,

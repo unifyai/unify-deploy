@@ -1952,16 +1952,31 @@ def get_twilio_wa_client():
     return TwilioClient(account_sid, auth_token)
 
 
-def create_conference_response(conference_name, with_status=False):
+_CONFERENCE_RINGBACK_URL = (
+    "https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3"
+)
+
+
+def create_conference_response(conference_name, with_status=False, ringback=True):
+    """TwiML joining a participant to a named conference.
+
+    The first participant into a Twilio conference hears the ``wait_url``
+    audio until a second joins. ``ringback`` stays True only for an inbound
+    caller's own leg (a human waiting for us to answer). Legs we dial — the
+    LiveKit SIP/agent leg, or a human who answered our call — wait in silence
+    so ring audio never plays into the LiveKit room or at someone who already
+    picked up.
+    """
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
+    wait_url = _CONFERENCE_RINGBACK_URL if ringback else ""
     if with_status:
         dial_user.conference(
             conference_name,
             startConferenceOnEnter=True,
             endConferenceOnExit=True,
             muted=False,
-            wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+            wait_url=wait_url,
             status_callback=f"{SETTINGS.comms_url}/phone/conference-status",
             status_callback_event="end",
         )
@@ -1971,7 +1986,7 @@ def create_conference_response(conference_name, with_status=False):
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        wait_url=wait_url,
     )
     return resp_user
 
@@ -1998,9 +2013,13 @@ def add_user_to_conference(
                     participant.sid,
                 ).update(muted=True)
                 break
-        response = create_conference_response(conference_name, with_status=True)
+        response = create_conference_response(
+            conference_name,
+            with_status=True,
+            ringback=False,
+        )
     else:
-        response = create_conference_response(conference_name)
+        response = create_conference_response(conference_name, ringback=False)
 
     call = twilio_client.calls.create(
         to=to_number_uri,
