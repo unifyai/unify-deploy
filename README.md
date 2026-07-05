@@ -108,7 +108,7 @@ Four projects, split to isolate workloads and GCE API rate limits.
 |---|---|---|---|
 | `gcp-project-runtime` | **Unity LiveKit** | Main hosted runtime: GKE cluster `unity`, Cloud Run (comms/adapters), Pub/Sub fleet, most buckets, tunnel servers, Artifact Registry | `us-central1` |
 | `gcp-project-vms` | Unity Assistant VMs | Assistant desktop VM pool: pool images/families, pool VMs, static IPs, per-assistant archives | `us-central1` (`-a`, `-f`) |
-| `gcp-project-saas` | SaaS | **Orchestra + Console + landing page** (Cloud Run) and **Cloud SQL** (Postgres) | `europe-west1` / `europe-west3` |
+| `gcp-project-saas` | SaaS | **Orchestra + Console + landing page** (Cloud Run) and **Cloud SQL** (Postgres) | `us-central1` |
 | `gcp-project-dns` | DNS-Server | Public Cloud DNS zone `unifyai` → `unify.ai` (incl. `vm.unify.ai`, `tunnel.unify.ai`) | global |
 
 **Why VMs are a separate project:** GKE Autopilot Node Auto-Provisioning consumes the per-project `compute.instances.insert` rate limit. Co-locating assistant-VM creation with a GKE NAP burst historically exhausted the limit and 500'd the hiring flow. Separating the pool into `gcp-project-vms` gives each its own budget.
@@ -128,15 +128,15 @@ Almost everything here is **regional or zonal**, and several `gcloud` surfaces *
 | **Cloud Build** — all triggers + builds, **both** projects | `gcloud builds …` | **`--region=us-central1`** (never `global`) |
 | GKE cluster `unity` (`gcp-project-runtime`) | `gcloud container clusters …` | `--region=us-central1` |
 | Cloud Run comms/adapters/link-tracker (`gcp-project-runtime`) | `gcloud run …` | `--region=us-central1` |
-| Cloud Run `orchestra`(+`-staging`), `landing-page`(+`-staging`), `saas-web-app` (Console **prod**) (`gcp-project-saas`) | `gcloud run …` | `--region=europe-west1` |
+| Cloud Run `orchestra`(+`-staging`), `landing-page`(+`-staging`), `saas-web-app` (Console **prod**) (`gcp-project-saas`) | `gcloud run …` | `--region=us-central1` |
 | Cloud Run `saas-web-app-redesign-staging` (Console **staging**) (`gcp-project-saas`) | `gcloud run …` | `--region=us-central1` ⚠️ (differs from Console prod) |
-| Cloud SQL `prod-ssd` / `staging-ssd` (`gcp-project-saas`) | `gcloud sql …` / proxy | `europe-west3` |
+| Cloud SQL `prod-ssd-usc1` / `staging-ssd-usc1` (`gcp-project-saas`) | `gcloud sql …` / proxy | `us-central1` |
 | Compute tunnel VMs (`gcp-project-runtime`) | `gcloud compute …` | zone `us-central1-a` |
 | Pool VMs (`gcp-project-vms`) | `gcloud compute …` | zones `us-central1-f` (Ubuntu) / `-a` |
 | Cloud DNS zone `unifyai` (`gcp-project-dns`) | `gcloud dns …` | global (no flag) |
 | Secret Manager (all projects) | `gcloud secrets …` | global — `--project` only, no region |
 
-The org GitHub variable `GCP_LOCATION=europe-west1` is **only** the saas **Cloud Run** default — it does **not** apply to Cloud Build (`us-central1`) or to the `gcp-project-runtime` runtime project. When a resource "doesn't exist" or a build "is missing", suspect a wrong/`global` location **before** suspecting a wrong project.
+The org GitHub variable `GCP_LOCATION=us-central1` is the saas **Cloud Run** default. As of the July 2026 consolidation the **entire** estate — runtime, saas Cloud Run, Cloud SQL, Cloud Build — is in `us-central1`; only Secret Manager and Cloud DNS remain global. When a resource "doesn't exist" or a build "is missing", suspect a wrong/`global` location **before** suspecting a wrong project.
 
 ---
 
@@ -195,8 +195,8 @@ After adding a scope, wait a few minutes for propagation, then run `python3 depl
 
 ### 4.3 `gcp-project-saas` — Orchestra + Console + DB
 
-- **Cloud SQL (Postgres, europe-west3):** `prod-ssd` (`34.40.62.164`), `staging-ssd` (`34.89.176.17`).
-- **Cloud Run (europe-west1 unless noted):** `orchestra`(+`-staging`), `saas-web-app` (Console prod), `saas-web-app-redesign-staging` (Console staging, us-central1), `landing-page`(+`-staging`).
+- **Cloud SQL (Postgres, us-central1):** `prod-ssd-usc1` (`203.0.113.14`), `staging-ssd-usc1` (`203.0.113.15`). Old `europe-west3` `prod-ssd`/`staging-ssd` retained read-only as rollback until decommissioned.
+- **Cloud Run (us-central1):** `orchestra`(+`-staging`), `saas-web-app` (Console prod), `saas-web-app-redesign-staging` (Console staging), `landing-page`(+`-staging`).
 - **Secrets delta:** `UNITY_COORDINATOR_*` and `UNITY_COORDINATOR_*` both exist (DISCORD_ID/TOKEN, EMAIL_ADDRESS, PHONE_UK/US, WHATSAPP_NUMBER × PRODUCTION/STAGING) ⚠️; `UNITY_{LIVEKIT,OPENAI,DEEPGRAM,CARTESIA}_*` and `UNITY_{ADAPTERS,COMMS}_URL*` still unity-only ⚠️.
 
 ### 4.4 `gcp-project-dns` — public DNS
@@ -288,7 +288,7 @@ Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides
 
 ### 7.2 GitHub Actions secrets (CI)
 
-Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLONE_TOKEN`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, and ⚠️ `UNITY_ADAPTERS_URL`, `UNITY_COMMS_URL`. Org variables: `GCP_PROJECT_ID=gcp-project-saas`, `GCP_LOCATION=europe-west1`, `GCP_BUCKET_*`. Per-repo additions are listed in [§8](#8-cicd-cloud-build-github-actions-branches). **CI mismatch:** workflows now read `UNITY_COMMS_URL`/`UNITY_ADAPTERS_URL` but only `UNITY_*` exist → empty at runtime (see [§9](#9-known-rename-loose-ends--gotchas)).
+Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLONE_TOKEN`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, and ⚠️ `UNITY_ADAPTERS_URL`, `UNITY_COMMS_URL`. Org variables: `GCP_PROJECT_ID=gcp-project-saas`, `GCP_LOCATION=us-central1`, `GCP_BUCKET_*`. Per-repo additions are listed in [§8](#8-cicd-cloud-build-github-actions-branches). **CI mismatch:** workflows now read `UNITY_COMMS_URL`/`UNITY_ADAPTERS_URL` but only `UNITY_*` exist → empty at runtime (see [§9](#9-known-rename-loose-ends--gotchas)).
 
 ### 7.3 VM TLS secrets
 
