@@ -12,9 +12,9 @@ For the end-to-end operating pattern see the brain wiki page:
 - A separate **deployment** under the existing `unify_company` client,
   not a new client.  Shares the tenant's Orchestra project, secrets
   bundle, and gateway routing.
-- Activated for the **production** brain operator assistant (**1406**)
-  on main-branch deploys only.  Staging deploys skip brain_operator.
-  ``BRAIN_OPERATOR_ASSISTANT_ID`` overrides the id when set explicitly.
+- Activated when ``BRAIN_OPERATOR_ASSISTANT_ID`` is set for the environment.
+  Cloud Build substitutions (``_BRAIN_OPERATOR_ASSISTANT_ID``) feed the
+  reconcile job and overlay image build.
 - Carries no per-customer state.  Customer-facing colleagues are
   separate deployments under separate clients.
 
@@ -74,12 +74,13 @@ and ships a generated scenario YAML).  Activation behaviour:
 
 | Env var | Effect |
 |---|---|
-| `BRAIN_OPERATOR_ASSISTANT_ID` (optional) | Defaults to **1406** on production; unset on staging (no activation). Stamped into every `tasks[*].target.assistant_id` at materialisation time. |
-| `BRAIN_OPERATOR_TASKS_ENABLED` (optional) | Defaults to `true` on production, `false` on staging. When `true`, materialised rows ship enabled. Per-job `enabled: false` in scenario YAML still respected (e.g. `social.*`). |
+| `BRAIN_OPERATOR_ASSISTANT_ID` | Overrides the environment default (**7367** staging, **1406** production). Also set via Cloud Build / overlay image ENV / ``brain/.env``. |
+| `BRAIN_OPERATOR_TASKS_ENABLED` | Defaults to `false` until explicitly armed. When `true`, materialised rows ship enabled. Per-job `enabled: false` in scenario YAML still respected (e.g. `social.*`). |
 
-Production/main Cloud Build passes both vars into the production reconcile job
-(`deploy/cloudbuild.yaml`).  Staging Cloud Build omits them so brain_operator
-is not synced on staging pushes.
+Cloud Build passes both vars into the reconcile job and bakes them into the
+overlay image (``deploy/Dockerfile`` build args). Current substitutions:
+``deploy/cloudbuild-staging.yaml`` → staging assistant / tasks off;
+``deploy/cloudbuild.yaml`` → production assistant / tasks off until armed.
 
 The deploy-reconcile control plane materialises rows on every push (no
 laptop step required).  Brain's `brain scheduled install --execute`
@@ -132,11 +133,15 @@ The deploy image installs brain via `deploy/Dockerfile` at a build-arg
 `unity-deploy/deploy/Dockerfile` and the `_BRAIN_REF` substitution on
 `deploy/cloudbuild.yaml`.
 
-## Activation checklist (production)
+## Activation checklist
 
-brain_operator runs on production assistant **1406** (main branch only).
+| Environment | Cloud Build substitution | Tasks (current) |
+|---|---|---|
+| Staging | `_BRAIN_OPERATOR_ASSISTANT_ID` | **disabled** — reconcile + validate wrappers safely |
+| Production | `_BRAIN_OPERATOR_ASSISTANT_ID` | **disabled** — flip `_BRAIN_OPERATOR_TASKS_ENABLED` to `true` when ready |
 
-1. Connect integrations (Instagram, TikTok, Gmail, etc.) on assistant 1406
+1. Connect integrations (Instagram, TikTok, Gmail, etc.) on the brain
+   operator assistant for the target environment
    in **production** Console.
 2. Add brain-specific secrets to ``unify-deploy/.secrets.json`` under
    ``assistant.1406`` (see social README) and seed on deploy.

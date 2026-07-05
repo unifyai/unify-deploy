@@ -7,10 +7,10 @@ Two deployments are routed under this client:
   organization in each environment.
 * ``brain_operator`` — dedicated colleague that owns the recurring +
   trigger-based jobs declared in the brain repo's
-  ``brain.scheduled`` registry.  Activated for the **production**
-  brain_operator assistant (1406) on main-branch deploys only; staging
-  deploys skip brain_operator.  Other unify_company routing (org
-  ``default`` deployment, org ids) remains per-environment via
+  ``brain.scheduled`` registry.  Routed to the assistant id in
+  ``BRAIN_OPERATOR_ASSISTANT_ID`` (set per environment in Cloud Build /
+  ``brain/.env``).  Other unify_company routing (org ``default``
+  deployment, org ids) remains per-environment via
   :func:`detect_environment`.
 """
 

@@ -20,11 +20,16 @@ RUN cd /app/unity-deploy-src && uv pip install --system --no-cache .
 # persist in the final image layer.
 ARG BRAIN_REPO=https://github.com/unifyai/brain.git
 ARG BRAIN_REF=main
+ARG BRAIN_OPERATOR_ASSISTANT_ID=
+ARG BRAIN_OPERATOR_TASKS_ENABLED=false
 ARG GITHUB_TOKEN
 RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
     git clone --depth 1 --branch "${BRAIN_REF}" "${BRAIN_REPO}" /app/brain && \
     uv pip install --system --no-cache -e /app/brain && \
     git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+
+ENV BRAIN_OPERATOR_ASSISTANT_ID=${BRAIN_OPERATOR_ASSISTANT_ID}
+ENV BRAIN_OPERATOR_TASKS_ENABLED=${BRAIN_OPERATOR_TASKS_ENABLED}
 
 # --- brain.social (Instagram/TikTok auto-publish) -----------------------
 # The social pipeline's media generation drives marketing/images +

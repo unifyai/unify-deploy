@@ -53,11 +53,10 @@ _DIR = Path(__file__).resolve().parent
 def _scenario_activations() -> list[ScenarioActivation]:
     """Return the brain_jobs scenario activations for this deployment.
 
-    The assistant id is resolved by :func:`brain_operator_assistant_id`
-    (production assistant 1406 on main deploys).  Resolving in code — rather
-    than from a reconcile-only env var — is what makes the scenario present at
-    assistant *runtime*, so the woken assistant's ``startup_hook`` actually
-    seeds the TaskScheduler rows.
+    The assistant id comes from ``BRAIN_OPERATOR_ASSISTANT_ID`` (Cloud Build
+    substitution → reconcile job + overlay image ENV).  Resolving from env —
+    rather than hardcoding per environment — keeps staging and production
+    deploys aligned with the same code path.
 
     ``tasks_enabled`` defaults true; per-job ``enabled: false`` in the
     scenario YAML still gates individual jobs (e.g. ``social.*``).

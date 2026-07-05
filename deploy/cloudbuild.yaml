@@ -47,6 +47,8 @@ steps:
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       --build-arg BRAIN_REF=${_BRAIN_REF} \
+      --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
+      --build-arg BRAIN_OPERATOR_TASKS_ENABLED=${_BRAIN_OPERATOR_TASKS_ENABLED} \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
@@ -567,9 +569,9 @@ substitutions:
   # Brain commit / branch installed into the overlay image. Production pins a SHA
   # via the trigger substitution; defaults to main.
   _BRAIN_REF: 'main'
-  # brain_operator deploys only on production (main branch); assistant 1406.
+  # brain_operator: assistant id + task flag from Cloud Build substitutions.
   _BRAIN_OPERATOR_ASSISTANT_ID: '1406'
-  _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
+  _BRAIN_OPERATOR_TASKS_ENABLED: 'false'
 
 availableSecrets:
   secretManager:
