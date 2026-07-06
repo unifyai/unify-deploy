@@ -285,7 +285,7 @@ async def run_social_post_discover_draft(
     operator-approval loop -> ``run_social_post_post_approved``.
     """
 
-    from brain.intel.social_post import (
+    from brain.social.curate import (
         SocialPostRepository,
         discover_and_draft,
         emit_review_cards as do_emit_cards,
@@ -351,7 +351,7 @@ async def run_social_post_now(
     """Reactive 'post about something on X now' trigger.
 
     Fired when the operator asks the assistant to post on X now (the
-    ``intel.social_post.x_post_now`` external trigger). Runs the same
+    ``social.x_post_now`` external trigger). Runs the same
     traction-gated discovery + deep-research + drafting + Discord-review-
     card flow as the morning tick (surfacing a few candidates to choose
     from), so the operator can ✅ the post immediately rather than
@@ -386,7 +386,7 @@ async def run_social_post_post_approved(
     review-gate policy: an empty ``approved/`` is a no-op.
     """
 
-    from brain.intel.social_post import (
+    from brain.social.curate import (
         SocialPostRepository,
         post_approved,
         summarise_to_discord as do_summary,

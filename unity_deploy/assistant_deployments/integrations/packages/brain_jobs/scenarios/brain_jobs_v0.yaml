@@ -471,7 +471,7 @@ tasks:
     recurrence_hint: daily_18_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.social_post.x_discover_draft
+- id: social.x_discover_draft
   enabled: true
   execution_mode: offline
   schedule:
@@ -484,19 +484,14 @@ tasks:
   activation:
     entrypoint_function: run_social_post_discover_draft
     task_name: 'X post: discover + draft (every 12h)'
-    task_description: "Runs twice daily (07:30 + 19:30) to feed the ~2-posts/day cadence \u2014 one review batch per ~12h\
-      \ window. Discovers recent agentic-AI items (HackerNews + Arxiv via API, plus the operator's X 'For You' feed via the\
-      \ browser) as quote-post candidates, gates them on traction + agentic relevance, then runs a CodeActActor to research\
-      \ each top candidate (clone/grep the repo, read the public discussion) and draft a quote-post of the source tweet \u2014\
-      \ pure commentary, one strong grounded opinion, no self-promotion. Applies the r.unify.ai link tracker and persists\
-      \ to data/intel/social_post/candidates/<date>/x/review/, emitting a Discord review card per candidate when UNIFY_DISCORD_REVIEW_WEBHOOK\
-      \ is set. NO tweet is posted by this tick \u2014 it stops at draft + review; the operator approves the single best card\
-      \ in the window."
+    task_description: Runs twice daily (07:30 + 19:30) to feed the ~2-posts/day cadence. Discovers recent agentic-AI items
+      (HackerNews + X via API/browser), researches top candidates via CodeActActor, drafts quote-post commentary, persists
+      to data/intel/social_post/candidates/<date>/x/review/, and emits Discord review cards. Does not post.
     visibility_policy: silent_by_default
     recurrence_hint: twice_daily_07_30_and_19_30_europe_london
   delivery:
     phase: real_delivery
-- id: intel.social_post.x_post_approved
+- id: social.x_post_approved
   enabled: true
   execution_mode: offline
   schedule:
@@ -509,36 +504,27 @@ tasks:
   activation:
     entrypoint_function: run_social_post_post_approved
     task_name: 'X post: hourly poll approvals + publish'
-    task_description: "Hourly check (REST poll \u2014 the bot receives no push events): read \u2705/\u274C reactions and any\
-      \ thread/inline-reply revisions on the Discord review cards, move review/ records to approved/ or rejected/, then drain\
-      \ data/intel/social_post/candidates/<date>/x/approved/ and publish each via the X API (XClient.create_tweet) from the\
-      \ operator's personal handle, moving shipped records to posted/ and stamping the tweet URL. v1 review-gate policy: only\
-      \ operator-approved items are posted, so an empty approved/ is a no-op. Also runs the daily OAuth2 token keepalive so\
-      \ the refresh chain never lapses, and posts a Discord digest of what shipped. daily_post_limit caps posts PER RUN at\
-      \ 1 so approvals trickle out at most one per hour."
+    task_description: "Hourly: poll Discord \u2705/\u274C on X draft cards, drain approved/, publish via X API, move to posted/,\
+      \ run token keepalive, optional Discord digest."
     visibility_policy: silent_by_default
     recurrence_hint: hourly
   delivery:
     phase: real_delivery
-- id: intel.social_post.x_post_now
+- id: social.x_post_now
   enabled: true
   execution_mode: live
   schedule:
     type: external_trigger
-    trigger_name: intel.social_post.x_post_now
+    trigger_name: social.x_post_now
   target:
     assistant_id: ''
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
     entrypoint_function: run_social_post_now
-    task_name: 'Daily X post: post now (reactive)'
-    task_description: "Reactive 'post about something on X now' trigger. Fires the same discovery + drafting + Discord-review-card\
-      \ flow as the 07:30 schedule, on demand, when the operator asks to post on X now. Discovers cool recent agentic-AI items\
-      \ (Arxiv + HN via API, X / LinkedIn 'For You' via the Droid browser), scores against the cached Droid relevance brief,\
-      \ drafts one short subtly-Droid-relevant post, and emits a Discord review card. Still review-gated: the tweet ships\
-      \ via the post-approved tick once the operator reacts \u2705. Fires when the external trigger 'intel.social_post.x_post_now'\
-      \ is dispatched."
+    task_name: 'X post: post now (reactive trigger)'
+    task_description: "Reactive 'post about something on X now' trigger. Same discover + draft + Discord card flow as the\
+      \ scheduled discover job; ships after operator \u2705 via the post-approved tick."
     visibility_policy: silent_by_default
     recurrence_hint: trigger_only
   delivery:
@@ -575,8 +561,8 @@ tasks:
   activation:
     entrypoint_function: run_social_poll_reviews
     task_name: 'Social: poll Discord review reactions'
-    task_description: "Read \u2705/\u274C on social review cards and advance the two-gate machine (storyboard -> render, review\
-      \ -> approved/rejected)."
+    task_description: "Read \u2705/\u274C on IG/TikTok review cards and advance the two-gate machine (storyboard -> render,\
+      \ review -> approved/rejected)."
     visibility_policy: silent_by_default
     recurrence_hint: recurring
   delivery:

@@ -57,9 +57,9 @@ this deployment's assistant id.
 | `intel.droid_outreach.hackernews_daily` | `intel.run_droid_outreach_hackernews_daily` |
 | `intel.droid_outreach.reddit_daily` | `intel.run_droid_outreach_reddit_daily` |
 | `intel.droid_outreach.discord_daily_summary` | `intel.run_droid_outreach_discord_daily_summary` |
-| `intel.social_post.x_discover_draft` | `intel.run_social_post_discover_draft` |
-| `intel.social_post.x_post_approved` | `intel.run_social_post_post_approved` |
-| `intel.social_post.x_post_now` | `intel.run_social_post_now` |
+| `social.x_discover_draft` | `intel.run_social_post_discover_draft` |
+| `social.x_post_approved` | `intel.run_social_post_post_approved` |
+| `social.x_post_now` | `intel.run_social_post_now` |
 | `social.ideate_and_generate` | `social.run_social_ideate_and_generate` (**disabled**) |
 | `social.poll_reviews` | `social.run_social_poll_reviews` (**disabled**) |
 | `social.render_storyboards` | `social.run_social_render_storyboards` (**disabled**) |

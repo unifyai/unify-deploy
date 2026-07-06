@@ -1,7 +1,7 @@
 """
 Instagram/TikTok auto-publish wrappers for the brain_operator deployment.
 
-Thin adapters onto :mod:`brain.social.pipeline` — the generate-then-publish
+Thin adapters onto :mod:`brain.social.create.pipeline` — the generate-then-publish
 loop (ideate -> generate -> caption -> Discord review -> publish) with a
 two-gate variant for video. Each function maps 1:1 to a
 ``BrainScheduledJob.entrypoint_function`` declared in
@@ -56,9 +56,9 @@ async def run_social_ideate_and_generate(
     ``platform`` (``instagram`` | ``tiktok``) pins generation dimensions and
     publish routing to that platform.
     """
-    from brain.social.assets import Platform
-    from brain.social import specs
-    from brain.social.pipeline import ideate_and_generate
+    from brain.social.create.assets import Platform
+    from brain.social.create import specs
+    from brain.social.create.pipeline import ideate_and_generate
 
     plat = Platform(platform) if platform else None
     platforms_allowed = [plat] if plat else None
@@ -79,7 +79,7 @@ async def run_social_ideate_and_generate(
 @custom_function()
 async def run_social_poll_reviews() -> dict[str, Any]:
     """Apply Discord ✅/❌ reactions across both review gates."""
-    from brain.social.pipeline import poll_reviews
+    from brain.social.create.pipeline import poll_reviews
 
     return poll_reviews()
 
@@ -91,7 +91,7 @@ async def run_social_render_storyboards(
     execute_cards: bool = True,
 ) -> dict[str, Any]:
     """Render videos whose storyboards were approved; post the final card."""
-    from brain.social.pipeline import render_approved_storyboards
+    from brain.social.create.pipeline import render_approved_storyboards
 
     return await render_approved_storyboards(
         dry_run=dry_run, execute_cards=execute_cards
@@ -105,6 +105,6 @@ async def run_social_publish_approved(*, live: bool = False) -> dict[str, Any]:
     Defaults to ``live=False`` (dry-run) so an accidental tick can never
     post for real before the publishers are wired.
     """
-    from brain.social.pipeline import publish_approved
+    from brain.social.create.pipeline import publish_approved
 
     return await publish_approved(live=live)
