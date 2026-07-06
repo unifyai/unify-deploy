@@ -30,6 +30,7 @@ Examples:
 
 - Communication: prove channels with a reference quiz.
 - Workspace: explain why Google/Microsoft access unlocks later setup.
+- Integrations: prove connected apps by connecting, reading, and acting.
 - Tasks: explain task definitions vs one-off actions.
 
 Step-specific guidance belongs on the Orchestra step. Use it for the concrete
@@ -40,6 +41,8 @@ Examples:
 - `email-reference`: send the first reference-quiz clue by email.
 - `email-reply`: wait for the user's guess by email.
 - `workspace`: open the OAuth dialog.
+- `integration-read`: read from one connected app and brief the user.
+- `integration-action`: take one safe action with connected apps.
 
 Unity should not hardcode section game design, clue content, step ordering, or
 Console click paths when Orchestra can provide them in the render.
@@ -72,10 +75,12 @@ a step is done:
 - Connect/Tasks steps derive from the resulting account state (a workspace
   contact, an app connection, a Tasks row).
 
-Workspace demos (`workspace-mailbox`, `workspace-drive`, `workspace-calendar`)
-are the deliberate exception: they **never auto-complete**. The checklist does
-not detect the demo work from any transcript row, so completion is always an
-explicit brain action. Instead:
+Workspace and Integrations demos are the deliberate exceptions: they **never
+auto-complete**. The checklist does not detect the demo work from any transcript
+row, so completion is always an explicit brain action.
+
+Workspace demos are `workspace-mailbox`, `workspace-drive`, and
+`workspace-calendar`:
 
 1. The user clicks the demo row → Orchestra emits `workspace_demo_requested`.
 2. Twin performs the demo task with its own tools: read the relevant area and
@@ -92,9 +97,36 @@ explicit brain action. Instead:
    extra acknowledgement turn — the brain already messaged the user on the turn
    that made the completion call.
 
+Integrations demos are `integration-read` and `integration-action`:
+
+1. The user connects at least one non-workspace app through `apps`.
+2. The user clicks `integration-read` or `integration-action`, or one of that
+   row's chips → Orchestra emits `integration_demo_requested` or
+   `integration_demo_chip_requested`.
+3. Twin performs the demo with connected integration/app tools. For
+   `integration-read`, it reads from a connected app and sends one short
+   `unify_message` brief. For `integration-action`, it takes one concrete,
+   user-safe action in or across connected apps and sends one short
+   `unify_message` report.
+4. Twin marks the step done explicitly with `set_onboarding_task_state`. If no
+   connected app fits, Twin says what is missing and does **not** mark the step
+   complete.
+
 `manual_completion_block_reason` in the graph is the single gate for which steps
 accept an explicit completion PATCH. Communication rows and other auto-derived
-triggers remain blocked; the three workspace demos are allowed.
+triggers remain blocked; workspace and integration demos are allowed.
+
+## Integrations Phase Events
+
+The Integrations phase has three rows:
+
+- `apps`: opens the Integrations pane. Connect chips are use-case nudges, not
+  completion signals. They dispatch `integration_connect_chip_requested` and may
+  include `gallery_category` plus a `search_query` fallback for Console.
+- `integration-read`: dispatches `integration_demo_requested`; chips dispatch
+  `integration_demo_chip_requested`.
+- `integration-action`: dispatches `integration_demo_requested`; chips dispatch
+  `integration_demo_chip_requested`.
 
 ## Prompt Precedence
 
