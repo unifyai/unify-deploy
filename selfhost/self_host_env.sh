@@ -287,7 +287,7 @@ append_self_host_unity_runtime_env() {
     local _otel_log_dir="${UNITY_OTEL_LOG_DIR:-$_unity_repo_root/logs/all}"
     mkdir -p \
       "$_otel_log_dir" \
-      "$_unity_repo_root/logs/unity" \
+      "$_unity_repo_root/logs/unify" \
       "$_unity_repo_root/logs/unisdk" \
       "$_unity_repo_root/logs/unillm" 2>/dev/null || true
     _target_array+=(
@@ -297,7 +297,7 @@ append_self_host_unity_runtime_env() {
       "UNITY_OTEL_LOG_DIR=$_otel_log_dir"
       "UNISDK_OTEL_LOG_DIR=${UNISDK_OTEL_LOG_DIR:-$_otel_log_dir}"
       "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
-      "UNITY_LOG_DIR=${UNITY_LOG_DIR:-$_unity_repo_root/logs/unity}"
+      "UNITY_LOG_DIR=${UNITY_LOG_DIR:-$_unity_repo_root/logs/unify}"
       "UNISDK_LOG_DIR=${UNISDK_LOG_DIR:-$_unity_repo_root/logs/unisdk}"
       "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_unity_repo_root/logs/unillm}"
     )

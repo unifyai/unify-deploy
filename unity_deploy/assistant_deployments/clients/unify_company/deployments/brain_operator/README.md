@@ -12,9 +12,9 @@ For the end-to-end operating pattern see the brain wiki page:
 - A separate **deployment** under the existing `unify_company` client,
   not a new client.  Shares the tenant's Orchestra project, secrets
   bundle, and gateway routing.
-- Activated for the assistant id named by the
-  `BRAIN_OPERATOR_ASSISTANT_ID` env var.  Without that env var, the
-  brain_operator simply doesn't activate.
+- Activated when ``BRAIN_OPERATOR_ASSISTANT_ID`` is set for the environment.
+  Cloud Build substitutions (``_BRAIN_OPERATOR_ASSISTANT_ID``) feed the
+  reconcile job and overlay image build.
 - Carries no per-customer state.  Customer-facing colleagues are
   separate deployments under separate clients.
 
@@ -31,6 +31,7 @@ brain_operator/
     ├── outbound.py     # one wrapper per evergreen tick name
     ├── influencers.py  # YouTube browser-extraction trigger
     ├── intel.py        # HackerNews-to-WhatsApp daily digest (canonical example)
+    ├── social.py       # IG/TikTok auto-publish (exported, disabled until armed)
     ├── helpers.py      # reserved (FunctionManager structural check)
     └── metrics.py      # reserved (FunctionManager structural check)
 ```
@@ -53,6 +54,16 @@ this deployment's assistant id.
 | `outbound.smartlead.reply_processor` | `outbound.run_smartlead_reply_processor` |
 | `influencers.youtube.extract` | `influencers.run_youtube_browser_extraction` |
 | `intel.hackernews.daily_digest` | `intel.run_hackernews_digest_to_whatsapp` |
+| `intel.droid_outreach.hackernews_daily` | `intel.run_droid_outreach_hackernews_daily` |
+| `intel.droid_outreach.reddit_daily` | `intel.run_droid_outreach_reddit_daily` |
+| `intel.droid_outreach.discord_daily_summary` | `intel.run_droid_outreach_discord_daily_summary` |
+| `intel.social_post.x_discover_draft` | `intel.run_social_post_discover_draft` |
+| `intel.social_post.x_post_approved` | `intel.run_social_post_post_approved` |
+| `intel.social_post.x_post_now` | `intel.run_social_post_now` |
+| `social.ideate_and_generate` | `social.run_social_ideate_and_generate` (**disabled**) |
+| `social.poll_reviews` | `social.run_social_poll_reviews` (**disabled**) |
+| `social.render_storyboards` | `social.run_social_render_storyboards` (**disabled**) |
+| `social.publish_approved` | `social.run_social_publish_approved` (**disabled**) |
 
 ## Scenario activation
 
@@ -63,8 +74,13 @@ and ships a generated scenario YAML).  Activation behaviour:
 
 | Env var | Effect |
 |---|---|
-| `BRAIN_OPERATOR_ASSISTANT_ID` (optional) | Stamped into every `tasks[*].target.assistant_id` at materialisation time.  When unset, no scenario is activated.  When set to a missing assistant id, deploy-time reconcile skips the optional target with a warning. |
-| `BRAIN_OPERATOR_TASKS_ENABLED` (optional, default `false`) | When `true`, materialised rows ship enabled.  When `false`, rows ship disabled and the operator flips them after seeding. |
+| `BRAIN_OPERATOR_ASSISTANT_ID` | Overrides the environment default (**7367** staging, **1406** production). Also set via Cloud Build / overlay image ENV / ``brain/.env``. |
+| `BRAIN_OPERATOR_TASKS_ENABLED` | Defaults to `false` until explicitly armed. When `true`, materialised rows ship enabled. Per-job `enabled: false` in scenario YAML still respected (e.g. `social.*`). |
+
+Cloud Build passes both vars into the reconcile job and bakes them into the
+overlay image (``deploy/Dockerfile`` build args). Current substitutions:
+``deploy/cloudbuild-staging.yaml`` → staging assistant / tasks off;
+``deploy/cloudbuild.yaml`` → production assistant / tasks off until armed.
 
 The deploy-reconcile control plane materialises rows on every push (no
 laptop step required).  Brain's `brain scheduled install --execute`
@@ -119,14 +135,18 @@ The deploy image installs brain via `deploy/Dockerfile` at a build-arg
 
 ## Activation checklist
 
-1. Provision a new assistant in Orchestra for the brain operator
-   inside the `unify_company` tenant.  Note the numeric id.
-2. Add `BRAIN_OPERATOR_ASSISTANT_ID=<id>` to the production Cloud Run
-   secret bundle.
-3. Add `BRAIN_WHATSAPP_DEFAULT_RECIPIENT=<+447...>` for the operator's
-   number.
-4. Run `brain whatsapp register-recipient` so the gateway can route to
-   that recipient.
-5. Deploy.  Tasks rows ship disabled.
-6. Flip `BRAIN_OPERATOR_TASKS_ENABLED=true` (or enable rows manually)
-   to start firing.
+| Environment | Cloud Build substitution | Tasks (current) |
+|---|---|---|
+| Staging | `_BRAIN_OPERATOR_ASSISTANT_ID` | **disabled** — reconcile + validate wrappers safely |
+| Production | `_BRAIN_OPERATOR_ASSISTANT_ID` | **disabled** — flip `_BRAIN_OPERATOR_TASKS_ENABLED` to `true` when ready |
+
+1. Connect integrations (Instagram, TikTok, Gmail, etc.) on the brain
+   operator assistant for the target environment
+   in **production** Console.
+2. Add brain-specific secrets to ``unify-deploy/.secrets.json`` under
+   ``assistant.1406`` (see social README) and seed on deploy.
+3. Add ``BRAIN_WHATSAPP_DEFAULT_RECIPIENT=<+447...>`` for digest jobs.
+4. Run ``brain whatsapp register-recipient`` against production.
+5. Deploy unify-deploy to **main** (production pipeline syncs 1406).
+6. Disable individual jobs via per-task ``enabled: false`` in scenario YAML
+   (``social.*`` ships disabled) rather than turning off the whole scenario.

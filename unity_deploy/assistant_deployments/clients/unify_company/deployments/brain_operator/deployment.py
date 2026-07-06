@@ -53,19 +53,13 @@ _DIR = Path(__file__).resolve().parent
 def _scenario_activations() -> list[ScenarioActivation]:
     """Return the brain_jobs scenario activations for this deployment.
 
-    The assistant id is resolved from the current environment
-    (:func:`brain_operator_assistant_id`, which keys off
-    ``detect_environment()`` with a ``BRAIN_OPERATOR_ASSISTANT_ID``
-    override).  Resolving this way — rather than from a reconcile-only
-    env var — is what makes the scenario present at assistant *runtime*,
-    so the woken assistant's ``startup_hook`` actually seeds the
-    TaskScheduler rows.  When no id is mapped for the environment the
-    activation list is empty and no rows are materialised.
+    The assistant id comes from ``BRAIN_OPERATOR_ASSISTANT_ID`` (Cloud Build
+    substitution → reconcile job + overlay image ENV).  Resolving from env —
+    rather than hardcoding per environment — keeps staging and production
+    deploys aligned with the same code path.
 
-    ``tasks_enabled`` ships true on staging so the brain_operator's
-    recurring work fires; the control-plane reconcile defers any
-    not-yet-seeded activation to the runtime plane, so shipping enabled
-    on a brand-new assistant is safe.
+    ``tasks_enabled`` defaults true; per-job ``enabled: false`` in the
+    scenario YAML still gates individual jobs (e.g. ``social.*``).
     """
 
     assistant_id = brain_operator_assistant_id()
@@ -201,6 +195,56 @@ def get_deployment() -> DeploymentSpec:
                         "job_id": "influencers.youtube.extract",
                         "wrapper": "run_youtube_browser_extraction",
                         "module": "brain.influencers.youtube.runner",
+                    },
+                    {
+                        "job_id": "intel.droid_outreach.hackernews_daily",
+                        "wrapper": "run_droid_outreach_hackernews_daily",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.droid_outreach.reddit_daily",
+                        "wrapper": "run_droid_outreach_reddit_daily",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.droid_outreach.discord_daily_summary",
+                        "wrapper": "run_droid_outreach_discord_daily_summary",
+                        "module": "brain.intel.droid_outreach",
+                    },
+                    {
+                        "job_id": "intel.social_post.x_discover_draft",
+                        "wrapper": "run_social_post_discover_draft",
+                        "module": "brain.intel.social_post",
+                    },
+                    {
+                        "job_id": "intel.social_post.x_post_approved",
+                        "wrapper": "run_social_post_post_approved",
+                        "module": "brain.intel.social_post",
+                    },
+                    {
+                        "job_id": "intel.social_post.x_post_now",
+                        "wrapper": "run_social_post_now",
+                        "module": "brain.intel.social_post",
+                    },
+                    {
+                        "job_id": "social.ideate_and_generate",
+                        "wrapper": "run_social_ideate_and_generate",
+                        "module": "brain.social.pipeline",
+                    },
+                    {
+                        "job_id": "social.poll_reviews",
+                        "wrapper": "run_social_poll_reviews",
+                        "module": "brain.social.pipeline",
+                    },
+                    {
+                        "job_id": "social.render_storyboards",
+                        "wrapper": "run_social_render_storyboards",
+                        "module": "brain.social.pipeline",
+                    },
+                    {
+                        "job_id": "social.publish_approved",
+                        "wrapper": "run_social_publish_approved",
+                        "module": "brain.social.pipeline",
                     },
                 ],
             },

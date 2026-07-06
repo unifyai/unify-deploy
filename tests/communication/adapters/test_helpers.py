@@ -20,6 +20,7 @@ from adapters.helpers import (
     build_webhook_context,
     cleanup_idle_pool,
     check_valid_contact,
+    create_conference_response,
     expire_all_stale_jobs,
     get_default_contacts,
     get_assistant,
@@ -482,6 +483,38 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert call_kwargs["data"]["medium"] == "api_message"
     assert call_kwargs["data"]["is_coordinator"] == "true"
     assert call_kwargs["data"]["desktop_mode"] == "ubuntu"
+
+
+def test_call_activation_defers_desktop_binding():
+    from adapters.helpers import call_activation_defers_desktop_binding
+
+    assistant = {"desktop_mode": "ubuntu"}
+    assert call_activation_defers_desktop_binding("unify_meet", assistant)
+    assert call_activation_defers_desktop_binding("phone", assistant)
+    assert call_activation_defers_desktop_binding("whatsapp_call", assistant)
+    assert not call_activation_defers_desktop_binding("email", assistant)
+    assert not call_activation_defers_desktop_binding(
+        "unify_meet",
+        {"desktop_mode": "none"},
+    )
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_includes_desktop_required_override(mock_post):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data()
+    assistant_data["desktop_mode"] = "ubuntu"
+
+    dispatch_unity_start_intent(
+        assistant_data,
+        "unify_meet",
+        desktop_required=False,
+    )
+
+    assert mock_post.call_args.kwargs["data"]["desktop_required"] == "false"
 
 
 @patch("adapters.helpers.requests.post")
@@ -1118,3 +1151,25 @@ def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
     assert result["deferred_jobs"] == ["unity-job-bound"]
     mock_post.assert_not_called()
     mock_delete.assert_not_called()
+
+
+# --- create_conference_response tests ---
+
+
+def test_conference_disables_join_beep():
+    """Twilio's default conference beep plays an artificial "call answered"
+    tone at the callee the moment they pick up (and into the agent's STT);
+    every leg renders with beep off."""
+    twiml = str(create_conference_response("conf-1"))
+    assert 'beep="false"' in twiml
+
+    with_status = str(create_conference_response("conf-1", with_status=True))
+    assert 'beep="false"' in with_status
+
+
+def test_dialed_leg_waits_in_silence():
+    """Legs we dial (SIP/agent, or a human who already answered) get no
+    conference wait audio; only an inbound caller's own leg hears ringback."""
+    twiml = str(create_conference_response("conf-1", ringback=False))
+    assert 'waitUrl=""' in twiml
+    assert "ring-tone" not in twiml

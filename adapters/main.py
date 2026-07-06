@@ -79,6 +79,7 @@ _ASSISTANT_UPDATE_STRING_FIELDS = {
     "assistant_whatsapp_number",
     "assistant_discord_bot_id",
     "assistant_slack_bot_user_id",
+    "assistant_slack_team_id",
     "assistant_email",
     "assistant_email_provider",
     "voice_provider",
@@ -1146,8 +1147,31 @@ async def twilio_whatsapp_webhook(request: Request):
         "body": body,
         "role": role,
     }
+    if message_sid:
+        event_data["message_sid"] = str(message_sid)
     if attachments:
         event_data["attachments"] = attachments
+
+    reaction_type = str(
+        form_data.get("MessageType") or form_data.get("type") or "",
+    ).lower()
+    reaction_emoji = form_data.get("Reaction") or form_data.get("reaction_emoji")
+    reacted_to_sid = (
+        form_data.get("OriginalRepliedMessageSid")
+        or form_data.get("reaction_message_id")
+        or form_data.get("RepliedMessageSid")
+    )
+    thread = "whatsapp"
+    if reaction_type == "reaction" or reacted_to_sid:
+        thread = "whatsapp_reaction"
+        event_data = {
+            "contacts": contacts,
+            "to_number": to_number,
+            "from_number": from_number,
+            "provider_message_sid": str(reacted_to_sid or message_sid or ""),
+            "message_sid": str(reacted_to_sid or message_sid or ""),
+            "emoji": str(reaction_emoji) if reaction_emoji else None,
+        }
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -1158,7 +1182,7 @@ async def twilio_whatsapp_webhook(request: Request):
             topic_path,
             json.dumps(
                 {
-                    "thread": "whatsapp",
+                    "thread": thread,
                     "publish_timestamp": time.time(),
                     "event": event_data,
                 },
@@ -1337,7 +1361,9 @@ async def twilio_whatsapp_call_webhook(request: Request):
         resp_user = create_conference_response(conference_name)
 
         wa_client = get_twilio_wa_client()
-        sip_twiml = str(create_conference_response(conference_name))
+        # No ringback on the agent leg: if it lands in the conference first,
+        # wait audio would play straight into the LiveKit room.
+        sip_twiml = str(create_conference_response(conference_name, ringback=False))
         call = wa_client.calls.create(
             to=sip_uri,
             from_=pool_number,
@@ -1978,6 +2004,72 @@ async def unify_message_webhook(request: Request):
         logger.info("unify_message message published to Pub/Sub successfully")
     except Exception as e:
         logger.error(f"Error publishing unify_message to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return Response(status_code=200)
+
+
+@app.post("/unify/reaction", dependencies=[Depends(require_admin_key)])
+async def unify_reaction_webhook(request: Request):
+    """Unify reaction webhook — user emoji reactions on console chat messages."""
+    logger.info("unify_reaction_webhook function started")
+    content_type = request.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        form_data = await request.form()
+        payload = dict(form_data)
+
+    assistant_id_input = payload.get("assistant_id", "")
+    contact_id = payload.get("contact_id")
+    target_message_id = payload.get("target_message_id")
+    emoji = payload.get("emoji")
+    if emoji == "":
+        emoji = None
+
+    if not assistant_id_input:
+        return Response(status_code=400, content="assistant_id is required")
+    if contact_id is None or target_message_id is None:
+        return Response(
+            status_code=400,
+            content="contact_id and target_message_id are required",
+        )
+
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        channel="unify_reaction",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "unify_message_reaction",
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "contact_id": contact_id,
+                        "contacts": contacts,
+                        "assistant_id": assistant_id,
+                        "target_message_id": target_message_id,
+                        "emoji": emoji,
+                    },
+                },
+            ).encode("utf-8"),
+            thread="inbound",
+        )
+    except Exception as e:
+        logger.error(f"Error publishing unify_message_reaction to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
@@ -4516,7 +4608,18 @@ async def microsoft_oauth_callback(request: Request):
                 status_code=400,
             )
 
-        assistant = get_assistant(email_address=assistant_email)
+        raw_assistant_id = state_data.get("assistant_id")
+        if raw_assistant_id:
+            assistant = get_assistant(assistant_id=str(raw_assistant_id))
+        elif is_unity_coordinator_email_address(assistant_email):
+            return Response(
+                content=(
+                    "Ambiguous universal contact lookup; pass assistant_id in OAuth state."
+                ),
+                status_code=400,
+            )
+        else:
+            assistant = get_assistant(email_address=assistant_email)
         if not assistant or not assistant.get("assistant_id"):
             return Response(
                 content=f"Assistant not found for email: {assistant_email}",

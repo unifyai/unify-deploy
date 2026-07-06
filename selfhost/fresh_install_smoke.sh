@@ -20,11 +20,14 @@
 set -euo pipefail
 
 # This script lives in unity-deploy/selfhost/. DEPLOY_REPO is the unity-deploy
-# checkout; UNITY_DEV_REPO is the sibling unity checkout under UNIFY_STACK_ROOT.
+# checkout; UNITY_DEV_REPO is the sibling unify checkout under UNIFY_STACK_ROOT.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=default_repo_paths.sh
+source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO/.." && pwd)}"
-UNITY_DEV_REPO="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
+UNITY_DEV_REPO="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNITY_DEV_REPO}"
 INSTALL_SCRIPT="${INSTALL_SCRIPT:-$UNITY_DEV_REPO/scripts/install.sh}"
 
 FRESH_INSTALL_ROOT="${FRESH_INSTALL_ROOT:-/tmp}"

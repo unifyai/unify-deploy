@@ -207,6 +207,11 @@ resolve_unity_repo_path() {
     return 0
   fi
   local candidate
+  candidate="$(cd "$COMMS_REPO_PATH/../unify" 2>/dev/null && pwd -P || echo "")"
+  if [[ -n "$candidate" && -d "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
   candidate="$(cd "$COMMS_REPO_PATH/../unity" 2>/dev/null && pwd -P || echo "")"
   if [[ -n "$candidate" && -d "$candidate" ]]; then
     echo "$candidate"
@@ -240,7 +245,7 @@ ensure_comms_unity_deps() {
 
   if ! unity_repo="$(resolve_unity_repo_path)"; then
     log_error "Comms App imports unity.task_scheduler.offline_runner_contract but unity is unavailable"
-    log_info "Clone unity as a sibling of unity-deploy (../unity) or set UNITY_REPO_PATH"
+    log_info "Clone unify as a sibling of unity-deploy (../unify) or set UNITY_REPO_PATH"
     return 1
   fi
 

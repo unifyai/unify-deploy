@@ -16,12 +16,15 @@
 #
 set -euo pipefail
 
-# This script lives in unity-deploy/selfhost/; the desktop image and unity venv
-# come from the sibling unity checkout under UNIFY_STACK_ROOT.
+# This script lives in unity-deploy/selfhost/; the desktop image and unify venv
+# come from the sibling unify checkout under UNIFY_STACK_ROOT.
 SELF_HOST_DESKTOP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=default_repo_paths.sh
+source "$SELF_HOST_DESKTOP_SCRIPT_DIR/default_repo_paths.sh"
 _DEPLOY_REPO_PATH="$(cd "$SELF_HOST_DESKTOP_SCRIPT_DIR/.." && pwd)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$_DEPLOY_REPO_PATH/.." && pwd)}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}}"
+UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}}"
+export UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNITY_REPO}"
 
 SELF_HOST_DESKTOP_IMAGE="${SELF_HOST_DESKTOP_IMAGE:-unity-desktop}"
 SELF_HOST_DESKTOP_CONTAINER="${SELF_HOST_DESKTOP_CONTAINER:-unity-desktop-selfhost}"

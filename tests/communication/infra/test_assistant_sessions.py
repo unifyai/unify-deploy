@@ -106,6 +106,19 @@ def test_build_assistant_session_spec_sets_desktop_required():
     assert "imageOverride" not in spec
 
 
+def test_build_assistant_session_spec_honors_desktop_required_override():
+    spec = build_assistant_session_spec(
+        assistant_id="42",
+        user_id="7",
+        medium="unify_meet",
+        desktop_mode="ubuntu",
+        startup_secret_ref="session-bootstrap-42",
+        activation_id="act-1",
+        desktop_required=False,
+    )
+    assert spec["desktop"] == {"required": False, "mode": "ubuntu"}
+
+
 def test_build_assistant_session_spec_carries_image_override():
     spec = build_assistant_session_spec(
         assistant_id="42",

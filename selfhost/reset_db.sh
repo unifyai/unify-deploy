@@ -3,9 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=default_repo_paths.sh
+source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}"
+UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNITY_REPO_PATH
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"

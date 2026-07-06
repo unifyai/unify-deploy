@@ -228,7 +228,7 @@ def _resolve_stack_script() -> tuple[Path, Path]:
     """Return (cwd, stack.sh path).
 
     The self-host stack orchestration lives in this repo under
-    ``selfhost/stack.sh`` and drives the sibling unity/console/orchestra
+    ``selfhost/stack.sh`` and drives the sibling unify/console/orchestra
     checkouts.
     """
 
@@ -319,7 +319,7 @@ def _stack_subprocess_env() -> dict[str, str]:
         "COMMUNICATION_REPO_PATH",
         str(_resolve_sibling_repo("communication")),
     )
-    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unity")))
+    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unify")))
     env.setdefault("CONSOLE_REPO_PATH", str(_resolve_sibling_repo("console")))
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     # Keep Orchestra alive for the full pytest session; local.sh defaults to 600s.

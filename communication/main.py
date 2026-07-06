@@ -127,6 +127,9 @@ class CommunicationInfraRuntimeActivator:
             "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number")
             or "",
             "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id") or "",
+            "assistant_slack_bot_user_id": assistant.get("assistant_slack_bot_user_id")
+            or "",
+            "assistant_slack_team_id": assistant.get("assistant_slack_team_id") or "",
             "voice_provider": voice_provider,
             "voice_id": voice_id,
             "desktop_mode": assistant.get("desktop_mode") or "none",

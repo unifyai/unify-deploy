@@ -342,6 +342,56 @@ def test_start_job_defaults_missing_coordinator_flag_to_false(client):
     assert payload["is_coordinator"] is False
 
 
+def test_start_job_honors_desktop_required_override(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(phase="PendingVM")
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value=existing_session["spec"]["startupSecretRef"],
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ) as mock_create_or_update_assistant_session,
+        patch(
+            "communication.infra.views._ensure_assistant_topic_on_wake",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response = client.post(
+            "/infra/job/start",
+            data=_start_job_payload(desktop_required="false"),
+        )
+
+    assert response.status_code == 200
+    spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert spec["desktop"] == {"required": False, "mode": "ubuntu"}
+
+
 def test_start_job_persists_wake_reasons_for_pending_reused_session(client):
     """Pending reused sessions must retain wake reasons in the bootstrap secret."""
 
@@ -1033,3 +1083,56 @@ def test_start_job_returns_conflict_when_session_terminates_mid_write(client):
 
     assert response.status_code == 409
     assert "is deleting" in response.json()["detail"]
+
+
+def test_request_desktop_promotes_voice_only_session(client):
+    custom_api = MagicMock()
+    session = _existing_session(phase="Active", desktop_required=False)
+
+    with (
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_spec",
+            return_value=session,
+        ) as mock_patch_spec,
+        patch(
+            "communication.infra.views.emit_observability_event",
+        ),
+    ):
+        response = client.post("/infra/runtime/assistant-123/request-desktop")
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True, "reason": "promoted"}
+    mock_patch_spec.assert_called_once()
+    assert mock_patch_spec.call_args.kwargs["desktop_required"] is True
+
+
+def test_request_desktop_is_idempotent_when_already_required(client):
+    custom_api = MagicMock()
+    session = _existing_session(phase="Active", desktop_required=True)
+
+    with (
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_spec",
+        ) as mock_patch_spec,
+    ):
+        response = client.post("/infra/runtime/assistant-123/request-desktop")
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True, "reason": "already_required"}
+    mock_patch_spec.assert_not_called()

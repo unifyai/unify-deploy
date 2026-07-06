@@ -30,15 +30,18 @@ set -e
 # (e.g. ~/dev/{unity,console,orchestra,...}). This mirrors stack.sh's
 # UNIFY_STACK_ROOT resolution so setup and stack always target the same repos.
 # Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
-# This script lives in unity-deploy/selfhost/ and bootstraps the sibling unity,
+# This script lives in unity-deploy/selfhost/ and bootstraps the sibling unify,
 # console, and orchestra checkouts located under UNIFY_STACK_ROOT (defaults to
 # the parent of unity-deploy). Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO
 # env vars still win.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=default_repo_paths.sh
+source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO/.." && pwd -P)}"
 UNITY_HOME="${UNITY_HOME:-$UNIFY_STACK_ROOT}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$UNIFY_STACK_ROOT/unity}}"
+UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}}"
+export UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNITY_REPO}"
 ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNITY_HOME}/orchestra}"
 CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
