@@ -23,7 +23,8 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
     "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
-    "assistant_discord_bot_id,assistant_slack_bot_user_id,age,nationality,"
+    "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
+    "age,nationality,"
     "about,job_title,timezone"
 )
 
@@ -104,6 +105,9 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         ),
         "assistant_slack_bot_user_id": _runtime_str(
             assistant.get("assistant_slack_bot_user_id"),
+        ),
+        "assistant_slack_team_id": _runtime_str(
+            assistant.get("assistant_slack_team_id"),
         ),
         "assistant_email": assistant["email"] or "",
         "assistant_email_provider": assistant.get("email_provider")

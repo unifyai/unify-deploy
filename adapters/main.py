@@ -79,6 +79,7 @@ _ASSISTANT_UPDATE_STRING_FIELDS = {
     "assistant_whatsapp_number",
     "assistant_discord_bot_id",
     "assistant_slack_bot_user_id",
+    "assistant_slack_team_id",
     "assistant_email",
     "assistant_email_provider",
     "voice_provider",

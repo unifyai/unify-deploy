@@ -1210,6 +1210,9 @@ def _build_start_job_request_data(
         "assistant_slack_bot_user_id": _runtime_str(
             assistant.get("assistant_slack_bot_user_id"),
         ),
+        "assistant_slack_team_id": _runtime_str(
+            assistant.get("assistant_slack_team_id"),
+        ),
         "voice_provider": _runtime_str(voice_provider),
         "voice_id": _runtime_str(voice_id),
         "desktop_mode": desktop_mode,
