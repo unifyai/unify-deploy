@@ -97,9 +97,11 @@ class TestOrgChat:
                     "team_id": 3,
                     "team_name": "Growth",
                     "organization_id": 11,
-                    "message": TEAM_MESSAGE,
-                    "participants": {"humans": [], "assistants": []},
-                    "recent_messages": [],
+                    "body": "Morning everyone",
+                    "group_message_id": 7,
+                    "sender_user_id": "user-1",
+                    "sender_email": "dana@example.com",
+                    "sender_name": "Dana",
                 },
             },
         )
@@ -121,13 +123,49 @@ class TestOrgChat:
         assert org_call[1]["team_id"] == "3"
         assert org_call[1]["organization_id"] == "11"
 
+        # Fan-out is a standard unify_message envelope with team context; the
+        # sender is not this assistant's owner so no contact_id is resolved
+        # (the runtime resolves the sender by email).
         fanout_call = publish_calls[1]
         assert fanout_call[0][0].endswith("/topics/unity-777")
         fanout_frame = json.loads(fanout_call[0][1].decode("utf-8"))
-        assert fanout_frame["thread"] == "unify_group_message"
+        assert fanout_frame["thread"] == "unify_message"
         assert fanout_frame["event"]["assistant_id"] == "777"
         assert fanout_frame["event"]["team_id"] == 3
+        assert fanout_frame["event"]["body"] == "Morning everyone"
+        assert fanout_frame["event"]["sender_email"] == "dana@example.com"
+        assert "contact_id" not in fanout_frame["event"]
         assert fanout_call[1]["thread"] == "inbound"
+
+    def test_team_message_owner_sender_resolves_boss_contact(self, client):
+        response = client.post(
+            "/unify/org-chat",
+            json={
+                "kind": "team",
+                "organization_id": 11,
+                "team_id": 3,
+                "message": TEAM_MESSAGE,
+                "fanout_assistant_ids": [777],
+                "assistant_event": {
+                    "team_id": 3,
+                    "team_name": "Growth",
+                    "organization_id": 11,
+                    "body": "Morning everyone",
+                    "group_message_id": 7,
+                    # Matches the mocked webhook context's assistant user_id,
+                    # so the fan-out resolves contact_id to the boss contact.
+                    "sender_user_id": "12345",
+                    "sender_email": "owner@example.com",
+                    "sender_name": "Owner",
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        fanout_call = client._mock_pubsub.publish.call_args_list[1]
+        fanout_frame = json.loads(fanout_call[0][1].decode("utf-8"))
+        assert fanout_frame["thread"] == "unify_message"
+        assert fanout_frame["event"]["contact_id"] == 1
 
     def test_dm_message_publishes_frame_only(self, client):
         response = client.post(

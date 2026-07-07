@@ -2274,10 +2274,12 @@ async def unify_org_chat_webhook(request: Request):
 
     1. Publish the Console frame to the per-organization topic
        (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
-    2. For human-sent team messages, publish one ``unify_group_message``
-       envelope per listed assistant (ensuring each runtime job is started).
-       Assistant replies arrive with no ``fanout_assistant_ids`` — they are
-       Console-publish only, which prevents AI reply loops.
+    2. For human-sent team messages, publish one standard ``unify_message``
+       envelope per listed assistant (ensuring each runtime job is started) —
+       team chat is ordinary unify_message traffic fanned out to every team
+       assistant, like a large email CC chain. Assistant replies arrive with
+       no ``fanout_assistant_ids`` — they are Console-publish only, which
+       prevents AI reply loops.
     """
     payload = await request.json()
     kind = payload.get("kind")
@@ -2327,6 +2329,10 @@ async def unify_org_chat_webhook(request: Request):
         logger.error(f"Error publishing {thread} to org topic: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
+    # Team chat fan-out rides the standard unify_message thread — every team
+    # assistant receives a copy, like a large email CC chain. When the sender
+    # is this assistant's owner we can resolve contact_id here; otherwise the
+    # runtime resolves the sender by email against its Contacts table.
     fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
     assistant_event = payload.get("assistant_event") or {}
     fanout_errors: list[str] = []
@@ -2334,14 +2340,25 @@ async def unify_org_chat_webhook(request: Request):
         try:
             context = await asyncio.to_thread(
                 build_webhook_context,
-                channel="unify_group_message",
+                channel="unify_message",
                 destination="",
                 sender="",
                 assistant_id=str(raw_assistant_id),
                 validate_contact=False,
                 ensure_job=True,
             )
-            assistant_id = context["assistant"]["assistant_id"]
+            assistant = context["assistant"]
+            assistant_id = assistant["assistant_id"]
+            event = {
+                **assistant_event,
+                "assistant_id": assistant_id,
+                "contacts": context["contacts"],
+            }
+            sender_user_id = str(assistant_event.get("sender_user_id") or "")
+            if sender_user_id and sender_user_id == str(
+                assistant.get("user_id") or "",
+            ):
+                event["contact_id"] = assistant.get("boss_contact_id")
             topic_path = pubsub_client.topic_path(
                 SETTINGS.gcp_project_id,
                 SETTINGS.assistant_topic(assistant_id),
@@ -2350,19 +2367,16 @@ async def unify_org_chat_webhook(request: Request):
                 topic_path,
                 json.dumps(
                     {
-                        "thread": "unify_group_message",
+                        "thread": "unify_message",
                         "publish_timestamp": time.time(),
-                        "event": {
-                            **assistant_event,
-                            "assistant_id": assistant_id,
-                        },
+                        "event": event,
                     },
                 ).encode("utf-8"),
                 thread="inbound",
             )
         except Exception as e:
             logger.error(
-                f"Error fanning out unify_group_message to assistant "
+                f"Error fanning out team chat message to assistant "
                 f"{raw_assistant_id}: {e}",
             )
             fanout_errors.append(str(raw_assistant_id))
