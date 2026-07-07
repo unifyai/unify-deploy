@@ -209,6 +209,11 @@ from .helpers import (
     resolve_phone_route,
     resolve_slack_inbound,
     slack_message_already_seen,
+    resolve_ms_teams_bot_inbound,
+    ensure_ms_teams_bot_pending_install,
+    verify_ms_teams_bot_token,
+    _strip_ms_teams_bot_mention,
+    MsTeamsBotAuthError,
     resolve_whatsapp_route,
     start_unity_job,
     update_whatsapp_call_session,
@@ -1751,6 +1756,167 @@ async def slack_events_webhook(request: Request):
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return {"ok": True}
+
+
+# =============================================================================
+# Microsoft Teams (Bot Framework) Webhook
+# =============================================================================
+#
+# Additive to the delegated-Graph Teams path (Graph change-notifications for
+# a user's own chats). This handles the org-installed Teams *bot*: every
+# activity the Bot Connector delivers (channel/group @mentions and 1:1
+# personal messages) lands here. Flow per inbound activity:
+#
+#   1. Verify the Bot Framework JWT (RS256 against the Bot Connector JWKS;
+#      audience = our bot app id). Fails closed with 401.
+#   2. On ``conversationUpdate`` where the bot itself was added, record a
+#      pending (unbound) install so the tenant-to-org bind handshake can
+#      capture the tenant's ``serviceUrl``.
+#   3. On ``message``, hand the activity to Orchestra's ms_teams_bot
+#      dispatcher, which consults installs, channel bindings, conversation
+#      routes, @mention+token addressing, and the coordinator fallback.
+#   4. Fetch assistant + contacts, best-effort wake the Unity job, and
+#      publish onto the assistant's Pub/Sub topic with
+#      ``thread="ms_teams_bot"`` for CommsManager to pick up.
+#
+# We always return HTTP 200 (even on routing misses) so the Bot Connector
+# does not retry -- downstream dedup is authoritative Unity-side.
+
+
+@app.post("/ms-teams-bot/messages")
+async def ms_teams_bot_messages_webhook(request: Request):
+    """Microsoft Teams Bot Framework webhook entry point.
+
+    Authenticated via the Bot Framework JWT the Connector attaches; no
+    admin key (Teams cannot carry it).
+    """
+    token = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[len("Bearer ") :].strip()
+    try:
+        await asyncio.to_thread(verify_ms_teams_bot_token, token)
+    except MsTeamsBotAuthError as exc:
+        logger.warning(f"ms_teams_bot inbound auth failed: {exc}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    activity = await request.json()
+    activity_type = activity.get("type") or ""
+
+    if activity_type == "conversationUpdate":
+        members_added = activity.get("membersAdded") or []
+        recipient_id = (activity.get("recipient") or {}).get("id") or ""
+        if any(m.get("id") == recipient_id for m in members_added):
+            await asyncio.to_thread(ensure_ms_teams_bot_pending_install, activity)
+        return {"status": 200}
+
+    if activity_type != "message":
+        return {"status": 200}
+
+    data = await asyncio.to_thread(resolve_ms_teams_bot_inbound, activity)
+    if data is None or not data.get("handled"):
+        return {"status": 200}
+
+    assistant_id = data.get("assistant_id")
+    if not assistant_id:
+        return {"status": 200}
+    assistant_id = str(assistant_id)
+    routing_metadata = data.get("routing_metadata") or {}
+
+    assistant_data = await asyncio.to_thread(get_assistant, assistant_id=assistant_id)
+    if not assistant_data:
+        logger.warning(
+            f"ms_teams_bot: orchestra returned no assistant for id {assistant_id}",
+        )
+        return {"status": 200}
+
+    conversation = activity.get("conversation") or {}
+    conversation_type = conversation.get("conversationType") or "personal"
+    is_channel = conversation_type != "personal"
+    channel_data = activity.get("channelData") or {}
+    sender = activity.get("from") or {}
+    recipient = activity.get("recipient") or {}
+    _, addressed_text = _strip_ms_teams_bot_mention(
+        activity.get("text", "") or "",
+        activity.get("entities") or [],
+        recipient.get("id") or "",
+    )
+
+    api_key = assistant_data.get("api_key", "") or ""
+    user_id = assistant_data.get("user_id", "") or ""
+    contacts: list[dict] = []
+    if api_key:
+        contacts_resp, contacts_status = await asyncio.to_thread(
+            get_contacts,
+            f"{user_id}/{assistant_id}/Contacts",
+            api_key,
+        )
+        if contacts_status == 200:
+            contact_logs = contacts_resp.get("logs", [])
+            if len(contact_logs) >= 2:
+                contacts = [c["entries"] for c in contact_logs]
+    if not contacts:
+        contacts = get_default_contacts(assistant_data)
+
+    if uses_local_unity_runtime(assistant_data):
+        logger.info("Skipped remote job start for local MS Teams bot assistant")
+    else:
+        asyncio.create_task(
+            asyncio.to_thread(start_unity_job, assistant_data, "ms_teams_bot"),
+        )
+
+    attachments = [
+        {
+            "id": a.get("contentUrl"),
+            "filename": a.get("name"),
+            "url": a.get("contentUrl"),
+            "content_type": a.get("contentType") or "",
+        }
+        for a in (activity.get("attachments") or [])
+        if a.get("contentUrl") and a.get("name")
+    ]
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    event_payload = {
+        "thread": "ms_teams_bot",
+        "publish_timestamp": time.time(),
+        "event": {
+            "event_id": activity.get("id", "") or "",
+            "message_id": activity.get("id", "") or "",
+            "tenant_id": (channel_data.get("tenant") or {}).get("id", "") or "",
+            "conversation_id": conversation.get("id", "") or "",
+            "conversation_type": conversation_type,
+            "channel_id": (channel_data.get("channel") or {}).get("id", "") or "",
+            "service_url": activity.get("serviceUrl", "") or "",
+            "bot_app_id": SETTINGS.ms_teams_bot_app_id,
+            "sender_aad_object_id": sender.get("aadObjectId", "") or "",
+            "sender_display_name": sender.get("name", "") or "",
+            "body": addressed_text or activity.get("text", "") or "",
+            "is_channel": is_channel,
+            "attachments": attachments,
+            "routing_metadata": routing_metadata,
+            "contacts": contacts,
+        },
+    }
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(event_payload).encode("utf-8"),
+            thread="inbound",
+        )
+        logger.info(
+            "published MS Teams bot %s for assistant %s (activity_id=%s)",
+            "channel message" if is_channel else "DM",
+            assistant_id,
+            activity.get("id", ""),
+        )
+    except Exception as e:
+        logger.error(f"ms_teams_bot: failed to publish to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return {"status": 200}
 
 
 # =============================================================================
