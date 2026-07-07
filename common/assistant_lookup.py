@@ -25,7 +25,7 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
-    "about,job_title,timezone"
+    "about,job_title,timezone,default_model,default_reasoning_effort"
 )
 
 
@@ -49,6 +49,8 @@ def _local_assistant_data() -> dict[str, Any]:
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
+        "default_model": None,
+        "default_reasoning_effort": None,
         "api_key": "",
         "user_first_name": "",
         "user_surname": "",
@@ -117,6 +119,8 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "user_email": assistant["user_email"] or "",
         "voice_provider": voice_provider,
         "voice_id": voice_id,
+        "default_model": assistant.get("default_model"),
+        "default_reasoning_effort": assistant.get("default_reasoning_effort"),
         "secrets": assistant.get("secrets", {}),
         "desktop_mode": _resolve_desktop_mode(assistant),
         "user_desktops": assistant.get("user_desktops", []),

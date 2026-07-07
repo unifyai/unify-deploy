@@ -132,6 +132,8 @@ class CommunicationInfraRuntimeActivator:
             "assistant_slack_team_id": assistant.get("assistant_slack_team_id") or "",
             "voice_provider": voice_provider,
             "voice_id": voice_id,
+            "default_model": assistant.get("default_model") or "",
+            "default_reasoning_effort": assistant.get("default_reasoning_effort") or "",
             "desktop_mode": assistant.get("desktop_mode") or "none",
             "desktop_url": assistant.get("desktop_url") or "",
             "user_desktops": json.dumps(assistant.get("user_desktops") or []),

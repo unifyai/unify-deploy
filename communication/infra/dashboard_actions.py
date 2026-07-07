@@ -150,6 +150,10 @@ def _build_dashboard_action_env(
         "ASSISTANT_AGE": str(assistant_data.get("assistant_age") or ""),
         "ASSISTANT_NATIONALITY": str(assistant_data.get("assistant_nationality") or ""),
         "ASSISTANT_TIMEZONE": str(assistant_data.get("assistant_timezone") or "UTC"),
+        "ASSISTANT_DEFAULT_MODEL": str(assistant_data.get("default_model") or ""),
+        "ASSISTANT_DEFAULT_REASONING_EFFORT": str(
+            assistant_data.get("default_reasoning_effort") or "",
+        ),
         "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
         "ASSISTANT_JOB_TITLE": str(assistant_data.get("assistant_job_title") or ""),
         "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),

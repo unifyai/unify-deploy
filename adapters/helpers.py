@@ -1417,6 +1417,10 @@ def _build_start_job_request_data(
         ),
         "voice_provider": _runtime_str(voice_provider),
         "voice_id": _runtime_str(voice_id),
+        "default_model": _runtime_str(assistant.get("default_model")),
+        "default_reasoning_effort": _runtime_str(
+            assistant.get("default_reasoning_effort"),
+        ),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.

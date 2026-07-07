@@ -84,6 +84,8 @@ _ASSISTANT_UPDATE_STRING_FIELDS = {
     "assistant_email_provider",
     "voice_provider",
     "voice_id",
+    "default_model",
+    "default_reasoning_effort",
     "desktop_mode",
 }
 
