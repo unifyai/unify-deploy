@@ -45,7 +45,10 @@ def test_assistant_id_unset_on_unknown_environment(monkeypatch):
     assert mod.brain_operator_assistant_id() is None
 
 
-@pytest.mark.parametrize("value,expected", [("true", True), ("false", False), ("1", True), ("0", False)])
+@pytest.mark.parametrize(
+    "value,expected",
+    [("true", True), ("false", False), ("1", True), ("0", False)],
+)
 def test_tasks_enabled_env_override(monkeypatch, value, expected):
     monkeypatch.setenv("BRAIN_OPERATOR_TASKS_ENABLED", value)
     mod = _reload()

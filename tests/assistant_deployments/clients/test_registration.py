@@ -656,9 +656,7 @@ class TestUnifyCompanyRouting:
             brain_operator_assistant_id="1406",
         )
         targets = uc._MAPPING.targets
-        brain_targets = [
-            t for t in targets if t.deployment == "brain_operator"
-        ]
+        brain_targets = [t for t in targets if t.deployment == "brain_operator"]
         assert len(brain_targets) == 1
         assert brain_targets[0].scope_id == "1406"
 

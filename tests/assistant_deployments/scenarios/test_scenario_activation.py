@@ -254,7 +254,11 @@ class TestMaterialiseHappyPath:
         assert spec.scenario_id == "custom_client_sync_v0"
 
     def test_tasks_enabled_toggle(self, tmp_path: Path):
-        enabled_template = _MINIMAL_TEMPLATE.replace("enabled: false", "enabled: true", 1)
+        enabled_template = _MINIMAL_TEMPLATE.replace(
+            "enabled: false",
+            "enabled: true",
+            1,
+        )
         _write_template(tmp_path, "my_pkg", "sync_v0", enabled_template)
 
         specs, _ = materialise_scenario_activations(

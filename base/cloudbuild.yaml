@@ -58,6 +58,13 @@ steps:
     UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/main | cut -f1)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8}"
+    SYSTEM_SHAS=""
+    for repo in orchestra console unify-deploy docs; do
+      SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/$${repo}.git refs/heads/main | cut -f1)
+      SYSTEM_SHAS="$${SYSTEM_SHAS}$${SHA:0:12}-"
+    done
+    echo "$${SYSTEM_SHAS}" > /workspace/system_repos_sha.txt
+    echo "System-source SHAs: $${SYSTEM_SHAS}"
   secretEnv: ['GITHUB_TOKEN']
   waitFor: ['-']
 
@@ -71,12 +78,14 @@ steps:
     set -euo pipefail
     UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
+    SYSTEM_SHA=$$(cat /workspace/system_repos_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
+      --build-arg SYSTEM_REPOS_SHA=$$SYSTEM_SHA \
       -f /workspace/unity-src/deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \

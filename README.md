@@ -195,7 +195,7 @@ After adding a scope, wait a few minutes for propagation, then run `python3 depl
 
 ### 4.3 `gcp-project-saas` — Orchestra + Console + DB
 
-- **Cloud SQL (Postgres, us-central1):** `prod-ssd-usc1` (`203.0.113.14`), `staging-ssd-usc1` (`203.0.113.15`). Old `europe-west3` `prod-ssd`/`staging-ssd` retained read-only as rollback until decommissioned.
+- **Cloud SQL (Postgres, us-central1):** `prod-ssd-usc1` (`203.0.113.14`), `staging-ssd-usc1` (`203.0.113.15`). The old `europe-west3` `prod-ssd`/`staging-ssd` are deleted; final SQL dumps live in `gs://bucket/` and `gs://bucket/` (`decommission-final-*.sql.gz`), plus a Cloud SQL final backup of `prod-ssd`.
 - **Cloud Run (us-central1):** `orchestra`(+`-staging`), `saas-web-app` (Console prod), `saas-web-app-redesign-staging` (Console staging), `landing-page`(+`-staging`).
 - **Secrets delta:** `UNITY_COORDINATOR_*` and `UNITY_COORDINATOR_*` both exist (DISCORD_ID/TOKEN, EMAIL_ADDRESS, PHONE_UK/US, WHATSAPP_NUMBER × PRODUCTION/STAGING) ⚠️; `UNITY_{LIVEKIT,OPENAI,DEEPGRAM,CARTESIA}_*` and `UNITY_{ADAPTERS,COMMS}_URL*` still unity-only ⚠️.
 
