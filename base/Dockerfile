@@ -154,6 +154,29 @@ RUN mkdir -p /root/.vnc && chmod 777 /root /root/.vnc && \
     mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix && \
     mkdir -p /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
 
+# Read-only platform source snapshots for the CodeActActor's system
+# self-knowledge (grep-able ground truth for "how does X work / is Y
+# possible" questions; the unify runtime source itself is already at /app).
+# Kept outside ~/Unity/Local so they are never synced to any user-visible
+# desktop, root-owned so the runtime user cannot modify them, and
+# .git-stripped so they are pure snapshots.  SYSTEM_REPOS_SHA is set at
+# build time to the tip SHAs of these repos; changing it busts this layer's
+# cache so stale clones are never reused.  Placed as the last root RUN layer
+# so source-repo churn re-executes only this cheap clone step.  The git
+# credential rewrite is scoped to this single layer (set + unset), mirroring
+# the install step.
+ARG SYSTEM_REPOS_SHA=unknown
+RUN echo "system_repos_sha=${SYSTEM_REPOS_SHA}" && \
+    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    SRC_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
+    mkdir -p /opt/system-sources && \
+    for repo in orchestra console unify-deploy docs; do \
+        git clone --depth 1 --branch $SRC_BRANCH https://github.com/unifyai/$repo.git /opt/system-sources/$repo && \
+        rm -rf /opt/system-sources/$repo/.git; \
+    done && \
+    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf && \
+    chmod -R a-w /opt/system-sources
+
 # Create non-root user for runtime
 RUN useradd -m -u 1000 unity && \
     mkdir -p /var/log/unity /var/log/unisdk /var/log/unillm /var/log/magnitude /home/unity/.cache /home/unity/.config && \
