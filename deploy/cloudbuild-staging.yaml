@@ -198,6 +198,7 @@ steps:
       --environment staging \
       --manifest /workspace/integration-manifests/bootstrap.staging.toml \
       --unity-image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA" \
+      --force-override "${_BUILTINS_SYNC_FORCE_OVERRIDE}" \
       --async
   waitFor: ['fetch-unity-integration-manifests', 'push-overlay']
 
@@ -573,6 +574,7 @@ substitutions:
   # (brain) push. resolve-unity-sha falls back to the published base SHA.
   _UNITY_SHA: ''
   _ORCHESTRA_URL: 'https://internal.example.com/v0'
+  _BUILTINS_SYNC_FORCE_OVERRIDE: ''
   _UNITY_COMMS_URL: 'https://service.a.run.app'
   # Shared coordinator mailbox; must match UNITY_COORDINATOR_EMAIL_ADDRESS_STAGING
   # in Orchestra so the gateway recognizes coordinator senders.
