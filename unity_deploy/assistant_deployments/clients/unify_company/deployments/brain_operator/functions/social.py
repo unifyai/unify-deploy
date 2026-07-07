@@ -39,6 +39,110 @@ os.environ.setdefault("BRAIN_SOCIAL_STORE", "datamanager")
 
 
 @custom_function()
+async def run_social_linkedin_discover_draft(
+    *,
+    include_personal_feeds: bool = True,
+    include_hackernews: bool = False,
+    include_x: bool = False,
+    include_arxiv: bool = False,
+    max_age_days: float = 14.0,
+    daily_post_limit: int = 3,
+    emit_review_cards: bool = True,
+    review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
+) -> dict[str, Any]:
+    """Discover LinkedIn home-feed posts (browser scrape) -> draft -> Discord.
+
+    Browser-scrape discovery for LinkedIn: restores a durable LinkedIn session
+    from DataManager (``BRAIN_SOCIAL_STORE=datamanager``), optionally auto-logs
+    in when logged out (``BRAIN_LINKEDIN_AUTOLOGIN=1``, using the seeded
+    credentials + TOTP + email-PIN dispatcher), scrapes the operator's home
+    feed, drafts commentary, and posts Discord review cards. Persists the
+    rotated session back after a successful run. Publishes nothing.
+
+    Ships **disabled** — arm only after a LinkedIn session has been seeded
+    (``brain social curate login --site linkedin`` on the live pod, or
+    ``--seed-file``) and the agent-service is reachable in the job pod.
+    """
+    from brain.intel.droid_pitch import build_relevance_brief
+    from brain.social.curate import (
+        SocialPostRepository,
+        discover_and_draft,
+        emit_review_cards as do_emit_cards,
+    )
+    from brain.social.platforms import Platform
+
+    brief = await build_relevance_brief()
+    repo = SocialPostRepository(platforms=(Platform.LINKEDIN.value,))
+    result = await discover_and_draft(
+        relevance_brief=brief.text,
+        destination=Platform.LINKEDIN,
+        include_hackernews=include_hackernews,
+        include_x=include_x,
+        include_arxiv=include_arxiv,
+        include_personal_feeds=include_personal_feeds,
+        max_age_days=max_age_days,
+        daily_post_limit=daily_post_limit,
+        repo=repo,
+    )
+
+    discord_status = "skipped"
+    if emit_review_cards and result.top_candidates:
+        try:
+            do_emit_cards(
+                candidates=result.top_candidates,
+                repo=repo,
+                webhook_env=review_webhook_env,
+                execute=True,
+            )
+            discord_status = f"emitted {len(result.top_candidates)} cards"
+        except Exception as exc:  # noqa: BLE001
+            discord_status = f"failed: {type(exc).__name__}: {exc}"
+
+    return {
+        "status": "ok",
+        "discovered": result.discovered,
+        "after_filter": result.after_filter,
+        "drafted": result.drafted,
+        "top_count": len(result.top_candidates),
+        "review_cards": discord_status,
+        "source_counts": result.source_counts,
+        "source_errors": result.source_errors,
+    }
+
+
+@custom_function()
+async def run_social_linkedin_login(
+    *,
+    sentinel_path: str | None = None,
+    hold_timeout: float = 900.0,
+) -> dict[str, Any]:
+    """Open a VISIBLE LinkedIn login in-pod for operator co-pilot over VNC.
+
+    Reactive trigger meant for the **live assistant pod** (which runs the
+    desktop stack + agent-service): opens a visible Chromium at the LinkedIn
+    login, then blocks until the operator finishes the login by hand (2FA /
+    captcha included) and ``touch``es the sentinel file over the pod's VNC.
+    On completion it saves the authenticated browser state and pushes it to the
+    assistant's durable DataManager store so scheduled scrapes can restore it.
+
+    Not for offline job pods (no visible display). Reach the desktop via
+    ``kubectl port-forward <pod> 5900:5900`` + a VNC viewer.
+    """
+    from brain.social.discovery.sources import capture_login_state
+    from brain.social.discovery.sources.linkedin_auth import DEFAULT_LOGIN_SENTINEL
+
+    sentinel = sentinel_path or DEFAULT_LOGIN_SENTINEL
+    name = await capture_login_state(
+        site="linkedin",
+        wait_for_enter=False,
+        hold_sentinel=sentinel,
+        hold_timeout=hold_timeout,
+        persist_to_store=True,
+    )
+    return {"status": "ok", "storage_state": name, "sentinel": sentinel}
+
+
+@custom_function()
 async def run_social_ideate_and_generate(
     *,
     n: int = 1,
