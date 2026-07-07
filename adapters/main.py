@@ -2244,6 +2244,143 @@ async def unify_reaction_webhook(request: Request):
 
 
 # =============================================================================
+# Org Chat (team group chat + human DMs)
+# =============================================================================
+
+# Org topics whose existence has been verified by this process. One topic per
+# organization carries every team-chat and DM frame for that org; Console's
+# SSE route subscribes per user and filters frames server-side.
+_ensured_org_topics: set[str] = set()
+
+
+def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
+    """Idempotently create an org chat topic (cached per process)."""
+    if topic_path in _ensured_org_topics:
+        return
+    try:
+        pubsub_client.create_topic(request={"name": topic_path})
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+    _ensured_org_topics.add(topic_path)
+
+
+@app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
+async def unify_org_chat_webhook(request: Request):
+    """Deliver one org-chat message (team group chat or human DM).
+
+    Orchestra has already persisted the message; this endpoint owns hosted
+    delivery:
+
+    1. Publish the Console frame to the per-organization topic
+       (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
+    2. For human-sent team messages, publish one ``unify_group_message``
+       envelope per listed assistant (ensuring each runtime job is started).
+       Assistant replies arrive with no ``fanout_assistant_ids`` — they are
+       Console-publish only, which prevents AI reply loops.
+    """
+    payload = await request.json()
+    kind = payload.get("kind")
+    organization_id = payload.get("organization_id")
+    message = payload.get("message") or {}
+
+    if kind not in ("team", "dm"):
+        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if not organization_id:
+        return Response(status_code=400, content="organization_id is required")
+    if not message:
+        return Response(status_code=400, content="message is required")
+
+    thread = "team_message" if kind == "team" else "dm_message"
+    attributes = {"thread": thread, "organization_id": str(organization_id)}
+    if kind == "team":
+        team_id = payload.get("team_id") or message.get("team_id")
+        if not team_id:
+            return Response(status_code=400, content="team_id is required")
+        attributes["team_id"] = str(team_id)
+    else:
+        user_ids = message.get("user_ids") or []
+        if len(user_ids) != 2:
+            return Response(status_code=400, content="message.user_ids must be a pair")
+        attributes["dm_user_a"] = str(user_ids[0])
+        attributes["dm_user_b"] = str(user_ids[1])
+
+    pubsub_client = get_pubsub_client()
+    org_topic_path = pubsub_client.topic_path(
+        SETTINGS.gcp_project_id,
+        SETTINGS.org_topic(organization_id),
+    )
+    try:
+        await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
+        pubsub_client.publish(
+            org_topic_path,
+            json.dumps(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": message,
+                },
+            ).encode("utf-8"),
+            **attributes,
+        )
+    except Exception as e:
+        logger.error(f"Error publishing {thread} to org topic: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
+    assistant_event = payload.get("assistant_event") or {}
+    fanout_errors: list[str] = []
+    for raw_assistant_id in fanout_assistant_ids:
+        try:
+            context = await asyncio.to_thread(
+                build_webhook_context,
+                channel="unify_group_message",
+                destination="",
+                sender="",
+                assistant_id=str(raw_assistant_id),
+                validate_contact=False,
+                ensure_job=True,
+            )
+            assistant_id = context["assistant"]["assistant_id"]
+            topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                SETTINGS.assistant_topic(assistant_id),
+            )
+            pubsub_client.publish(
+                topic_path,
+                json.dumps(
+                    {
+                        "thread": "unify_group_message",
+                        "publish_timestamp": time.time(),
+                        "event": {
+                            **assistant_event,
+                            "assistant_id": assistant_id,
+                        },
+                    },
+                ).encode("utf-8"),
+                thread="inbound",
+            )
+        except Exception as e:
+            logger.error(
+                f"Error fanning out unify_group_message to assistant "
+                f"{raw_assistant_id}: {e}",
+            )
+            fanout_errors.append(str(raw_assistant_id))
+
+    return Response(
+        content=json.dumps(
+            {
+                "published": True,
+                "fanned_out": len(fanout_assistant_ids) - len(fanout_errors),
+                "fanout_errors": fanout_errors,
+            },
+        ),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+# =============================================================================
 # API Message
 # =============================================================================
 

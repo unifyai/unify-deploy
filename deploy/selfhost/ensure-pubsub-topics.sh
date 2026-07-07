@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Ensure Pub/Sub emulator topics and subscriptions for one assistant.
+# With --org, ensures the per-organization chat topic instead (bare topic;
+# Console SSE creates its own per-user subscriptions).
 set -euo pipefail
+
+kind="assistant"
+if [[ "${1:-}" == "--org" ]]; then
+  kind="org"
+  shift
+fi
 
 agent_id="${1:-}"
 project_id="${PUBSUB_GCP_PROJECT_ID:-local-test-project}"
@@ -13,6 +21,17 @@ fi
 
 emulator_url="http://${emulator_host#http://}"
 emulator_url="${emulator_url%/}"
+
+if [[ "$kind" == "org" ]]; then
+  org_topic="unity-org-${agent_id}${suffix}"
+  org_http="$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+    "${emulator_url}/v1/projects/${project_id}/topics/${org_topic}")"
+  if [[ "$org_http" != "200" && "$org_http" != "409" ]]; then
+    echo "Failed to create topic ${org_topic} (HTTP ${org_http})" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 topic_name="unity-${agent_id}${suffix}"
 

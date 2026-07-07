@@ -250,5 +250,14 @@ class Settings:
         """
         return f"unity-{assistant_id}{self.env_suffix}"
 
+    def org_topic(self, organization_id: int | str) -> str:
+        """Pub/Sub topic carrying an organization's chat frames.
+
+        One topic per organization multiplexes team group-chat and human DM
+        frames; Console's SSE route subscribes per user and filters frames
+        server-side by that user's team memberships and DM participation.
+        """
+        return f"unity-org-{organization_id}{self.env_suffix}"
+
 
 SETTINGS = Settings()
