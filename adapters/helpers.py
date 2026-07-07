@@ -606,7 +606,7 @@ _MS_TEAMS_BOT_OPENID_CONFIG_URL = (
 _MS_TEAMS_BOT_ISSUER = "https://api.botframework.com"
 _MS_TEAMS_BOT_JWK_CLIENT_TTL_SECONDS = 24 * 3600
 
-_ms_teams_bot_jwk_client = None
+_ms_teams_bot_jwk_client_cache = None
 _ms_teams_bot_jwk_client_built_at = 0.0
 
 
@@ -624,17 +624,17 @@ def _ms_teams_bot_jwks_uri() -> str:
 
 
 def _ms_teams_bot_jwk_client(force_refresh: bool = False):
-    global _ms_teams_bot_jwk_client, _ms_teams_bot_jwk_client_built_at
+    global _ms_teams_bot_jwk_client_cache, _ms_teams_bot_jwk_client_built_at
     from jwt import PyJWKClient
 
     now = time.time()
     stale = (
         now - _ms_teams_bot_jwk_client_built_at > _MS_TEAMS_BOT_JWK_CLIENT_TTL_SECONDS
     )
-    if _ms_teams_bot_jwk_client is None or stale or force_refresh:
-        _ms_teams_bot_jwk_client = PyJWKClient(_ms_teams_bot_jwks_uri())
+    if _ms_teams_bot_jwk_client_cache is None or stale or force_refresh:
+        _ms_teams_bot_jwk_client_cache = PyJWKClient(_ms_teams_bot_jwks_uri())
         _ms_teams_bot_jwk_client_built_at = now
-    return _ms_teams_bot_jwk_client
+    return _ms_teams_bot_jwk_client_cache
 
 
 def verify_ms_teams_bot_token(token: str) -> dict:
