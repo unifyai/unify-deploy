@@ -32,18 +32,24 @@ from unity_deploy.assistant_deployments.deployment_types import (
     resolve_deployment_name,
 )
 from unity_deploy.assistant_deployments.blacklist_source import (
-    entry_from_fields,
+    entry_from_fields as blacklist_entry_from_fields,
     write_blacklist_jsonl,
+)
+from unity_deploy.assistant_deployments.contacts_source import (
+    entry_from_fields as contact_entry_from_fields,
+    write_contacts_jsonl,
 )
 from unity_deploy.assistant_deployments.guidance_source import (
     slugify_key,
     write_guidance_jsonl,
 )
 from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
+from unify.contact_manager.custom_contacts import collect_contacts_from_directories
 from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
 
 _GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
 _BLACKLIST_ROOT = Path("/tmp/unify-deploy-test-blacklist")
+_CONTACTS_ROOT = Path("/tmp/unify-deploy-test-contacts")
 
 
 def _write_test_guidance(
@@ -74,10 +80,29 @@ def _write_test_blacklist(
     return write_blacklist_jsonl(
         _BLACKLIST_ROOT / name,
         [
-            entry_from_fields(
+            blacklist_entry_from_fields(
                 medium=medium,
                 contact_detail=contact_detail,
                 reason=reason,
+            ),
+        ],
+    )
+
+
+def _write_test_contacts(
+    name: str,
+    *,
+    first_name: str,
+    surname: str,
+    **fields: object,
+) -> Path:
+    return write_contacts_jsonl(
+        _CONTACTS_ROOT / name,
+        [
+            contact_entry_from_fields(
+                first_name=first_name,
+                surname=surname,
+                **fields,
             ),
         ],
     )
@@ -872,11 +897,17 @@ class TestSeedLayers:
             "test_client",
             "org",
             "7",
-            SeedLayer(contacts=[{"first_name": "Alice", "surname": "Smith"}]),
+            SeedLayer(
+                contacts_dir=_write_test_contacts(
+                    "register-layer",
+                    first_name="Alice",
+                    surname="Smith",
+                ),
+            ),
         )
         entry = _CLIENT_DEPLOYMENTS["test_client"]
         assert "org:7" in entry.layers
-        assert len(entry.layers["org:7"].contacts) == 1
+        assert entry.layers["org:7"].contacts_dir is not None
 
     def test_register_layer_requires_existing_client(self):
         with pytest.raises(KeyError, match="not registered"):
@@ -884,7 +915,13 @@ class TestSeedLayers:
                 "nonexistent",
                 "org",
                 "1",
-                SeedLayer(contacts=[{"first_name": "X"}]),
+                SeedLayer(
+                    contacts_dir=_write_test_contacts(
+                        "missing-client",
+                        first_name="X",
+                        surname="Y",
+                    ),
+                ),
             )
 
     def test_register_layer_validates_scope(self, monkeypatch):
@@ -900,10 +937,17 @@ class TestSeedLayers:
             "test_client",
             "org",
             "10",
-            SeedLayer(contacts=[{"first_name": "Org", "surname": "Contact"}]),
+            SeedLayer(
+                contacts_dir=_write_test_contacts(
+                    "org-layer",
+                    first_name="Org",
+                    surname="Contact",
+                ),
+            ),
         )
         result = resolve(org_id=10)
-        names = [(c["first_name"], c["surname"]) for c in result.contacts]
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        names = [(c["first_name"], c["surname"]) for c in source.values()]
         assert ("Org", "Contact") in names
 
     def test_user_layer_contacts_override_org(self, monkeypatch):
@@ -913,9 +957,12 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "Person", "email": "org@x.com"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "org-shared",
+                    first_name="Shared",
+                    surname="Person",
+                    email_address="org@x.com",
+                ),
             ),
         )
         register_layer(
@@ -923,18 +970,17 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                contacts=[
-                    {
-                        "first_name": "Shared",
-                        "surname": "Person",
-                        "email": "user@x.com",
-                    },
-                ],
+                contacts_dir=_write_test_contacts(
+                    "user-shared",
+                    first_name="Shared",
+                    surname="Person",
+                    email_address="user@x.com",
+                ),
             ),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        by_name = {f"{c['first_name']}|{c['surname']}": c for c in result.contacts}
-        assert by_name["Shared|Person"]["email"] == "user@x.com"
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        assert source["shared|person"]["email_address"] == "user@x.com"
 
     # -- guidance merge --
 
@@ -1091,9 +1137,12 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "org"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-org",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="org@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1101,9 +1150,12 @@ class TestSeedLayers:
             "team",
             "50",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "team"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-team",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="team@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1111,9 +1163,12 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "user"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-user",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="user@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1121,9 +1176,12 @@ class TestSeedLayers:
             "assistant",
             "99",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "asst"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-asst",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="asst@x.com",
+                ),
             ),
         )
         result = resolve(
@@ -1132,8 +1190,9 @@ class TestSeedLayers:
             user_id="user-aaa",
             assistant_id=99,
         )
-        assert len(result.contacts) == 1
-        assert result.contacts[0]["level"] == "asst"
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        assert len(source) == 1
+        assert source["shared|x"]["email_address"] == "asst@x.com"
 
     # -- no layers = unchanged --
 
@@ -1142,4 +1201,4 @@ class TestSeedLayers:
         result = resolve(org_id=10)
         assert result.config.guidelines == "Default v0"
         assert len(result.guidance_dirs) == 1
-        assert result.contacts == []
+        assert result.contacts_dirs == []

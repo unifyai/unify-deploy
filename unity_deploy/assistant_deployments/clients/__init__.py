@@ -48,7 +48,7 @@ class ResolvedAssistantDeployment:
     function_dirs: list[Path]
     venv_dirs: list[Path]
     guidance_dirs: list[Path]
-    contacts: list[dict[str, Any]]
+    contacts_dirs: list[Path]
     knowledge: dict[str, dict[str, Any]]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
@@ -108,8 +108,13 @@ def _merge_by_key(
     return list(merged.values())
 
 
-def _contact_key(r: dict) -> str:
-    return f"{r.get('first_name', '')}|{r.get('surname', '')}".lower()
+def _append_contacts_dir(dirs: list[Path], contacts_dir: Path | None) -> list[Path]:
+    if contacts_dir is None:
+        return dirs
+    resolved = str(Path(contacts_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(contacts_dir)]
 
 
 def _append_guidance_dir(dirs: list[Path], guidance_dir: Path | None) -> list[Path]:
@@ -245,7 +250,9 @@ def _spec_to_resolved(
     from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
-    contacts: list[dict] = list(spec.contacts)
+    contacts_dirs: list[Path] = []
+    if spec.contacts_dir is not None:
+        contacts_dirs = _append_contacts_dir(contacts_dirs, spec.contacts_dir)
     guidance_dirs: list[Path] = []
     if spec.guidance_dir is not None:
         guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
@@ -264,8 +271,8 @@ def _spec_to_resolved(
         user_id=user_id,
         assistant_id=assistant_id,
     ):
-        if layer.contacts:
-            contacts = _merge_by_key(contacts, layer.contacts, _contact_key)
+        if layer.contacts_dir is not None:
+            contacts_dirs = _append_contacts_dir(contacts_dirs, layer.contacts_dir)
         if layer.guidance_dir is not None:
             guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
         if layer.knowledge:
@@ -315,7 +322,7 @@ def _spec_to_resolved(
         function_dirs=[spec.function_dir] if spec.function_dir else [],
         venv_dirs=[spec.venv_dir] if spec.venv_dir else [],
         guidance_dirs=guidance_dirs,
-        contacts=contacts,
+        contacts_dirs=contacts_dirs,
         knowledge=knowledge,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
@@ -423,7 +430,7 @@ def resolve(
         function_dirs=[],
         venv_dirs=[],
         guidance_dirs=[],
-        contacts=[],
+        contacts_dirs=[],
         knowledge={},
         blacklist_dirs=[],
         secrets=[],

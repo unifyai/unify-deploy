@@ -258,44 +258,6 @@ def sync_seed_data(
 # ---------------------------------------------------------------------------
 
 
-def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
-    if not records:
-        return False
-    from unify.manager_registry import ManagerRegistry
-
-    cm = ManagerRegistry.get_contact_manager()
-    filter_contacts = _manager_api(cm, "filter_contacts")
-    create_contact = _manager_api(cm, "create_contact")
-    update_contact = _manager_api(cm, "update_contact")
-
-    def natural_key(r: dict) -> str:
-        return f"{r.get('first_name') or ''}|{r.get('surname') or ''}".lower()
-
-    def get_existing() -> list[dict]:
-        result = filter_contacts(limit=1000)
-        contacts = result.get("contacts", [])
-        return [c.model_dump() if hasattr(c, "model_dump") else c for c in contacts]
-
-    def create(rec: dict) -> Any:
-        return create_contact(**{k: v for k, v in rec.items() if k != "contact_id"})
-
-    def update(contact_id: int, rec: dict) -> Any:
-        fields = {k: v for k, v in rec.items() if k != "contact_id"}
-        return update_contact(contact_id=contact_id, **fields)
-
-    return sync_seed_data(
-        manager_key="contacts",
-        source_records=records,
-        natural_key_fn=natural_key,
-        get_existing_fn=get_existing,
-        create_fn=create,
-        update_fn=update,
-        delete_fn=None,
-        id_field="contact_id",
-        meta_store=meta,
-    )
-
-
 def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     if not records:
         return False
@@ -576,29 +538,12 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
     after all managers are constructed but before the Actor is initialized.
     Returns True if any manager was updated.
     """
-    has_data = (
-        resolved.contacts
-        or resolved.knowledge
-        or resolved.secrets
-        or resolved.integration_registry
-    )
+    has_data = resolved.knowledge or resolved.secrets or resolved.integration_registry
     if not has_data:
         return False
 
     meta = SeedMetaStore()
     changed = False
-
-    if resolved.contacts:
-        try:
-            sync_start = perf_counter()
-            changed |= _sync_contacts(resolved.contacts, meta)
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] seed_sync.contacts total=%.2fs",
-                perf_counter() - sync_start,
-            )
-        except Exception:
-            logger.exception("Failed to sync seed contacts")
 
     if resolved.secrets:
         try:

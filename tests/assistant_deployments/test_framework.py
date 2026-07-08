@@ -123,7 +123,7 @@ class TestSyncAllSeedData:
             environments=[],
             function_dirs=[],
             venv_dirs=[],
-            contacts=[],
+            contacts_dirs=[],
             guidance_dirs=[],
             knowledge={},
             blacklist_dirs=[],

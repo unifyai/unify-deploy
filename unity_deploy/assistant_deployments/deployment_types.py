@@ -71,11 +71,14 @@ class SeedLayer(BaseModel):
     Layers are collected during resolution in scope order
     (org -> team -> user -> assistant) and merged onto the
     deployment spec's seed data.  More specific layers override
-    less specific ones using natural-key dedup (contacts by
-    name, knowledge tables by seed_key, etc.).
+    less specific ones using natural-key dedup (knowledge tables by
+    seed_key, etc.).
     """
 
-    contacts: list[dict] = Field(default_factory=list)
+    contacts_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing contacts.jsonl for this layer.",
+    )
     guidance_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing guidance.jsonl for this layer.",
@@ -167,9 +170,9 @@ class DeploymentSpec(BaseModel):
             "scopes via register_layer overlays."
         ),
     )
-    contacts: list[dict] = Field(
-        default_factory=list,
-        description="Contact records synced to the ContactManager.",
+    contacts_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing contacts.jsonl registered with the actor.",
     )
     knowledge: dict[str, dict] = Field(
         default_factory=dict,

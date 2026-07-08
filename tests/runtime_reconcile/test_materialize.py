@@ -47,15 +47,26 @@ class _FakeBlacklistManager:
         return True
 
 
+class _FakeContactManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_custom(self, *, source_contacts=None) -> bool:
+        self.calls.append({"source_contacts": source_contacts})
+        return True
+
+
 def _install_materialize_fakes(
     monkeypatch,
     *,
     function_collector,
     venv_collector,
     guidance_collector,
+    contacts_collector,
     blacklist_collector,
     function_manager: _FakeFunctionManager,
     guidance_manager: _FakeGuidanceManager,
+    contact_manager: _FakeContactManager,
     blacklist_manager: _FakeBlacklistManager,
 ) -> None:
     custom_functions = ModuleType("unify.function_manager.custom_functions")
@@ -83,6 +94,14 @@ def _install_materialize_fakes(
         custom_blacklist,
     )
 
+    custom_contacts = ModuleType("unify.contact_manager.custom_contacts")
+    custom_contacts.collect_contacts_from_directories = contacts_collector
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.contact_manager.custom_contacts",
+        custom_contacts,
+    )
+
     manager_registry = ModuleType("unify.manager_registry")
 
     class ManagerRegistry:
@@ -93,6 +112,10 @@ def _install_materialize_fakes(
         @staticmethod
         def get_guidance_manager():
             return guidance_manager
+
+        @staticmethod
+        def get_contact_manager():
+            return contact_manager
 
         @staticmethod
         def get_blacklist_manager():
@@ -117,6 +140,7 @@ def _install_materialize_fakes(
 def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
+    fake_cm = _FakeContactManager()
     fake_bm = _FakeBlacklistManager()
 
     _install_materialize_fakes(
@@ -124,9 +148,11 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         function_collector=lambda _dirs: {},
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
+        contacts_collector=lambda _dirs: {},
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
+        contact_manager=fake_cm,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -140,6 +166,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
             function_dirs=[],
             venv_dirs=[],
             guidance_dirs=[],
+            contacts_dirs=[],
             blacklist_dirs=[],
         ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
@@ -148,9 +175,11 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
 
     assert result.custom_changed is True
     assert result.guidance_changed is True
+    assert result.contacts_changed is True
     assert result.blacklist_changed is True
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
+    assert fake_cm.calls == [{"source_contacts": {}}]
     assert fake_bm.calls == [{"source_blacklist": {}}]
 
 
@@ -162,6 +191,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     seen_dirs: list[Path] = []
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
+    fake_cm = _FakeContactManager()
     fake_bm = _FakeBlacklistManager()
 
     def collect_functions(dirs):
@@ -173,9 +203,11 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         function_collector=collect_functions,
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
+        contacts_collector=lambda _dirs: {},
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
+        contact_manager=fake_cm,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -189,6 +221,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             function_dirs=[deployment_dir],
             venv_dirs=[],
             guidance_dirs=[],
+            contacts_dirs=[],
             blacklist_dirs=[],
         ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),

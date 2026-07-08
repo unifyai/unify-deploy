@@ -32,7 +32,7 @@ def _hash_payload(payload: Any) -> str:
 
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
     return {
-        "contacts": len(resolved.contacts),
+        "contacts_dirs": len(resolved.contacts_dirs),
         "guidance_dir_count": len(resolved.guidance_dirs),
         "knowledge_tables": sorted(resolved.knowledge.keys()),
         "blacklist_dir_count": len(resolved.blacklist_dirs),

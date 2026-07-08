@@ -28,6 +28,7 @@ class RuntimeStateResult:
     custom_changed: bool = False
     guidance_changed: bool = False
     blacklist_changed: bool = False
+    contacts_changed: bool = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -76,7 +77,10 @@ def compute_runtime_state_fingerprint(
     """Compute a deterministic fingerprint for side-effectful runtime state."""
 
     payload = {
-        "contacts": resolved.contacts,
+        "contacts_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.contacts_dirs
+        ],
         "knowledge": resolved.knowledge,
         "blacklist_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
@@ -190,6 +194,9 @@ def materialize_runtime_state(
     from unify.blacklist_manager.custom_blacklist import (
         collect_blacklist_from_directories,
     )
+    from unify.contact_manager.custom_contacts import (
+        collect_contacts_from_directories,
+    )
     from unify.guidance_manager.custom_guidance import (
         collect_guidance_from_directories,
     )
@@ -206,12 +213,12 @@ def materialize_runtime_state(
         status.update(
             phase="syncing_seed_data",
             message=(
-                "Preparing deployment-defined contacts, knowledge, "
+                "Preparing deployment-defined knowledge, "
                 "secrets, and custom blacklist."
             ),
-            blocking_resources=("contacts", "knowledge", "secrets"),
+            blocking_resources=("knowledge", "secrets"),
             resources={
-                "contacts": "syncing",
+                "contacts": "pending",
                 "guidance": "pending",
                 "knowledge": "syncing",
                 "secrets": "syncing",
@@ -284,6 +291,7 @@ def materialize_runtime_state(
 
     custom_changed = False
     guidance_changed = False
+    contacts_changed = False
     blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
@@ -358,6 +366,19 @@ def materialize_runtime_state(
             identity.assistant_id,
         )
 
+    contacts_dirs = _dedupe_paths(resolved.contacts_dirs)
+    source_contacts = collect_contacts_from_directories(contacts_dirs)
+    contacts_start = perf_counter()
+    cm = ManagerRegistry.get_contact_manager()
+    contacts_changed = cm.sync_custom(source_contacts=source_contacts)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_contacts assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - contacts_start,
+        contacts_changed,
+    )
+
     blacklist_dirs = _dedupe_paths(resolved.blacklist_dirs)
     source_blacklist = collect_blacklist_from_directories(blacklist_dirs)
     blacklist_start = perf_counter()
@@ -395,12 +416,13 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         seed_changed,
         custom_changed,
         guidance_changed,
+        contacts_changed,
         blacklist_changed,
     )
 
@@ -410,5 +432,6 @@ def materialize_runtime_state(
         seed_changed=seed_changed,
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
+        contacts_changed=contacts_changed,
         blacklist_changed=blacklist_changed,
     )

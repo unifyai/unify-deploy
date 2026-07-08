@@ -130,7 +130,7 @@ def startup_hook(
             "contacts=%d guidance_dirs=%d knowledge_tables=%d secrets=%d blacklist_dirs=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
-        len(resolved.contacts),
+        len(resolved.contacts_dirs),
         len(resolved.guidance_dirs),
         len(resolved.knowledge),
         len(resolved.secrets),

@@ -9,7 +9,6 @@ from unity_deploy.assistant_deployments.seed_sync import (
     _aggregate_hash,
     _manager_api,
     _record_hash,
-    _sync_contacts,
     sync_seed_data,
 )
 from unity_deploy.assistant_deployments.secrets_file import load_secrets
@@ -210,51 +209,6 @@ class TestSyncSeedData:
 
         assert result is True
         assert updated == []
-
-    def test_contact_sync_uses_contact_manager_create_api(self, monkeypatch):
-        class FakeContactManager:
-            def __init__(self):
-                self.created = []
-
-            def filter_contacts(self, limit=1000):
-                return {"contacts": []}
-
-            def _create_contact(self, **kwargs):
-                self.created.append(kwargs)
-                return {"details": {"contact_id": 1}}
-
-            def update_contact(self, **kwargs):
-                raise AssertionError("update_contact should not be called")
-
-        fake = FakeContactManager()
-        from unify.manager_registry import ManagerRegistry
-
-        monkeypatch.setattr(
-            ManagerRegistry,
-            "get_contact_manager",
-            staticmethod(lambda: fake),
-        )
-
-        result = _sync_contacts(
-            [
-                {
-                    "contact_id": 99,
-                    "first_name": "Seed",
-                    "surname": "Contact",
-                    "email_address": "seed@example.com",
-                },
-            ],
-            InMemoryMetaStore(),
-        )
-
-        assert result is True
-        assert fake.created == [
-            {
-                "first_name": "Seed",
-                "surname": "Contact",
-                "email_address": "seed@example.com",
-            },
-        ]
 
     def test_deletes_removed_records(self):
         deleted = []
