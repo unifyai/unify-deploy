@@ -19,11 +19,13 @@ Optional:
   --batch-size N
   --timeout DURATION
   --backend-id BACKEND
+  --force-override manifest|true|false
   --dry-run
 
-A full resync (bypassing the manifest-hash and per-unit/checkpoint skips) is
-requested declaratively via ``sync.force = true`` on the relevant provider in the
-integration bootstrap manifest, not from this script or Cloud Build.
+A full resync can be requested declaratively via ``sync.force = true`` in the
+manifest, or operationally for this job revision with
+``--force-override true`` / ``UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=true``.
+Use ``false`` to suppress a manifest force value without changing code.
 
 The job runs from the Unity image and seeds all Builtins artifacts:
 functions, guidance, and provider-backed integrations. Orchestra remains the
@@ -44,6 +46,7 @@ backend_id=""
 wait_mode="async"
 dry_run="false"
 setup_only="false"
+force_override="${UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     --batch-size) batch_size="$2"; shift 2 ;;
     --timeout) timeout="$2"; shift 2 ;;
     --backend-id) backend_id="$2"; shift 2 ;;
+    --force-override) force_override="$2"; shift 2 ;;
     --async) wait_mode="async"; shift ;;
     --wait) wait_mode="wait"; shift ;;
     --setup-only) setup_only="true"; shift ;;
@@ -69,6 +73,14 @@ if [[ -z "$environment" || -z "$unity_image" || -z "$manifest" ]]; then
   usage >&2
   exit 2
 fi
+
+case "${force_override,,}" in
+  ""|manifest|auto|default|unset|1|true|yes|on|force|forced|0|false|no|off|skip|disabled|disable) ;;
+  *)
+    echo "--force-override must be one of manifest/auto, true/on, or false/off." >&2
+    exit 2
+    ;;
+esac
 
 case "$environment" in
   staging)
@@ -184,6 +196,11 @@ if (( poll_timeout_seconds < 600 )); then
   poll_timeout_seconds=600
 fi
 
+job_env_vars="ORCHESTRA_URL=${orchestra_url},UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
+if [[ -n "$force_override" ]]; then
+  job_env_vars="${job_env_vars},UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=${force_override}"
+fi
+
 if [[ "$dry_run" == "true" ]]; then
   python3 - <<PY
 import json
@@ -201,6 +218,7 @@ print(json.dumps({
     "trigger_timeout_seconds": "$trigger_timeout_seconds",
     "poll_timeout_seconds": "$poll_timeout_seconds",
     "setup_only": "$setup_only",
+    "force_override": "$force_override",
 }, sort_keys=True))
 PY
   exit 0
@@ -221,7 +239,7 @@ job_flags=(
   "--task-timeout=${timeout}"
   "--max-retries=0"
   "--service-account=${job_service_account}"
-  "--set-env-vars=ORCHESTRA_URL=${orchestra_url},UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
+  "--set-env-vars=${job_env_vars}"
   "--update-secrets=ORCHESTRA_ADMIN_KEY=ORCHESTRA_ADMIN_KEY:latest,UNIFY_KEY=ORCHESTRA_ADMIN_KEY:latest"
 )
 if gcloud --project "$unity_project" run jobs describe "$job_name" --region "$unity_region" >/dev/null 2>&1; then
@@ -246,6 +264,7 @@ print(json.dumps({
     "task_timeout_seconds": "$task_timeout_seconds",
     "trigger_timeout_seconds": "$trigger_timeout_seconds",
     "poll_timeout_seconds": "$poll_timeout_seconds",
+    "force_override": "$force_override",
     "setup_only": True,
 }, sort_keys=True))
 PY
@@ -275,5 +294,6 @@ print(json.dumps({
     "task_timeout_seconds": "$task_timeout_seconds",
     "trigger_timeout_seconds": "$trigger_timeout_seconds",
     "poll_timeout_seconds": "$poll_timeout_seconds",
+    "force_override": "$force_override",
 }, sort_keys=True))
 PY

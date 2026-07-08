@@ -954,6 +954,12 @@ def _build_offline_runner_env(
             ),
             "VOICE_ID": str(assistant_data.get("voice_id") or ""),
             "VOICE_MODE": "tts",
+            "ASSISTANT_DEFAULT_MODEL": str(
+                assistant_data.get("default_model") or "",
+            ),
+            "ASSISTANT_DEFAULT_REASONING_EFFORT": str(
+                assistant_data.get("default_reasoning_effort") or "",
+            ),
             "TEAM_IDS": encode_int_list_for_env(team_ids, field_name="team_ids"),
             "TEAM_SUMMARIES": encode_team_summaries_for_env(
                 team_summaries,

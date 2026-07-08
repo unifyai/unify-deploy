@@ -84,6 +84,8 @@ _ASSISTANT_UPDATE_STRING_FIELDS = {
     "assistant_email_provider",
     "voice_provider",
     "voice_id",
+    "default_model",
+    "default_reasoning_effort",
     "desktop_mode",
 }
 
@@ -209,6 +211,11 @@ from .helpers import (
     resolve_phone_route,
     resolve_slack_inbound,
     slack_message_already_seen,
+    resolve_ms_teams_bot_inbound,
+    ensure_ms_teams_bot_pending_install,
+    verify_ms_teams_bot_token,
+    _strip_ms_teams_bot_mention,
+    MsTeamsBotAuthError,
     resolve_whatsapp_route,
     start_unity_job,
     update_whatsapp_call_session,
@@ -1754,6 +1761,167 @@ async def slack_events_webhook(request: Request):
 
 
 # =============================================================================
+# Microsoft Teams (Bot Framework) Webhook
+# =============================================================================
+#
+# Additive to the delegated-Graph Teams path (Graph change-notifications for
+# a user's own chats). This handles the org-installed Teams *bot*: every
+# activity the Bot Connector delivers (channel/group @mentions and 1:1
+# personal messages) lands here. Flow per inbound activity:
+#
+#   1. Verify the Bot Framework JWT (RS256 against the Bot Connector JWKS;
+#      audience = our bot app id). Fails closed with 401.
+#   2. On ``conversationUpdate`` where the bot itself was added, record a
+#      pending (unbound) install so the tenant-to-org bind handshake can
+#      capture the tenant's ``serviceUrl``.
+#   3. On ``message``, hand the activity to Orchestra's ms_teams_bot
+#      dispatcher, which consults installs, channel bindings, conversation
+#      routes, @mention+token addressing, and the coordinator fallback.
+#   4. Fetch assistant + contacts, best-effort wake the Unity job, and
+#      publish onto the assistant's Pub/Sub topic with
+#      ``thread="ms_teams_bot"`` for CommsManager to pick up.
+#
+# We always return HTTP 200 (even on routing misses) so the Bot Connector
+# does not retry -- downstream dedup is authoritative Unity-side.
+
+
+@app.post("/ms-teams-bot/messages")
+async def ms_teams_bot_messages_webhook(request: Request):
+    """Microsoft Teams Bot Framework webhook entry point.
+
+    Authenticated via the Bot Framework JWT the Connector attaches; no
+    admin key (Teams cannot carry it).
+    """
+    token = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[len("Bearer ") :].strip()
+    try:
+        await asyncio.to_thread(verify_ms_teams_bot_token, token)
+    except MsTeamsBotAuthError as exc:
+        logger.warning(f"ms_teams_bot inbound auth failed: {exc}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    activity = await request.json()
+    activity_type = activity.get("type") or ""
+
+    if activity_type == "conversationUpdate":
+        members_added = activity.get("membersAdded") or []
+        recipient_id = (activity.get("recipient") or {}).get("id") or ""
+        if any(m.get("id") == recipient_id for m in members_added):
+            await asyncio.to_thread(ensure_ms_teams_bot_pending_install, activity)
+        return {"status": 200}
+
+    if activity_type != "message":
+        return {"status": 200}
+
+    data = await asyncio.to_thread(resolve_ms_teams_bot_inbound, activity)
+    if data is None or not data.get("handled"):
+        return {"status": 200}
+
+    assistant_id = data.get("assistant_id")
+    if not assistant_id:
+        return {"status": 200}
+    assistant_id = str(assistant_id)
+    routing_metadata = data.get("routing_metadata") or {}
+
+    assistant_data = await asyncio.to_thread(get_assistant, assistant_id=assistant_id)
+    if not assistant_data:
+        logger.warning(
+            f"ms_teams_bot: orchestra returned no assistant for id {assistant_id}",
+        )
+        return {"status": 200}
+
+    conversation = activity.get("conversation") or {}
+    conversation_type = conversation.get("conversationType") or "personal"
+    is_channel = conversation_type != "personal"
+    channel_data = activity.get("channelData") or {}
+    sender = activity.get("from") or {}
+    recipient = activity.get("recipient") or {}
+    _, addressed_text = _strip_ms_teams_bot_mention(
+        activity.get("text", "") or "",
+        activity.get("entities") or [],
+        recipient.get("id") or "",
+    )
+
+    api_key = assistant_data.get("api_key", "") or ""
+    user_id = assistant_data.get("user_id", "") or ""
+    contacts: list[dict] = []
+    if api_key:
+        contacts_resp, contacts_status = await asyncio.to_thread(
+            get_contacts,
+            f"{user_id}/{assistant_id}/Contacts",
+            api_key,
+        )
+        if contacts_status == 200:
+            contact_logs = contacts_resp.get("logs", [])
+            if len(contact_logs) >= 2:
+                contacts = [c["entries"] for c in contact_logs]
+    if not contacts:
+        contacts = get_default_contacts(assistant_data)
+
+    if uses_local_unity_runtime(assistant_data):
+        logger.info("Skipped remote job start for local MS Teams bot assistant")
+    else:
+        asyncio.create_task(
+            asyncio.to_thread(start_unity_job, assistant_data, "ms_teams_bot"),
+        )
+
+    attachments = [
+        {
+            "id": a.get("contentUrl"),
+            "filename": a.get("name"),
+            "url": a.get("contentUrl"),
+            "content_type": a.get("contentType") or "",
+        }
+        for a in (activity.get("attachments") or [])
+        if a.get("contentUrl") and a.get("name")
+    ]
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    event_payload = {
+        "thread": "ms_teams_bot",
+        "publish_timestamp": time.time(),
+        "event": {
+            "event_id": activity.get("id", "") or "",
+            "message_id": activity.get("id", "") or "",
+            "tenant_id": (channel_data.get("tenant") or {}).get("id", "") or "",
+            "conversation_id": conversation.get("id", "") or "",
+            "conversation_type": conversation_type,
+            "channel_id": (channel_data.get("channel") or {}).get("id", "") or "",
+            "service_url": activity.get("serviceUrl", "") or "",
+            "bot_app_id": SETTINGS.ms_teams_bot_app_id,
+            "sender_aad_object_id": sender.get("aadObjectId", "") or "",
+            "sender_display_name": sender.get("name", "") or "",
+            "body": addressed_text or activity.get("text", "") or "",
+            "is_channel": is_channel,
+            "attachments": attachments,
+            "routing_metadata": routing_metadata,
+            "contacts": contacts,
+        },
+    }
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(event_payload).encode("utf-8"),
+            thread="inbound",
+        )
+        logger.info(
+            "published MS Teams bot %s for assistant %s (activity_id=%s)",
+            "channel message" if is_channel else "DM",
+            assistant_id,
+            activity.get("id", ""),
+        )
+    except Exception as e:
+        logger.error(f"ms_teams_bot: failed to publish to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return {"status": 200}
+
+
+# =============================================================================
 # Unify Attachment Upload
 # =============================================================================
 
@@ -2073,6 +2241,157 @@ async def unify_reaction_webhook(request: Request):
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
+
+
+# =============================================================================
+# Org Chat (team group chat + human DMs)
+# =============================================================================
+
+# Org topics whose existence has been verified by this process. One topic per
+# organization carries every team-chat and DM frame for that org; Console's
+# SSE route subscribes per user and filters frames server-side.
+_ensured_org_topics: set[str] = set()
+
+
+def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
+    """Idempotently create an org chat topic (cached per process)."""
+    if topic_path in _ensured_org_topics:
+        return
+    try:
+        pubsub_client.create_topic(request={"name": topic_path})
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+    _ensured_org_topics.add(topic_path)
+
+
+@app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
+async def unify_org_chat_webhook(request: Request):
+    """Deliver one org-chat message (team group chat or human DM).
+
+    Orchestra has already persisted the message; this endpoint owns hosted
+    delivery:
+
+    1. Publish the Console frame to the per-organization topic
+       (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
+    2. For human-sent team messages, publish one standard ``unify_message``
+       envelope per listed assistant (ensuring each runtime job is started) —
+       team chat is ordinary unify_message traffic fanned out to every team
+       assistant, like a large email CC chain. Assistant replies arrive with
+       no ``fanout_assistant_ids`` — they are Console-publish only, which
+       prevents AI reply loops.
+    """
+    payload = await request.json()
+    kind = payload.get("kind")
+    organization_id = payload.get("organization_id")
+    message = payload.get("message") or {}
+
+    if kind not in ("team", "dm"):
+        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if not organization_id:
+        return Response(status_code=400, content="organization_id is required")
+    if not message:
+        return Response(status_code=400, content="message is required")
+
+    thread = "team_message" if kind == "team" else "dm_message"
+    attributes = {"thread": thread, "organization_id": str(organization_id)}
+    if kind == "team":
+        team_id = payload.get("team_id") or message.get("team_id")
+        if not team_id:
+            return Response(status_code=400, content="team_id is required")
+        attributes["team_id"] = str(team_id)
+    else:
+        user_ids = message.get("user_ids") or []
+        if len(user_ids) != 2:
+            return Response(status_code=400, content="message.user_ids must be a pair")
+        attributes["dm_user_a"] = str(user_ids[0])
+        attributes["dm_user_b"] = str(user_ids[1])
+
+    pubsub_client = get_pubsub_client()
+    org_topic_path = pubsub_client.topic_path(
+        SETTINGS.gcp_project_id,
+        SETTINGS.org_topic(organization_id),
+    )
+    try:
+        await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
+        pubsub_client.publish(
+            org_topic_path,
+            json.dumps(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": message,
+                },
+            ).encode("utf-8"),
+            **attributes,
+        )
+    except Exception as e:
+        logger.error(f"Error publishing {thread} to org topic: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    # Team chat fan-out rides the standard unify_message thread — every team
+    # assistant receives a copy, like a large email CC chain. When the sender
+    # is this assistant's owner we can resolve contact_id here; otherwise the
+    # runtime resolves the sender by email against its Contacts table.
+    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
+    assistant_event = payload.get("assistant_event") or {}
+    fanout_errors: list[str] = []
+    for raw_assistant_id in fanout_assistant_ids:
+        try:
+            context = await asyncio.to_thread(
+                build_webhook_context,
+                channel="unify_message",
+                destination="",
+                sender="",
+                assistant_id=str(raw_assistant_id),
+                validate_contact=False,
+                ensure_job=True,
+            )
+            assistant = context["assistant"]
+            assistant_id = assistant["assistant_id"]
+            event = {
+                **assistant_event,
+                "assistant_id": assistant_id,
+                "contacts": context["contacts"],
+            }
+            sender_user_id = str(assistant_event.get("sender_user_id") or "")
+            if sender_user_id and sender_user_id == str(
+                assistant.get("user_id") or "",
+            ):
+                event["contact_id"] = assistant.get("boss_contact_id")
+            topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                SETTINGS.assistant_topic(assistant_id),
+            )
+            pubsub_client.publish(
+                topic_path,
+                json.dumps(
+                    {
+                        "thread": "unify_message",
+                        "publish_timestamp": time.time(),
+                        "event": event,
+                    },
+                ).encode("utf-8"),
+                thread="inbound",
+            )
+        except Exception as e:
+            logger.error(
+                f"Error fanning out team chat message to assistant "
+                f"{raw_assistant_id}: {e}",
+            )
+            fanout_errors.append(str(raw_assistant_id))
+
+    return Response(
+        content=json.dumps(
+            {
+                "published": True,
+                "fanned_out": len(fanout_assistant_ids) - len(fanout_errors),
+                "fanout_errors": fanout_errors,
+            },
+        ),
+        status_code=200,
+        media_type="application/json",
+    )
 
 
 # =============================================================================

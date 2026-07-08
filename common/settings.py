@@ -133,6 +133,15 @@ class Settings:
         # bot tokens are stored in Orchestra (slack_installs), not here.
         self.slack_signing_secret: str = os.environ.get("SLACK_SIGNING_SECRET", "")
 
+        # Microsoft Teams (Bot Framework) multi-tenant app credentials.
+        # App-level (one registration shared across every tenant that
+        # installs the Teams app). ``ms_teams_bot_app_id`` is the audience
+        # the /ms-teams-bot/messages webhook validates inbound activity JWTs
+        # against; the secret is used only for outbound token minting in the
+        # gateway (not needed here). Per-tenant install state (service_url,
+        # conversation references) lives in Orchestra (ms_teams_bot_installs).
+        self.ms_teams_bot_app_id: str = os.environ.get("MS_TEAMS_BOT_APP_ID", "")
+
         # Cleanup / Workspace integration.  ``workspace_admin_subject`` is
         # the Workspace user we impersonate for Admin SDK Directory calls;
         # still used by ``DELETE /gmail/delete`` (Orchestra teardown
@@ -240,6 +249,15 @@ class Settings:
         production).
         """
         return f"unity-{assistant_id}{self.env_suffix}"
+
+    def org_topic(self, organization_id: int | str) -> str:
+        """Pub/Sub topic carrying an organization's chat frames.
+
+        One topic per organization multiplexes team group-chat and human DM
+        frames; Console's SSE route subscribes per user and filters frames
+        server-side by that user's team memberships and DM participation.
+        """
+        return f"unity-org-{organization_id}{self.env_suffix}"
 
 
 SETTINGS = Settings()

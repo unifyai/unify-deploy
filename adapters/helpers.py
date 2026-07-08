@@ -586,6 +586,208 @@ def resolve_slack_inbound(payload: dict) -> dict | None:
     }
 
 
+# =============================================================================
+# Microsoft Teams (Bot Framework) inbound
+# =============================================================================
+#
+# Additive to the existing delegated-Graph Teams integration: the Graph
+# change-notification path handles a user's own 1:1 chats via their OAuth
+# tokens, while this Bot-Framework path handles bot-addressed channel /
+# group-chat activity and installs into the org's own Teams app.
+#
+# Inbound trust is a hand-rolled Bot Framework JWT check (PyJWT + the Bot
+# Connector JWKS), the same "verify-the-provider-signature-ourselves" shape
+# as the Slack HMAC verifier above -- we deliberately avoid the heavy Bot
+# Framework SDK.
+
+_MS_TEAMS_BOT_OPENID_CONFIG_URL = (
+    "https://login.botframework.com/v1/.well-known/openidconfiguration"
+)
+_MS_TEAMS_BOT_ISSUER = "https://api.botframework.com"
+_MS_TEAMS_BOT_JWK_CLIENT_TTL_SECONDS = 24 * 3600
+
+_ms_teams_bot_jwk_client_cache = None
+_ms_teams_bot_jwk_client_built_at = 0.0
+
+
+class MsTeamsBotAuthError(Exception):
+    """Raised when an inbound Bot Framework activity JWT fails verification."""
+
+
+def _ms_teams_bot_jwks_uri() -> str:
+    resp = requests.get(_MS_TEAMS_BOT_OPENID_CONFIG_URL, timeout=10)
+    resp.raise_for_status()
+    jwks_uri = resp.json().get("jwks_uri")
+    if not jwks_uri:
+        raise MsTeamsBotAuthError("Bot Connector OpenID config has no jwks_uri.")
+    return jwks_uri
+
+
+def _ms_teams_bot_jwk_client(force_refresh: bool = False):
+    global _ms_teams_bot_jwk_client_cache, _ms_teams_bot_jwk_client_built_at
+    from jwt import PyJWKClient
+
+    now = time.time()
+    stale = (
+        now - _ms_teams_bot_jwk_client_built_at > _MS_TEAMS_BOT_JWK_CLIENT_TTL_SECONDS
+    )
+    if _ms_teams_bot_jwk_client_cache is None or stale or force_refresh:
+        _ms_teams_bot_jwk_client_cache = PyJWKClient(_ms_teams_bot_jwks_uri())
+        _ms_teams_bot_jwk_client_built_at = now
+    return _ms_teams_bot_jwk_client_cache
+
+
+def verify_ms_teams_bot_token(token: str) -> dict:
+    """Verify an inbound Bot Framework JWT and return its claims.
+
+    Validates RS256 signature (against the Bot Connector JWKS), ``iss``
+    (Bot Connector emitter), ``aud`` (our bot app id from
+    ``SETTINGS.ms_teams_bot_app_id``), and ``exp``. Raises
+    :class:`MsTeamsBotAuthError` on any failure. Signing keys rotate, so a
+    missing ``kid`` triggers one JWKS refresh + retry.
+    """
+    import jwt as _jwt
+
+    app_id = SETTINGS.ms_teams_bot_app_id or ""
+    if not token:
+        raise MsTeamsBotAuthError("Missing bearer token.")
+    if not app_id:
+        raise MsTeamsBotAuthError("MS_TEAMS_BOT_APP_ID is not configured.")
+
+    def _decode(client) -> dict:
+        signing_key = client.get_signing_key_from_jwt(token)
+        return _jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=app_id,
+            issuer=_MS_TEAMS_BOT_ISSUER,
+            options={"require": ["exp", "iss", "aud"]},
+        )
+
+    try:
+        return _decode(_ms_teams_bot_jwk_client())
+    except _jwt.PyJWKClientError:
+        try:
+            return _decode(_ms_teams_bot_jwk_client(force_refresh=True))
+        except Exception as exc:  # noqa: BLE001 - normalize to our error type
+            raise MsTeamsBotAuthError(str(exc)) from exc
+    except _jwt.InvalidTokenError as exc:
+        raise MsTeamsBotAuthError(str(exc)) from exc
+
+
+def _strip_ms_teams_bot_mention(
+    text: str,
+    entities: list[dict],
+    recipient_id: str,
+) -> tuple[bool, str]:
+    """Return ``(bot_mentioned, text_without_bot_mention)``.
+
+    Teams marks @mentions with ``mention`` entities carrying the exact
+    ``<at>Name</at>`` substring; the bot's own mention is the one whose
+    ``mentioned.id`` equals the activity ``recipient.id``.
+    """
+    bot_mentioned = False
+    cleaned = text or ""
+    for entity in entities or []:
+        if entity.get("type") != "mention":
+            continue
+        if (entity.get("mentioned") or {}).get("id") == recipient_id:
+            bot_mentioned = True
+            mention_text = entity.get("text") or ""
+            if mention_text:
+                cleaned = cleaned.replace(mention_text, "")
+    return bot_mentioned, cleaned.strip()
+
+
+def _post_ms_teams_bot(path: str, body: dict) -> dict | None:
+    """POST to an Orchestra admin endpoint; ``None`` on 404 / transport error."""
+    resp = requests.post(
+        f"{SETTINGS.orchestra_url}{path}",
+        json=body,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot POST {path} failed: {resp.status_code} {resp.text}",
+        )
+        return None
+    return resp.json()
+
+
+def ensure_ms_teams_bot_pending_install(activity: dict) -> None:
+    """Record a pending (unbound) install when the bot is added to a tenant.
+
+    Captures ``serviceUrl`` (required for every future outbound call) so the
+    tenant-to-org bind handshake can complete later without another inbound
+    round-trip.
+    """
+    channel_data = activity.get("channelData") or {}
+    tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
+    if not tenant_id:
+        return
+    installer = activity.get("from") or {}
+    _post_ms_teams_bot(
+        "/admin/ms-teams-bot/pending-install",
+        {
+            "tenant_id": tenant_id,
+            "bot_app_id": SETTINGS.ms_teams_bot_app_id,
+            "service_url": activity.get("serviceUrl") or "",
+            "installer_aad_object_id": installer.get("aadObjectId") or "",
+        },
+    )
+
+
+def resolve_ms_teams_bot_inbound(activity: dict) -> dict | None:
+    """Route a Teams ``message`` activity via Orchestra.
+
+    The sender's display name is present inline on the activity, so we
+    resolve identity in a single dispatch pass (``sender_identity_provided``)
+    -- no ``users.info``-style second pass is needed for name matching
+    (unlike Slack). Email-based matching via the Teams roster is deferred.
+
+    Returns Orchestra's ``DispatchResponse`` dict (``handled``,
+    ``assistant_id``, ``routing_metadata``, ...), or ``None`` on 404 /
+    transport failure.
+    """
+    channel_data = activity.get("channelData") or {}
+    tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
+    conversation = activity.get("conversation") or {}
+    sender = activity.get("from") or {}
+    recipient = activity.get("recipient") or {}
+    bot_mentioned, addressed_text = _strip_ms_teams_bot_mention(
+        activity.get("text", "") or "",
+        activity.get("entities") or [],
+        recipient.get("id") or "",
+    )
+    conversation_reference = {
+        "bot": recipient,
+        "user": sender,
+        "conversation": conversation,
+        "channelId": activity.get("channelId") or "msteams",
+        "serviceUrl": activity.get("serviceUrl") or "",
+        "tenantId": tenant_id,
+    }
+    return _post_ms_teams_bot(
+        "/admin/ms-teams-bot/dispatch",
+        {
+            "tenant_id": tenant_id,
+            "conversation_id": conversation.get("id") or "",
+            "conversation_type": conversation.get("conversationType") or "personal",
+            "channel_id": (channel_data.get("channel") or {}).get("id"),
+            "sender_aad_object_id": sender.get("aadObjectId") or "",
+            "sender_display_name": sender.get("name") or "",
+            "bot_mentioned": bot_mentioned,
+            "addressed_text": addressed_text,
+            "conversation_reference": json.dumps(conversation_reference),
+            "sender_identity_provided": True,
+        },
+    )
+
+
 def _normalize_display_name(name: str) -> str:
     """Lower-case + strip punctuation/diacritics so two display strings
     that "look the same" compare equal.
@@ -1215,6 +1417,10 @@ def _build_start_job_request_data(
         ),
         "voice_provider": _runtime_str(voice_provider),
         "voice_id": _runtime_str(voice_id),
+        "default_model": _runtime_str(assistant.get("default_model")),
+        "default_reasoning_effort": _runtime_str(
+            assistant.get("default_reasoning_effort"),
+        ),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.

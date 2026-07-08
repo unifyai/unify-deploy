@@ -67,6 +67,40 @@ def test_assistant_payload_coerces_nullable_runtime_strings():
     assert payload["boss_contact_id"] == 1
 
 
+def test_assistant_payload_carries_default_model_fields():
+    assistant = {
+        "agent_id": 7,
+        "user_id": "user-7",
+        "api_key": "key",
+        "user_first_name": "Ada",
+        "user_last_name": "Lovelace",
+        "first_name": "Model",
+        "surname": "Tester",
+        "age": 30,
+        "nationality": "GB",
+        "about": "x",
+        "job_title": None,
+        "timezone": "UTC",
+        "phone": None,
+        "email": None,
+        "user_phone": None,
+        "user_email": "ada@example.com",
+        "voice_provider": "cartesia",
+        "voice_id": "voice-1",
+        "default_model": "claude-fable-5@anthropic",
+        "default_reasoning_effort": "high",
+        "self_contact_id": 1,
+        "boss_contact_id": 2,
+    }
+
+    payload = _assistant_payload(assistant)
+
+    assert payload["default_model"] == "claude-fable-5@anthropic"
+    assert payload["default_reasoning_effort"] == "high"
+    assert "default_model" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    assert "default_reasoning_effort" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+
+
 def test_get_assistant_skips_universal_coordinator_email_lookup(monkeypatch):
     monkeypatch.setattr(
         "common.assistant_lookup.SETTINGS.unity_coordinator_email_address",
