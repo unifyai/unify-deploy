@@ -174,7 +174,7 @@ def test_unknown_integration_slug_logs_warning(caplog):
 
 def test_expand_seeds_integration_registry_with_one_row_per_slug():
     """``ResolvedAssistantDeployment.integration_registry`` should carry one
-    row per loaded integration, ready for ``_sync_integration_registry`` to
+    row per loaded integration, ready for ``sync_custom_integration_registry`` to
     push into the ``Integrations/Manifests`` DataManager context."""
     resolved = _empty_resolved(integrations=["github", "fetch_mcp"])
 

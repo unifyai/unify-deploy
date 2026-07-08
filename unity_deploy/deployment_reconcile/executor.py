@@ -146,7 +146,7 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
             item=item,
             status="applied",
             message=(
-                f"seed_changed={result.seed_changed} "
+                f"integration_registry_changed={result.integration_registry_changed} "
                 f"custom_changed={result.custom_changed}"
             ),
         )

@@ -163,9 +163,8 @@ def _scenario_task_activation_action(task: Any) -> str:
     authoritative seeder is the runtime plane
     (:func:`unity_deploy.runtime_reconcile.materialize.materialize_runtime_state`),
     which runs in the woken assistant's own identity/context and calls
-    ``sync_all_seed_data`` (seeds the scenario's TaskScheduler tasks) plus
-    ``FunctionManager.sync_custom`` (registers the entrypoint functions).  Until
-    that has happened the activation ids do not exist yet, so a brand-new
+    ``sync_custom_integration_registry`` plus manager ``sync_custom`` hooks.
+    Until that has happened the activation ids do not exist yet, so a brand-new
     activation is ``"deferred"`` rather than a hard failure: the control plane
     leaves it to the runtime plane and converges on a later reconcile.
     """

@@ -74,6 +74,15 @@ class _FakeKnowledgeManager:
         return True
 
 
+class _FakeIntegrationRegistrySync:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def __call__(self, *, source_registry=None) -> bool:
+        self.calls.append({"source_registry": source_registry})
+        return False
+
+
 def _install_materialize_fakes(
     monkeypatch,
     *,
@@ -84,6 +93,8 @@ def _install_materialize_fakes(
     secrets_collector,
     secrets_model_collector,
     knowledge_collector,
+    integration_registry_collector,
+    integration_registry_sync,
     blacklist_collector,
     function_manager: _FakeFunctionManager,
     guidance_manager: _FakeGuidanceManager,
@@ -142,6 +153,27 @@ def _install_materialize_fakes(
         custom_knowledge,
     )
 
+    integration_registry = ModuleType("unify.integration_registry")
+    integration_registry.collect_integration_registry_from_rows = (
+        integration_registry_collector
+    )
+    integration_registry.sync_custom_integration_registry = integration_registry_sync
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.integration_registry",
+        integration_registry,
+    )
+
+    catalog_projection = ModuleType(
+        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+    )
+    catalog_projection.sync_integrations = lambda _rows: None
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+        catalog_projection,
+    )
+
     manager_registry = ModuleType("unify.manager_registry")
 
     class ManagerRegistry:
@@ -176,14 +208,6 @@ def _install_materialize_fakes(
         manager_registry,
     )
 
-    seed_sync = ModuleType("unity_deploy.assistant_deployments.seed_sync")
-    seed_sync.sync_all_seed_data = lambda _resolved: False
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "unity_deploy.assistant_deployments.seed_sync",
-        seed_sync,
-    )
-
 
 def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_fm = _FakeFunctionManager()
@@ -191,6 +215,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_cm = _FakeContactManager()
     fake_sm = _FakeSecretManager()
     fake_km = _FakeKnowledgeManager()
+    fake_registry_sync = _FakeIntegrationRegistrySync()
     fake_bm = _FakeBlacklistManager()
 
     _install_materialize_fakes(
@@ -202,6 +227,8 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         secrets_collector=lambda _dirs: {},
         secrets_model_collector=lambda _secrets: {},
         knowledge_collector=lambda _dirs: {},
+        integration_registry_collector=lambda _rows: {},
+        integration_registry_sync=fake_registry_sync,
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
@@ -223,6 +250,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
             guidance_dirs=[],
             contacts_dirs=[],
             knowledge_dirs=[],
+            integration_registry=[],
             secrets_dirs=[],
             secrets=[],
             blacklist_dirs=[],
@@ -241,6 +269,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
     assert fake_cm.calls == [{"source_contacts": {}}]
     assert fake_km.calls == [{"source_tables": {}}]
+    assert fake_registry_sync.calls == [{"source_registry": {}}]
     assert fake_sm.calls == [{"source_secrets": {}}]
     assert fake_bm.calls == [{"source_blacklist": {}}]
 
@@ -271,6 +300,8 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         secrets_collector=lambda _dirs: {},
         secrets_model_collector=lambda _secrets: {},
         knowledge_collector=lambda _dirs: {},
+        integration_registry_collector=lambda _rows: {},
+        integration_registry_sync=_FakeIntegrationRegistrySync(),
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
@@ -292,6 +323,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             guidance_dirs=[],
             contacts_dirs=[],
             knowledge_dirs=[],
+            integration_registry=[],
             secrets_dirs=[],
             secrets=[],
             blacklist_dirs=[],

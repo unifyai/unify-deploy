@@ -24,7 +24,7 @@ class RuntimeStateResult:
 
     identity: RuntimeIdentity
     revision: str
-    seed_changed: bool = False
+    integration_registry_changed: bool = False
     custom_changed: bool = False
     guidance_changed: bool = False
     secrets_changed: bool = False
@@ -96,6 +96,9 @@ def compute_runtime_state_fingerprint(
             for path in resolved.secrets_dirs
         ],
         "supplemental_secrets": _supplemental_secret_fingerprints(resolved.secrets),
+        "integration_registry": _integration_registry_fingerprints(
+            resolved.integration_registry,
+        ),
         "integrations": resolved.integrations,
         "mcp_configs": resolved.mcp_configs,
         "url_mappings": resolved.url_mappings,
@@ -113,6 +116,21 @@ def compute_runtime_state_fingerprint(
         ],
     }
     return _hash_payload(payload)
+
+
+def _integration_registry_fingerprints(
+    rows: list[Any],
+) -> list[dict[str, str]]:
+    from unify.integration_registry.custom_integration_registry import (
+        collect_integration_registry_from_rows,
+    )
+
+    return [
+        {"slug": slug, "digest": data["custom_hash"]}
+        for slug, data in sorted(
+            collect_integration_registry_from_rows(rows).items(),
+        )
+    ]
 
 
 def _supplemental_secret_fingerprints(secrets: list[Any]) -> list[dict[str, str]]:
@@ -224,19 +242,25 @@ def materialize_runtime_state(
     from unify.guidance_manager.custom_guidance import (
         collect_guidance_from_directories,
     )
+    from unify.integration_registry import (
+        collect_integration_registry_from_rows,
+        sync_custom_integration_registry,
+    )
+    from unity_deploy.assistant_deployments.integrations.catalog_projection import (
+        sync_integrations,
+    )
     from unify.manager_registry import ManagerRegistry
-    from unity_deploy.assistant_deployments.seed_sync import sync_all_seed_data
 
     revision = revision or compute_runtime_state_fingerprint(resolved)
     logger.info(
-        "Runtime reconcile phase starting: assistant=%s phase=syncing_seed_data revision=%s",
+        "Runtime reconcile phase starting: assistant=%s phase=syncing_integration_registry revision=%s",
         identity.assistant_id,
         revision[:16],
     )
     if status is not None:
         status.update(
-            phase="syncing_seed_data",
-            message=("Preparing deployment-defined integration registry."),
+            phase="syncing_integration_registry",
+            message="Preparing deployment-defined integration registry.",
             blocking_resources=(),
             resources={
                 "contacts": "pending",
@@ -247,13 +271,37 @@ def materialize_runtime_state(
             },
             data_freshness="partial",
         )
-    seed_start = perf_counter()
-    seed_changed = sync_all_seed_data(resolved)
-    logger.info(
-        "Runtime reconcile phase completed: assistant=%s phase=syncing_seed_data duration=%.2fs seed_changed=%s",
+    integration_registry_start = perf_counter()
+    source_registry = collect_integration_registry_from_rows(
+        resolved.integration_registry,
+    )
+    integration_registry_changed = sync_custom_integration_registry(
+        source_registry=source_registry,
+    )
+    if resolved.integration_registry:
+        try:
+            catalog_start = perf_counter()
+            sync_integrations(resolved.integration_registry)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] runtime_reconcile.native_integration_catalog assistant=%s duration=%.2fs",
+                identity.assistant_id,
+                perf_counter() - catalog_start,
+            )
+        except Exception:
+            logger.exception("Failed to publish native integration app catalog")
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_integration_registry assistant=%s duration=%.2fs changed=%s",
         identity.assistant_id,
-        perf_counter() - seed_start,
-        seed_changed,
+        perf_counter() - integration_registry_start,
+        integration_registry_changed,
+    )
+    logger.info(
+        "Runtime reconcile phase completed: assistant=%s phase=syncing_integration_registry duration=%.2fs integration_registry_changed=%s",
+        identity.assistant_id,
+        perf_counter() - integration_registry_start,
+        integration_registry_changed,
     )
 
     function_resources = {
@@ -470,10 +518,10 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
-        seed_changed,
+        integration_registry_changed,
         custom_changed,
         guidance_changed,
         contacts_changed,
@@ -485,7 +533,7 @@ def materialize_runtime_state(
     return RuntimeStateResult(
         identity=identity,
         revision=revision,
-        seed_changed=seed_changed,
+        integration_registry_changed=integration_registry_changed,
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
         contacts_changed=contacts_changed,

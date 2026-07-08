@@ -59,7 +59,7 @@ class LoadedIntegration:
     """Runtime registry row for ``Integrations/Manifests``.
 
     Populated when the manifest has at least one capability or any secrets.
-    Consumed downstream by ``_sync_integration_registry`` (deploy time) and
+    Consumed downstream by ``sync_custom_integration_registry`` (deploy time) and
     ``unify.integration_status`` (runtime).  All list/dict values are
     JSON-stringified to keep the DataManager schema scalar-only.
     """
@@ -157,8 +157,8 @@ def _build_registry_row(manifest: IntegrationManifest) -> dict:
        per-deployment record of which integrations were declared — and
        for any future read paths that explicitly want the deployment's
        declared set vs the runtime's available set.  See
-       ``_sync_integration_registry`` in ``seed_sync.py`` for the docstring
-       describing this trade-off in full.
+       ``unify.integration_registry.sync_custom_integration_registry`` for the
+       sync implementation and telemetry trade-offs.
     """
     import json
 

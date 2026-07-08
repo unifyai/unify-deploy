@@ -60,9 +60,9 @@ def expand_integrations(
     resolved.mcp_configs.extend(loaded.mcp_configs)
     resolved.scenarios.extend(loaded.scenarios)
 
-    # Seed-data sync (``_sync_integration_registry`` in ``seed_sync.py``) reads
-    # ``resolved.integration_registry`` and pushes the rows into the
-    # ``Integrations/Manifests`` DataManager context.  Idempotent on slug.
+    # Runtime reconcile (``sync_custom_integration_registry`` in
+    # ``unify.integration_registry``) reads ``resolved.integration_registry`` and
+    # pushes the rows into the ``Integrations/Manifests`` DataManager context.
     _merge_registry_rows(resolved.integration_registry, loaded.registry_rows)
 
     logger.info(

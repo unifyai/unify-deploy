@@ -58,9 +58,10 @@ class ResolvedAssistantDeployment:
     """One row per enabled integration, populated by ``expand_integrations``.
 
     Seeded into the ``Integrations/Manifests`` DataManager context by
-    ``_sync_integration_registry`` and consumed at runtime by
-    ``unify.integration_status`` to compute which integrations have working
-    credentials.  See ``integrations/loader.py:_build_registry_row``."""
+    ``unify.integration_registry.sync_custom_integration_registry`` and
+    consumed at runtime by ``unify.integration_status`` to compute which
+    integrations have working credentials.  See
+    ``integrations/loader.py:_build_registry_row``."""
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None
