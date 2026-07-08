@@ -94,11 +94,11 @@ async def run_hackernews_digest_to_whatsapp(
     }
 
 
-# ── Droid outreach daily ticks (HN + Reddit + Discord summary) ─────
+# ── Teammate outreach daily ticks (HN + Reddit + Discord summary) ──
 
 
 @custom_function()
-async def run_droid_outreach_hackernews_daily(
+async def run_teammate_outreach_hackernews_daily(
     *,
     max_age_days: float = 84.0,
     daily_post_limit: int = 1,
@@ -106,26 +106,26 @@ async def run_droid_outreach_hackernews_daily(
     emit_review_cards: bool = True,
     review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
 ) -> dict[str, Any]:
-    """Run the Droid-outreach HackerNews half-tick at 08:00 Europe/London.
+    """Run the Teammate-outreach HackerNews half-tick at 08:00 Europe/London.
 
-    Discovers Droid-relevant HN threads via Algolia over the past
-    ``max_age_days``, scores against the cached Droid relevance
+    Discovers teammate-relevant HN threads via Algolia over the past
+    ``max_age_days``, scores against the cached Teammate relevance
     brief, drafts a minimal reply for the top ``daily_post_limit``
     candidates, persists JSONs under
-    ``data/intel/droid_outreach/candidates/<date>/hackernews/review/``,
+    ``data/intel/teammate_outreach/candidates/<date>/hackernews/review/``,
     and optionally posts Discord review cards.
 
     NO HN comments are posted by this wrapper.  Posting happens in
     the operator-approval loop (Phase 6) or via the manual
-    ``scripts.droid_outreach_post_approved`` CLI.
+    ``scripts.teammate_outreach_post_approved`` CLI.
     """
 
-    from brain.intel.droid_outreach import (
+    from brain.intel.teammate_outreach import (
         OutreachRepository,
         emit_review_cards as do_emit_cards,
         find_and_draft_hackernews,
     )
-    from brain.intel.droid_pitch import build_relevance_brief
+    from brain.intel.teammate_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = OutreachRepository()
@@ -165,7 +165,7 @@ async def run_droid_outreach_hackernews_daily(
 
 
 @custom_function()
-async def run_droid_outreach_reddit_daily(
+async def run_teammate_outreach_reddit_daily(
     *,
     max_age_days: float = 84.0,
     daily_post_limit: int = 5,
@@ -174,18 +174,18 @@ async def run_droid_outreach_reddit_daily(
     review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
     reddit_username: str = "daniellenton",
 ) -> dict[str, Any]:
-    """Run the Droid-outreach Reddit half-tick at 09:00 Europe/London.
+    """Run the Teammate-outreach Reddit half-tick at 09:00 Europe/London.
 
-    Same shape as :func:`run_droid_outreach_hackernews_daily` but
+    Same shape as :func:`run_teammate_outreach_hackernews_daily` but
     over the configured Reddit subs + sitewide keyword queries.
     """
 
-    from brain.intel.droid_outreach import (
+    from brain.intel.teammate_outreach import (
         OutreachRepository,
         emit_review_cards as do_emit_cards,
         find_and_draft_reddit,
     )
-    from brain.intel.droid_pitch import build_relevance_brief
+    from brain.intel.teammate_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = OutreachRepository()
@@ -223,19 +223,19 @@ async def run_droid_outreach_reddit_daily(
 
 
 @custom_function()
-async def run_droid_outreach_discord_daily_summary(
+async def run_teammate_outreach_discord_daily_summary(
     *,
     digest_webhook_env: str = "UNIFY_DISCORD_DIGEST_WEBHOOK",
 ) -> dict[str, Any]:
-    """Run the Droid-outreach evening Discord digest at 18:00 Europe/London.
+    """Run the Teammate-outreach evening Discord digest at 18:00 Europe/London.
 
-    Reads ``data/intel/droid_outreach/candidates/<today>/{hackernews,reddit}/posted/``
+    Reads ``data/intel/teammate_outreach/candidates/<today>/{hackernews,reddit}/posted/``
     and posts one digest embed-list to the channel behind
     ``UNIFY_DISCORD_DIGEST_WEBHOOK``.  Idempotent — no state is
     written beyond the OutboundAction audit row.
     """
 
-    from brain.intel.droid_outreach import summarise_to_discord
+    from brain.intel.teammate_outreach import summarise_to_discord
 
     # Run the (synchronous) summariser in a thread so the event loop
     # isn't blocked by the httpx POST.
@@ -290,7 +290,7 @@ async def run_social_post_discover_draft(
         discover_and_draft,
         emit_review_cards as do_emit_cards,
     )
-    from brain.intel.droid_pitch import build_relevance_brief
+    from brain.intel.teammate_pitch import build_relevance_brief
 
     brief = await build_relevance_brief()
     repo = SocialPostRepository()

@@ -197,19 +197,19 @@ def get_deployment() -> DeploymentSpec:
                         "module": "brain.influencers.youtube.runner",
                     },
                     {
-                        "job_id": "intel.droid_outreach.hackernews_daily",
-                        "wrapper": "run_droid_outreach_hackernews_daily",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.hackernews_daily",
+                        "wrapper": "run_teammate_outreach_hackernews_daily",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
-                        "job_id": "intel.droid_outreach.reddit_daily",
-                        "wrapper": "run_droid_outreach_reddit_daily",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.reddit_daily",
+                        "wrapper": "run_teammate_outreach_reddit_daily",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
-                        "job_id": "intel.droid_outreach.discord_daily_summary",
-                        "wrapper": "run_droid_outreach_discord_daily_summary",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.discord_daily_summary",
+                        "wrapper": "run_teammate_outreach_discord_daily_summary",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
                         "job_id": "social.x_discover_draft",
@@ -224,6 +224,21 @@ def get_deployment() -> DeploymentSpec:
                     {
                         "job_id": "social.x_post_now",
                         "wrapper": "run_social_post_now",
+                        "module": "brain.social.curate",
+                    },
+                    {
+                        "job_id": "social.linkedin_discover_draft",
+                        "wrapper": "run_social_linkedin_discover_draft",
+                        "module": "brain.social.curate",
+                    },
+                    {
+                        "job_id": "social.linkedin_login",
+                        "wrapper": "run_social_linkedin_login",
+                        "module": "brain.social.discovery.sources",
+                    },
+                    {
+                        "job_id": "social.linkedin_post_approved",
+                        "wrapper": "run_social_linkedin_post_approved",
                         "module": "brain.social.curate",
                     },
                     {
@@ -245,6 +260,26 @@ def get_deployment() -> DeploymentSpec:
                         "job_id": "social.publish_approved",
                         "wrapper": "run_social_publish_approved",
                         "module": "brain.social.create.pipeline",
+                    },
+                    {
+                        "job_id": "gtm.stargazer.poll",
+                        "wrapper": "run_gtm_stargazer_poll_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.stargazer.enrich",
+                        "wrapper": "run_gtm_stargazer_enrich_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.smartlead.reconcile",
+                        "wrapper": "run_gtm_smartlead_reconcile_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.outbound.replenish",
+                        "wrapper": "run_gtm_outbound_replenish_inventory",
+                        "module": "brain.gtm",
                     },
                 ],
             },
