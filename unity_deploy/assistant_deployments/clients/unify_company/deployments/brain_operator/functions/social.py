@@ -63,7 +63,7 @@ async def run_social_linkedin_discover_draft(
     (``brain social curate login --site linkedin`` on the live pod, or
     ``--seed-file``) and the agent-service is reachable in the job pod.
     """
-    from brain.intel.droid_pitch import build_relevance_brief
+    from brain.intel.teammate_pitch import build_relevance_brief
     from brain.social.curate import (
         SocialPostRepository,
         discover_and_draft,

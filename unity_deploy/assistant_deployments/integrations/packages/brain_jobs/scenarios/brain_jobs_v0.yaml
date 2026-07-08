@@ -439,7 +439,7 @@ tasks:
     recurrence_hint: daily_07_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.droid_outreach.hackernews_daily
+- id: intel.teammate_outreach.hackernews_daily
   enabled: true
   execution_mode: offline
   schedule:
@@ -450,14 +450,14 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_droid_outreach_hackernews_daily
-    task_name: 'Droid outreach: HackerNews discovery + draft'
-    task_description: "Algolia-search HN for Droid-relevant threads (OpenClaw, HermesAgent, AI coworker, agent memory, agent steering, interruptible agent, voice agent realtime, etc.) over the past 12 weeks. Score each against the cached Droid relevance brief, draft a minimal 'maybe X could be useful?' reply for the top candidates, and persist to data/intel/droid_outreach/candidates/<date>/hackernews/review/. Optionally emits Discord review cards when UNIFY_DISCORD_REVIEW_WEBHOOK is set, so the operator can approve via ✅/❌ before the post step ships. NO comments are posted by this tick — it stops at draft."
+    entrypoint_function: run_teammate_outreach_hackernews_daily
+    task_name: 'Teammate outreach: HackerNews discovery + draft'
+    task_description: "Algolia-search HN for the teammate-relevant threads (OpenClaw, HermesAgent, AI coworker, agent memory, agent steering, interruptible agent, voice agent realtime, etc.) over the past 12 weeks. Score each against the cached teammate relevance brief, draft a minimal 'maybe X could be useful?' reply for the top candidates, and persist to data/intel/teammate_outreach/candidates/<date>/hackernews/review/. Optionally emits Discord review cards when UNIFY_DISCORD_REVIEW_WEBHOOK is set, so the operator can approve via ✅/❌ before the post step ships. NO comments are posted by this tick — it stops at draft."
     visibility_policy: silent_by_default
     recurrence_hint: daily_08_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.droid_outreach.reddit_daily
+- id: intel.teammate_outreach.reddit_daily
   enabled: true
   execution_mode: offline
   schedule:
@@ -468,14 +468,14 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_droid_outreach_reddit_daily
-    task_name: 'Droid outreach: Reddit discovery + draft'
-    task_description: Walk the configured Reddit subs (openclaw, hermesagent, LocalLLaMA, selfhosted, LangChain, AI_Agents, LLMDevs, LocalLLM, MachineLearning, voiceassistants) and the Droid-relevant sitewide keyword queries. Score each thread against the Droid relevance brief, draft a minimal reply for the top candidates, persist to data/intel/droid_outreach/candidates/<date>/reddit/review/. Emits Discord review cards when configured. NO comments posted by this tick.
+    entrypoint_function: run_teammate_outreach_reddit_daily
+    task_name: 'Teammate outreach: Reddit discovery + draft'
+    task_description: Walk the configured Reddit subs (openclaw, hermesagent, LocalLLaMA, selfhosted, LangChain, AI_Agents, LLMDevs, LocalLLM, MachineLearning, voiceassistants) and the product-relevant sitewide keyword queries. Score each thread against the Teammate relevance brief, draft a minimal reply for the top candidates, persist to data/intel/teammate_outreach/candidates/<date>/reddit/review/. Emits Discord review cards when configured. NO comments posted by this tick.
     visibility_policy: silent_by_default
     recurrence_hint: daily_09_00_europe_london
   delivery:
     phase: real_delivery
-- id: intel.droid_outreach.discord_daily_summary
+- id: intel.teammate_outreach.discord_daily_summary
   enabled: true
   execution_mode: offline
   schedule:
@@ -486,9 +486,9 @@ tasks:
     scenario_id: brain_jobs_v0
     tick_policy: incrementing
   activation:
-    entrypoint_function: run_droid_outreach_discord_daily_summary
-    task_name: 'Droid outreach: Discord daily summary'
-    task_description: Aggregate today's data/intel/droid_outreach/candidates/<date>/{hackernews,reddit}/posted/ records into a single Discord digest embed-list and POST to the channel configured by UNIFY_DISCORD_DIGEST_WEBHOOK. One embed per comment shipped, linking to the live thread + scoring rationale. Writes an OutboundAction even on no-op days so the daily ritual is auditable.
+    entrypoint_function: run_teammate_outreach_discord_daily_summary
+    task_name: 'Teammate outreach: Discord daily summary'
+    task_description: Aggregate today's data/intel/teammate_outreach/candidates/<date>/{hackernews,reddit}/posted/ records into a single Discord digest embed-list and POST to the channel configured by UNIFY_DISCORD_DIGEST_WEBHOOK. One embed per comment shipped, linking to the live thread + scoring rationale. Writes an OutboundAction even on no-op days so the daily ritual is auditable.
     visibility_policy: silent_by_default
     recurrence_hint: daily_18_00_europe_london
   delivery:

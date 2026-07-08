@@ -197,19 +197,19 @@ def get_deployment() -> DeploymentSpec:
                         "module": "brain.influencers.youtube.runner",
                     },
                     {
-                        "job_id": "intel.droid_outreach.hackernews_daily",
-                        "wrapper": "run_droid_outreach_hackernews_daily",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.hackernews_daily",
+                        "wrapper": "run_teammate_outreach_hackernews_daily",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
-                        "job_id": "intel.droid_outreach.reddit_daily",
-                        "wrapper": "run_droid_outreach_reddit_daily",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.reddit_daily",
+                        "wrapper": "run_teammate_outreach_reddit_daily",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
-                        "job_id": "intel.droid_outreach.discord_daily_summary",
-                        "wrapper": "run_droid_outreach_discord_daily_summary",
-                        "module": "brain.intel.droid_outreach",
+                        "job_id": "intel.teammate_outreach.discord_daily_summary",
+                        "wrapper": "run_teammate_outreach_discord_daily_summary",
+                        "module": "brain.intel.teammate_outreach",
                     },
                     {
                         "job_id": "social.x_discover_draft",
