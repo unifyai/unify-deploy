@@ -32,6 +32,7 @@ def _hash_payload(payload: Any) -> str:
 
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
     from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
+    from unify.data_manager.custom_data import list_data_table_contexts
 
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
@@ -39,6 +40,8 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
         "guidance_dir_count": len(resolved.guidance_dirs),
         "knowledge_tables": list_knowledge_table_names(resolved.knowledge_dirs),
         "knowledge_dirs": len(resolved.knowledge_dirs),
+        "custom_data_tables": list_data_table_contexts(resolved.custom_data_dirs),
+        "custom_data_dirs": len(resolved.custom_data_dirs),
         "blacklist_dir_count": len(resolved.blacklist_dirs),
         "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),

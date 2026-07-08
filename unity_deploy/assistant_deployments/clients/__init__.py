@@ -51,6 +51,7 @@ class ResolvedAssistantDeployment:
     contacts_dirs: list[Path]
     secrets_dirs: list[Path]
     knowledge_dirs: list[Path]
+    custom_data_dirs: list[Path]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
@@ -144,6 +145,18 @@ def _append_knowledge_dir(dirs: list[Path], knowledge_dir: Path | None) -> list[
     if any(str(Path(existing).resolve()) == resolved for existing in dirs):
         return dirs
     return [*dirs, Path(knowledge_dir)]
+
+
+def _append_custom_data_dir(
+    dirs: list[Path],
+    custom_data_dir: Path | None,
+) -> list[Path]:
+    if custom_data_dir is None:
+        return dirs
+    resolved = str(Path(custom_data_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(custom_data_dir)]
 
 
 def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
@@ -252,6 +265,12 @@ def _spec_to_resolved(
     knowledge_dirs: list[Path] = []
     if spec.knowledge_dir is not None:
         knowledge_dirs = _append_knowledge_dir(knowledge_dirs, spec.knowledge_dir)
+    custom_data_dirs: list[Path] = []
+    if spec.custom_data_dir is not None:
+        custom_data_dirs = _append_custom_data_dir(
+            custom_data_dirs,
+            spec.custom_data_dir,
+        )
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
@@ -274,6 +293,11 @@ def _spec_to_resolved(
             guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
         if layer.knowledge_dir is not None:
             knowledge_dirs = _append_knowledge_dir(knowledge_dirs, layer.knowledge_dir)
+        if layer.custom_data_dir is not None:
+            custom_data_dirs = _append_custom_data_dir(
+                custom_data_dirs,
+                layer.custom_data_dir,
+            )
         if layer.blacklist_dir is not None:
             blacklist_dirs = _append_blacklist_dir(
                 blacklist_dirs,
@@ -320,6 +344,7 @@ def _spec_to_resolved(
         contacts_dirs=contacts_dirs,
         secrets_dirs=secrets_dirs,
         knowledge_dirs=knowledge_dirs,
+        custom_data_dirs=custom_data_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
@@ -457,6 +482,7 @@ def resolve(
         contacts_dirs=[],
         secrets_dirs=[],
         knowledge_dirs=[],
+        custom_data_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=[],

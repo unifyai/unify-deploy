@@ -91,6 +91,13 @@ class SeedLayer(BaseModel):
         default=None,
         description="Directory containing knowledge table definitions for this layer.",
     )
+    custom_data_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined DataManager tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
+    )
     blacklist_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing blacklist.jsonl for this layer.",
@@ -188,6 +195,13 @@ class DeploymentSpec(BaseModel):
         default=None,
         description=(
             "Directory containing deployment-defined knowledge tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
+    )
+    custom_data_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined DataManager tables. Each "
             "table is a subdirectory with meta.json and rows.jsonl."
         ),
     )

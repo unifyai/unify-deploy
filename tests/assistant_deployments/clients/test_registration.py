@@ -50,10 +50,32 @@ from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_dire
 from unify.contact_manager.custom_contacts import collect_contacts_from_directories
 from unify.secret_manager.custom_secrets import collect_secrets_from_directories
 from unity_deploy.assistant_deployments.knowledge_source import write_knowledge_table
+from unity_deploy.assistant_deployments.custom_data_source import write_data_table
+from unify.data_manager.custom_data import collect_data_from_directories
 from unify.knowledge_manager.custom_knowledge import collect_knowledge_from_directories
 from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
 
 _KNOWLEDGE_ROOT = Path("/tmp/unify-deploy-test-knowledge")
+_CUSTOM_DATA_ROOT = Path("/tmp/unify-deploy-test-custom-data")
+
+
+def _write_test_custom_data(
+    name: str,
+    *,
+    context: str,
+    seed_key: str,
+    fields: dict[str, str] | None = None,
+    rows: list[dict[str, object]],
+) -> Path:
+    directory = _CUSTOM_DATA_ROOT / name
+    write_data_table(
+        directory,
+        context,
+        fields=fields,
+        seed_key=seed_key,
+        rows=rows,
+    )
+    return directory
 
 
 def _write_test_knowledge(
@@ -1075,6 +1097,46 @@ class TestSeedLayers:
         assert "industry" in tbl["columns"]
         assert len(tbl["rows"]) == 1
         assert tbl["rows"][0]["industry"] == "Tech"
+
+    # -- custom data merge --
+
+    def test_custom_data_deep_merge(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                custom_data_dir=_write_test_custom_data(
+                    "org-layer",
+                    context="CRM/ReferenceCodes",
+                    seed_key="code",
+                    fields={"code": "str"},
+                    rows=[{"code": "A1"}],
+                ),
+            ),
+        )
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                custom_data_dir=_write_test_custom_data(
+                    "user-layer",
+                    context="CRM/ReferenceCodes",
+                    seed_key="code",
+                    fields={"label": "str"},
+                    rows=[{"code": "A1", "label": "Alpha"}],
+                ),
+            ),
+        )
+        result = resolve(org_id=10, user_id="user-aaa")
+        tables = collect_data_from_directories(result.custom_data_dirs)
+        tbl = tables["CRM/ReferenceCodes"]
+        assert "code" in tbl["fields"]
+        assert "label" in tbl["fields"]
+        assert len(tbl["rows"]) == 1
+        assert tbl["rows"][0]["label"] == "Alpha"
 
     # -- blacklist merge --
 

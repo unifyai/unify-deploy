@@ -98,6 +98,7 @@ def _apply_manifest_layers(
     contacts_dirs = list(resolved.contacts_dirs)
     guidance_dirs = list(resolved.guidance_dirs)
     knowledge_dirs = list(resolved.knowledge_dirs)
+    custom_data_dirs = list(resolved.custom_data_dirs)
     secrets_dirs = list(resolved.secrets_dirs)
     blacklist_dirs = list(resolved.blacklist_dirs)
     integrations = list(resolved.integrations)
@@ -112,6 +113,9 @@ def _apply_manifest_layers(
         knowledge = _resolve_layer_path(client_root, layer.knowledge_dir)
         if knowledge is not None:
             knowledge_dirs.append(knowledge)
+        custom_data = _resolve_layer_path(client_root, layer.custom_data_dir)
+        if custom_data is not None:
+            custom_data_dirs.append(custom_data)
         secrets = _resolve_layer_path(client_root, layer.secrets_dir)
         if secrets is not None:
             secrets_dirs.append(secrets)
@@ -129,6 +133,7 @@ def _apply_manifest_layers(
         contacts_dirs=contacts_dirs,
         secrets_dirs=secrets_dirs,
         knowledge_dirs=knowledge_dirs,
+        custom_data_dirs=custom_data_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=resolved.secrets,
         integrations=integrations,
@@ -170,6 +175,9 @@ def _spec_to_resolved(
     knowledge_dirs: list[Path] = []
     if spec.knowledge_dir is not None:
         knowledge_dirs.append(spec.knowledge_dir)
+    custom_data_dirs: list[Path] = []
+    if spec.custom_data_dir is not None:
+        custom_data_dirs.append(spec.custom_data_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs.append(spec.blacklist_dir)
@@ -204,6 +212,7 @@ def _spec_to_resolved(
         contacts_dirs=contacts_dirs,
         secrets_dirs=secrets_dirs,
         knowledge_dirs=knowledge_dirs,
+        custom_data_dirs=custom_data_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=list(spec.integrations or []),
