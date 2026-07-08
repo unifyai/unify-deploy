@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 
@@ -16,18 +15,7 @@ def get_deployment() -> DeploymentSpec:
         name="default",
         actor_config=ActorConfig(),
         guidance_dir=_DIR / "guidance",
-        secrets=[
-            Secret(
-                name="FIREFLIES_API_KEY",
-                value="${FIREFLIES_API_KEY}",
-                description="Fireflies API key for transcript export and CRM sync.",
-            ),
-            Secret(
-                name="GOOGLE_SERVICE_ACCOUNT_KEY_FILE",
-                value="${GOOGLE_SERVICE_ACCOUNT_KEY_FILE}",
-                description="Service account key path for Gmail and Drive delegation.",
-            ),
-        ],
+        secrets_dir=_DIR / "secrets",
         knowledge={
             "CRM/OperatingRules": {
                 "description": "Company CRM operating rules and source-of-truth decisions.",

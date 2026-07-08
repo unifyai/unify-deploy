@@ -33,16 +33,18 @@ def _hash_payload(payload: Any) -> str:
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
+        "secrets_dirs": len(resolved.secrets_dirs),
         "guidance_dir_count": len(resolved.guidance_dirs),
         "knowledge_tables": sorted(resolved.knowledge.keys()),
         "blacklist_dir_count": len(resolved.blacklist_dirs),
-        "secrets": len(resolved.secrets),
+        "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),
         "mcp_configs": len(resolved.mcp_configs),
         "function_dirs": [str(path) for path in resolved.function_dirs],
         "venv_dirs": [str(path) for path in resolved.venv_dirs],
         "guidance_dirs": [str(path) for path in resolved.guidance_dirs],
         "blacklist_dirs": [str(path) for path in resolved.blacklist_dirs],
+        "secrets_dir_paths": [str(path) for path in resolved.secrets_dirs],
     }
 
 

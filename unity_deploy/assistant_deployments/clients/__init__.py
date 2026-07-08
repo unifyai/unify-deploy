@@ -49,6 +49,7 @@ class ResolvedAssistantDeployment:
     venv_dirs: list[Path]
     guidance_dirs: list[Path]
     contacts_dirs: list[Path]
+    secrets_dirs: list[Path]
     knowledge: dict[str, dict[str, Any]]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
@@ -106,6 +107,15 @@ def _merge_by_key(
     for rec in overlay:
         merged[key_fn(rec)] = rec
     return list(merged.values())
+
+
+def _append_secrets_dir(dirs: list[Path], secrets_dir: Path | None) -> list[Path]:
+    if secrets_dir is None:
+        return dirs
+    resolved = str(Path(secrets_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(secrets_dir)]
 
 
 def _append_contacts_dir(dirs: list[Path], contacts_dir: Path | None) -> list[Path]:
@@ -253,6 +263,9 @@ def _spec_to_resolved(
     contacts_dirs: list[Path] = []
     if spec.contacts_dir is not None:
         contacts_dirs = _append_contacts_dir(contacts_dirs, spec.contacts_dir)
+    secrets_dirs: list[Path] = []
+    if spec.secrets_dir is not None:
+        secrets_dirs = _append_secrets_dir(secrets_dirs, spec.secrets_dir)
     guidance_dirs: list[Path] = []
     if spec.guidance_dir is not None:
         guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
@@ -260,7 +273,7 @@ def _spec_to_resolved(
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
-    secrets: list[Secret] = list(spec.secrets)
+    secrets: list[Secret] = []
     integrations: list[str] = list(spec.integrations)
     activations: list[ScenarioActivation] = list(spec.scenarios)
 
@@ -273,6 +286,8 @@ def _spec_to_resolved(
     ):
         if layer.contacts_dir is not None:
             contacts_dirs = _append_contacts_dir(contacts_dirs, layer.contacts_dir)
+        if layer.secrets_dir is not None:
+            secrets_dirs = _append_secrets_dir(secrets_dirs, layer.secrets_dir)
         if layer.guidance_dir is not None:
             guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
         if layer.knowledge:
@@ -282,8 +297,6 @@ def _spec_to_resolved(
                 blacklist_dirs,
                 layer.blacklist_dir,
             )
-        if layer.secrets:
-            secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
         if layer.integrations:
             integrations = _merge_integrations(integrations, list(layer.integrations))
         if layer.scenarios:
@@ -323,6 +336,7 @@ def _spec_to_resolved(
         venv_dirs=[spec.venv_dir] if spec.venv_dir else [],
         guidance_dirs=guidance_dirs,
         contacts_dirs=contacts_dirs,
+        secrets_dirs=secrets_dirs,
         knowledge=knowledge,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
@@ -431,6 +445,7 @@ def resolve(
         venv_dirs=[],
         guidance_dirs=[],
         contacts_dirs=[],
+        secrets_dirs=[],
         knowledge={},
         blacklist_dirs=[],
         secrets=[],

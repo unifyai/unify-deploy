@@ -29,6 +29,7 @@ class RuntimeStateResult:
     guidance_changed: bool = False
     blacklist_changed: bool = False
     contacts_changed: bool = False
+    secrets_changed: bool = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -86,7 +87,11 @@ def compute_runtime_state_fingerprint(
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.blacklist_dirs
         ],
-        "secrets": resolved.secrets,
+        "secrets_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.secrets_dirs
+        ],
+        "supplemental_secrets": _supplemental_secret_fingerprints(resolved.secrets),
         "integrations": resolved.integrations,
         "mcp_configs": resolved.mcp_configs,
         "url_mappings": resolved.url_mappings,
@@ -104,6 +109,17 @@ def compute_runtime_state_fingerprint(
         ],
     }
     return _hash_payload(payload)
+
+
+def _supplemental_secret_fingerprints(secrets: list[Any]) -> list[dict[str, str]]:
+    from unify.secret_manager.custom_secrets import collect_secrets_from_secret_models
+
+    return [
+        {"name": name, "digest": data["custom_hash"]}
+        for name, data in sorted(
+            collect_secrets_from_secret_models(secrets).items(),
+        )
+    ]
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -197,6 +213,10 @@ def materialize_runtime_state(
     from unify.contact_manager.custom_contacts import (
         collect_contacts_from_directories,
     )
+    from unify.secret_manager.custom_secrets import (
+        collect_secrets_from_directories,
+        collect_secrets_from_secret_models,
+    )
     from unify.guidance_manager.custom_guidance import (
         collect_guidance_from_directories,
     )
@@ -212,16 +232,13 @@ def materialize_runtime_state(
     if status is not None:
         status.update(
             phase="syncing_seed_data",
-            message=(
-                "Preparing deployment-defined knowledge, "
-                "secrets, and custom blacklist."
-            ),
-            blocking_resources=("knowledge", "secrets"),
+            message=("Preparing deployment-defined knowledge " "and custom blacklist."),
+            blocking_resources=("knowledge",),
             resources={
                 "contacts": "pending",
                 "guidance": "pending",
                 "knowledge": "syncing",
-                "secrets": "syncing",
+                "secrets": "pending",
                 "functions": "pending",
             },
             data_freshness="partial",
@@ -292,6 +309,7 @@ def materialize_runtime_state(
     custom_changed = False
     guidance_changed = False
     contacts_changed = False
+    secrets_changed = False
     blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
@@ -379,6 +397,20 @@ def materialize_runtime_state(
         contacts_changed,
     )
 
+    secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
+    source_secrets = collect_secrets_from_directories(secrets_dirs)
+    source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
+    secrets_start = perf_counter()
+    sm = ManagerRegistry.get_secret_manager()
+    secrets_changed = sm.sync_custom(source_secrets=source_secrets)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_secrets assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - secrets_start,
+        secrets_changed,
+    )
+
     blacklist_dirs = _dedupe_paths(resolved.blacklist_dirs)
     source_blacklist = collect_blacklist_from_directories(blacklist_dirs)
     blacklist_start = perf_counter()
@@ -416,13 +448,14 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         seed_changed,
         custom_changed,
         guidance_changed,
         contacts_changed,
+        secrets_changed,
         blacklist_changed,
     )
 
@@ -433,5 +466,6 @@ def materialize_runtime_state(
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
         contacts_changed=contacts_changed,
+        secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )

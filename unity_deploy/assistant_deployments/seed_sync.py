@@ -18,7 +18,6 @@ from typing import Any, Callable, TYPE_CHECKING
 import unisdk
 
 from unify.common.hierarchical_logger import ICONS
-from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.integrations.catalog_projection import (
     sync_integrations,
 )
@@ -258,80 +257,6 @@ def sync_seed_data(
 # ---------------------------------------------------------------------------
 
 
-def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
-    if not records:
-        return False
-
-    # Manifest-declared integration secrets emit ``Secret(value="")``: the
-    # name is registered for the runtime allowlist (see
-    # ``_sync_integration_registry``) but the actual value is owned by the
-    # user — pasted via Console or written by the OAuth callback into the
-    # Secrets context directly.  Empty-value rows must NOT flow through
-    # this seed sync, because:
-    #   1. The update path would overwrite the user's pasted value with
-    #      "" whenever the existing-value read returns a stripped value.
-    #   2. The delete branch (when a name later disappears from source)
-    #      would wipe user state.
-    # Filter them out: this sync only touches secrets whose values are
-    # provided at deploy time (e.g. file_secrets from ``load_secrets``).
-    source_records = [r for r in records if (r.value or "").strip()]
-    if not source_records:
-        return False
-    from unify.manager_registry import ManagerRegistry
-
-    sm = ManagerRegistry.get_secret_manager()
-    list_secret_keys = _manager_api(sm, "list_secret_keys")
-    create_secret = _manager_api(sm, "create_secret")
-    update_secret = _manager_api(sm, "update_secret")
-    source_dicts = [r.model_dump() for r in source_records]
-
-    def natural_key(r: dict) -> str:
-        return str(r.get("name", ""))
-
-    def get_existing() -> list[dict]:
-        keys = list_secret_keys()
-        result = []
-        for name in keys:
-            logs = unisdk.get_logs(
-                context=sm._ctx,
-                filter=f"name == '{name}'",
-                limit=1,
-                from_fields=["secret_id", "name", "description"],
-            )
-            if logs:
-                result.append(logs[0].entries)
-        return result
-
-    def create(rec: dict) -> Any:
-        return create_secret(
-            name=rec["name"],
-            value=rec["value"],
-            description=rec.get("description"),
-        )
-
-    def update(_secret_id: int, rec: dict) -> Any:
-        return update_secret(
-            name=rec["name"],
-            value=rec["value"],
-            description=rec.get("description"),
-        )
-
-    # delete_fn intentionally None: removing an integration package from a
-    # deployment must not silently delete user-pasted credentials.  The
-    # user removes those via the Console UI when they want to disconnect.
-    return sync_seed_data(
-        manager_key="secrets",
-        source_records=source_dicts,
-        natural_key_fn=natural_key,
-        get_existing_fn=get_existing,
-        create_fn=create,
-        update_fn=update,
-        delete_fn=None,
-        id_field="secret_id",
-        meta_store=meta,
-    )
-
-
 def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
     """Sync knowledge seed data.
 
@@ -538,24 +463,12 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
     after all managers are constructed but before the Actor is initialized.
     Returns True if any manager was updated.
     """
-    has_data = resolved.knowledge or resolved.secrets or resolved.integration_registry
+    has_data = resolved.knowledge or resolved.integration_registry
     if not has_data:
         return False
 
     meta = SeedMetaStore()
     changed = False
-
-    if resolved.secrets:
-        try:
-            sync_start = perf_counter()
-            changed |= _sync_secrets(resolved.secrets, meta)
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] seed_sync.secrets total=%.2fs",
-                perf_counter() - sync_start,
-            )
-        except Exception:
-            logger.exception("Failed to sync seed secrets")
 
     if resolved.knowledge:
         try:

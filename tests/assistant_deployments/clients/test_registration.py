@@ -23,7 +23,6 @@ from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
-    SecretEntry,
     SeedLayer,
     _merge_actor_configs,
     detect_environment,
@@ -39,17 +38,23 @@ from unity_deploy.assistant_deployments.contacts_source import (
     entry_from_fields as contact_entry_from_fields,
     write_contacts_jsonl,
 )
+from unity_deploy.assistant_deployments.secrets_source import (
+    entry_from_fields as secret_entry_from_fields,
+    write_secrets_jsonl,
+)
 from unity_deploy.assistant_deployments.guidance_source import (
     slugify_key,
     write_guidance_jsonl,
 )
 from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
 from unify.contact_manager.custom_contacts import collect_contacts_from_directories
+from unify.secret_manager.custom_secrets import collect_secrets_from_directories
 from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
 
 _GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
 _BLACKLIST_ROOT = Path("/tmp/unify-deploy-test-blacklist")
 _CONTACTS_ROOT = Path("/tmp/unify-deploy-test-contacts")
+_SECRETS_ROOT = Path("/tmp/unify-deploy-test-secrets")
 
 
 def _write_test_guidance(
@@ -133,11 +138,30 @@ def _clean_registry():
 # ---------------------------------------------------------------------------
 
 
+def _write_test_secrets(
+    name: str,
+    *,
+    secret_name: str,
+    value: str,
+    description: str = "",
+) -> Path:
+    return write_secrets_jsonl(
+        _SECRETS_ROOT / name,
+        [
+            secret_entry_from_fields(
+                name=secret_name,
+                value=value,
+                description=description,
+            ),
+        ],
+    )
+
+
 def _make_spec(
     name: str,
     guideline_text: str,
     *,
-    secrets: list[SecretEntry] | None = None,
+    secrets_dir: Path | None = None,
     function_dir: Path | None = None,
     console_config: dict | None = None,
 ) -> DeploymentSpec:
@@ -149,7 +173,7 @@ def _make_spec(
             title=f"{name} guide",
             content=f"Guidance content for {name}. " + "x" * 50,
         ),
-        secrets=secrets or [],
+        secrets_dir=secrets_dir,
         function_dir=function_dir,
         console_config=console_config,
     )
@@ -345,25 +369,32 @@ class TestDeploymentSpecDerive:
         assert derived.function_dir == _FAKE_DIR_B
 
     def test_secrets_inherited(self):
-        secrets = [
-            SecretEntry(name="KEY_A", value="val", description="Desc"),
-        ]
-        base = _make_spec("base", "Base", secrets=secrets)
+        secrets_dir = _write_test_secrets(
+            "base-secrets",
+            secret_name="KEY_A",
+            value="val",
+            description="Desc",
+        )
+        base = _make_spec("base", "Base", secrets_dir=secrets_dir)
         derived = base.derive(name="v1")
-        assert len(derived.secrets) == 1
-        assert derived.secrets[0].name == "KEY_A"
+        assert derived.secrets_dir == secrets_dir
 
     def test_secrets_replaced_when_passed(self):
-        base_secrets = [
-            SecretEntry(name="OLD", value="old", description="Old"),
-        ]
-        new_secrets = [
-            SecretEntry(name="NEW", value="new", description="New"),
-        ]
-        base = _make_spec("base", "Base", secrets=base_secrets)
-        derived = base.derive(name="v1", secrets=new_secrets)
-        assert len(derived.secrets) == 1
-        assert derived.secrets[0].name == "NEW"
+        base_dir = _write_test_secrets(
+            "base-old",
+            secret_name="OLD",
+            value="old",
+            description="Old",
+        )
+        new_dir = _write_test_secrets(
+            "base-new",
+            secret_name="NEW",
+            value="new",
+            description="New",
+        )
+        base = _make_spec("base", "Base", secrets_dir=base_dir)
+        derived = base.derive(name="v1", secrets_dir=new_dir)
+        assert derived.secrets_dir == new_dir
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -563,10 +594,16 @@ class TestIsolatedResolution:
     def test_secrets_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
 
-        secrets = [
-            SecretEntry(name="KEY_A", value="val-a", description="Secret A"),
-        ]
-        spec = _make_spec("v0", "With secrets", secrets=secrets)
+        spec = _make_spec(
+            "v0",
+            "With secrets",
+            secrets_dir=_write_test_secrets(
+                "resolved-secrets",
+                secret_name="KEY_A",
+                value="val-a",
+                description="Secret A",
+            ),
+        )
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
 
         mapping = DeploymentMapping(
@@ -575,8 +612,8 @@ class TestIsolatedResolution:
         register_client("test", mapping, Path("/fake"))
 
         result = resolve(org_id=10)
-        secret_names = {s.name for s in result.secrets}
-        assert "KEY_A" in secret_names
+        source = collect_secrets_from_directories(result.secrets_dirs)
+        assert "KEY_A" in source
 
     def test_console_config_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
@@ -1105,7 +1142,12 @@ class TestSeedLayers:
                 title="g",
                 content="c " + "x" * 50,
             ),
-            secrets=[SecretEntry(name="CODE_KEY", value="from-spec", description="d")],
+            secrets_dir=_write_test_secrets(
+                "spec-secrets",
+                secret_name="CODE_KEY",
+                value="from-spec",
+                description="d",
+            ),
         )
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
 
@@ -1118,15 +1160,18 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                secrets=[
-                    SecretEntry(name="ORG_KEY", value="org-val", description="org"),
-                ],
+                secrets_dir=_write_test_secrets(
+                    "org-secrets",
+                    secret_name="ORG_KEY",
+                    value="org-val",
+                    description="org",
+                ),
             ),
         )
         result = resolve(org_id=10)
-        names = {s.name for s in result.secrets}
-        assert "CODE_KEY" in names
-        assert "ORG_KEY" in names
+        source = collect_secrets_from_directories(result.secrets_dirs)
+        assert "CODE_KEY" in source
+        assert "ORG_KEY" in source
 
     # -- scope order --
 

@@ -98,7 +98,6 @@ def get_deployment() -> DeploymentSpec:
         # ``GOOGLE_SERVICE_ACCOUNT_KEY_FILE``, ``BRAIN_WHATSAPP_DEFAULT_RECIPIENT``)
         # are written into the SecretManager out-of-band.  ``brain`` defaults
         # ``UNISDK_PROJECT`` to ``Brain`` via ``os.environ.setdefault``.
-        secrets=[],
         knowledge={
             "BrainOperator/JobOwnership": {
                 "description": (

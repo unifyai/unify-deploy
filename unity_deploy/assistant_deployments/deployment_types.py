@@ -79,6 +79,10 @@ class SeedLayer(BaseModel):
         default=None,
         description="Directory containing contacts.jsonl for this layer.",
     )
+    secrets_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing secrets.jsonl for this layer.",
+    )
     guidance_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing guidance.jsonl for this layer.",
@@ -88,7 +92,6 @@ class SeedLayer(BaseModel):
         default=None,
         description="Directory containing blacklist.jsonl for this layer.",
     )
-    secrets: list[Secret] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)
     scenarios: list[ScenarioActivation] = Field(
         default_factory=list,
@@ -173,6 +176,10 @@ class DeploymentSpec(BaseModel):
     contacts_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing contacts.jsonl registered with the actor.",
+    )
+    secrets_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing secrets.jsonl registered with the actor.",
     )
     knowledge: dict[str, dict] = Field(
         default_factory=dict,

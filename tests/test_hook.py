@@ -56,6 +56,7 @@ def _session_details():
 def _resolved_startup_spec():
     return SimpleNamespace(
         contacts_dirs=[],
+        secrets_dirs=[],
         guidance_dirs=[],
         knowledge=[],
         secrets=[],

@@ -56,6 +56,15 @@ class _FakeContactManager:
         return True
 
 
+class _FakeSecretManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_custom(self, *, source_secrets=None) -> bool:
+        self.calls.append({"source_secrets": source_secrets})
+        return True
+
+
 def _install_materialize_fakes(
     monkeypatch,
     *,
@@ -63,10 +72,13 @@ def _install_materialize_fakes(
     venv_collector,
     guidance_collector,
     contacts_collector,
+    secrets_collector,
+    secrets_model_collector,
     blacklist_collector,
     function_manager: _FakeFunctionManager,
     guidance_manager: _FakeGuidanceManager,
     contact_manager: _FakeContactManager,
+    secret_manager: _FakeSecretManager,
     blacklist_manager: _FakeBlacklistManager,
 ) -> None:
     custom_functions = ModuleType("unify.function_manager.custom_functions")
@@ -102,6 +114,15 @@ def _install_materialize_fakes(
         custom_contacts,
     )
 
+    custom_secrets = ModuleType("unify.secret_manager.custom_secrets")
+    custom_secrets.collect_secrets_from_directories = secrets_collector
+    custom_secrets.collect_secrets_from_secret_models = secrets_model_collector
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.secret_manager.custom_secrets",
+        custom_secrets,
+    )
+
     manager_registry = ModuleType("unify.manager_registry")
 
     class ManagerRegistry:
@@ -116,6 +137,10 @@ def _install_materialize_fakes(
         @staticmethod
         def get_contact_manager():
             return contact_manager
+
+        @staticmethod
+        def get_secret_manager():
+            return secret_manager
 
         @staticmethod
         def get_blacklist_manager():
@@ -141,6 +166,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
     fake_cm = _FakeContactManager()
+    fake_sm = _FakeSecretManager()
     fake_bm = _FakeBlacklistManager()
 
     _install_materialize_fakes(
@@ -149,10 +175,13 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
         contacts_collector=lambda _dirs: {},
+        secrets_collector=lambda _dirs: {},
+        secrets_model_collector=lambda _secrets: {},
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
         contact_manager=fake_cm,
+        secret_manager=fake_sm,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -167,6 +196,8 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
             venv_dirs=[],
             guidance_dirs=[],
             contacts_dirs=[],
+            secrets_dirs=[],
+            secrets=[],
             blacklist_dirs=[],
         ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
@@ -176,10 +207,12 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert result.custom_changed is True
     assert result.guidance_changed is True
     assert result.contacts_changed is True
+    assert result.secrets_changed is True
     assert result.blacklist_changed is True
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
     assert fake_cm.calls == [{"source_contacts": {}}]
+    assert fake_sm.calls == [{"source_secrets": {}}]
     assert fake_bm.calls == [{"source_blacklist": {}}]
 
 
@@ -192,6 +225,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
     fake_cm = _FakeContactManager()
+    fake_sm = _FakeSecretManager()
     fake_bm = _FakeBlacklistManager()
 
     def collect_functions(dirs):
@@ -204,10 +238,13 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
         contacts_collector=lambda _dirs: {},
+        secrets_collector=lambda _dirs: {},
+        secrets_model_collector=lambda _secrets: {},
         blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
         contact_manager=fake_cm,
+        secret_manager=fake_sm,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -222,6 +259,8 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             venv_dirs=[],
             guidance_dirs=[],
             contacts_dirs=[],
+            secrets_dirs=[],
+            secrets=[],
             blacklist_dirs=[],
         ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
