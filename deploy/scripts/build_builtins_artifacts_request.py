@@ -45,14 +45,11 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         return tomllib.load(file)
 
 
-def build_request(
+def _matching_sync_plans(
     manifest: dict[str, Any],
     *,
-    environment: str,
-    workers: int,
-    batch_size: int,
-    backend_id: str | None = None,
-) -> dict[str, Any]:
+    backend_id: str | None,
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
     providers = manifest.get("providers") or {}
     sync_plans = []
     for provider_id, config in sorted(providers.items()):
@@ -63,12 +60,19 @@ def build_request(
             and sync
         ):
             sync_plans.append((str(provider_id), config, sync))
-    if len(sync_plans) != 1:
-        raise ValueError(
-            f"expected exactly one enabled provider sync, got {len(sync_plans)}",
-        )
+    return sync_plans
 
-    provider_id, config, sync = sync_plans[0]
+
+def _build_backend_request(
+    provider_id: str,
+    config: dict[str, Any],
+    sync: dict[str, Any],
+    *,
+    environment: str,
+    schema_version: int,
+    workers: int,
+    batch_size: int,
+) -> dict[str, Any]:
     mode = sync.get("mode", "partial")
     if mode not in {"partial", "full"}:
         raise ValueError(f"{provider_id}: sync.mode must be partial or full")
@@ -98,7 +102,7 @@ def build_request(
             sync_payload["include_all_apps"] = True
 
     desired_config = {
-        "schema_version": manifest.get("schema_version", 1),
+        "schema_version": schema_version,
         "environment": environment,
         "seed_owner": SEED_OWNER,
         "artifact_kind": "integrations",
@@ -126,6 +130,66 @@ def build_request(
     }
 
 
+def build_request(
+    manifest: dict[str, Any],
+    *,
+    environment: str,
+    workers: int,
+    batch_size: int,
+    backend_id: str | None = None,
+) -> dict[str, Any]:
+    sync_plans = _matching_sync_plans(manifest, backend_id=backend_id)
+    if len(sync_plans) != 1:
+        raise ValueError(
+            f"expected exactly one enabled provider sync, got {len(sync_plans)}",
+        )
+    provider_id, config, sync = sync_plans[0]
+    return _build_backend_request(
+        provider_id,
+        config,
+        sync,
+        environment=environment,
+        schema_version=manifest.get("schema_version", 1),
+        workers=workers,
+        batch_size=batch_size,
+    )
+
+
+def build_requests(
+    manifest: dict[str, Any],
+    *,
+    environment: str,
+    workers: int,
+    batch_size: int,
+    backend_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build one seed request per enabled provider sync in the manifest.
+
+    Unlike ``build_request``, this does not require the manifest to resolve
+    to a single provider: the Cloud Run seed job already seeds every enabled
+    provider from the manifest in one run, so the deploy pre-flight step only
+    needs a ``desired_hash``/``run_id`` per provider for status reporting.
+    """
+    sync_plans = _matching_sync_plans(manifest, backend_id=backend_id)
+    if not sync_plans:
+        raise ValueError(
+            f"expected at least one enabled provider sync, got {len(sync_plans)}",
+        )
+    schema_version = manifest.get("schema_version", 1)
+    return [
+        _build_backend_request(
+            provider_id,
+            config,
+            sync,
+            environment=environment,
+            schema_version=schema_version,
+            workers=workers,
+            batch_size=batch_size,
+        )
+        for provider_id, config, sync in sync_plans
+    ]
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
@@ -138,13 +202,24 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    payload = build_request(
-        _load_manifest(Path(args.manifest)),
-        environment=args.environment,
-        workers=args.workers,
-        batch_size=args.batch_size,
-        backend_id=args.backend_id or None,
-    )
+    manifest = _load_manifest(Path(args.manifest))
+    backend_id = args.backend_id or None
+    if backend_id is not None:
+        payload = build_request(
+            manifest,
+            environment=args.environment,
+            workers=args.workers,
+            batch_size=args.batch_size,
+            backend_id=backend_id,
+        )
+    else:
+        payloads = build_requests(
+            manifest,
+            environment=args.environment,
+            workers=args.workers,
+            batch_size=args.batch_size,
+        )
+        payload = payloads[0] if len(payloads) == 1 else {"requests": payloads}
     print(_json_dumps(payload))
     return 0
 

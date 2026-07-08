@@ -179,8 +179,22 @@ if [[ -n "$backend_id" ]]; then
 fi
 "${request_builder_args[@]}" > "$request_json"
 
-desired_hash="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["desired_hash"])' "$request_json")"
-run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$request_json")"
+# The request builder emits a single payload when the manifest resolves to
+# one enabled provider, or ``{"requests": [...]}`` when it resolves to
+# several (the seed job always seeds every enabled provider from the
+# manifest in one run, so status reporting joins per-provider values).
+desired_hash="$(python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+requests = data.get("requests")
+print(",".join(r["desired_hash"] for r in requests) if requests else data["desired_hash"])
+' "$request_json")"
+run_id="$(python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+requests = data.get("requests")
+print(",".join(r["run_id"] for r in requests) if requests else data["run_id"])
+' "$request_json")"
 # ``timeout`` bounds the Cloud Run task (the trigger + the poll loop that waits
 # for the Orchestra-launched worker job). The seed endpoint returns 202 quickly,
 # so the POST itself only needs a short trigger timeout; the bulk of the budget
