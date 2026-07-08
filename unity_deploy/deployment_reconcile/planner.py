@@ -34,6 +34,9 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
     from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
     from unify.data_manager.custom_data import list_data_table_contexts
 
+    from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
+
+    dashboard_entities = list_dashboard_entity_ids(resolved.dashboards_dirs)
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
         "secrets_dirs": len(resolved.secrets_dirs),
@@ -42,6 +45,9 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
         "knowledge_dirs": len(resolved.knowledge_dirs),
         "custom_data_tables": list_data_table_contexts(resolved.custom_data_dirs),
         "custom_data_dirs": len(resolved.custom_data_dirs),
+        "dashboard_tiles": dashboard_entities["tiles"],
+        "dashboard_layouts": dashboard_entities["layouts"],
+        "dashboards_dirs": len(resolved.dashboards_dirs),
         "blacklist_dir_count": len(resolved.blacklist_dirs),
         "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),

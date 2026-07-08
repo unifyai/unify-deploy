@@ -31,6 +31,7 @@ class ManifestLayer:
     contacts_dir: str | None = None
     knowledge_dir: str | None = None
     custom_data_dir: str | None = None
+    dashboards_dir: str | None = None
     guidance_dir: str | None = None
     secrets_dir: str | None = None
     blacklist_dir: str | None = None
@@ -127,6 +128,7 @@ def resolve_manifest_layers(
                     contacts_dir=layer.get("contacts_dir"),
                     knowledge_dir=layer.get("knowledge_dir"),
                     custom_data_dir=layer.get("custom_data_dir"),
+                    dashboards_dir=layer.get("dashboards_dir"),
                     guidance_dir=layer.get("guidance_dir"),
                     secrets_dir=layer.get("secrets_dir"),
                     blacklist_dir=layer.get("blacklist_dir"),

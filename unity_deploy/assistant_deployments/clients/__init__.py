@@ -52,6 +52,7 @@ class ResolvedAssistantDeployment:
     secrets_dirs: list[Path]
     knowledge_dirs: list[Path]
     custom_data_dirs: list[Path]
+    dashboards_dirs: list[Path]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
@@ -157,6 +158,15 @@ def _append_custom_data_dir(
     if any(str(Path(existing).resolve()) == resolved for existing in dirs):
         return dirs
     return [*dirs, Path(custom_data_dir)]
+
+
+def _append_dashboards_dir(dirs: list[Path], dashboards_dir: Path | None) -> list[Path]:
+    if dashboards_dir is None:
+        return dirs
+    resolved = str(Path(dashboards_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(dashboards_dir)]
 
 
 def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
@@ -271,6 +281,9 @@ def _spec_to_resolved(
             custom_data_dirs,
             spec.custom_data_dir,
         )
+    dashboards_dirs: list[Path] = []
+    if spec.dashboards_dir is not None:
+        dashboards_dirs = _append_dashboards_dir(dashboards_dirs, spec.dashboards_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
@@ -297,6 +310,11 @@ def _spec_to_resolved(
             custom_data_dirs = _append_custom_data_dir(
                 custom_data_dirs,
                 layer.custom_data_dir,
+            )
+        if layer.dashboards_dir is not None:
+            dashboards_dirs = _append_dashboards_dir(
+                dashboards_dirs,
+                layer.dashboards_dir,
             )
         if layer.blacklist_dir is not None:
             blacklist_dirs = _append_blacklist_dir(
@@ -345,6 +363,7 @@ def _spec_to_resolved(
         secrets_dirs=secrets_dirs,
         knowledge_dirs=knowledge_dirs,
         custom_data_dirs=custom_data_dirs,
+        dashboards_dirs=dashboards_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
@@ -483,6 +502,7 @@ def resolve(
         secrets_dirs=[],
         knowledge_dirs=[],
         custom_data_dirs=[],
+        dashboards_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=[],

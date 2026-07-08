@@ -31,6 +31,7 @@ class RuntimeStateResult:
     contacts_changed: bool = False
     knowledge_changed: bool = False
     custom_data_changed: bool = False
+    dashboards_changed: bool = False
     blacklist_changed: bool = False
 
 
@@ -91,6 +92,10 @@ def compute_runtime_state_fingerprint(
         "custom_data_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.custom_data_dirs
+        ],
+        "dashboards_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.dashboards_dirs
         ],
         "blacklist_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
@@ -487,6 +492,23 @@ def materialize_runtime_state(
         custom_data_changed,
     )
 
+    dashboards_dirs = _dedupe_paths(resolved.dashboards_dirs)
+    from unify.dashboard_manager.custom_dashboards import (
+        collect_dashboards_from_directories,
+    )
+
+    source_dashboards = collect_dashboards_from_directories(dashboards_dirs)
+    dashboards_start = perf_counter()
+    dash_mgr = ManagerRegistry.get_dashboard_manager()
+    dashboards_changed = dash_mgr.sync_custom(source_entities=source_dashboards)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_dashboards assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - dashboards_start,
+        dashboards_changed,
+    )
+
     secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
     source_secrets = collect_secrets_from_directories(secrets_dirs)
     source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
@@ -533,13 +555,14 @@ def materialize_runtime_state(
                 "guidance": "ready",
                 "knowledge": "ready",
                 "data": "ready",
+                "dashboards": "ready",
                 "secrets": "ready",
                 "functions": "ready",
             },
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         integration_registry_changed,
@@ -548,6 +571,7 @@ def materialize_runtime_state(
         contacts_changed,
         knowledge_changed,
         custom_data_changed,
+        dashboards_changed,
         secrets_changed,
         blacklist_changed,
     )
@@ -561,6 +585,7 @@ def materialize_runtime_state(
         contacts_changed=contacts_changed,
         knowledge_changed=knowledge_changed,
         custom_data_changed=custom_data_changed,
+        dashboards_changed=dashboards_changed,
         secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )
