@@ -20,13 +20,32 @@ class _FakeFunctionManager:
         )
         return True
 
+    def list_functions(self):
+        return {}
+
+
+class _FakeGuidanceManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_custom(self, *, source_guidance=None, function_name_to_id=None) -> bool:
+        self.calls.append(
+            {
+                "source_guidance": source_guidance,
+                "function_name_to_id": function_name_to_id,
+            },
+        )
+        return True
+
 
 def _install_materialize_fakes(
     monkeypatch,
     *,
     function_collector,
     venv_collector,
+    guidance_collector,
     function_manager: _FakeFunctionManager,
+    guidance_manager: _FakeGuidanceManager,
 ) -> None:
     custom_functions = ModuleType("unify.function_manager.custom_functions")
     custom_functions.collect_functions_from_directories = function_collector
@@ -37,12 +56,24 @@ def _install_materialize_fakes(
         custom_functions,
     )
 
+    custom_guidance = ModuleType("unify.guidance_manager.custom_guidance")
+    custom_guidance.collect_guidance_from_directories = guidance_collector
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.guidance_manager.custom_guidance",
+        custom_guidance,
+    )
+
     manager_registry = ModuleType("unify.manager_registry")
 
     class ManagerRegistry:
         @staticmethod
         def get_function_manager():
             return function_manager
+
+        @staticmethod
+        def get_guidance_manager():
+            return guidance_manager
 
     manager_registry.ManagerRegistry = ManagerRegistry
     monkeypatch.setitem(
@@ -62,27 +93,32 @@ def _install_materialize_fakes(
 
 def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_fm = _FakeFunctionManager()
+    fake_gm = _FakeGuidanceManager()
 
     _install_materialize_fakes(
         monkeypatch,
         function_collector=lambda _dirs: {},
         venv_collector=lambda _dirs: {},
+        guidance_collector=lambda _dirs: {},
         function_manager=fake_fm,
+        guidance_manager=fake_gm,
     )
     monkeypatch.setattr(
         materialize,
         "_enabled_integration_source_dirs",
-        lambda: ([], []),
+        lambda: ([], [], []),
     )
 
     result = materialize.materialize_runtime_state(
-        SimpleNamespace(function_dirs=[], venv_dirs=[]),
+        SimpleNamespace(function_dirs=[], venv_dirs=[], guidance_dirs=[]),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
         revision="test-revision",
     )
 
     assert result.custom_changed is True
+    assert result.guidance_changed is True
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
+    assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
 
 
 def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
@@ -92,6 +128,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     integration_dir.mkdir()
     seen_dirs: list[Path] = []
     fake_fm = _FakeFunctionManager()
+    fake_gm = _FakeGuidanceManager()
 
     def collect_functions(dirs):
         seen_dirs.extend(dirs)
@@ -101,16 +138,22 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         monkeypatch,
         function_collector=collect_functions,
         venv_collector=lambda _dirs: {},
+        guidance_collector=lambda _dirs: {},
         function_manager=fake_fm,
+        guidance_manager=fake_gm,
     )
     monkeypatch.setattr(
         materialize,
         "_enabled_integration_source_dirs",
-        lambda: ([integration_dir], []),
+        lambda: ([integration_dir], [], []),
     )
 
     result = materialize.materialize_runtime_state(
-        SimpleNamespace(function_dirs=[deployment_dir], venv_dirs=[]),
+        SimpleNamespace(
+            function_dirs=[deployment_dir],
+            venv_dirs=[],
+            guidance_dirs=[],
+        ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
         revision="test-revision",
     )

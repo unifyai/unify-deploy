@@ -26,6 +26,7 @@ class RuntimeStateResult:
     revision: str
     seed_changed: bool = False
     custom_changed: bool = False
+    guidance_changed: bool = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -75,7 +76,6 @@ def compute_runtime_state_fingerprint(
 
     payload = {
         "contacts": resolved.contacts,
-        "guidance": resolved.guidance,
         "knowledge": resolved.knowledge,
         "blacklist": resolved.blacklist,
         "secrets": resolved.secrets,
@@ -89,6 +89,10 @@ def compute_runtime_state_fingerprint(
         "venv_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.venv_dirs
+        ],
+        "guidance_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.guidance_dirs
         ],
     }
     return _hash_payload(payload)
@@ -108,15 +112,17 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
     return result
 
 
-def _enabled_integration_source_dirs() -> tuple[list[Path], list[Path]] | None:
-    """Return enabled integration function/venv dirs, or None if unknown.
+def _enabled_integration_source_dirs() -> (
+    tuple[list[Path], list[Path], list[Path]] | None
+):
+    """Return enabled integration function/venv/guidance dirs, or None if unknown.
 
-    ``FunctionManager.sync_custom`` treats its input as the authoritative set of
-    source-defined custom functions. Runtime reconciliation therefore needs to
-    include enabled integration packages in the same set before deleting stale
-    deployment functions. If integration discovery cannot be read, return
-    ``None`` so callers can avoid destructive empty syncs based on incomplete
-    information.
+    ``FunctionManager.sync_custom`` and ``GuidanceManager.sync_custom`` treat
+    their inputs as the authoritative set of source-defined rows. Runtime
+    reconciliation therefore needs to include enabled integration packages in
+    the same sets before deleting stale deployment-owned rows. If integration
+    discovery cannot be read, return ``None`` so callers can avoid destructive
+    empty syncs based on incomplete information.
     """
 
     try:
@@ -141,6 +147,7 @@ def _enabled_integration_source_dirs() -> tuple[list[Path], list[Path]] | None:
 
     function_dirs: list[Path] = []
     venv_dirs: list[Path] = []
+    guidance_dirs: list[Path] = []
     for package in enabled.values():
         function_dir = package.get("function_dir")
         if function_dir is not None:
@@ -152,7 +159,15 @@ def _enabled_integration_source_dirs() -> tuple[list[Path], list[Path]] | None:
             if venv_dir.is_dir():
                 venv_dirs.append(venv_dir)
 
-    return _dedupe_paths(function_dirs), _dedupe_paths(venv_dirs)
+        guidance_dir = package.get("guidance_dir")
+        if guidance_dir is not None:
+            guidance_dirs.append(Path(guidance_dir))
+
+    return (
+        _dedupe_paths(function_dirs),
+        _dedupe_paths(venv_dirs),
+        _dedupe_paths(guidance_dirs),
+    )
 
 
 def materialize_runtime_state(
@@ -168,6 +183,9 @@ def materialize_runtime_state(
         collect_functions_from_directories,
         collect_venvs_from_directories,
     )
+    from unify.guidance_manager.custom_guidance import (
+        collect_guidance_from_directories,
+    )
     from unify.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.seed_sync import sync_all_seed_data
 
@@ -181,13 +199,13 @@ def materialize_runtime_state(
         status.update(
             phase="syncing_seed_data",
             message=(
-                "Preparing deployment-defined contacts, guidance, knowledge, "
+                "Preparing deployment-defined contacts, knowledge, "
                 "secrets, and blacklist."
             ),
-            blocking_resources=("contacts", "guidance", "knowledge", "secrets"),
+            blocking_resources=("contacts", "knowledge", "secrets"),
             resources={
                 "contacts": "syncing",
-                "guidance": "syncing",
+                "guidance": "pending",
                 "knowledge": "syncing",
                 "secrets": "syncing",
                 "functions": "pending",
@@ -205,7 +223,7 @@ def materialize_runtime_state(
 
     function_resources = {
         "contacts": "ready",
-        "guidance": "ready",
+        "guidance": "pending",
         "knowledge": "ready",
         "secrets": "ready",
         "functions": "syncing",
@@ -213,9 +231,14 @@ def materialize_runtime_state(
     integration_source_dirs = _enabled_integration_source_dirs()
     integration_function_dirs: list[Path] = []
     integration_venv_dirs: list[Path] = []
+    integration_guidance_dirs: list[Path] = []
     can_sync_custom = integration_source_dirs is not None
     if can_sync_custom:
-        integration_function_dirs, integration_venv_dirs = integration_source_dirs
+        (
+            integration_function_dirs,
+            integration_venv_dirs,
+            integration_guidance_dirs,
+        ) = integration_source_dirs
 
     function_dirs = (
         _dedupe_paths([*resolved.function_dirs, *integration_function_dirs])
@@ -224,6 +247,11 @@ def materialize_runtime_state(
     )
     venv_dirs = (
         _dedupe_paths([*resolved.venv_dirs, *integration_venv_dirs])
+        if can_sync_custom
+        else []
+    )
+    guidance_dirs = (
+        _dedupe_paths([*resolved.guidance_dirs, *integration_guidance_dirs])
         if can_sync_custom
         else []
     )
@@ -248,18 +276,21 @@ def materialize_runtime_state(
         )
 
     custom_changed = False
+    guidance_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
         collect_start = perf_counter()
         source_fns = collect_functions_from_directories(function_dirs)
         source_venvs = collect_venvs_from_directories(venv_dirs)
+        source_guidance = collect_guidance_from_directories(guidance_dirs)
         log_startup_timing(
             logger,
-            "⏱️ [StartupTiming] runtime_reconcile.collect_custom_sources assistant=%s duration=%.2fs functions=%d venvs=%d",
+            "⏱️ [StartupTiming] runtime_reconcile.collect_custom_sources assistant=%s duration=%.2fs functions=%d venvs=%d guidance=%d",
             identity.assistant_id,
             perf_counter() - collect_start,
             len(source_fns),
             len(source_venvs),
+            len(source_guidance),
         )
         fm_start = perf_counter()
         fm = ManagerRegistry.get_function_manager()
@@ -280,6 +311,37 @@ def materialize_runtime_state(
             identity.assistant_id,
             perf_counter() - sync_start,
             custom_changed,
+        )
+
+        function_name_to_id = {
+            name: data["function_id"]
+            for name, data in fm.list_functions().items()
+            if data.get("function_id") is not None
+        }
+        if status is not None:
+            status.update(
+                phase="syncing_custom_functions",
+                message="Preparing deployment-defined custom guidance.",
+                blocking_resources=("guidance",),
+                resources={
+                    **function_resources,
+                    "functions": "ready",
+                    "guidance": "syncing",
+                },
+                data_freshness="partial",
+            )
+        guidance_start = perf_counter()
+        gm = ManagerRegistry.get_guidance_manager()
+        guidance_changed = gm.sync_custom(
+            source_guidance=source_guidance,
+            function_name_to_id=function_name_to_id,
+        )
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.sync_custom_guidance assistant=%s duration=%.2fs changed=%s",
+            identity.assistant_id,
+            perf_counter() - guidance_start,
+            guidance_changed,
         )
     else:
         logger.warning(
@@ -312,11 +374,12 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s",
         identity.assistant_id,
         revision[:16],
         seed_changed,
         custom_changed,
+        guidance_changed,
     )
 
     return RuntimeStateResult(
@@ -324,4 +387,5 @@ def materialize_runtime_state(
         revision=revision,
         seed_changed=seed_changed,
         custom_changed=custom_changed,
+        guidance_changed=guidance_changed,
     )

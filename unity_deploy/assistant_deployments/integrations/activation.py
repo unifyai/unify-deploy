@@ -54,7 +54,7 @@ def expand_integrations(
 
     resolved.function_dirs.extend(loaded.function_dirs)
     resolved.venv_dirs.extend(loaded.venv_dirs)
-    resolved.guidance.extend(loaded.guidance)
+    resolved.guidance_dirs.extend(loaded.guidance_dirs)
     resolved.secrets.extend(loaded.secrets)
     resolved.url_mappings.update(loaded.url_mappings)
     resolved.mcp_configs.extend(loaded.mcp_configs)

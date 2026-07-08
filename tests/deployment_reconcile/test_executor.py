@@ -8,7 +8,6 @@ from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
-    GuidanceEntry,
 )
 from unity_deploy import deployment_reconcile
 from unity_deploy.deployment_reconcile import executor
@@ -19,15 +18,6 @@ def _spec(name: str, console_config: dict | None = None) -> DeploymentSpec:
     return DeploymentSpec(
         name=name,
         actor_config=ActorConfig(guidelines=f"{name} guidelines"),
-        guidance=[
-            GuidanceEntry(
-                title=f"{name} guide",
-                content=(
-                    "Guidance for deployment reconciliation tests with enough "
-                    "detail to satisfy deployment validation constraints."
-                ),
-            ),
-        ],
         console_config=console_config,
     )
 
@@ -87,7 +77,7 @@ def test_build_deployment_target_plans_only_uses_assistant_targets():
 
     assert len(plans) == 1
     assert plans[0].target_key == "staging/client_a/v1/101"
-    assert plans[0].runtime_summary["guidance"] == 1
+    assert plans[0].runtime_summary["guidance_dir_count"] == 0
     assert plans[0].control_plane_revision
     assert plans[0].runtime_revision
 

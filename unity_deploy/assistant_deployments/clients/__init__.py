@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar, TYPE_CHECKING
 
-from unify.guidance_manager.types.guidance import Guidance
 from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 
@@ -48,8 +47,8 @@ class ResolvedAssistantDeployment:
     environments: list[BaseEnvironment]
     function_dirs: list[Path]
     venv_dirs: list[Path]
+    guidance_dirs: list[Path]
     contacts: list[dict[str, Any]]
-    guidance: list[Guidance]
     knowledge: dict[str, dict[str, Any]]
     blacklist: list[dict[str, Any]]
     secrets: list[Secret]
@@ -113,8 +112,13 @@ def _contact_key(r: dict) -> str:
     return f"{r.get('first_name', '')}|{r.get('surname', '')}".lower()
 
 
-def _guidance_key(r: Guidance) -> str:
-    return r.title
+def _append_guidance_dir(dirs: list[Path], guidance_dir: Path | None) -> list[Path]:
+    if guidance_dir is None:
+        return dirs
+    resolved = str(Path(guidance_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(guidance_dir)]
 
 
 def _blacklist_key(r: dict) -> str:
@@ -237,7 +241,9 @@ def _spec_to_resolved(
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
     contacts: list[dict] = list(spec.contacts)
-    guidance: list[Guidance] = list(spec.guidance)
+    guidance_dirs: list[Path] = []
+    if spec.guidance_dir is not None:
+        guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
     knowledge: dict[str, dict] = dict(spec.knowledge)
     blacklist: list[dict] = list(spec.blacklist)
     secrets: list[Secret] = list(spec.secrets)
@@ -253,8 +259,8 @@ def _spec_to_resolved(
     ):
         if layer.contacts:
             contacts = _merge_by_key(contacts, layer.contacts, _contact_key)
-        if layer.guidance:
-            guidance = _merge_by_key(guidance, list(layer.guidance), _guidance_key)
+        if layer.guidance_dir is not None:
+            guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
         if layer.knowledge:
             knowledge = _merge_knowledge(knowledge, layer.knowledge)
         if layer.blacklist:
@@ -298,8 +304,8 @@ def _spec_to_resolved(
         environments=list(spec.environments),
         function_dirs=[spec.function_dir] if spec.function_dir else [],
         venv_dirs=[spec.venv_dir] if spec.venv_dir else [],
+        guidance_dirs=guidance_dirs,
         contacts=contacts,
-        guidance=guidance,
         knowledge=knowledge,
         blacklist=blacklist,
         secrets=secrets,
@@ -406,8 +412,8 @@ def resolve(
         environments=[],
         function_dirs=[],
         venv_dirs=[],
+        guidance_dirs=[],
         contacts=[],
-        guidance=[],
         knowledge={},
         blacklist=[],
         secrets=[],

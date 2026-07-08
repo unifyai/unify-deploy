@@ -16,7 +16,10 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from unify.guidance_manager.types.guidance import Guidance
+from unify.guidance_manager.custom_guidance import (
+    collect_custom_guidance,
+    guidance_titles_from_source,
+)
 from unity_deploy.assistant_deployments.integrations.discovery import (
     _load_manifest,
 )
@@ -35,8 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 def _stem_to_title(stem: str) -> str:
-    """Mirror ``_load_guidance``'s title transformation so the runtime
-    registry's ``guidance_titles`` resolve back to seeded ``Guidance.title``s."""
+    """Mirror guidance.jsonl title transformation for registry rows."""
     return stem.replace("_", " ").replace("-", " ").title()
 
 
@@ -48,7 +50,7 @@ class LoadedIntegration:
     root_dir: Path
     function_dir: Path | None = None
     venv_dir: Path | None = None
-    guidance_entries: list[Guidance] = field(default_factory=list)
+    guidance_dir: Path | None = None
     secret_entries: list[Secret] = field(default_factory=list)
     scenario_specs: list[ScenarioSpec] = field(default_factory=list)
     url_mapping: dict[str, str] | None = None
@@ -69,7 +71,7 @@ class AggregatedIntegrations:
 
     function_dirs: list[Path] = field(default_factory=list)
     venv_dirs: list[Path] = field(default_factory=list)
-    guidance: list[Guidance] = field(default_factory=list)
+    guidance_dirs: list[Path] = field(default_factory=list)
     secrets: list[Secret] = field(default_factory=list)
     scenarios: list[ScenarioSpec] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
@@ -103,8 +105,8 @@ def load_integration(manifest: IntegrationManifest, root: Path) -> LoadedIntegra
         result.venv_dir = venvs_dir
 
     guidance_dir = root / "guidance"
-    if guidance_dir.is_dir():
-        result.guidance_entries = _load_guidance(guidance_dir)
+    if (guidance_dir / "guidance.jsonl").is_file():
+        result.guidance_dir = guidance_dir
 
     if manifest.secrets:
         result.secret_entries = [
@@ -242,7 +244,8 @@ def load_integrations(
             result.function_dirs.append(loaded.function_dir)
         if loaded.venv_dir is not None:
             result.venv_dirs.append(loaded.venv_dir)
-        result.guidance.extend(loaded.guidance_entries)
+        if loaded.guidance_dir is not None:
+            result.guidance_dirs.append(loaded.guidance_dir)
         result.secrets.extend(loaded.secret_entries)
         result.scenarios.extend(loaded.scenario_specs)
         if loaded.url_mapping:
@@ -255,22 +258,6 @@ def load_integrations(
     return result
 
 
-def _load_guidance(guidance_dir: Path) -> list[Guidance]:
-    """Parse guidance markdown files into canonical :class:`Guidance` models.
-
-    Each ``.md`` file becomes a :class:`Guidance` instance with
-    title derived from the filename and content from the file body.
-    Files with empty bodies are skipped (Guidance requires min_length=1).
-    """
-    entries: list[Guidance] = []
-    for md_file in sorted(guidance_dir.glob("*.md")):
-        try:
-            raw_content = md_file.read_text().strip()
-            if not raw_content:
-                logger.warning("Skipping empty guidance file: %s", md_file)
-                continue
-            title = md_file.stem.replace("_", " ").replace("-", " ").title()
-            entries.append(Guidance(title=title, content=raw_content))
-        except OSError:
-            logger.warning("Failed to read guidance file: %s", md_file, exc_info=True)
-    return entries
+def guidance_titles_for_dir(guidance_dir: Path) -> list[str]:
+    """Return sorted titles from a package's ``guidance.jsonl`` file."""
+    return guidance_titles_from_source(collect_custom_guidance(path=guidance_dir))

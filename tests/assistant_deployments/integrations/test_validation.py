@@ -1,7 +1,10 @@
 """Symbolic tests for integration package validation."""
 
+import json
 import pytest
 from pathlib import Path
+
+from unify.guidance_manager.custom_guidance import GUIDANCE_JSONL_FILENAME
 
 
 from unity_deploy.assistant_deployments.integrations.types import (
@@ -31,7 +34,16 @@ def valid_package(tmp_path: Path) -> tuple[IntegrationManifest, Path]:
 
     guidance_dir = root / "guidance"
     guidance_dir.mkdir()
-    (guidance_dir / "how_to.md").write_text("# How To\n\nDo the thing.")
+    (guidance_dir / GUIDANCE_JSONL_FILENAME).write_text(
+        json.dumps(
+            {
+                "key": "how_to",
+                "title": "How To",
+                "content": "Do the thing.",
+            },
+        )
+        + "\n",
+    )
 
     demo_dir = root / "demo_site"
     demo_dir.mkdir()
@@ -130,6 +142,9 @@ class TestValidateIntegration:
         (root / "__init__.py").write_text("")
         guidance_dir = root / "guidance"
         guidance_dir.mkdir()
+        (guidance_dir / "guidance.jsonl").write_text(
+            '{"key": "other", "title": "Other", "content": "x"}\n',
+        )
 
         manifest = IntegrationManifest(
             name="Test",

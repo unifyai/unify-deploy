@@ -18,7 +18,6 @@ from typing import Any, Callable, TYPE_CHECKING
 import unisdk
 
 from unify.common.hierarchical_logger import ICONS
-from unify.guidance_manager.types.guidance import Guidance
 from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.integrations.catalog_projection import (
     sync_integrations,
@@ -294,56 +293,6 @@ def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
         delete_fn=None,
         id_field="contact_id",
         meta_store=meta,
-    )
-
-
-def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
-    if not records:
-        return False
-    from unify.manager_registry import ManagerRegistry
-
-    gm = ManagerRegistry.get_guidance_manager()
-    filter_guidance = _manager_api(gm, "filter")
-    add_guidance = _manager_api(gm, "add_guidance")
-    update_guidance = _manager_api(gm, "update_guidance")
-    delete_guidance = _manager_api(gm, "delete_guidance")
-    source_dicts = [r.model_dump() for r in records]
-    readonly_fields = {"authoring_assistant_id", "is_builtin"}
-
-    def writable_fields(rec: dict) -> dict:
-        return {
-            k: v for k, v in rec.items() if k not in {"guidance_id", *readonly_fields}
-        }
-
-    def natural_key(r: dict) -> str:
-        return str(r.get("title", ""))
-
-    def get_existing() -> list[dict]:
-        entries = filter_guidance(limit=1000)
-        existing = [g.model_dump() if hasattr(g, "model_dump") else g for g in entries]
-        return [entry for entry in existing if not entry.get("is_builtin")]
-
-    def create(rec: dict) -> Any:
-        return add_guidance(**writable_fields(rec))
-
-    def update(guidance_id: int, rec: dict) -> Any:
-        fields = writable_fields(rec)
-        return update_guidance(guidance_id=guidance_id, **fields)
-
-    def delete(guidance_id: int) -> Any:
-        return delete_guidance(guidance_id=guidance_id)
-
-    return sync_seed_data(
-        manager_key="guidance",
-        source_records=source_dicts,
-        natural_key_fn=natural_key,
-        get_existing_fn=get_existing,
-        create_fn=create,
-        update_fn=update,
-        delete_fn=delete,
-        id_field="guidance_id",
-        meta_store=meta,
-        exclude_fields=readonly_fields,
     )
 
 
@@ -679,7 +628,6 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
     """
     has_data = (
         resolved.contacts
-        or resolved.guidance
         or resolved.knowledge
         or resolved.secrets
         or resolved.blacklist
@@ -702,18 +650,6 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
             )
         except Exception:
             logger.exception("Failed to sync seed contacts")
-
-    if resolved.guidance:
-        try:
-            sync_start = perf_counter()
-            changed |= _sync_guidance(resolved.guidance, meta)
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] seed_sync.guidance total=%.2fs",
-                perf_counter() - sync_start,
-            )
-        except Exception:
-            logger.exception("Failed to sync seed guidance")
 
     if resolved.secrets:
         try:

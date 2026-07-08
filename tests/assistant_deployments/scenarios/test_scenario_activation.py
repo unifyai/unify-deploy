@@ -580,8 +580,13 @@ class TestEndToEndResolution:
             SeedLayer,
         )
 
-        # Stage a fake template.
-        _write_template(tmp_path, "fake_pkg", "sync_v0", _MINIMAL_TEMPLATE)
+        # Stage a fake template with tasks enabled so tasks_enabled=True takes effect.
+        enabled_template = _MINIMAL_TEMPLATE.replace(
+            "enabled: false",
+            "enabled: true",
+            1,
+        )
+        _write_template(tmp_path, "fake_pkg", "sync_v0", enabled_template)
 
         # Patch the loader's default search paths to include our tmp_path
         # without disturbing the real ones.  The cleanest way: use

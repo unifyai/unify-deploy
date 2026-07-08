@@ -91,25 +91,28 @@ def _validate_guidance(
     root: Path,
     errors: list[str],
 ) -> None:
-    """Check that guidance file stems referenced in capabilities exist."""
+    """Check that guidance keys referenced in capabilities exist in guidance.jsonl."""
     guidance_dir = root / "guidance"
+    jsonl_path = guidance_dir / "guidance.jsonl"
     declared_guidance: set[str] = set()
     for cap in manifest.capabilities:
         declared_guidance.update(cap.guidance)
 
-    if declared_guidance and not guidance_dir.is_dir():
+    if declared_guidance and not jsonl_path.is_file():
         errors.append(
-            f"Capabilities reference guidance but guidance/ dir is missing in {root}",
+            f"Capabilities reference guidance but {jsonl_path} is missing in {root}",
         )
         return
 
-    if guidance_dir.is_dir() and declared_guidance:
-        available_stems = {f.stem for f in guidance_dir.glob("*.md")}
+    if jsonl_path.is_file() and declared_guidance:
+        from unify.guidance_manager.custom_guidance import collect_custom_guidance
+
+        available_keys = set(collect_custom_guidance(path=guidance_dir).keys())
         for stem in declared_guidance:
-            if stem not in available_stems:
+            if stem not in available_keys:
                 errors.append(
                     f"Capability references guidance '{stem}' but "
-                    f"'{stem}.md' not found in {guidance_dir}",
+                    f"key '{stem}' not found in {jsonl_path}",
                 )
 
 

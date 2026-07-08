@@ -23,7 +23,6 @@ from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
-    GuidanceEntry,
     SecretEntry,
     SeedLayer,
     _merge_actor_configs,
@@ -32,6 +31,37 @@ from unity_deploy.assistant_deployments.deployment_types import (
     register_layer,
     resolve_deployment_name,
 )
+from unity_deploy.assistant_deployments.guidance_source import (
+    slugify_key,
+    write_guidance_jsonl,
+)
+from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
+
+_GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
+
+
+def _write_test_guidance(
+    name: str,
+    *,
+    title: str,
+    content: str,
+) -> Path:
+    return write_guidance_jsonl(
+        _GUIDANCE_ROOT / name,
+        [
+            {
+                "key": slugify_key(title),
+                "title": title,
+                "content": content,
+            },
+        ],
+    )
+
+
+def _guidance_titles(resolved) -> set[str]:
+    source = collect_guidance_from_directories(resolved.guidance_dirs)
+    return {entry["title"] for entry in source.values()}
+
 
 # ---------------------------------------------------------------------------
 # Registry cleanup fixture
@@ -64,12 +94,11 @@ def _make_spec(
     return DeploymentSpec(
         name=name,
         actor_config=ActorConfig(guidelines=guideline_text),
-        guidance=[
-            GuidanceEntry(
-                title=f"{name} guide",
-                content=f"Guidance content for {name}. " + "x" * 50,
-            ),
-        ],
+        guidance_dir=_write_test_guidance(
+            name,
+            title=f"{name} guide",
+            content=f"Guidance content for {name}. " + "x" * 50,
+        ),
         secrets=secrets or [],
         function_dir=function_dir,
         console_config=console_config,
@@ -245,18 +274,20 @@ class TestDeploymentSpecDerive:
 
     def test_guidance_replaced_wholesale(self):
         base = _make_spec("base", "Base")
-        new_guidance = [
-            GuidanceEntry(title="New", content="New content " + "x" * 50),
-        ]
-        derived = base.derive(name="v1", guidance=new_guidance)
-        assert len(derived.guidance) == 1
-        assert derived.guidance[0].title == "New"
+        new_dir = _write_test_guidance(
+            "base-v1",
+            title="New",
+            content="New content " + "x" * 50,
+        )
+        derived = base.derive(name="v1", guidance_dir=new_dir)
+        source = collect_guidance_from_directories([derived.guidance_dir])
+        assert len(source) == 1
+        assert list(source.values())[0]["title"] == "New"
 
     def test_guidance_inherited_when_not_passed(self):
         base = _make_spec("base", "Base")
         derived = base.derive(name="v1")
-        assert len(derived.guidance) == len(base.guidance)
-        assert derived.guidance[0].title == base.guidance[0].title
+        assert derived.guidance_dir == base.guidance_dir
 
     def test_function_dir_override(self):
         base = _make_spec("base", "Base", function_dir=_FAKE_DIR_A)
@@ -423,8 +454,9 @@ class TestIsolatedResolution:
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert result.config.guidelines == "Assistant v1"
-        assert len(result.guidance) == 1
-        assert result.guidance[0].title == "v1 guide"
+        assert len(result.guidance_dirs) == 1
+        titles = _guidance_titles(result)
+        assert "v1 guide" in titles
 
     def test_default_catches_unmatched_session(self, monkeypatch):
         self._register_with_default(monkeypatch)
@@ -438,7 +470,7 @@ class TestIsolatedResolution:
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert "Default v0" not in (result.config.guidelines or "")
-        assert len(result.guidance) == 1
+        assert len(result.guidance_dirs) == 1
 
     def test_assistant_match_ignores_org_mismatch(self, monkeypatch):
         """Assistant target matches regardless of org_id in the session."""
@@ -462,7 +494,7 @@ class TestIsolatedResolution:
         result = resolve(org_id=999)
         assert result.config == ActorConfig()
         assert result.function_dirs == []
-        assert result.guidance == []
+        assert result.guidance_dirs == []
 
     def test_function_dir_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
@@ -619,7 +651,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(org_id=1)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {
+        assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
             "CRM email sending policy",
         }
@@ -635,7 +667,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(org_id=5)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {
+        assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
             "CRM email sending policy",
         }
@@ -701,7 +733,7 @@ class TestUnifyCompanyRouting:
         )
         matched = resolve_from_deployments(assistant_id=7367)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {"Brain operator role definition"}
+        assert _guidance_titles(matched) >= {"Brain operator role definition"}
 
         assert resolve_from_deployments(assistant_id=1406) is None
 
@@ -713,7 +745,7 @@ class TestUnifyCompanyRouting:
         )
         matched = resolve_from_deployments(assistant_id=1406)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {"Brain operator role definition"}
+        assert _guidance_titles(matched) >= {"Brain operator role definition"}
 
         assert resolve_from_deployments(assistant_id=7367) is None
 
@@ -883,42 +915,38 @@ class TestSeedLayers:
 
     def test_team_layer_guidance_added(self, monkeypatch):
         self._register(monkeypatch)
+        team_dir = _write_test_guidance(
+            "team-layer",
+            title="Team tip",
+            content="Extra guidance " + "x" * 50,
+        )
         register_layer(
             "test_client",
             "team",
             "100",
-            SeedLayer(
-                guidance=[
-                    GuidanceEntry(
-                        title="Team tip",
-                        content="Extra guidance " + "x" * 50,
-                    ),
-                ],
-            ),
+            SeedLayer(guidance_dir=team_dir),
         )
         result = resolve(org_id=10, team_ids=[100])
-        titles = {g.title for g in result.guidance}
+        titles = _guidance_titles(result)
         assert "Team tip" in titles
         assert "v0 guide" in titles
 
-    def test_guidance_overlay_wins_by_title(self, monkeypatch):
+    def test_guidance_overlay_wins_by_key(self, monkeypatch):
         self._register(monkeypatch)
+        overlay_dir = _write_test_guidance(
+            "user-overlay",
+            title="v0 guide",
+            content="Overridden guidance content " + "x" * 50,
+        )
         register_layer(
             "test_client",
             "user",
             "user-aaa",
-            SeedLayer(
-                guidance=[
-                    GuidanceEntry(
-                        title="v0 guide",
-                        content="Overridden guidance content " + "x" * 50,
-                    ),
-                ],
-            ),
+            SeedLayer(guidance_dir=overlay_dir),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        by_title = {g.title: g for g in result.guidance}
-        assert "Overridden" in by_title["v0 guide"].content
+        source = collect_guidance_from_directories(result.guidance_dirs)
+        assert source[slugify_key("v0 guide")]["content"].startswith("Overridden")
 
     # -- knowledge merge --
 
@@ -994,7 +1022,11 @@ class TestSeedLayers:
         spec = DeploymentSpec(
             name="v0",
             actor_config=ActorConfig(guidelines="G"),
-            guidance=[GuidanceEntry(title="g", content="c " + "x" * 50)],
+            guidance_dir=_write_test_guidance(
+                "code-key",
+                title="g",
+                content="c " + "x" * 50,
+            ),
             secrets=[SecretEntry(name="CODE_KEY", value="from-spec", description="d")],
         )
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
@@ -1077,5 +1109,5 @@ class TestSeedLayers:
         self._register(monkeypatch)
         result = resolve(org_id=10)
         assert result.config.guidelines == "Default v0"
-        assert len(result.guidance) == 1
+        assert len(result.guidance_dirs) == 1
         assert result.contacts == []

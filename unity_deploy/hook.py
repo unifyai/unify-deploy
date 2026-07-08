@@ -127,11 +127,11 @@ def startup_hook(
         logger,
         (
             "⏱️ [StartupTiming] unity_deploy.startup_hook resolved "
-            "contacts=%d guidance=%d knowledge_tables=%d secrets=%d blacklist=%d "
+            "contacts=%d guidance_dirs=%d knowledge_tables=%d secrets=%d blacklist=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
         len(resolved.contacts),
-        len(resolved.guidance),
+        len(resolved.guidance_dirs),
         len(resolved.knowledge),
         len(resolved.secrets),
         len(resolved.blacklist),

@@ -10,10 +10,8 @@ from unity_deploy.assistant_deployments.seed_sync import (
     _manager_api,
     _record_hash,
     _sync_contacts,
-    _sync_guidance,
     sync_seed_data,
 )
-from unify.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
@@ -212,120 +210,6 @@ class TestSyncSeedData:
 
         assert result is True
         assert updated == []
-
-    def test_guidance_sync_does_not_write_readonly_fields(self, monkeypatch):
-        class FakeGuidanceManager:
-            def __init__(self):
-                self.created = []
-
-            def filter(self, limit=1000):
-                return []
-
-            def add_guidance(self, *, title, content, images, function_ids):
-                self.created.append(
-                    {
-                        "title": title,
-                        "content": content,
-                        "images": images,
-                        "function_ids": function_ids,
-                    },
-                )
-                return {"details": {"guidance_id": 1}}
-
-            def update_guidance(self, **kwargs):
-                raise AssertionError("update_guidance should not be called")
-
-            def delete_guidance(self, **kwargs):
-                raise AssertionError("delete_guidance should not be called")
-
-        fake = FakeGuidanceManager()
-        from unify.manager_registry import ManagerRegistry
-
-        monkeypatch.setattr(
-            ManagerRegistry,
-            "get_guidance_manager",
-            staticmethod(lambda: fake),
-        )
-
-        result = _sync_guidance(
-            [
-                Guidance(
-                    title="How to triage repairs",
-                    content="Check urgent repairs first.",
-                    authoring_assistant_id=1851,
-                ),
-            ],
-            InMemoryMetaStore(),
-        )
-
-        assert result is True
-        assert len(fake.created) == 1
-        assert "guidance_id" not in fake.created[0]
-        assert "authoring_assistant_id" not in fake.created[0]
-        assert "is_builtin" not in fake.created[0]
-
-    def test_guidance_sync_ignores_existing_builtins(self, monkeypatch):
-        class ExistingGuidance:
-            def __init__(self, **kwargs):
-                self._kwargs = kwargs
-
-            def model_dump(self):
-                return dict(self._kwargs)
-
-        class FakeGuidanceManager:
-            def __init__(self):
-                self.created = []
-
-            def filter(self, limit=1000):
-                return [
-                    ExistingGuidance(
-                        guidance_id=500,
-                        title="Builtin runbook",
-                        content="Platform content.",
-                        images=[],
-                        function_ids=[],
-                        is_builtin=True,
-                    ),
-                ]
-
-            def add_guidance(self, *, title, content, images, function_ids):
-                self.created.append(
-                    {
-                        "title": title,
-                        "content": content,
-                        "images": images,
-                        "function_ids": function_ids,
-                    },
-                )
-                return {"details": {"guidance_id": 1}}
-
-            def update_guidance(self, **kwargs):
-                raise AssertionError("update_guidance should not be called")
-
-            def delete_guidance(self, **kwargs):
-                raise AssertionError("builtins must not be deleted")
-
-        fake = FakeGuidanceManager()
-        from unify.manager_registry import ManagerRegistry
-
-        monkeypatch.setattr(
-            ManagerRegistry,
-            "get_guidance_manager",
-            staticmethod(lambda: fake),
-        )
-
-        result = _sync_guidance(
-            [
-                Guidance(
-                    title="Tenant runbook",
-                    content="Deployment-defined content.",
-                ),
-            ],
-            InMemoryMetaStore(),
-        )
-
-        assert result is True
-        assert [created["title"] for created in fake.created] == ["Tenant runbook"]
 
     def test_contact_sync_uses_contact_manager_create_api(self, monkeypatch):
         class FakeContactManager:

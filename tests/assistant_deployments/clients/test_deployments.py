@@ -24,6 +24,7 @@ from typing import List
 import pytest
 
 import unity_deploy.assistant_deployments.clients
+from unify.guidance_manager.custom_guidance import collect_custom_guidance
 from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentSpec,
     load_deployment,
@@ -120,10 +121,12 @@ class TestDeploymentStructure:
 
     def test_guidance_nonempty(self, client: str, deploy: str, dep_dir: Path):
         spec = _load(client, deploy, dep_dir)
-        assert len(spec.guidance) >= 1
-        for entry in spec.guidance:
-            assert entry.title
-            assert len(entry.content) > 50
+        assert spec.guidance_dir is not None
+        entries = collect_custom_guidance(path=spec.guidance_dir)
+        assert len(entries) >= 1
+        for entry in entries.values():
+            assert entry["title"]
+            assert len(entry["content"]) > 50
 
     def test_console_config_shape(self, client: str, deploy: str, dep_dir: Path):
         spec = _load(client, deploy, dep_dir)
