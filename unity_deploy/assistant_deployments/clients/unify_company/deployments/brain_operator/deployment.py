@@ -246,6 +246,26 @@ def get_deployment() -> DeploymentSpec:
                         "wrapper": "run_social_publish_approved",
                         "module": "brain.social.create.pipeline",
                     },
+                    {
+                        "job_id": "gtm.stargazer.poll",
+                        "wrapper": "run_gtm_stargazer_poll_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.stargazer.enrich",
+                        "wrapper": "run_gtm_stargazer_enrich_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.smartlead.reconcile",
+                        "wrapper": "run_gtm_smartlead_reconcile_tick",
+                        "module": "brain.gtm",
+                    },
+                    {
+                        "job_id": "gtm.outbound.replenish",
+                        "wrapper": "run_gtm_outbound_replenish_inventory",
+                        "module": "brain.gtm",
+                    },
                 ],
             },
         },
