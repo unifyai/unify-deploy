@@ -15,9 +15,18 @@ from unity_deploy.assistant_deployments.deployment_types import DeploymentMappin
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 from unity_deploy.assistant_deployments.deployment_types import DeploymentTarget
 from unity_deploy.assistant_deployments.deployment_types import SeedLayer
+from unify.guidance_manager.custom_guidance import (
+    collect_guidance_from_directories,
+    guidance_titles_from_source,
+)
 from unity_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
+
+
+def _guidance_titles(resolved: ResolvedAssistantDeployment) -> set[str]:
+    source = collect_guidance_from_directories(resolved.guidance_dirs)
+    return set(guidance_titles_from_source(source))
 
 
 def _empty_resolved(*, integrations: list[str]) -> ResolvedAssistantDeployment:
@@ -26,10 +35,14 @@ def _empty_resolved(*, integrations: list[str]) -> ResolvedAssistantDeployment:
         environments=[],
         function_dirs=[],
         venv_dirs=[],
-        contacts=[],
-        guidance=[],
-        knowledge={},
-        blacklist=[],
+        contacts_dirs=[],
+        secrets_dirs=[],
+        guidance_dirs=[],
+        knowledge_dirs=[],
+        custom_data_dirs=[],
+        dashboards_dirs=[],
+        tasks_dirs=[],
+        blacklist_dirs=[],
         secrets=[],
         integrations=integrations,
     )
@@ -42,8 +55,8 @@ def test_expand_github_integration_adds_seed_and_functions():
 
     assert expanded.function_dirs
     assert any(path.name == "functions" for path in expanded.function_dirs)
-    assert expanded.guidance
-    assert {g.title for g in expanded.guidance} >= {"Repo Lookup", "Issue Triage"}
+    assert expanded.guidance_dirs
+    assert _guidance_titles(expanded) >= {"Repo Lookup", "Issue Triage"}
     assert {s.name for s in expanded.secrets} == {"GITHUB_TOKEN"}
 
 
@@ -53,7 +66,7 @@ def test_expand_fetch_mcp_integration_adds_mcp_config():
     expanded = expand_integrations(resolved)
 
     assert not expanded.function_dirs
-    assert expanded.guidance
+    assert expanded.guidance_dirs
     assert len(expanded.mcp_configs) == 1
     assert expanded.mcp_configs[0].command == "npx"
 
@@ -85,7 +98,7 @@ def test_native_package_expansion_survives_provider_backed_sync_model():
     assert expanded.mcp_configs[0].command == "npx"
     assert "@modelcontextprotocol/server-fetch" in expanded.mcp_configs[0].args
     assert expanded.scenarios
-    assert {guidance.title for guidance in expanded.guidance} >= {
+    assert _guidance_titles(expanded) >= {
         "Repo Lookup",
         "Pilot Usage",
     }
@@ -102,7 +115,7 @@ def test_native_api_browser_tier_package_metadata_survives_provider_backed_sync_
         path.name == "functions" and path.parent.name == "matterport"
         for path in expanded.function_dirs
     )
-    guidance_titles = {guidance.title for guidance in expanded.guidance}
+    guidance_titles = _guidance_titles(expanded)
     assert {
         "Matterport Overview",
         "Matterport Setup",
@@ -164,7 +177,7 @@ def test_unknown_integration_slug_logs_warning(caplog):
 
 def test_expand_seeds_integration_registry_with_one_row_per_slug():
     """``ResolvedAssistantDeployment.integration_registry`` should carry one
-    row per loaded integration, ready for ``_sync_integration_registry`` to
+    row per loaded integration, ready for ``sync_custom_integration_registry`` to
     push into the ``Integrations/Manifests`` DataManager context."""
     resolved = _empty_resolved(integrations=["github", "fetch_mcp"])
 

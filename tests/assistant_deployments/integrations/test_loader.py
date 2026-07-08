@@ -4,18 +4,23 @@ Tests that the loader correctly converts manifests into the data
 structures the sync pipeline expects.
 """
 
+import json
+
 import pytest
 from pathlib import Path
 
 import yaml
 
+from unify.guidance_manager.custom_guidance import (
+    GUIDANCE_JSONL_FILENAME,
+    collect_custom_guidance,
+)
 from unity_deploy.assistant_deployments.integrations.loader import (
     AggregatedIntegrations,
+    guidance_titles_for_dir,
     load_integration,
     load_integrations,
-    _load_guidance,
 )
-from unify.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.integrations.types import (
     Capability,
     IntegrationManifest,
@@ -41,8 +46,15 @@ def github_integration(tmp_path: Path) -> tuple[IntegrationManifest, Path]:
 
     guidance_dir = root / "guidance"
     guidance_dir.mkdir()
-    (guidance_dir / "repo_lookup.md").write_text(
-        "# Repo Lookup\n\nHow to look up GitHub repositories.",
+    (guidance_dir / GUIDANCE_JSONL_FILENAME).write_text(
+        json.dumps(
+            {
+                "key": "repo_lookup",
+                "title": "Repo Lookup",
+                "content": "How to look up GitHub repositories.",
+            },
+        )
+        + "\n",
     )
 
     manifest = IntegrationManifest(
@@ -74,8 +86,15 @@ def mcp_integration(tmp_path: Path) -> tuple[IntegrationManifest, Path]:
 
     guidance_dir = root / "guidance"
     guidance_dir.mkdir()
-    (guidance_dir / "usage.md").write_text(
-        "# Usage\n\nHow to use this MCP server.",
+    (guidance_dir / GUIDANCE_JSONL_FILENAME).write_text(
+        json.dumps(
+            {
+                "key": "usage",
+                "title": "Usage",
+                "content": "How to use this MCP server.",
+            },
+        )
+        + "\n",
     )
 
     manifest = IntegrationManifest(
@@ -95,31 +114,54 @@ def mcp_integration(tmp_path: Path) -> tuple[IntegrationManifest, Path]:
 
 
 class TestLoadGuidance:
-    def test_loads_markdown_files(self, tmp_path: Path):
+    def test_loads_jsonl_entries(self, tmp_path: Path):
         guidance_dir = tmp_path / "guidance"
         guidance_dir.mkdir()
-        (guidance_dir / "repo_lookup.md").write_text("# Repo Lookup\n\nContent here.")
-        (guidance_dir / "issue_triage.md").write_text("# Issue Triage\n\nTriage info.")
+        lines = [
+            json.dumps(
+                {
+                    "key": "repo_lookup",
+                    "title": "Repo Lookup",
+                    "content": "Content here.",
+                },
+            ),
+            json.dumps(
+                {
+                    "key": "issue_triage",
+                    "title": "Issue Triage",
+                    "content": "Triage info.",
+                },
+            ),
+        ]
+        (guidance_dir / GUIDANCE_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
 
-        entries = _load_guidance(guidance_dir)
+        entries = collect_custom_guidance(path=guidance_dir)
         assert len(entries) == 2
-        assert all(isinstance(e, Guidance) for e in entries)
-        titles = {e.title for e in entries}
+        titles = {entry["title"] for entry in entries.values()}
         assert "Repo Lookup" in titles
         assert "Issue Triage" in titles
 
-    def test_title_from_filename(self, tmp_path: Path):
+    def test_title_from_entry(self, tmp_path: Path):
         guidance_dir = tmp_path / "guidance"
         guidance_dir.mkdir()
-        (guidance_dir / "file_operations.md").write_text("Content")
+        (guidance_dir / GUIDANCE_JSONL_FILENAME).write_text(
+            json.dumps(
+                {
+                    "key": "file_operations",
+                    "title": "File Operations",
+                    "content": "Content",
+                },
+            )
+            + "\n",
+        )
 
-        entries = _load_guidance(guidance_dir)
-        assert entries[0].title == "File Operations"
+        entries = collect_custom_guidance(path=guidance_dir)
+        assert list(entries.values())[0]["title"] == "File Operations"
 
     def test_empty_dir(self, tmp_path: Path):
         guidance_dir = tmp_path / "guidance"
         guidance_dir.mkdir()
-        assert _load_guidance(guidance_dir) == []
+        assert collect_custom_guidance(path=guidance_dir) == {}
 
 
 class TestLoadIntegration:
@@ -132,9 +174,9 @@ class TestLoadIntegration:
     def test_loads_guidance(self, github_integration):
         manifest, root = github_integration
         loaded = load_integration(manifest, root)
-        assert len(loaded.guidance_entries) == 1
-        assert isinstance(loaded.guidance_entries[0], Guidance)
-        assert loaded.guidance_entries[0].title == "Repo Lookup"
+        assert loaded.guidance_dir is not None
+        titles = guidance_titles_for_dir(loaded.guidance_dir)
+        assert titles == ["Repo Lookup"]
 
     def test_loads_secrets(self, github_integration):
         manifest, root = github_integration
@@ -191,8 +233,27 @@ class TestRegistryRowFromCapabilities:
         (root / "functions").mkdir()
         (root / "functions" / "__init__.py").write_text("")
         (root / "guidance").mkdir()
-        (root / "guidance" / "demo_overview.md").write_text("# Overview")
-        (root / "guidance" / "demo_workflows.md").write_text("# Workflows")
+        (root / "guidance" / GUIDANCE_JSONL_FILENAME).write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "key": "demo_overview",
+                            "title": "Demo Overview",
+                            "content": "Overview",
+                        },
+                    ),
+                    json.dumps(
+                        {
+                            "key": "demo_workflows",
+                            "title": "Demo Workflows",
+                            "content": "Workflows",
+                        },
+                    ),
+                ],
+            )
+            + "\n",
+        )
 
         manifest = IntegrationManifest(
             name="Demo",
@@ -250,13 +311,12 @@ class TestRegistryRowFromCapabilities:
         ]
 
     def test_guidance_titles_match_loader_title_transform(self, tmp_path):
-        """Registry titles must match what ``_load_guidance`` writes into
-        GuidanceManager — otherwise the runtime can't resolve them at lookup."""
+        """Registry titles must match guidance.jsonl titles for runtime lookup."""
         manifest, root = self._make_pkg(tmp_path)
         loaded = load_integration(manifest, root)
         import json
 
-        seeded_titles = sorted(g.title for g in loaded.guidance_entries)
+        seeded_titles = guidance_titles_for_dir(loaded.guidance_dir)
         registry_titles = json.loads(loaded.registry_row["guidance_titles_json"])
         assert registry_titles == seeded_titles
 
@@ -288,14 +348,14 @@ class TestLoadIntegrations:
         )
         assert isinstance(result, AggregatedIntegrations)
         assert len(result.function_dirs) == 1  # only github has functions
-        assert len(result.guidance) == 2
+        assert len(result.guidance_dirs) == 2
         assert len(result.secrets) == 1
         assert len(result.mcp_configs) == 1
 
     def test_missing_slug_logged(self, tmp_path):
         result = load_integrations(["nonexistent"], [tmp_path])
         assert result.function_dirs == []
-        assert result.guidance == []
+        assert result.guidance_dirs == []
 
     def test_aggregates_registry_rows_in_slug_order(
         self,
@@ -350,4 +410,4 @@ class TestLoadIntegrations:
             ["test_pkg"],
             [tmp_path / "path1", tmp_path / "path2"],
         )
-        assert len(result.guidance) == 0
+        assert result.guidance_dirs == []

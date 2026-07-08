@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
-from unify.guidance_manager.types.guidance import Guidance
 from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
@@ -63,7 +62,6 @@ def detect_environment() -> str:
 # Core deployment models
 # ---------------------------------------------------------------------------
 
-GuidanceEntry = Guidance
 SecretEntry = Secret
 
 
@@ -73,15 +71,47 @@ class SeedLayer(BaseModel):
     Layers are collected during resolution in scope order
     (org -> team -> user -> assistant) and merged onto the
     deployment spec's seed data.  More specific layers override
-    less specific ones using natural-key dedup (contacts by
-    name, guidance by title, knowledge tables by seed_key, etc.).
+    less specific ones using natural-key dedup (knowledge tables by
+    seed_key, etc.).
     """
 
-    contacts: list[dict] = Field(default_factory=list)
-    guidance: list[Guidance] = Field(default_factory=list)
-    knowledge: dict[str, dict] = Field(default_factory=dict)
-    blacklist: list[dict] = Field(default_factory=list)
-    secrets: list[Secret] = Field(default_factory=list)
+    contacts_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing contacts.jsonl for this layer.",
+    )
+    secrets_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing secrets.jsonl for this layer.",
+    )
+    guidance_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing guidance.jsonl for this layer.",
+    )
+    knowledge_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing knowledge table definitions for this layer.",
+    )
+    custom_data_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined DataManager tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
+    )
+    dashboards_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined dashboard tiles and layouts."
+        ),
+    )
+    tasks_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing tasks.jsonl for this layer.",
+    )
+    blacklist_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing blacklist.jsonl for this layer.",
+    )
     integrations: list[str] = Field(default_factory=list)
     scenarios: list[ScenarioActivation] = Field(
         default_factory=list,
@@ -136,9 +166,9 @@ class DeploymentSpec(BaseModel):
         ...,
         description="Actor identity and capabilities config.",
     )
-    guidance: list[Guidance] = Field(
-        default_factory=list,
-        description="Guidance entries registered with the actor.",
+    guidance_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing guidance.jsonl registered with the actor.",
     )
     secrets: list[Secret] = Field(
         default_factory=list,
@@ -163,17 +193,41 @@ class DeploymentSpec(BaseModel):
             "scopes via register_layer overlays."
         ),
     )
-    contacts: list[dict] = Field(
-        default_factory=list,
-        description="Contact records synced to the ContactManager.",
+    contacts_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing contacts.jsonl registered with the actor.",
     )
-    knowledge: dict[str, dict] = Field(
-        default_factory=dict,
-        description="Knowledge table specs synced to the KnowledgeManager.",
+    secrets_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing secrets.jsonl registered with the actor.",
     )
-    blacklist: list[dict] = Field(
-        default_factory=list,
-        description="Blacklist entries synced to the ContactManager.",
+    knowledge_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined knowledge tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
+    )
+    custom_data_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined DataManager tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
+    )
+    dashboards_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined dashboard tiles and layouts."
+        ),
+    )
+    tasks_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing tasks.jsonl for this layer.",
+    )
+    blacklist_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing blacklist.jsonl registered with the actor.",
     )
     environments: list = Field(
         default_factory=list,

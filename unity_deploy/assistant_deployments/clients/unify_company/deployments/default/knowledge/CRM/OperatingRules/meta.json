@@ -1,0 +1,9 @@
+{
+  "description": "Company CRM operating rules and source-of-truth decisions.",
+  "columns": {
+    "rule": "str",
+    "details": "str"
+  },
+  "seed_key": "rule",
+  "destination": "personal"
+}

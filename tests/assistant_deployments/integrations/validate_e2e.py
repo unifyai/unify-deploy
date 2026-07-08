@@ -26,6 +26,7 @@ from unity_deploy.assistant_deployments.integrations.discovery import (
     discover_integrations,
 )
 from unity_deploy.assistant_deployments.integrations.loader import load_integration
+from unify.guidance_manager.custom_guidance import collect_custom_guidance
 from unity_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
@@ -174,7 +175,7 @@ async def run_validation(include_real: bool = False) -> int:
             "github: guidance entries are non-empty",
             lambda l=loaded: (
                 None
-                if l.guidance_entries
+                if l.guidance_dir and collect_custom_guidance(path=l.guidance_dir)
                 else (_ for _ in ()).throw(
                     AssertionError("No guidance entries loaded"),
                 )
@@ -214,7 +215,7 @@ async def run_validation(include_real: bool = False) -> int:
             "fetch_mcp: guidance entries are non-empty",
             lambda l=loaded_mcp: (
                 None
-                if l.guidance_entries
+                if l.guidance_dir and collect_custom_guidance(path=l.guidance_dir)
                 else (_ for _ in ()).throw(
                     AssertionError("No guidance entries loaded"),
                 )

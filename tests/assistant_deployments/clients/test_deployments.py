@@ -24,6 +24,7 @@ from typing import List
 import pytest
 
 import unity_deploy.assistant_deployments.clients
+from unify.guidance_manager.custom_guidance import collect_custom_guidance
 from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentSpec,
     load_deployment,
@@ -120,10 +121,12 @@ class TestDeploymentStructure:
 
     def test_guidance_nonempty(self, client: str, deploy: str, dep_dir: Path):
         spec = _load(client, deploy, dep_dir)
-        assert len(spec.guidance) >= 1
-        for entry in spec.guidance:
-            assert entry.title
-            assert len(entry.content) > 50
+        assert spec.guidance_dir is not None
+        entries = collect_custom_guidance(path=spec.guidance_dir)
+        assert len(entries) >= 1
+        for entry in entries.values():
+            assert entry["title"]
+            assert len(entry["content"]) > 50
 
     def test_console_config_shape(self, client: str, deploy: str, dep_dir: Path):
         spec = _load(client, deploy, dep_dir)
@@ -338,7 +341,7 @@ def _secrets_deployments():
     results = []
     for client, deploy, dep_dir in _ALL_DEPLOYMENTS:
         spec = _load(client, deploy, dep_dir)
-        if spec.secrets:
+        if spec.secrets_dir is not None:
             results.append((client, deploy, dep_dir))
     return results
 
@@ -355,25 +358,29 @@ _SECRETS_IDS = [f"{c}/{d}" for c, d, _ in _SECRETS_DEPLOYMENTS]
 class TestSecretsStructure:
     """Validate secrets are well-formed."""
 
-    def test_secrets_json_exists(self, client: str, deploy: str, dep_dir: Path):
-        secrets_path = dep_dir / deploy / "secrets.json"
+    def test_secrets_jsonl_exists(self, client: str, deploy: str, dep_dir: Path):
+        spec = _load(client, deploy, dep_dir)
+        secrets_path = spec.secrets_dir / "secrets.jsonl"
         assert (
             secrets_path.is_file()
-        ), f"Deployment {client}/{deploy} declares secrets but has no secrets.json"
+        ), f"Deployment {client}/{deploy} declares secrets_dir but has no secrets.jsonl"
 
-    def test_secrets_match_spec(self, client: str, deploy: str, dep_dir: Path):
+    def test_secrets_jsonl_matches_spec_dir(
+        self,
+        client: str,
+        deploy: str,
+        dep_dir: Path,
+    ):
         spec = _load(client, deploy, dep_dir)
-        secrets_path = dep_dir / deploy / "secrets.json"
+        secrets_path = spec.secrets_dir / "secrets.jsonl"
         if not secrets_path.is_file():
-            pytest.skip("No secrets.json file")
-        with open(secrets_path, encoding="utf-8") as f:
-            raw = json.load(f)
-        json_names = {entry["name"] for entry in raw}
-        spec_names = {s.name for s in spec.secrets}
-        assert json_names == spec_names, (
-            f"Mismatch: json has {json_names - spec_names} extra, "
-            f"spec has {spec_names - json_names} extra"
-        )
+            pytest.skip("No secrets.jsonl file")
+        json_names = {
+            json.loads(line)["name"]
+            for line in secrets_path.read_text().splitlines()
+            if line.strip()
+        }
+        assert json_names, f"secrets.jsonl for {client}/{deploy} is empty"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -31,20 +31,40 @@ def _hash_payload(payload: Any) -> str:
 
 
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
+    from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
+    from unify.data_manager.custom_data import list_data_table_contexts
+
+    from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
+
+    dashboard_entities = list_dashboard_entity_ids(resolved.dashboards_dirs)
+    from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
+
     return {
-        "contacts": len(resolved.contacts),
-        "guidance": len(resolved.guidance),
-        "knowledge_tables": sorted(resolved.knowledge.keys()),
-        "blacklist": len(resolved.blacklist),
-        "secrets": len(resolved.secrets),
+        "contacts_dirs": len(resolved.contacts_dirs),
+        "secrets_dirs": len(resolved.secrets_dirs),
+        "guidance_dir_count": len(resolved.guidance_dirs),
+        "knowledge_tables": list_knowledge_table_names(resolved.knowledge_dirs),
+        "knowledge_dirs": len(resolved.knowledge_dirs),
+        "custom_data_tables": list_data_table_contexts(resolved.custom_data_dirs),
+        "custom_data_dirs": len(resolved.custom_data_dirs),
+        "dashboard_tiles": dashboard_entities["tiles"],
+        "dashboard_layouts": dashboard_entities["layouts"],
+        "dashboards_dirs": len(resolved.dashboards_dirs),
+        "tasks_dirs": len(resolved.tasks_dirs),
+        "custom_tasks": len(collect_tasks_from_directories(resolved.tasks_dirs)),
+        "blacklist_dir_count": len(resolved.blacklist_dirs),
+        "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),
         "mcp_configs": len(resolved.mcp_configs),
         "function_dirs": [str(path) for path in resolved.function_dirs],
         "venv_dirs": [str(path) for path in resolved.venv_dirs],
+        "guidance_dirs": [str(path) for path in resolved.guidance_dirs],
+        "blacklist_dirs": [str(path) for path in resolved.blacklist_dirs],
+        "secrets_dir_paths": [str(path) for path in resolved.secrets_dirs],
     }
 
 
-def _control_plane_revision(operations: Iterable[Any]) -> str:
+def _control_plane_revision(operations: tuple[Any, ...]) -> str:
     payload = [
         {
             "service": op.service,

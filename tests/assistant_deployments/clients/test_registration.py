@@ -23,8 +23,6 @@ from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
-    GuidanceEntry,
-    SecretEntry,
     SeedLayer,
     _merge_actor_configs,
     detect_environment,
@@ -32,6 +30,139 @@ from unity_deploy.assistant_deployments.deployment_types import (
     register_layer,
     resolve_deployment_name,
 )
+from unity_deploy.assistant_deployments.blacklist_source import (
+    entry_from_fields as blacklist_entry_from_fields,
+    write_blacklist_jsonl,
+)
+from unity_deploy.assistant_deployments.contacts_source import (
+    entry_from_fields as contact_entry_from_fields,
+    write_contacts_jsonl,
+)
+from unity_deploy.assistant_deployments.secrets_source import (
+    entry_from_fields as secret_entry_from_fields,
+    write_secrets_jsonl,
+)
+from unity_deploy.assistant_deployments.guidance_source import (
+    slugify_key,
+    write_guidance_jsonl,
+)
+from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
+from unify.contact_manager.custom_contacts import collect_contacts_from_directories
+from unify.secret_manager.custom_secrets import collect_secrets_from_directories
+from unity_deploy.assistant_deployments.knowledge_source import write_knowledge_table
+from unity_deploy.assistant_deployments.custom_data_source import write_data_table
+from unify.data_manager.custom_data import collect_data_from_directories
+from unify.knowledge_manager.custom_knowledge import collect_knowledge_from_directories
+from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
+
+_KNOWLEDGE_ROOT = Path("/tmp/unify-deploy-test-knowledge")
+_CUSTOM_DATA_ROOT = Path("/tmp/unify-deploy-test-custom-data")
+
+
+def _write_test_custom_data(
+    name: str,
+    *,
+    context: str,
+    seed_key: str,
+    fields: dict[str, str] | None = None,
+    rows: list[dict[str, object]],
+) -> Path:
+    directory = _CUSTOM_DATA_ROOT / name
+    write_data_table(
+        directory,
+        context,
+        fields=fields,
+        seed_key=seed_key,
+        rows=rows,
+    )
+    return directory
+
+
+def _write_test_knowledge(
+    name: str,
+    *,
+    table_name: str,
+    seed_key: str,
+    columns: dict[str, str] | None = None,
+    rows: list[dict[str, object]],
+) -> Path:
+    directory = _KNOWLEDGE_ROOT / name
+    write_knowledge_table(
+        directory,
+        table_name,
+        columns=columns,
+        seed_key=seed_key,
+        rows=rows,
+    )
+    return directory
+
+
+_GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
+_BLACKLIST_ROOT = Path("/tmp/unify-deploy-test-blacklist")
+_CONTACTS_ROOT = Path("/tmp/unify-deploy-test-contacts")
+_SECRETS_ROOT = Path("/tmp/unify-deploy-test-secrets")
+
+
+def _write_test_guidance(
+    name: str,
+    *,
+    title: str,
+    content: str,
+) -> Path:
+    return write_guidance_jsonl(
+        _GUIDANCE_ROOT / name,
+        [
+            {
+                "key": slugify_key(title),
+                "title": title,
+                "content": content,
+            },
+        ],
+    )
+
+
+def _write_test_blacklist(
+    name: str,
+    *,
+    medium: str,
+    contact_detail: str,
+    reason: str,
+) -> Path:
+    return write_blacklist_jsonl(
+        _BLACKLIST_ROOT / name,
+        [
+            blacklist_entry_from_fields(
+                medium=medium,
+                contact_detail=contact_detail,
+                reason=reason,
+            ),
+        ],
+    )
+
+
+def _write_test_contacts(
+    name: str,
+    *,
+    first_name: str,
+    surname: str,
+    **fields: object,
+) -> Path:
+    return write_contacts_jsonl(
+        _CONTACTS_ROOT / name,
+        [
+            contact_entry_from_fields(
+                first_name=first_name,
+                surname=surname,
+                **fields,
+            ),
+        ],
+    )
+
+
+def _guidance_titles(resolved) -> set[str]:
+    source = collect_guidance_from_directories(resolved.guidance_dirs)
+    return {entry["title"] for entry in source.values()}
+
 
 # ---------------------------------------------------------------------------
 # Registry cleanup fixture
@@ -53,24 +184,42 @@ def _clean_registry():
 # ---------------------------------------------------------------------------
 
 
+def _write_test_secrets(
+    name: str,
+    *,
+    secret_name: str,
+    value: str,
+    description: str = "",
+) -> Path:
+    return write_secrets_jsonl(
+        _SECRETS_ROOT / name,
+        [
+            secret_entry_from_fields(
+                name=secret_name,
+                value=value,
+                description=description,
+            ),
+        ],
+    )
+
+
 def _make_spec(
     name: str,
     guideline_text: str,
     *,
-    secrets: list[SecretEntry] | None = None,
+    secrets_dir: Path | None = None,
     function_dir: Path | None = None,
     console_config: dict | None = None,
 ) -> DeploymentSpec:
     return DeploymentSpec(
         name=name,
         actor_config=ActorConfig(guidelines=guideline_text),
-        guidance=[
-            GuidanceEntry(
-                title=f"{name} guide",
-                content=f"Guidance content for {name}. " + "x" * 50,
-            ),
-        ],
-        secrets=secrets or [],
+        guidance_dir=_write_test_guidance(
+            name,
+            title=f"{name} guide",
+            content=f"Guidance content for {name}. " + "x" * 50,
+        ),
+        secrets_dir=secrets_dir,
         function_dir=function_dir,
         console_config=console_config,
     )
@@ -245,18 +394,20 @@ class TestDeploymentSpecDerive:
 
     def test_guidance_replaced_wholesale(self):
         base = _make_spec("base", "Base")
-        new_guidance = [
-            GuidanceEntry(title="New", content="New content " + "x" * 50),
-        ]
-        derived = base.derive(name="v1", guidance=new_guidance)
-        assert len(derived.guidance) == 1
-        assert derived.guidance[0].title == "New"
+        new_dir = _write_test_guidance(
+            "base-v1",
+            title="New",
+            content="New content " + "x" * 50,
+        )
+        derived = base.derive(name="v1", guidance_dir=new_dir)
+        source = collect_guidance_from_directories([derived.guidance_dir])
+        assert len(source) == 1
+        assert list(source.values())[0]["title"] == "New"
 
     def test_guidance_inherited_when_not_passed(self):
         base = _make_spec("base", "Base")
         derived = base.derive(name="v1")
-        assert len(derived.guidance) == len(base.guidance)
-        assert derived.guidance[0].title == base.guidance[0].title
+        assert derived.guidance_dir == base.guidance_dir
 
     def test_function_dir_override(self):
         base = _make_spec("base", "Base", function_dir=_FAKE_DIR_A)
@@ -264,25 +415,32 @@ class TestDeploymentSpecDerive:
         assert derived.function_dir == _FAKE_DIR_B
 
     def test_secrets_inherited(self):
-        secrets = [
-            SecretEntry(name="KEY_A", value="val", description="Desc"),
-        ]
-        base = _make_spec("base", "Base", secrets=secrets)
+        secrets_dir = _write_test_secrets(
+            "base-secrets",
+            secret_name="KEY_A",
+            value="val",
+            description="Desc",
+        )
+        base = _make_spec("base", "Base", secrets_dir=secrets_dir)
         derived = base.derive(name="v1")
-        assert len(derived.secrets) == 1
-        assert derived.secrets[0].name == "KEY_A"
+        assert derived.secrets_dir == secrets_dir
 
     def test_secrets_replaced_when_passed(self):
-        base_secrets = [
-            SecretEntry(name="OLD", value="old", description="Old"),
-        ]
-        new_secrets = [
-            SecretEntry(name="NEW", value="new", description="New"),
-        ]
-        base = _make_spec("base", "Base", secrets=base_secrets)
-        derived = base.derive(name="v1", secrets=new_secrets)
-        assert len(derived.secrets) == 1
-        assert derived.secrets[0].name == "NEW"
+        base_dir = _write_test_secrets(
+            "base-old",
+            secret_name="OLD",
+            value="old",
+            description="Old",
+        )
+        new_dir = _write_test_secrets(
+            "base-new",
+            secret_name="NEW",
+            value="new",
+            description="New",
+        )
+        base = _make_spec("base", "Base", secrets_dir=base_dir)
+        derived = base.derive(name="v1", secrets_dir=new_dir)
+        assert derived.secrets_dir == new_dir
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -423,8 +581,9 @@ class TestIsolatedResolution:
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert result.config.guidelines == "Assistant v1"
-        assert len(result.guidance) == 1
-        assert result.guidance[0].title == "v1 guide"
+        assert len(result.guidance_dirs) == 1
+        titles = _guidance_titles(result)
+        assert "v1 guide" in titles
 
     def test_default_catches_unmatched_session(self, monkeypatch):
         self._register_with_default(monkeypatch)
@@ -438,7 +597,7 @@ class TestIsolatedResolution:
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert "Default v0" not in (result.config.guidelines or "")
-        assert len(result.guidance) == 1
+        assert len(result.guidance_dirs) == 1
 
     def test_assistant_match_ignores_org_mismatch(self, monkeypatch):
         """Assistant target matches regardless of org_id in the session."""
@@ -462,7 +621,7 @@ class TestIsolatedResolution:
         result = resolve(org_id=999)
         assert result.config == ActorConfig()
         assert result.function_dirs == []
-        assert result.guidance == []
+        assert result.guidance_dirs == []
 
     def test_function_dir_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
@@ -481,10 +640,16 @@ class TestIsolatedResolution:
     def test_secrets_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
 
-        secrets = [
-            SecretEntry(name="KEY_A", value="val-a", description="Secret A"),
-        ]
-        spec = _make_spec("v0", "With secrets", secrets=secrets)
+        spec = _make_spec(
+            "v0",
+            "With secrets",
+            secrets_dir=_write_test_secrets(
+                "resolved-secrets",
+                secret_name="KEY_A",
+                value="val-a",
+                description="Secret A",
+            ),
+        )
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
 
         mapping = DeploymentMapping(
@@ -493,8 +658,8 @@ class TestIsolatedResolution:
         register_client("test", mapping, Path("/fake"))
 
         result = resolve(org_id=10)
-        secret_names = {s.name for s in result.secrets}
-        assert "KEY_A" in secret_names
+        source = collect_secrets_from_directories(result.secrets_dirs)
+        assert "KEY_A" in source
 
     def test_console_config_in_resolved(self, monkeypatch):
         from unity_deploy.assistant_deployments import deployment_types as dt
@@ -619,7 +784,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(org_id=1)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {
+        assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
             "CRM email sending policy",
         }
@@ -635,7 +800,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(org_id=5)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {
+        assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
             "CRM email sending policy",
         }
@@ -649,73 +814,29 @@ class TestUnifyCompanyRouting:
         assert resolve_from_deployments(org_id=123) is not None
         assert resolve_from_deployments(org_id=5) is None
 
-    def test_brain_operator_targets_production_assistant(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://api.unify.ai/v0",
-            brain_operator_assistant_id="1406",
-        )
-        targets = uc._MAPPING.targets
-        brain_targets = [t for t in targets if t.deployment == "brain_operator"]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "1406"
-
-    def test_brain_operator_targets_staging_assistant(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://internal.example.com/v0",
-            brain_operator_assistant_id="7367",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "7367"
-
-    def test_brain_operator_targets_staging_assistant_by_default(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://internal.example.com/v0",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "7367"
-
-    def test_brain_operator_skipped_on_unknown_environment(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "http://127.0.0.1:8000/v0",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert brain_targets == []
-
-    def test_brain_operator_resolves_on_staging_assistant(self, monkeypatch):
+    def test_unify_org_resolves_any_assistant_in_org(self, monkeypatch):
         self._reload_unify_company(
             monkeypatch,
             "https://internal.example.com/v0",
             brain_operator_assistant_id="7367",
         )
-        matched = resolve_from_deployments(assistant_id=7367)
+        matched = resolve_from_deployments(org_id=5, assistant_id=7367)
         assert matched is not None
-        assert {g.title for g in matched.guidance} >= {"Brain operator role definition"}
+        assert _guidance_titles(matched) >= {
+            "CRM stage hygiene",
+            "CRM email sending policy",
+        }
 
-        assert resolve_from_deployments(assistant_id=1406) is None
-
-    def test_brain_operator_resolves_on_production_assistant_only(self, monkeypatch):
-        self._reload_unify_company(
+    def test_no_assistant_scoped_brain_operator_target(self, monkeypatch):
+        uc = self._reload_unify_company(
             monkeypatch,
-            "https://api.unify.ai/v0",
-            brain_operator_assistant_id="1406",
+            "https://internal.example.com/v0",
+            brain_operator_assistant_id="7367",
         )
-        matched = resolve_from_deployments(assistant_id=1406)
-        assert matched is not None
-        assert {g.title for g in matched.guidance} >= {"Brain operator role definition"}
-
-        assert resolve_from_deployments(assistant_id=7367) is None
+        assert all(t.deployment != "brain_operator" for t in uc._MAPPING.targets)
+        assert any(
+            t.scope == "org" and t.deployment == "default" for t in uc._MAPPING.targets
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -815,11 +936,17 @@ class TestSeedLayers:
             "test_client",
             "org",
             "7",
-            SeedLayer(contacts=[{"first_name": "Alice", "surname": "Smith"}]),
+            SeedLayer(
+                contacts_dir=_write_test_contacts(
+                    "register-layer",
+                    first_name="Alice",
+                    surname="Smith",
+                ),
+            ),
         )
         entry = _CLIENT_DEPLOYMENTS["test_client"]
         assert "org:7" in entry.layers
-        assert len(entry.layers["org:7"].contacts) == 1
+        assert entry.layers["org:7"].contacts_dir is not None
 
     def test_register_layer_requires_existing_client(self):
         with pytest.raises(KeyError, match="not registered"):
@@ -827,7 +954,13 @@ class TestSeedLayers:
                 "nonexistent",
                 "org",
                 "1",
-                SeedLayer(contacts=[{"first_name": "X"}]),
+                SeedLayer(
+                    contacts_dir=_write_test_contacts(
+                        "missing-client",
+                        first_name="X",
+                        surname="Y",
+                    ),
+                ),
             )
 
     def test_register_layer_validates_scope(self, monkeypatch):
@@ -843,10 +976,17 @@ class TestSeedLayers:
             "test_client",
             "org",
             "10",
-            SeedLayer(contacts=[{"first_name": "Org", "surname": "Contact"}]),
+            SeedLayer(
+                contacts_dir=_write_test_contacts(
+                    "org-layer",
+                    first_name="Org",
+                    surname="Contact",
+                ),
+            ),
         )
         result = resolve(org_id=10)
-        names = [(c["first_name"], c["surname"]) for c in result.contacts]
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        names = [(c["first_name"], c["surname"]) for c in source.values()]
         assert ("Org", "Contact") in names
 
     def test_user_layer_contacts_override_org(self, monkeypatch):
@@ -856,9 +996,12 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "Person", "email": "org@x.com"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "org-shared",
+                    first_name="Shared",
+                    surname="Person",
+                    email_address="org@x.com",
+                ),
             ),
         )
         register_layer(
@@ -866,59 +1009,54 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                contacts=[
-                    {
-                        "first_name": "Shared",
-                        "surname": "Person",
-                        "email": "user@x.com",
-                    },
-                ],
+                contacts_dir=_write_test_contacts(
+                    "user-shared",
+                    first_name="Shared",
+                    surname="Person",
+                    email_address="user@x.com",
+                ),
             ),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        by_name = {f"{c['first_name']}|{c['surname']}": c for c in result.contacts}
-        assert by_name["Shared|Person"]["email"] == "user@x.com"
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        assert source["shared|person"]["email_address"] == "user@x.com"
 
     # -- guidance merge --
 
     def test_team_layer_guidance_added(self, monkeypatch):
         self._register(monkeypatch)
+        team_dir = _write_test_guidance(
+            "team-layer",
+            title="Team tip",
+            content="Extra guidance " + "x" * 50,
+        )
         register_layer(
             "test_client",
             "team",
             "100",
-            SeedLayer(
-                guidance=[
-                    GuidanceEntry(
-                        title="Team tip",
-                        content="Extra guidance " + "x" * 50,
-                    ),
-                ],
-            ),
+            SeedLayer(guidance_dir=team_dir),
         )
         result = resolve(org_id=10, team_ids=[100])
-        titles = {g.title for g in result.guidance}
+        titles = _guidance_titles(result)
         assert "Team tip" in titles
         assert "v0 guide" in titles
 
-    def test_guidance_overlay_wins_by_title(self, monkeypatch):
+    def test_guidance_overlay_wins_by_key(self, monkeypatch):
         self._register(monkeypatch)
+        overlay_dir = _write_test_guidance(
+            "user-overlay",
+            title="v0 guide",
+            content="Overridden guidance content " + "x" * 50,
+        )
         register_layer(
             "test_client",
             "user",
             "user-aaa",
-            SeedLayer(
-                guidance=[
-                    GuidanceEntry(
-                        title="v0 guide",
-                        content="Overridden guidance content " + "x" * 50,
-                    ),
-                ],
-            ),
+            SeedLayer(guidance_dir=overlay_dir),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        by_title = {g.title: g for g in result.guidance}
-        assert "Overridden" in by_title["v0 guide"].content
+        source = collect_guidance_from_directories(result.guidance_dirs)
+        assert source[slugify_key("v0 guide")]["content"].startswith("Overridden")
 
     # -- knowledge merge --
 
@@ -929,13 +1067,13 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                knowledge={
-                    "Companies": {
-                        "columns": {"name": "str"},
-                        "seed_key": "name",
-                        "rows": [{"name": "Acme"}],
-                    },
-                },
+                knowledge_dir=_write_test_knowledge(
+                    "org-layer",
+                    table_name="Companies",
+                    seed_key="name",
+                    columns={"name": "str"},
+                    rows=[{"name": "Acme"}],
+                ),
             ),
         )
         register_layer(
@@ -943,33 +1081,78 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                knowledge={
-                    "Companies": {
-                        "columns": {"industry": "str"},
-                        "rows": [{"name": "Acme", "industry": "Tech"}],
-                    },
-                },
+                knowledge_dir=_write_test_knowledge(
+                    "user-layer",
+                    table_name="Companies",
+                    seed_key="name",
+                    columns={"industry": "str"},
+                    rows=[{"name": "Acme", "industry": "Tech"}],
+                ),
             ),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        tbl = result.knowledge["Companies"]
+        tables = collect_knowledge_from_directories(result.knowledge_dirs)
+        tbl = tables["Companies"]
         assert "name" in tbl["columns"]
         assert "industry" in tbl["columns"]
         assert len(tbl["rows"]) == 1
         assert tbl["rows"][0]["industry"] == "Tech"
 
-    # -- blacklist merge --
+    # -- custom data merge --
 
-    def test_blacklist_dedup_by_medium_and_detail(self, monkeypatch):
+    def test_custom_data_deep_merge(self, monkeypatch):
         self._register(monkeypatch)
         register_layer(
             "test_client",
             "org",
             "10",
             SeedLayer(
-                blacklist=[
-                    {"medium": "email", "contact_detail": "spam@x", "reason": "org"},
-                ],
+                custom_data_dir=_write_test_custom_data(
+                    "org-layer",
+                    context="CRM/ReferenceCodes",
+                    seed_key="code",
+                    fields={"code": "str"},
+                    rows=[{"code": "A1"}],
+                ),
+            ),
+        )
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                custom_data_dir=_write_test_custom_data(
+                    "user-layer",
+                    context="CRM/ReferenceCodes",
+                    seed_key="code",
+                    fields={"label": "str"},
+                    rows=[{"code": "A1", "label": "Alpha"}],
+                ),
+            ),
+        )
+        result = resolve(org_id=10, user_id="user-aaa")
+        tables = collect_data_from_directories(result.custom_data_dirs)
+        tbl = tables["CRM/ReferenceCodes"]
+        assert "code" in tbl["fields"]
+        assert "label" in tbl["fields"]
+        assert len(tbl["rows"]) == 1
+        assert tbl["rows"][0]["label"] == "Alpha"
+
+    # -- blacklist merge --
+
+    def test_blacklist_overlay_wins_by_key(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                blacklist_dir=_write_test_blacklist(
+                    "org-layer",
+                    medium="email",
+                    contact_detail="spam@x",
+                    reason="org",
+                ),
             ),
         )
         register_layer(
@@ -977,14 +1160,18 @@ class TestSeedLayers:
             "assistant",
             "99",
             SeedLayer(
-                blacklist=[
-                    {"medium": "email", "contact_detail": "spam@x", "reason": "asst"},
-                ],
+                blacklist_dir=_write_test_blacklist(
+                    "asst-layer",
+                    medium="email",
+                    contact_detail="spam@x",
+                    reason="asst",
+                ),
             ),
         )
         result = resolve(org_id=10, assistant_id=99)
-        assert len(result.blacklist) == 1
-        assert result.blacklist[0]["reason"] == "asst"
+        source = collect_blacklist_from_directories(result.blacklist_dirs)
+        assert len(source) == 1
+        assert source["email|spam@x"]["reason"] == "asst"
 
     # -- secrets merge --
 
@@ -994,8 +1181,17 @@ class TestSeedLayers:
         spec = DeploymentSpec(
             name="v0",
             actor_config=ActorConfig(guidelines="G"),
-            guidance=[GuidanceEntry(title="g", content="c " + "x" * 50)],
-            secrets=[SecretEntry(name="CODE_KEY", value="from-spec", description="d")],
+            guidance_dir=_write_test_guidance(
+                "code-key",
+                title="g",
+                content="c " + "x" * 50,
+            ),
+            secrets_dir=_write_test_secrets(
+                "spec-secrets",
+                secret_name="CODE_KEY",
+                value="from-spec",
+                description="d",
+            ),
         )
         monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
 
@@ -1008,15 +1204,18 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                secrets=[
-                    SecretEntry(name="ORG_KEY", value="org-val", description="org"),
-                ],
+                secrets_dir=_write_test_secrets(
+                    "org-secrets",
+                    secret_name="ORG_KEY",
+                    value="org-val",
+                    description="org",
+                ),
             ),
         )
         result = resolve(org_id=10)
-        names = {s.name for s in result.secrets}
-        assert "CODE_KEY" in names
-        assert "ORG_KEY" in names
+        source = collect_secrets_from_directories(result.secrets_dirs)
+        assert "CODE_KEY" in source
+        assert "ORG_KEY" in source
 
     # -- scope order --
 
@@ -1027,9 +1226,12 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "org"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-org",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="org@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1037,9 +1239,12 @@ class TestSeedLayers:
             "team",
             "50",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "team"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-team",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="team@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1047,9 +1252,12 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "user"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-user",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="user@x.com",
+                ),
             ),
         )
         register_layer(
@@ -1057,9 +1265,12 @@ class TestSeedLayers:
             "assistant",
             "99",
             SeedLayer(
-                contacts=[
-                    {"first_name": "Shared", "surname": "X", "level": "asst"},
-                ],
+                contacts_dir=_write_test_contacts(
+                    "scope-asst",
+                    first_name="Shared",
+                    surname="X",
+                    email_address="asst@x.com",
+                ),
             ),
         )
         result = resolve(
@@ -1068,8 +1279,9 @@ class TestSeedLayers:
             user_id="user-aaa",
             assistant_id=99,
         )
-        assert len(result.contacts) == 1
-        assert result.contacts[0]["level"] == "asst"
+        source = collect_contacts_from_directories(result.contacts_dirs)
+        assert len(source) == 1
+        assert source["shared|x"]["email_address"] == "asst@x.com"
 
     # -- no layers = unchanged --
 
@@ -1077,5 +1289,5 @@ class TestSeedLayers:
         self._register(monkeypatch)
         result = resolve(org_id=10)
         assert result.config.guidelines == "Default v0"
-        assert len(result.guidance) == 1
-        assert result.contacts == []
+        assert len(result.guidance_dirs) == 1
+        assert result.contacts_dirs == []

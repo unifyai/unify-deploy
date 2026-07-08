@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar, TYPE_CHECKING
 
-from unify.guidance_manager.types.guidance import Guidance
 from unify.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 
@@ -48,19 +47,24 @@ class ResolvedAssistantDeployment:
     environments: list[BaseEnvironment]
     function_dirs: list[Path]
     venv_dirs: list[Path]
-    contacts: list[dict[str, Any]]
-    guidance: list[Guidance]
-    knowledge: dict[str, dict[str, Any]]
-    blacklist: list[dict[str, Any]]
+    guidance_dirs: list[Path]
+    contacts_dirs: list[Path]
+    secrets_dirs: list[Path]
+    knowledge_dirs: list[Path]
+    custom_data_dirs: list[Path]
+    dashboards_dirs: list[Path]
+    tasks_dirs: list[Path]
+    blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
     integration_registry: list[dict[str, Any]] = field(default_factory=list)
     """One row per enabled integration, populated by ``expand_integrations``.
 
     Seeded into the ``Integrations/Manifests`` DataManager context by
-    ``_sync_integration_registry`` and consumed at runtime by
-    ``unify.integration_status`` to compute which integrations have working
-    credentials.  See ``integrations/loader.py:_build_registry_row``."""
+    ``unify.integration_registry.sync_custom_integration_registry`` and
+    consumed at runtime by ``unify.integration_status`` to compute which
+    integrations have working credentials.  See
+    ``integrations/loader.py:_build_registry_row``."""
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None
@@ -109,50 +113,83 @@ def _merge_by_key(
     return list(merged.values())
 
 
-def _contact_key(r: dict) -> str:
-    return f"{r.get('first_name', '')}|{r.get('surname', '')}".lower()
+def _append_secrets_dir(dirs: list[Path], secrets_dir: Path | None) -> list[Path]:
+    if secrets_dir is None:
+        return dirs
+    resolved = str(Path(secrets_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(secrets_dir)]
 
 
-def _guidance_key(r: Guidance) -> str:
-    return r.title
+def _append_contacts_dir(dirs: list[Path], contacts_dir: Path | None) -> list[Path]:
+    if contacts_dir is None:
+        return dirs
+    resolved = str(Path(contacts_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(contacts_dir)]
 
 
-def _blacklist_key(r: dict) -> str:
-    return f"{r.get('medium', '')}|{r.get('contact_detail', '')}"
+def _append_guidance_dir(dirs: list[Path], guidance_dir: Path | None) -> list[Path]:
+    if guidance_dir is None:
+        return dirs
+    resolved = str(Path(guidance_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(guidance_dir)]
+
+
+def _append_knowledge_dir(dirs: list[Path], knowledge_dir: Path | None) -> list[Path]:
+    if knowledge_dir is None:
+        return dirs
+    resolved = str(Path(knowledge_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(knowledge_dir)]
+
+
+def _append_custom_data_dir(
+    dirs: list[Path],
+    custom_data_dir: Path | None,
+) -> list[Path]:
+    if custom_data_dir is None:
+        return dirs
+    resolved = str(Path(custom_data_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(custom_data_dir)]
+
+
+def _append_dashboards_dir(dirs: list[Path], dashboards_dir: Path | None) -> list[Path]:
+    if dashboards_dir is None:
+        return dirs
+    resolved = str(Path(dashboards_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(dashboards_dir)]
+
+
+def _append_tasks_dir(dirs: list[Path], tasks_dir: Path | None) -> list[Path]:
+    if tasks_dir is None:
+        return dirs
+    resolved = str(Path(tasks_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(tasks_dir)]
+
+
+def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
+    if blacklist_dir is None:
+        return dirs
+    resolved = str(Path(blacklist_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(blacklist_dir)]
 
 
 def _secret_key(r: Secret) -> str:
     return r.name
-
-
-def _merge_knowledge(
-    base: dict[str, dict],
-    overlay: dict[str, dict],
-) -> dict[str, dict]:
-    """Deep-merge knowledge tables.  Overlay columns and rows win on collision."""
-    merged = {k: dict(v) for k, v in base.items()}
-    for table_name, spec in overlay.items():
-        if table_name not in merged:
-            merged[table_name] = dict(spec)
-            continue
-        existing = merged[table_name]
-        if spec.get("columns"):
-            existing.setdefault("columns", {}).update(spec["columns"])
-        if spec.get("description"):
-            existing["description"] = spec["description"]
-        seed_key = spec.get("seed_key") or existing.get("seed_key")
-        if seed_key:
-            existing["seed_key"] = seed_key
-        if spec.get("rows"):
-            all_rows = existing.get("rows", []) + spec["rows"]
-            if seed_key:
-                seen: dict[str, dict] = {}
-                for row in all_rows:
-                    seen[str(row.get(seed_key, id(row)))] = row
-                existing["rows"] = list(seen.values())
-            else:
-                existing["rows"] = all_rows
-    return merged
 
 
 def _merge_integrations(base: list[str], overlay: list[str]) -> list[str]:
@@ -236,11 +273,34 @@ def _spec_to_resolved(
     from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
-    contacts: list[dict] = list(spec.contacts)
-    guidance: list[Guidance] = list(spec.guidance)
-    knowledge: dict[str, dict] = dict(spec.knowledge)
-    blacklist: list[dict] = list(spec.blacklist)
-    secrets: list[Secret] = list(spec.secrets)
+    contacts_dirs: list[Path] = []
+    if spec.contacts_dir is not None:
+        contacts_dirs = _append_contacts_dir(contacts_dirs, spec.contacts_dir)
+    secrets_dirs: list[Path] = []
+    if spec.secrets_dir is not None:
+        secrets_dirs = _append_secrets_dir(secrets_dirs, spec.secrets_dir)
+    guidance_dirs: list[Path] = []
+    if spec.guidance_dir is not None:
+        guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
+    knowledge_dirs: list[Path] = []
+    if spec.knowledge_dir is not None:
+        knowledge_dirs = _append_knowledge_dir(knowledge_dirs, spec.knowledge_dir)
+    custom_data_dirs: list[Path] = []
+    if spec.custom_data_dir is not None:
+        custom_data_dirs = _append_custom_data_dir(
+            custom_data_dirs,
+            spec.custom_data_dir,
+        )
+    dashboards_dirs: list[Path] = []
+    if spec.dashboards_dir is not None:
+        dashboards_dirs = _append_dashboards_dir(dashboards_dirs, spec.dashboards_dir)
+    tasks_dirs: list[Path] = []
+    if spec.tasks_dir is not None:
+        tasks_dirs = _append_tasks_dir(tasks_dirs, spec.tasks_dir)
+    blacklist_dirs: list[Path] = []
+    if spec.blacklist_dir is not None:
+        blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
+    secrets: list[Secret] = []
     integrations: list[str] = list(spec.integrations)
     activations: list[ScenarioActivation] = list(spec.scenarios)
 
@@ -251,16 +311,31 @@ def _spec_to_resolved(
         user_id=user_id,
         assistant_id=assistant_id,
     ):
-        if layer.contacts:
-            contacts = _merge_by_key(contacts, layer.contacts, _contact_key)
-        if layer.guidance:
-            guidance = _merge_by_key(guidance, list(layer.guidance), _guidance_key)
-        if layer.knowledge:
-            knowledge = _merge_knowledge(knowledge, layer.knowledge)
-        if layer.blacklist:
-            blacklist = _merge_by_key(blacklist, layer.blacklist, _blacklist_key)
-        if layer.secrets:
-            secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
+        if layer.contacts_dir is not None:
+            contacts_dirs = _append_contacts_dir(contacts_dirs, layer.contacts_dir)
+        if layer.secrets_dir is not None:
+            secrets_dirs = _append_secrets_dir(secrets_dirs, layer.secrets_dir)
+        if layer.guidance_dir is not None:
+            guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
+        if layer.knowledge_dir is not None:
+            knowledge_dirs = _append_knowledge_dir(knowledge_dirs, layer.knowledge_dir)
+        if layer.custom_data_dir is not None:
+            custom_data_dirs = _append_custom_data_dir(
+                custom_data_dirs,
+                layer.custom_data_dir,
+            )
+        if layer.dashboards_dir is not None:
+            dashboards_dirs = _append_dashboards_dir(
+                dashboards_dirs,
+                layer.dashboards_dir,
+            )
+        if layer.tasks_dir is not None:
+            tasks_dirs = _append_tasks_dir(tasks_dirs, layer.tasks_dir)
+        if layer.blacklist_dir is not None:
+            blacklist_dirs = _append_blacklist_dir(
+                blacklist_dirs,
+                layer.blacklist_dir,
+            )
         if layer.integrations:
             integrations = _merge_integrations(integrations, list(layer.integrations))
         if layer.scenarios:
@@ -298,10 +373,14 @@ def _spec_to_resolved(
         environments=list(spec.environments),
         function_dirs=[spec.function_dir] if spec.function_dir else [],
         venv_dirs=[spec.venv_dir] if spec.venv_dir else [],
-        contacts=contacts,
-        guidance=guidance,
-        knowledge=knowledge,
-        blacklist=blacklist,
+        guidance_dirs=guidance_dirs,
+        contacts_dirs=contacts_dirs,
+        secrets_dirs=secrets_dirs,
+        knowledge_dirs=knowledge_dirs,
+        custom_data_dirs=custom_data_dirs,
+        dashboards_dirs=dashboards_dirs,
+        tasks_dirs=tasks_dirs,
+        blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
         mcp_configs=[],
@@ -386,30 +465,62 @@ def resolve(
 ) -> ResolvedAssistantDeployment:
     """Resolve the assistant deployment for the given identity.
 
-    Walks ``_CLIENT_DEPLOYMENTS`` looking for a client whose mapping
-    targets match the session identity.  Returns the deployment spec
-    as a :class:`ResolvedAssistantDeployment`.
-
-    When no client matches, returns an empty default assistant_deployments.
+    In ``embedded`` mode, walks ``_CLIENT_DEPLOYMENTS`` populated by client
+    subpackage imports.  In ``bundled`` mode (production pods), resolves via
+    ``routing_manifest.yaml`` and the unpacked GCS client bundle.
     """
-    result = resolve_from_deployments(
-        org_id=org_id,
-        team_ids=team_ids,
-        user_id=user_id,
-        assistant_id=assistant_id,
+    import os
+
+    client_mode = (
+        (os.environ.get("UNITY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
     )
-    if result is not None:
-        return result
+    if client_mode == "embedded":
+        _ensure_embedded_clients_registered()
+        result = resolve_from_deployments(
+            org_id=org_id,
+            team_ids=team_ids,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if result is not None:
+            return result
+    else:
+        from unity_deploy.assistant_deployments.routing_manifest import (
+            resolve_client_bundle_target,
+        )
+        from unity_deploy.client_bundle.loader import resolve_from_bundle
+
+        target = resolve_client_bundle_target(
+            org_id=org_id,
+            team_ids=team_ids,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if target is not None:
+            bundled = resolve_from_bundle(
+                client_name=target.client_name,
+                deployment=target.deployment,
+                org_id=org_id,
+                team_ids=team_ids,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            )
+            if bundled is not None:
+                return bundled
 
     return ResolvedAssistantDeployment(
         config=ActorConfig(),
         environments=[],
         function_dirs=[],
         venv_dirs=[],
-        contacts=[],
-        guidance=[],
-        knowledge={},
-        blacklist=[],
+        guidance_dirs=[],
+        contacts_dirs=[],
+        secrets_dirs=[],
+        knowledge_dirs=[],
+        custom_data_dirs=[],
+        dashboards_dirs=[],
+        tasks_dirs=[],
+        blacklist_dirs=[],
         secrets=[],
         integrations=[],
         mcp_configs=[],
@@ -418,19 +529,17 @@ def resolve(
     )
 
 
-# ---------------------------------------------------------------------------
-# Import client subpackages so they self-register.
-# Add new clients here.
-# ---------------------------------------------------------------------------
+_EMBEDDED_CLIENTS_REGISTERED = False
 
-# Specific-scope clients should register before broader org-level clients
-# because resolution is first-match-wins in insertion order.
-from . import client_alpha  # noqa: F401, E402  (specific assistant ids)
-from . import clientepsilon_homes  # noqa: F401, E402  (specific assistant ids)
-from . import clientzeta  # noqa: F401, E402  (specific assistant ids)
-from . import client_beta  # noqa: F401, E402  (specific assistant/org ids)
-from . import unify_company  # noqa: F401, E402  (Unify org + brain operator)
 
-# TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
-# owner is assigned and _ENVIRONMENTS is populated in clientgamma/__init__.py.
-# from . import clientgamma  # noqa: F401, E402
+def _ensure_embedded_clients_registered() -> None:
+    global _EMBEDDED_CLIENTS_REGISTERED
+    if _EMBEDDED_CLIENTS_REGISTERED:
+        return
+    from . import clientzeta  # noqa: F401
+    from . import clientepsilon_homes  # noqa: F401
+    from . import client_beta  # noqa: F401
+    from . import client_alpha  # noqa: F401
+    from . import unify_company  # noqa: F401
+
+    _EMBEDDED_CLIENTS_REGISTERED = True

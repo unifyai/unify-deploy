@@ -55,11 +55,15 @@ def _session_details():
 
 def _resolved_startup_spec():
     return SimpleNamespace(
-        contacts=[],
-        guidance=[],
-        knowledge=[],
+        contacts_dirs=[],
+        secrets_dirs=[],
+        guidance_dirs=[],
+        knowledge_dirs=[],
+        custom_data_dirs=[],
+        dashboards_dirs=[],
+        tasks_dirs=[],
         secrets=[],
-        blacklist=[],
+        blacklist_dirs=[],
         function_dirs=[],
         venv_dirs=[],
         integrations=[],

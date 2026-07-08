@@ -1,0 +1,3 @@
+{"rule": "source_of_truth", "details": "Live mutable CRM state belongs in Unity DataManager tables under Data/CRM."}
+{"rule": "bronze_cache", "details": "Raw integration exports stay gitignored locally or in object storage, with normalized provenance rows in CRM tables."}
+{"rule": "recurring_syncs", "details": "Recurring CRM work is represented as TaskScheduler tasks that call stable brain sync functions."}

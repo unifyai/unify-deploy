@@ -22,14 +22,27 @@ def resolve_startup_spec(identity: StartupIdentity) -> ResolvedAssistantDeployme
     """Resolve the assistant deployment spec without side effects."""
 
     from unity_deploy.assistant_deployments.clients import resolve
+    from unity_deploy.client_bundle.fetch import (
+        bundled_client_mode,
+        ensure_client_bundle,
+    )
+
+    assistant_id_int = (
+        int(identity.assistant_id) if str(identity.assistant_id).isdigit() else None
+    )
+    if bundled_client_mode():
+        ensure_client_bundle(
+            org_id=identity.org_id,
+            team_ids=list(identity.team_ids) or None,
+            user_id=identity.user_id,
+            assistant_id=assistant_id_int,
+        )
 
     return resolve(
         org_id=identity.org_id,
         team_ids=list(identity.team_ids) or None,
         user_id=identity.user_id,
-        assistant_id=(
-            int(identity.assistant_id) if str(identity.assistant_id).isdigit() else None
-        ),
+        assistant_id=assistant_id_int,
     )
 
 

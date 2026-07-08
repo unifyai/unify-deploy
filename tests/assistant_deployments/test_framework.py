@@ -2,7 +2,7 @@
 
 Covers ActorConfig model behavior, environment reconstruction helpers,
 secrets file merge order, custom function collection, hash behavior, and
-the sync_all_seed_data orchestrator.
+the integration registry sync helper.
 """
 
 from __future__ import annotations
@@ -17,13 +17,9 @@ from unity_deploy.assistant_deployments.environments.reconstruct import (
     write_files_to_package,
     import_and_resolve,
 )
-from unity_deploy.assistant_deployments.clients import (
-    ResolvedAssistantDeployment,
-)
-from unity_deploy.assistant_deployments.seed_sync import (
-    _aggregate_hash,
-    _record_hash,
-    sync_all_seed_data,
+from unify.integration_registry.custom_integration_registry import (
+    collect_integration_registry_from_rows,
+    compute_custom_integration_registry_hash,
 )
 from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
@@ -112,24 +108,15 @@ class TestEnvironmentReconstruct:
 
 
 # ---------------------------------------------------------------------------
-# 3. sync_all_seed_data with empty data
+# 3. Integration registry sync with empty data
 # ---------------------------------------------------------------------------
 
 
-class TestSyncAllSeedData:
-    def test_noop_with_empty_resolved(self):
-        empty = ResolvedAssistantDeployment(
-            config=ActorConfig(),
-            environments=[],
-            function_dirs=[],
-            venv_dirs=[],
-            contacts=[],
-            guidance=[],
-            knowledge={},
-            blacklist=[],
-            secrets=[],
-        )
-        result = sync_all_seed_data(empty)
+class TestIntegrationRegistrySync:
+    def test_noop_with_empty_registry(self):
+        from unify.integration_registry import sync_custom_integration_registry
+
+        result = sync_custom_integration_registry(source_registry={})
         assert result is False
 
 
@@ -293,20 +280,31 @@ class TestCustomFunctionCollection:
 
 
 class TestHashEdgeCases:
-    def test_hash_with_nested_dicts(self):
-        r = {"name": "x", "meta": {"a": 1, "b": [2, 3]}}
-        h = _record_hash(r, set())
-        assert len(h) == 16
-
-    def test_aggregate_hash_single_record(self):
-        h = _aggregate_hash(
-            [{"k": "only"}],
-            lambda r: r["k"],
-            set(),
+    def test_registry_hash_with_json_fields(self):
+        rows = collect_integration_registry_from_rows(
+            [
+                {
+                    "slug": "github",
+                    "label": "GitHub",
+                    "tags_json": '["git"]',
+                },
+            ],
         )
+        assert rows["github"]["custom_hash"]
+        assert len(rows["github"]["custom_hash"]) == 16
+
+    def test_aggregate_registry_hash_single_record(self):
+        rows = collect_integration_registry_from_rows(
+            [{"slug": "only", "label": "Only"}],
+        )
+        h = compute_custom_integration_registry_hash(source_registry=rows)
         assert len(h) == 16
 
-    def test_hash_changes_when_value_changes(self):
-        h1 = _record_hash({"name": "A", "v": 1}, set())
-        h2 = _record_hash({"name": "A", "v": 2}, set())
-        assert h1 != h2
+    def test_registry_hash_changes_when_value_changes(self):
+        base = collect_integration_registry_from_rows(
+            [{"slug": "app", "label": "A", "description": "one"}],
+        )
+        changed = collect_integration_registry_from_rows(
+            [{"slug": "app", "label": "A", "description": "two"}],
+        )
+        assert base["app"]["custom_hash"] != changed["app"]["custom_hash"]

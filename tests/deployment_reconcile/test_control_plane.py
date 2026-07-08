@@ -327,7 +327,7 @@ def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
         reconcile.ReconcileOperation(
             client_name="unify_company",
             assistant_id="2098",
-            deployment="brain_operator",
+            deployment="default",
             field="console_config",
             action="clear",
             path="/admin/assistant/2098",
@@ -337,7 +337,7 @@ def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
         reconcile.ReconcileOperation(
             client_name="unify_company",
             assistant_id="2098",
-            deployment="brain_operator",
+            deployment="default",
             field="task_activation",
             action="upsert",
             path="/infra/task-activation/upsert",
