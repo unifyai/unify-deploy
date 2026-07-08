@@ -41,6 +41,7 @@ def _empty_resolved(*, integrations: list[str]) -> ResolvedAssistantDeployment:
         knowledge_dirs=[],
         custom_data_dirs=[],
         dashboards_dirs=[],
+        tasks_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=integrations,

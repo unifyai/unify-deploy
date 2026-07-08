@@ -37,6 +37,8 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
     from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
 
     dashboard_entities = list_dashboard_entity_ids(resolved.dashboards_dirs)
+    from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
+
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
         "secrets_dirs": len(resolved.secrets_dirs),
@@ -48,6 +50,8 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
         "dashboard_tiles": dashboard_entities["tiles"],
         "dashboard_layouts": dashboard_entities["layouts"],
         "dashboards_dirs": len(resolved.dashboards_dirs),
+        "tasks_dirs": len(resolved.tasks_dirs),
+        "custom_tasks": len(collect_tasks_from_directories(resolved.tasks_dirs)),
         "blacklist_dir_count": len(resolved.blacklist_dirs),
         "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),

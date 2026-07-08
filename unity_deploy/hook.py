@@ -130,7 +130,7 @@ def startup_hook(
         logger,
         (
             "⏱️ [StartupTiming] unity_deploy.startup_hook resolved "
-            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_tables=%d custom_data_tables=%d dashboard_entities=%d blacklist_dirs=%d "
+            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_tables=%d custom_data_tables=%d dashboard_entities=%d tasks_dirs=%d blacklist_dirs=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
         len(resolved.contacts_dirs),
@@ -143,6 +143,7 @@ def startup_hook(
             len(names)
             for names in list_dashboard_entity_ids(resolved.dashboards_dirs).values()
         ),
+        len(resolved.tasks_dirs),
         len(resolved.blacklist_dirs),
         len(resolved.function_dirs),
         len(resolved.venv_dirs),

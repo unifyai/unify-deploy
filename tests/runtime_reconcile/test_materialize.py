@@ -92,6 +92,20 @@ class _FakeDashboardManager:
         return True
 
 
+class _FakeTaskScheduler:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_custom(self, *, source_tasks=None, function_name_to_id=None) -> bool:
+        self.calls.append(
+            {
+                "source_tasks": source_tasks,
+                "function_name_to_id": function_name_to_id,
+            },
+        )
+        return True
+
+
 class _FakeIntegrationRegistrySync:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -113,6 +127,7 @@ def _install_materialize_fakes(
     knowledge_collector,
     data_collector,
     dashboards_collector,
+    tasks_collector,
     integration_registry_collector,
     integration_registry_sync,
     blacklist_collector,
@@ -123,6 +138,7 @@ def _install_materialize_fakes(
     knowledge_manager: _FakeKnowledgeManager,
     data_manager: _FakeDataManager,
     dashboard_manager: _FakeDashboardManager,
+    task_scheduler: _FakeTaskScheduler,
     blacklist_manager: _FakeBlacklistManager,
 ) -> None:
     custom_functions = ModuleType("unify.function_manager.custom_functions")
@@ -191,6 +207,14 @@ def _install_materialize_fakes(
         custom_dashboards,
     )
 
+    custom_tasks = ModuleType("unify.task_scheduler.custom_tasks")
+    custom_tasks.collect_tasks_from_directories = tasks_collector
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.task_scheduler.custom_tasks",
+        custom_tasks,
+    )
+
     integration_registry = ModuleType("unify.integration_registry")
     integration_registry.collect_integration_registry_from_rows = (
         integration_registry_collector
@@ -244,6 +268,10 @@ def _install_materialize_fakes(
             return dashboard_manager
 
         @staticmethod
+        def get_task_scheduler():
+            return task_scheduler
+
+        @staticmethod
         def get_blacklist_manager():
             return blacklist_manager
 
@@ -263,6 +291,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FakeDataManager()
     fake_dash = _FakeDashboardManager()
+    fake_ts = _FakeTaskScheduler()
     fake_registry_sync = _FakeIntegrationRegistrySync()
     fake_bm = _FakeBlacklistManager()
 
@@ -277,6 +306,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         knowledge_collector=lambda _dirs: {},
         data_collector=lambda _dirs: {},
         dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
+        tasks_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
         integration_registry_sync=fake_registry_sync,
         blacklist_collector=lambda _dirs: {},
@@ -287,6 +317,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         knowledge_manager=fake_km,
         data_manager=fake_dm,
         dashboard_manager=fake_dash,
+        task_scheduler=fake_ts,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -304,6 +335,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
             knowledge_dirs=[],
             custom_data_dirs=[],
             dashboards_dirs=[],
+            tasks_dirs=[],
             integration_registry=[],
             secrets_dirs=[],
             secrets=[],
@@ -319,6 +351,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert result.knowledge_changed is True
     assert result.custom_data_changed is True
     assert result.dashboards_changed is True
+    assert result.tasks_changed is True
     assert result.secrets_changed is True
     assert result.blacklist_changed is True
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
@@ -327,6 +360,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert fake_km.calls == [{"source_tables": {}}]
     assert fake_dm.calls == [{"source_tables": {}}]
     assert fake_dash.calls == [{"source_entities": {"tiles": {}, "layouts": {}}}]
+    assert fake_ts.calls == [{"source_tasks": {}, "function_name_to_id": {}}]
     assert fake_registry_sync.calls == [{"source_registry": {}}]
     assert fake_sm.calls == [{"source_secrets": {}}]
     assert fake_bm.calls == [{"source_blacklist": {}}]
@@ -345,6 +379,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FakeDataManager()
     fake_dash = _FakeDashboardManager()
+    fake_ts = _FakeTaskScheduler()
     fake_bm = _FakeBlacklistManager()
 
     def collect_functions(dirs):
@@ -362,6 +397,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         knowledge_collector=lambda _dirs: {},
         data_collector=lambda _dirs: {},
         dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
+        tasks_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
         integration_registry_sync=_FakeIntegrationRegistrySync(),
         blacklist_collector=lambda _dirs: {},
@@ -372,6 +408,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         knowledge_manager=fake_km,
         data_manager=fake_dm,
         dashboard_manager=fake_dash,
+        task_scheduler=fake_ts,
         blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
@@ -389,6 +426,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             knowledge_dirs=[],
             custom_data_dirs=[],
             dashboards_dirs=[],
+            tasks_dirs=[],
             integration_registry=[],
             secrets_dirs=[],
             secrets=[],

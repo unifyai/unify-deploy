@@ -32,6 +32,7 @@ class RuntimeStateResult:
     knowledge_changed: bool = False
     custom_data_changed: bool = False
     dashboards_changed: bool = False
+    tasks_changed: bool = False
     blacklist_changed: bool = False
 
 
@@ -96,6 +97,10 @@ def compute_runtime_state_fingerprint(
         "dashboards_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.dashboards_dirs
+        ],
+        "tasks_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.tasks_dirs
         ],
         "blacklist_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
@@ -373,6 +378,9 @@ def materialize_runtime_state(
     contacts_changed = False
     secrets_changed = False
     knowledge_changed = False
+    custom_data_changed = False
+    dashboards_changed = False
+    tasks_changed = False
     blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
@@ -509,6 +517,30 @@ def materialize_runtime_state(
         dashboards_changed,
     )
 
+    tasks_dirs = _dedupe_paths(resolved.tasks_dirs)
+    from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
+
+    source_tasks = collect_tasks_from_directories(tasks_dirs)
+    fm_for_tasks = ManagerRegistry.get_function_manager()
+    function_name_to_id_for_tasks = {
+        name: data["function_id"]
+        for name, data in fm_for_tasks.list_functions().items()
+        if data.get("function_id") is not None
+    }
+    tasks_start = perf_counter()
+    ts = ManagerRegistry.get_task_scheduler()
+    tasks_changed = ts.sync_custom(
+        source_tasks=source_tasks,
+        function_name_to_id=function_name_to_id_for_tasks,
+    )
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_tasks assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - tasks_start,
+        tasks_changed,
+    )
+
     secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
     source_secrets = collect_secrets_from_directories(secrets_dirs)
     source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
@@ -556,13 +588,14 @@ def materialize_runtime_state(
                 "knowledge": "ready",
                 "data": "ready",
                 "dashboards": "ready",
+                "tasks": "ready",
                 "secrets": "ready",
                 "functions": "ready",
             },
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s tasks_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         integration_registry_changed,
@@ -572,6 +605,7 @@ def materialize_runtime_state(
         knowledge_changed,
         custom_data_changed,
         dashboards_changed,
+        tasks_changed,
         secrets_changed,
         blacklist_changed,
     )
@@ -586,6 +620,7 @@ def materialize_runtime_state(
         knowledge_changed=knowledge_changed,
         custom_data_changed=custom_data_changed,
         dashboards_changed=dashboards_changed,
+        tasks_changed=tasks_changed,
         secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )

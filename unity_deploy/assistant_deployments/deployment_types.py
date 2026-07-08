@@ -104,6 +104,10 @@ class SeedLayer(BaseModel):
             "Directory containing deployment-defined dashboard tiles and layouts."
         ),
     )
+    tasks_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing tasks.jsonl for this layer.",
+    )
     blacklist_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing blacklist.jsonl for this layer.",
@@ -216,6 +220,10 @@ class DeploymentSpec(BaseModel):
         description=(
             "Directory containing deployment-defined dashboard tiles and layouts."
         ),
+    )
+    tasks_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing tasks.jsonl for this layer.",
     )
     blacklist_dir: Optional[Path] = Field(
         default=None,

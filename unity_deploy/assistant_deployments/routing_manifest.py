@@ -32,6 +32,7 @@ class ManifestLayer:
     knowledge_dir: str | None = None
     custom_data_dir: str | None = None
     dashboards_dir: str | None = None
+    tasks_dir: str | None = None
     guidance_dir: str | None = None
     secrets_dir: str | None = None
     blacklist_dir: str | None = None
@@ -129,6 +130,7 @@ def resolve_manifest_layers(
                     knowledge_dir=layer.get("knowledge_dir"),
                     custom_data_dir=layer.get("custom_data_dir"),
                     dashboards_dir=layer.get("dashboards_dir"),
+                    tasks_dir=layer.get("tasks_dir"),
                     guidance_dir=layer.get("guidance_dir"),
                     secrets_dir=layer.get("secrets_dir"),
                     blacklist_dir=layer.get("blacklist_dir"),
