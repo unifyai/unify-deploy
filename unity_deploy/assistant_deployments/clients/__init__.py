@@ -50,7 +50,7 @@ class ResolvedAssistantDeployment:
     guidance_dirs: list[Path]
     contacts: list[dict[str, Any]]
     knowledge: dict[str, dict[str, Any]]
-    blacklist: list[dict[str, Any]]
+    blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
     integration_registry: list[dict[str, Any]] = field(default_factory=list)
@@ -121,8 +121,13 @@ def _append_guidance_dir(dirs: list[Path], guidance_dir: Path | None) -> list[Pa
     return [*dirs, Path(guidance_dir)]
 
 
-def _blacklist_key(r: dict) -> str:
-    return f"{r.get('medium', '')}|{r.get('contact_detail', '')}"
+def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
+    if blacklist_dir is None:
+        return dirs
+    resolved = str(Path(blacklist_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(blacklist_dir)]
 
 
 def _secret_key(r: Secret) -> str:
@@ -245,7 +250,9 @@ def _spec_to_resolved(
     if spec.guidance_dir is not None:
         guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
     knowledge: dict[str, dict] = dict(spec.knowledge)
-    blacklist: list[dict] = list(spec.blacklist)
+    blacklist_dirs: list[Path] = []
+    if spec.blacklist_dir is not None:
+        blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
     secrets: list[Secret] = list(spec.secrets)
     integrations: list[str] = list(spec.integrations)
     activations: list[ScenarioActivation] = list(spec.scenarios)
@@ -263,8 +270,11 @@ def _spec_to_resolved(
             guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
         if layer.knowledge:
             knowledge = _merge_knowledge(knowledge, layer.knowledge)
-        if layer.blacklist:
-            blacklist = _merge_by_key(blacklist, layer.blacklist, _blacklist_key)
+        if layer.blacklist_dir is not None:
+            blacklist_dirs = _append_blacklist_dir(
+                blacklist_dirs,
+                layer.blacklist_dir,
+            )
         if layer.secrets:
             secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
         if layer.integrations:
@@ -307,7 +317,7 @@ def _spec_to_resolved(
         guidance_dirs=guidance_dirs,
         contacts=contacts,
         knowledge=knowledge,
-        blacklist=blacklist,
+        blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
         mcp_configs=[],
@@ -415,7 +425,7 @@ def resolve(
         guidance_dirs=[],
         contacts=[],
         knowledge={},
-        blacklist=[],
+        blacklist_dirs=[],
         secrets=[],
         integrations=[],
         mcp_configs=[],

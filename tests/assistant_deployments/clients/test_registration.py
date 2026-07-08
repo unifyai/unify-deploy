@@ -31,13 +31,19 @@ from unity_deploy.assistant_deployments.deployment_types import (
     register_layer,
     resolve_deployment_name,
 )
+from unity_deploy.assistant_deployments.blacklist_source import (
+    entry_from_fields,
+    write_blacklist_jsonl,
+)
 from unity_deploy.assistant_deployments.guidance_source import (
     slugify_key,
     write_guidance_jsonl,
 )
+from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
 from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
 
 _GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
+_BLACKLIST_ROOT = Path("/tmp/unify-deploy-test-blacklist")
 
 
 def _write_test_guidance(
@@ -54,6 +60,25 @@ def _write_test_guidance(
                 "title": title,
                 "content": content,
             },
+        ],
+    )
+
+
+def _write_test_blacklist(
+    name: str,
+    *,
+    medium: str,
+    contact_detail: str,
+    reason: str,
+) -> Path:
+    return write_blacklist_jsonl(
+        _BLACKLIST_ROOT / name,
+        [
+            entry_from_fields(
+                medium=medium,
+                contact_detail=contact_detail,
+                reason=reason,
+            ),
         ],
     )
 
@@ -988,16 +1013,19 @@ class TestSeedLayers:
 
     # -- blacklist merge --
 
-    def test_blacklist_dedup_by_medium_and_detail(self, monkeypatch):
+    def test_blacklist_overlay_wins_by_key(self, monkeypatch):
         self._register(monkeypatch)
         register_layer(
             "test_client",
             "org",
             "10",
             SeedLayer(
-                blacklist=[
-                    {"medium": "email", "contact_detail": "spam@x", "reason": "org"},
-                ],
+                blacklist_dir=_write_test_blacklist(
+                    "org-layer",
+                    medium="email",
+                    contact_detail="spam@x",
+                    reason="org",
+                ),
             ),
         )
         register_layer(
@@ -1005,14 +1033,18 @@ class TestSeedLayers:
             "assistant",
             "99",
             SeedLayer(
-                blacklist=[
-                    {"medium": "email", "contact_detail": "spam@x", "reason": "asst"},
-                ],
+                blacklist_dir=_write_test_blacklist(
+                    "asst-layer",
+                    medium="email",
+                    contact_detail="spam@x",
+                    reason="asst",
+                ),
             ),
         )
         result = resolve(org_id=10, assistant_id=99)
-        assert len(result.blacklist) == 1
-        assert result.blacklist[0]["reason"] == "asst"
+        source = collect_blacklist_from_directories(result.blacklist_dirs)
+        assert len(source) == 1
+        assert source["email|spam@x"]["reason"] == "asst"
 
     # -- secrets merge --
 

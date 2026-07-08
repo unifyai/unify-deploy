@@ -81,7 +81,10 @@ class SeedLayer(BaseModel):
         description="Directory containing guidance.jsonl for this layer.",
     )
     knowledge: dict[str, dict] = Field(default_factory=dict)
-    blacklist: list[dict] = Field(default_factory=list)
+    blacklist_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing blacklist.jsonl for this layer.",
+    )
     secrets: list[Secret] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)
     scenarios: list[ScenarioActivation] = Field(
@@ -172,9 +175,9 @@ class DeploymentSpec(BaseModel):
         default_factory=dict,
         description="Knowledge table specs synced to the KnowledgeManager.",
     )
-    blacklist: list[dict] = Field(
-        default_factory=list,
-        description="Blacklist entries synced to the ContactManager.",
+    blacklist_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing blacklist.jsonl registered with the actor.",
     )
     environments: list = Field(
         default_factory=list,

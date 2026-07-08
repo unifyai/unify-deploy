@@ -59,7 +59,7 @@ def _resolved_startup_spec():
         guidance_dirs=[],
         knowledge=[],
         secrets=[],
-        blacklist=[],
+        blacklist_dirs=[],
         function_dirs=[],
         venv_dirs=[],
         integrations=[],

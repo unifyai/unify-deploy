@@ -38,14 +38,25 @@ class _FakeGuidanceManager:
         return True
 
 
+class _FakeBlacklistManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def sync_custom(self, *, source_blacklist=None) -> bool:
+        self.calls.append({"source_blacklist": source_blacklist})
+        return True
+
+
 def _install_materialize_fakes(
     monkeypatch,
     *,
     function_collector,
     venv_collector,
     guidance_collector,
+    blacklist_collector,
     function_manager: _FakeFunctionManager,
     guidance_manager: _FakeGuidanceManager,
+    blacklist_manager: _FakeBlacklistManager,
 ) -> None:
     custom_functions = ModuleType("unify.function_manager.custom_functions")
     custom_functions.collect_functions_from_directories = function_collector
@@ -64,6 +75,14 @@ def _install_materialize_fakes(
         custom_guidance,
     )
 
+    custom_blacklist = ModuleType("unify.blacklist_manager.custom_blacklist")
+    custom_blacklist.collect_blacklist_from_directories = blacklist_collector
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "unify.blacklist_manager.custom_blacklist",
+        custom_blacklist,
+    )
+
     manager_registry = ModuleType("unify.manager_registry")
 
     class ManagerRegistry:
@@ -74,6 +93,10 @@ def _install_materialize_fakes(
         @staticmethod
         def get_guidance_manager():
             return guidance_manager
+
+        @staticmethod
+        def get_blacklist_manager():
+            return blacklist_manager
 
     manager_registry.ManagerRegistry = ManagerRegistry
     monkeypatch.setitem(
@@ -94,14 +117,17 @@ def _install_materialize_fakes(
 def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
+    fake_bm = _FakeBlacklistManager()
 
     _install_materialize_fakes(
         monkeypatch,
         function_collector=lambda _dirs: {},
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
+        blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
+        blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
         materialize,
@@ -110,15 +136,22 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     )
 
     result = materialize.materialize_runtime_state(
-        SimpleNamespace(function_dirs=[], venv_dirs=[], guidance_dirs=[]),
+        SimpleNamespace(
+            function_dirs=[],
+            venv_dirs=[],
+            guidance_dirs=[],
+            blacklist_dirs=[],
+        ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
         revision="test-revision",
     )
 
     assert result.custom_changed is True
     assert result.guidance_changed is True
+    assert result.blacklist_changed is True
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
+    assert fake_bm.calls == [{"source_blacklist": {}}]
 
 
 def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
@@ -129,6 +162,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     seen_dirs: list[Path] = []
     fake_fm = _FakeFunctionManager()
     fake_gm = _FakeGuidanceManager()
+    fake_bm = _FakeBlacklistManager()
 
     def collect_functions(dirs):
         seen_dirs.extend(dirs)
@@ -139,8 +173,10 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         function_collector=collect_functions,
         venv_collector=lambda _dirs: {},
         guidance_collector=lambda _dirs: {},
+        blacklist_collector=lambda _dirs: {},
         function_manager=fake_fm,
         guidance_manager=fake_gm,
+        blacklist_manager=fake_bm,
     )
     monkeypatch.setattr(
         materialize,
@@ -153,6 +189,7 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             function_dirs=[deployment_dir],
             venv_dirs=[],
             guidance_dirs=[],
+            blacklist_dirs=[],
         ),
         RuntimeIdentity(assistant_id="382", user_id="user-1"),
         revision="test-revision",

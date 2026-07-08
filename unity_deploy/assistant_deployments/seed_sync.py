@@ -370,56 +370,6 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     )
 
 
-def _sync_blacklist(records: list[dict], meta: SeedMetaStore) -> bool:
-    if not records:
-        return False
-    from unify.manager_registry import ManagerRegistry
-
-    bm = ManagerRegistry.get_blacklist_manager()
-    filter_blacklist = _manager_api(bm, "filter_blacklist")
-    create_blacklist_entry = _manager_api(bm, "create_blacklist_entry")
-    update_blacklist_entry = _manager_api(bm, "update_blacklist_entry")
-    delete_blacklist_entry = _manager_api(bm, "delete_blacklist_entry")
-
-    def natural_key(r: dict) -> str:
-        return f"{r.get('medium', '')}|{r.get('contact_detail', '')}"
-
-    def get_existing() -> list[dict]:
-        result = filter_blacklist(limit=1000)
-        entries = result.get("entries", [])
-        return [e.model_dump() if hasattr(e, "model_dump") else e for e in entries]
-
-    def create(rec: dict) -> Any:
-        return create_blacklist_entry(
-            medium=rec["medium"],
-            contact_detail=rec["contact_detail"],
-            reason=rec.get("reason", ""),
-        )
-
-    def update(blacklist_id: int, rec: dict) -> Any:
-        return update_blacklist_entry(
-            blacklist_id=blacklist_id,
-            medium=rec.get("medium"),
-            contact_detail=rec.get("contact_detail"),
-            reason=rec.get("reason"),
-        )
-
-    def delete(blacklist_id: int) -> Any:
-        return delete_blacklist_entry(blacklist_id=blacklist_id)
-
-    return sync_seed_data(
-        manager_key="blacklist",
-        source_records=records,
-        natural_key_fn=natural_key,
-        get_existing_fn=get_existing,
-        create_fn=create,
-        update_fn=update,
-        delete_fn=delete,
-        id_field="blacklist_id",
-        meta_store=meta,
-    )
-
-
 def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
     """Sync knowledge seed data.
 
@@ -630,7 +580,6 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
         resolved.contacts
         or resolved.knowledge
         or resolved.secrets
-        or resolved.blacklist
         or resolved.integration_registry
     )
     if not has_data:
@@ -662,18 +611,6 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
             )
         except Exception:
             logger.exception("Failed to sync seed secrets")
-
-    if resolved.blacklist:
-        try:
-            sync_start = perf_counter()
-            changed |= _sync_blacklist(resolved.blacklist, meta)
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] seed_sync.blacklist total=%.2fs",
-                perf_counter() - sync_start,
-            )
-        except Exception:
-            logger.exception("Failed to sync seed blacklist")
 
     if resolved.knowledge:
         try:

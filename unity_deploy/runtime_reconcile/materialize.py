@@ -27,6 +27,7 @@ class RuntimeStateResult:
     seed_changed: bool = False
     custom_changed: bool = False
     guidance_changed: bool = False
+    blacklist_changed: bool = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -77,7 +78,10 @@ def compute_runtime_state_fingerprint(
     payload = {
         "contacts": resolved.contacts,
         "knowledge": resolved.knowledge,
-        "blacklist": resolved.blacklist,
+        "blacklist_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.blacklist_dirs
+        ],
         "secrets": resolved.secrets,
         "integrations": resolved.integrations,
         "mcp_configs": resolved.mcp_configs,
@@ -183,6 +187,9 @@ def materialize_runtime_state(
         collect_functions_from_directories,
         collect_venvs_from_directories,
     )
+    from unify.blacklist_manager.custom_blacklist import (
+        collect_blacklist_from_directories,
+    )
     from unify.guidance_manager.custom_guidance import (
         collect_guidance_from_directories,
     )
@@ -200,7 +207,7 @@ def materialize_runtime_state(
             phase="syncing_seed_data",
             message=(
                 "Preparing deployment-defined contacts, knowledge, "
-                "secrets, and blacklist."
+                "secrets, and custom blacklist."
             ),
             blocking_resources=("contacts", "knowledge", "secrets"),
             resources={
@@ -277,6 +284,7 @@ def materialize_runtime_state(
 
     custom_changed = False
     guidance_changed = False
+    blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
         collect_start = perf_counter()
@@ -349,6 +357,19 @@ def materialize_runtime_state(
             "because enabled integration sources were unavailable",
             identity.assistant_id,
         )
+
+    blacklist_dirs = _dedupe_paths(resolved.blacklist_dirs)
+    source_blacklist = collect_blacklist_from_directories(blacklist_dirs)
+    blacklist_start = perf_counter()
+    bm = ManagerRegistry.get_blacklist_manager()
+    blacklist_changed = bm.sync_custom(source_blacklist=source_blacklist)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_blacklist assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - blacklist_start,
+        blacklist_changed,
+    )
     logger.info(
         "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions duration=%.2fs custom_changed=%s",
         identity.assistant_id,
@@ -374,12 +395,13 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         seed_changed,
         custom_changed,
         guidance_changed,
+        blacklist_changed,
     )
 
     return RuntimeStateResult(
@@ -388,4 +410,5 @@ def materialize_runtime_state(
         seed_changed=seed_changed,
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
+        blacklist_changed=blacklist_changed,
     )

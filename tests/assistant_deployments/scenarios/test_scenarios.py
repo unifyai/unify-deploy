@@ -88,7 +88,7 @@ def test_expand_integrations_includes_mock_package_and_scenario():
         contacts=[],
         guidance_dirs=[],
         knowledge={},
-        blacklist=[],
+        blacklist_dirs=[],
         secrets=[],
         integrations=["client_alpha_repairs_mock"],
     )
@@ -111,7 +111,7 @@ def test_expand_integrations_includes_clientepsilon_mock_package_and_scenario():
         contacts=[],
         guidance_dirs=[],
         knowledge={},
-        blacklist=[],
+        blacklist_dirs=[],
         secrets=[],
         integrations=["clientepsilon_homes_compliance_mock"],
     )

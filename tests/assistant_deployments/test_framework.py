@@ -126,7 +126,7 @@ class TestSyncAllSeedData:
             contacts=[],
             guidance_dirs=[],
             knowledge={},
-            blacklist=[],
+            blacklist_dirs=[],
             secrets=[],
         )
         result = sync_all_seed_data(empty)
