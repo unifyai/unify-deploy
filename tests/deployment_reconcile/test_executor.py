@@ -53,14 +53,14 @@ def _optional_registry() -> dict[str, ClientDeploymentEntry]:
                     DeploymentTarget(
                         scope="assistant",
                         scope_id="2098",
-                        deployment="brain_operator",
+                        deployment="default",
                         missing_ok=True,
                     ),
                 ],
             ),
             specs={
-                "brain_operator": _spec(
-                    "brain_operator",
+                "default": _spec(
+                    "default",
                     console_config={"version": "1"},
                 ),
             },

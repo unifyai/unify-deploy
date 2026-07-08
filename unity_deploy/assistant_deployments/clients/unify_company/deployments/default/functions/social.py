@@ -253,7 +253,8 @@ async def run_social_render_storyboards(
     from brain.social.create.pipeline import render_approved_storyboards
 
     return await render_approved_storyboards(
-        dry_run=dry_run, execute_cards=execute_cards
+        dry_run=dry_run,
+        execute_cards=execute_cards,
     )
 
 

@@ -792,73 +792,29 @@ class TestUnifyCompanyRouting:
         assert resolve_from_deployments(org_id=123) is not None
         assert resolve_from_deployments(org_id=5) is None
 
-    def test_brain_operator_targets_production_assistant(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://api.unify.ai/v0",
-            brain_operator_assistant_id="1406",
-        )
-        targets = uc._MAPPING.targets
-        brain_targets = [t for t in targets if t.deployment == "brain_operator"]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "1406"
-
-    def test_brain_operator_targets_staging_assistant(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://internal.example.com/v0",
-            brain_operator_assistant_id="7367",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "7367"
-
-    def test_brain_operator_targets_staging_assistant_by_default(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "https://internal.example.com/v0",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert len(brain_targets) == 1
-        assert brain_targets[0].scope_id == "7367"
-
-    def test_brain_operator_skipped_on_unknown_environment(self, monkeypatch):
-        uc = self._reload_unify_company(
-            monkeypatch,
-            "http://127.0.0.1:8000/v0",
-        )
-        brain_targets = [
-            t for t in uc._MAPPING.targets if t.deployment == "brain_operator"
-        ]
-        assert brain_targets == []
-
-    def test_brain_operator_resolves_on_staging_assistant(self, monkeypatch):
+    def test_unify_org_resolves_any_assistant_in_org(self, monkeypatch):
         self._reload_unify_company(
             monkeypatch,
             "https://internal.example.com/v0",
             brain_operator_assistant_id="7367",
         )
-        matched = resolve_from_deployments(assistant_id=7367)
+        matched = resolve_from_deployments(org_id=5, assistant_id=7367)
         assert matched is not None
-        assert _guidance_titles(matched) >= {"Brain operator role definition"}
+        assert _guidance_titles(matched) >= {
+            "CRM stage hygiene",
+            "CRM email sending policy",
+        }
 
-        assert resolve_from_deployments(assistant_id=1406) is None
-
-    def test_brain_operator_resolves_on_production_assistant_only(self, monkeypatch):
-        self._reload_unify_company(
+    def test_no_assistant_scoped_brain_operator_target(self, monkeypatch):
+        uc = self._reload_unify_company(
             monkeypatch,
-            "https://api.unify.ai/v0",
-            brain_operator_assistant_id="1406",
+            "https://internal.example.com/v0",
+            brain_operator_assistant_id="7367",
         )
-        matched = resolve_from_deployments(assistant_id=1406)
-        assert matched is not None
-        assert _guidance_titles(matched) >= {"Brain operator role definition"}
-
-        assert resolve_from_deployments(assistant_id=7367) is None
+        assert all(t.deployment != "brain_operator" for t in uc._MAPPING.targets)
+        assert any(
+            t.scope == "org" and t.deployment == "default" for t in uc._MAPPING.targets
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

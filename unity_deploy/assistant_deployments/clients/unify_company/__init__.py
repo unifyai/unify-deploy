@@ -1,17 +1,8 @@
-"""Unify organization operating-memory assistant_deployments.
+"""Unify organization assistant deployment.
 
-Two deployments are routed under this client:
-
-* ``default`` — the original Unify company brain (CRM seed data,
-  generic guidance, light function surface).  Scoped to the Unify
-  organization in each environment.
-* ``brain_operator`` — dedicated colleague that owns the recurring +
-  trigger-based jobs declared in the brain repo's
-  ``brain.scheduled`` registry.  Routed to the assistant id in
-  ``BRAIN_OPERATOR_ASSISTANT_ID`` (set per environment in Cloud Build /
-  ``brain/.env``).  Other unify_company routing (org ``default``
-  deployment, org ids) remains per-environment via
-  :func:`detect_environment`.
+All Unify-internal assistants in the unify org resolve to the ``default``
+deployment, which carries CRM seed data, guidance, and the brain scheduled-job
+function surface.
 """
 
 from __future__ import annotations
@@ -19,9 +10,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from unity_deploy.assistant_deployments.clients.unify_company._brain_operator import (
-    brain_operator_assistant_id,
-)
 from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentTarget,
@@ -46,21 +34,10 @@ def unify_company_org_id() -> str | None:
 
 
 def _targets() -> list[DeploymentTarget]:
-    out: list[DeploymentTarget] = []
-    assistant_id = brain_operator_assistant_id()
-    if assistant_id:
-        out.append(
-            DeploymentTarget(
-                scope="assistant",
-                scope_id=assistant_id,
-                deployment="brain_operator",
-                missing_ok=True,
-            ),
-        )
     org_id = unify_company_org_id()
-    if org_id:
-        out.append(DeploymentTarget(scope="org", scope_id=org_id, deployment="default"))
-    return out
+    if not org_id:
+        return []
+    return [DeploymentTarget(scope="org", scope_id=org_id, deployment="default")]
 
 
 _MAPPING = DeploymentMapping(targets=_targets())

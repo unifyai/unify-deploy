@@ -405,20 +405,48 @@ def resolve(
 ) -> ResolvedAssistantDeployment:
     """Resolve the assistant deployment for the given identity.
 
-    Walks ``_CLIENT_DEPLOYMENTS`` looking for a client whose mapping
-    targets match the session identity.  Returns the deployment spec
-    as a :class:`ResolvedAssistantDeployment`.
-
-    When no client matches, returns an empty default assistant_deployments.
+    In ``embedded`` mode, walks ``_CLIENT_DEPLOYMENTS`` populated by client
+    subpackage imports.  In ``bundled`` mode (production pods), resolves via
+    ``routing_manifest.yaml`` and the unpacked GCS client bundle.
     """
-    result = resolve_from_deployments(
-        org_id=org_id,
-        team_ids=team_ids,
-        user_id=user_id,
-        assistant_id=assistant_id,
+    import os
+
+    client_mode = (
+        (os.environ.get("UNITY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
     )
-    if result is not None:
-        return result
+    if client_mode == "embedded":
+        _ensure_embedded_clients_registered()
+        result = resolve_from_deployments(
+            org_id=org_id,
+            team_ids=team_ids,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if result is not None:
+            return result
+    else:
+        from unity_deploy.assistant_deployments.routing_manifest import (
+            resolve_client_bundle_target,
+        )
+        from unity_deploy.client_bundle.loader import resolve_from_bundle
+
+        target = resolve_client_bundle_target(
+            org_id=org_id,
+            team_ids=team_ids,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        if target is not None:
+            bundled = resolve_from_bundle(
+                client_name=target.client_name,
+                deployment=target.deployment,
+                org_id=org_id,
+                team_ids=team_ids,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            )
+            if bundled is not None:
+                return bundled
 
     return ResolvedAssistantDeployment(
         config=ActorConfig(),
@@ -438,19 +466,17 @@ def resolve(
     )
 
 
-# ---------------------------------------------------------------------------
-# Import client subpackages so they self-register.
-# Add new clients here.
-# ---------------------------------------------------------------------------
+_EMBEDDED_CLIENTS_REGISTERED = False
 
-# Specific-scope clients should register before broader org-level clients
-# because resolution is first-match-wins in insertion order.
-from . import client_alpha  # noqa: F401, E402  (specific assistant ids)
-from . import clientepsilon_homes  # noqa: F401, E402  (specific assistant ids)
-from . import clientzeta  # noqa: F401, E402  (specific assistant ids)
-from . import client_beta  # noqa: F401, E402  (specific assistant/org ids)
-from . import unify_company  # noqa: F401, E402  (Unify org + brain operator)
 
-# TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
-# owner is assigned and _ENVIRONMENTS is populated in clientgamma/__init__.py.
-# from . import clientgamma  # noqa: F401, E402
+def _ensure_embedded_clients_registered() -> None:
+    global _EMBEDDED_CLIENTS_REGISTERED
+    if _EMBEDDED_CLIENTS_REGISTERED:
+        return
+    from . import clientzeta  # noqa: F401
+    from . import clientepsilon_homes  # noqa: F401
+    from . import client_beta  # noqa: F401
+    from . import client_alpha  # noqa: F401
+    from . import unify_company  # noqa: F401
+
+    _EMBEDDED_CLIENTS_REGISTERED = True

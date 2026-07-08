@@ -1987,6 +1987,71 @@ async def get_latest_unity_image_commit():
         )
 
 
+@router.get("/client-bundle")
+async def get_client_bundle_signed_url(
+    org_id: int | None = None,
+    assistant_id: int | None = None,
+):
+    """Return a short-lived signed URL for the client deployment bundle."""
+
+    from datetime import timedelta
+
+    from unity_deploy.assistant_deployments.routing_manifest import (
+        resolve_client_bundle_target,
+    )
+
+    target = resolve_client_bundle_target(
+        org_id=org_id,
+        assistant_id=assistant_id,
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No client bundle mapped to identity",
+        )
+
+    bucket_name = SETTINGS.client_bundle_bucket
+    environment = SETTINGS.deploy_env
+    pointer_blob = f"{environment}/{target.bundle_key}/latest.txt"
+    storage_client = storage.Client(credentials=_service_account_credentials())
+    bucket = storage_client.bucket(bucket_name)
+    latest_blob = bucket.blob(pointer_blob)
+    if not latest_blob.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Bundle pointer missing: gs://{bucket_name}/{pointer_blob}",
+        )
+    bundle_sha = latest_blob.download_as_text().strip()
+    archive_blob_name = f"{environment}/{target.bundle_key}/{bundle_sha}.tar.gz"
+    sha256_blob_name = f"{environment}/{target.bundle_key}/{bundle_sha}.sha256"
+    archive_blob = bucket.blob(archive_blob_name)
+    if not archive_blob.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Bundle archive missing: gs://{bucket_name}/{archive_blob_name}",
+        )
+    sha256_blob = bucket.blob(sha256_blob_name)
+    if not sha256_blob.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Bundle checksum missing: gs://{bucket_name}/{sha256_blob_name}",
+        )
+    sha256 = sha256_blob.download_as_text().strip()
+    signed_url = archive_blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=5),
+        method="GET",
+    )
+    return {
+        "client_name": target.client_name,
+        "deployment": target.deployment,
+        "bundle_sha": bundle_sha,
+        "sha256": sha256,
+        "signed_url": signed_url,
+        "expires_in": 300,
+    }
+
+
 # =============================================================================
 # Tunnel Management Endpoints (user API key auth, not admin key)
 # =============================================================================

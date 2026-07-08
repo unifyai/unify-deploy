@@ -209,6 +209,10 @@ class Settings:
             self.gmail_topic,
         )
         self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
+        self.client_bundle_bucket: str = os.environ.get(
+            "UNITY_CLIENT_BUNDLE_BUCKET",
+            "unity-client-bundles",
+        )
 
         # Container image registry (Artifact Registry)
         self.image_registry: str = (
