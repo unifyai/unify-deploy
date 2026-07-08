@@ -143,6 +143,61 @@ async def run_social_linkedin_login(
 
 
 @custom_function()
+async def run_social_linkedin_post_approved(
+    *,
+    daily_post_limit: int = 3,
+    summarise_to_discord: bool = True,
+    digest_webhook_env: str = "UNIFY_DISCORD_DIGEST_WEBHOOK",
+) -> dict[str, Any]:
+    """Publish operator-approved LinkedIn drafts as comments, then digest.
+
+    Drains the LinkedIn ``approved/`` queue and posts each as a **comment** on
+    the source post via the Composio LinkedIn adapter (which resolves the
+    captured ``urn:li:activity:<id>`` to a commentable share/ugcPost URN).
+    Mirrors the X post-approved tick: an empty ``approved/`` is a no-op.
+    """
+    from brain.social.curate import (
+        SocialPostRepository,
+        post_approved,
+        summarise_to_discord as do_summary,
+    )
+    from brain.social.platforms import CurateMode, Platform
+
+    repo = SocialPostRepository(platforms=(Platform.LINKEDIN.value,))
+    result = await post_approved(
+        repo=repo,
+        destination=Platform.LINKEDIN,
+        curate_mode=CurateMode.COMMENT,
+        daily_post_limit=daily_post_limit,
+        dry_run=False,
+    )
+
+    digest_status = "skipped"
+    if summarise_to_discord:
+        import asyncio
+
+        try:
+            await asyncio.to_thread(
+                do_summary,
+                webhook_env=digest_webhook_env,
+                platform="linkedin",
+                execute=True,
+            )
+            digest_status = "posted"
+        except Exception as exc:  # noqa: BLE001
+            digest_status = f"failed: {type(exc).__name__}: {exc}"
+
+    return {
+        "status": "ok",
+        "posted": len(result.posted),
+        "failed": len(result.failed),
+        "comment_urls": [o.post_url for o in result.posted if o.post_url],
+        "errors": [o.error for o in result.failed if o.error],
+        "discord_digest": digest_status,
+    }
+
+
+@custom_function()
 async def run_social_ideate_and_generate(
     *,
     n: int = 1,

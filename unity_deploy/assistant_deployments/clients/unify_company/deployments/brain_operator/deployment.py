@@ -227,6 +227,21 @@ def get_deployment() -> DeploymentSpec:
                         "module": "brain.social.curate",
                     },
                     {
+                        "job_id": "social.linkedin_discover_draft",
+                        "wrapper": "run_social_linkedin_discover_draft",
+                        "module": "brain.social.curate",
+                    },
+                    {
+                        "job_id": "social.linkedin_login",
+                        "wrapper": "run_social_linkedin_login",
+                        "module": "brain.social.discovery.sources",
+                    },
+                    {
+                        "job_id": "social.linkedin_post_approved",
+                        "wrapper": "run_social_linkedin_post_approved",
+                        "module": "brain.social.curate",
+                    },
+                    {
                         "job_id": "social.ideate_and_generate",
                         "wrapper": "run_social_ideate_and_generate",
                         "module": "brain.social.create.pipeline",

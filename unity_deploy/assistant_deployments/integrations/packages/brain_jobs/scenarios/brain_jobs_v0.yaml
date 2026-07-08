@@ -583,6 +583,24 @@ tasks:
     recurrence_hint: trigger_only
   delivery:
     phase: real_delivery
+- id: social.linkedin_post_approved
+  enabled: false
+  execution_mode: offline
+  schedule:
+    type: cron
+    cron: 0 * * * *
+  target:
+    assistant_id: ''
+    scenario_id: brain_jobs_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_social_linkedin_post_approved
+    task_name: 'LinkedIn: hourly poll approvals + publish comments'
+    task_description: "Hourly: poll Discord ✅/❌ on LinkedIn draft cards, drain the LinkedIn approved/ queue, and publish each as a comment on the source post via Composio (resolving the captured urn:li:activity:<id> to a commentable share/ugcPost URN), then move to posted/. Ships disabled alongside the discover job."
+    visibility_policy: silent_by_default
+    recurrence_hint: hourly
+  delivery:
+    phase: real_delivery
 - id: social.ideate_and_generate
   enabled: false
   execution_mode: offline
