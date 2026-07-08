@@ -31,11 +31,14 @@ def _hash_payload(payload: Any) -> str:
 
 
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
+    from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
+
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
         "secrets_dirs": len(resolved.secrets_dirs),
         "guidance_dir_count": len(resolved.guidance_dirs),
-        "knowledge_tables": sorted(resolved.knowledge.keys()),
+        "knowledge_tables": list_knowledge_table_names(resolved.knowledge_dirs),
+        "knowledge_dirs": len(resolved.knowledge_dirs),
         "blacklist_dir_count": len(resolved.blacklist_dirs),
         "supplemental_secrets": len(resolved.secrets),
         "integrations": list(resolved.integrations),

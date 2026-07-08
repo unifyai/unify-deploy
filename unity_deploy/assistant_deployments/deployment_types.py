@@ -87,7 +87,10 @@ class SeedLayer(BaseModel):
         default=None,
         description="Directory containing guidance.jsonl for this layer.",
     )
-    knowledge: dict[str, dict] = Field(default_factory=dict)
+    knowledge_dir: Optional[Path] = Field(
+        default=None,
+        description="Directory containing knowledge table definitions for this layer.",
+    )
     blacklist_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing blacklist.jsonl for this layer.",
@@ -181,9 +184,12 @@ class DeploymentSpec(BaseModel):
         default=None,
         description="Directory containing secrets.jsonl registered with the actor.",
     )
-    knowledge: dict[str, dict] = Field(
-        default_factory=dict,
-        description="Knowledge table specs synced to the KnowledgeManager.",
+    knowledge_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing deployment-defined knowledge tables. Each "
+            "table is a subdirectory with meta.json and rows.jsonl."
+        ),
     )
     blacklist_dir: Optional[Path] = Field(
         default=None,

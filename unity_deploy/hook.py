@@ -25,6 +25,7 @@ import os
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
+from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
 from unify.logger import LOGGER as logger
 from unity_deploy.timing import log_startup_timing
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
@@ -134,7 +135,7 @@ def startup_hook(
         len(resolved.secrets_dirs),
         len(resolved.secrets),
         len(resolved.guidance_dirs),
-        len(resolved.knowledge),
+        len(list_knowledge_table_names(resolved.knowledge_dirs)),
         len(resolved.blacklist_dirs),
         len(resolved.function_dirs),
         len(resolved.venv_dirs),

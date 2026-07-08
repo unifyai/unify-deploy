@@ -253,105 +253,6 @@ def sync_seed_data(
 
 
 # ---------------------------------------------------------------------------
-# Per-manager adapters
-# ---------------------------------------------------------------------------
-
-
-def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
-    """Sync knowledge seed data.
-
-    ``tables`` is a dict like::
-
-        {
-            "Companies": {
-                "description": "Known companies",
-                "columns": {"company_name": "str", "industry": "str"},
-                "seed_key": "company_name",
-                "rows": [{"company_name": "Example Co", "industry": "Real Estate"}],
-            },
-        }
-    """
-    if not tables:
-        return False
-    from unify.manager_registry import ManagerRegistry
-
-    km = ManagerRegistry.get_knowledge_manager()
-    tables_overview = _manager_api(km, "tables_overview")
-    create_table = _manager_api(km, "create_table")
-    filter_rows = _manager_api(km, "filter")
-    add_rows = _manager_api(km, "add_rows")
-    update_rows = _manager_api(km, "update_rows")
-    delete_rows = _manager_api(km, "delete_rows")
-
-    any_changed = False
-    for table_name, table_spec in tables.items():
-        rows = table_spec.get("rows", [])
-        if not rows:
-            continue
-        seed_key = table_spec.get("seed_key")
-        if not seed_key:
-            logger.warning(
-                "%s Knowledge table %s has no seed_key, skipping",
-                _ICON,
-                table_name,
-            )
-            continue
-
-        existing_tables = tables_overview()
-        if table_name not in existing_tables:
-            create_table(
-                name=table_name,
-                description=table_spec.get("description"),
-                columns=table_spec.get("columns"),
-            )
-
-        def make_natural_key(r: dict, _sk: str = seed_key) -> str:
-            return str(r.get(_sk, ""))
-
-        def get_existing(_tn: str = table_name) -> list[dict]:
-            result = filter_rows(tables=[_tn], limit=1000)
-            return result.get(_tn, [])
-
-        unique_key = "row_id"
-        if table_name in existing_tables:
-            tbl_info = existing_tables[table_name]
-            if isinstance(tbl_info, dict) and "unique_key" in tbl_info:
-                unique_key = tbl_info["unique_key"]
-
-        def create(rec: dict, _tn: str = table_name, _uk: str = unique_key) -> Any:
-            clean = {k: v for k, v in rec.items() if k != _uk}
-            return add_rows(table=_tn, rows=[clean])
-
-        def update(
-            row_id: int,
-            rec: dict,
-            _tn: str = table_name,
-            _uk: str = unique_key,
-        ) -> Any:
-            clean = {k: v for k, v in rec.items() if k != _uk}
-            return update_rows(table=_tn, updates={row_id: clean})
-
-        def delete(row_id: int, _tn: str = table_name, _uk: str = unique_key) -> Any:
-            return delete_rows(filter=f"{_uk} == {row_id}", tables=[_tn])
-
-        changed = sync_seed_data(
-            manager_key=f"knowledge/{table_name}",
-            source_records=rows,
-            natural_key_fn=make_natural_key,
-            get_existing_fn=get_existing,
-            create_fn=create,
-            update_fn=update,
-            delete_fn=delete,
-            id_field=unique_key,
-            meta_store=meta,
-        )
-        if changed:
-            any_changed = True
-
-    return any_changed
-
-
-# ---------------------------------------------------------------------------
 # Integration registry sync (Integrations/Manifests context)
 # ---------------------------------------------------------------------------
 
@@ -463,24 +364,12 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
     after all managers are constructed but before the Actor is initialized.
     Returns True if any manager was updated.
     """
-    has_data = resolved.knowledge or resolved.integration_registry
+    has_data = resolved.integration_registry
     if not has_data:
         return False
 
     meta = SeedMetaStore()
     changed = False
-
-    if resolved.knowledge:
-        try:
-            sync_start = perf_counter()
-            changed |= _sync_knowledge(resolved.knowledge, meta)
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] seed_sync.knowledge total=%.2fs",
-                perf_counter() - sync_start,
-            )
-        except Exception:
-            logger.exception("Failed to sync seed knowledge")
 
     if resolved.integration_registry:
         try:

@@ -49,7 +49,31 @@ from unity_deploy.assistant_deployments.guidance_source import (
 from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
 from unify.contact_manager.custom_contacts import collect_contacts_from_directories
 from unify.secret_manager.custom_secrets import collect_secrets_from_directories
+from unity_deploy.assistant_deployments.knowledge_source import write_knowledge_table
+from unify.knowledge_manager.custom_knowledge import collect_knowledge_from_directories
 from unify.guidance_manager.custom_guidance import collect_guidance_from_directories
+
+_KNOWLEDGE_ROOT = Path("/tmp/unify-deploy-test-knowledge")
+
+
+def _write_test_knowledge(
+    name: str,
+    *,
+    table_name: str,
+    seed_key: str,
+    columns: dict[str, str] | None = None,
+    rows: list[dict[str, object]],
+) -> Path:
+    directory = _KNOWLEDGE_ROOT / name
+    write_knowledge_table(
+        directory,
+        table_name,
+        columns=columns,
+        seed_key=seed_key,
+        rows=rows,
+    )
+    return directory
+
 
 _GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
 _BLACKLIST_ROOT = Path("/tmp/unify-deploy-test-blacklist")
@@ -1065,13 +1089,13 @@ class TestSeedLayers:
             "org",
             "10",
             SeedLayer(
-                knowledge={
-                    "Companies": {
-                        "columns": {"name": "str"},
-                        "seed_key": "name",
-                        "rows": [{"name": "Acme"}],
-                    },
-                },
+                knowledge_dir=_write_test_knowledge(
+                    "org-layer",
+                    table_name="Companies",
+                    seed_key="name",
+                    columns={"name": "str"},
+                    rows=[{"name": "Acme"}],
+                ),
             ),
         )
         register_layer(
@@ -1079,16 +1103,18 @@ class TestSeedLayers:
             "user",
             "user-aaa",
             SeedLayer(
-                knowledge={
-                    "Companies": {
-                        "columns": {"industry": "str"},
-                        "rows": [{"name": "Acme", "industry": "Tech"}],
-                    },
-                },
+                knowledge_dir=_write_test_knowledge(
+                    "user-layer",
+                    table_name="Companies",
+                    seed_key="name",
+                    columns={"industry": "str"},
+                    rows=[{"name": "Acme", "industry": "Tech"}],
+                ),
             ),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        tbl = result.knowledge["Companies"]
+        tables = collect_knowledge_from_directories(result.knowledge_dirs)
+        tbl = tables["Companies"]
         assert "name" in tbl["columns"]
         assert "industry" in tbl["columns"]
         assert len(tbl["rows"]) == 1

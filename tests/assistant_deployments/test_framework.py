@@ -126,7 +126,7 @@ class TestSyncAllSeedData:
             contacts_dirs=[],
             secrets_dirs=[],
             guidance_dirs=[],
-            knowledge={},
+            knowledge_dirs=[],
             blacklist_dirs=[],
             secrets=[],
         )

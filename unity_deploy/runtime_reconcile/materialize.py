@@ -27,9 +27,10 @@ class RuntimeStateResult:
     seed_changed: bool = False
     custom_changed: bool = False
     guidance_changed: bool = False
-    blacklist_changed: bool = False
-    contacts_changed: bool = False
     secrets_changed: bool = False
+    contacts_changed: bool = False
+    knowledge_changed: bool = False
+    blacklist_changed: bool = False
 
 
 def _jsonable(value: Any) -> Any:
@@ -82,7 +83,10 @@ def compute_runtime_state_fingerprint(
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.contacts_dirs
         ],
-        "knowledge": resolved.knowledge,
+        "knowledge_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.knowledge_dirs
+        ],
         "blacklist_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.blacklist_dirs
@@ -232,12 +236,12 @@ def materialize_runtime_state(
     if status is not None:
         status.update(
             phase="syncing_seed_data",
-            message=("Preparing deployment-defined knowledge " "and custom blacklist."),
-            blocking_resources=("knowledge",),
+            message=("Preparing deployment-defined integration registry."),
+            blocking_resources=(),
             resources={
                 "contacts": "pending",
                 "guidance": "pending",
-                "knowledge": "syncing",
+                "knowledge": "pending",
                 "secrets": "pending",
                 "functions": "pending",
             },
@@ -255,7 +259,7 @@ def materialize_runtime_state(
     function_resources = {
         "contacts": "ready",
         "guidance": "pending",
-        "knowledge": "ready",
+        "knowledge": "pending",
         "secrets": "ready",
         "functions": "syncing",
     }
@@ -310,6 +314,7 @@ def materialize_runtime_state(
     guidance_changed = False
     contacts_changed = False
     secrets_changed = False
+    knowledge_changed = False
     blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
@@ -397,6 +402,23 @@ def materialize_runtime_state(
         contacts_changed,
     )
 
+    knowledge_dirs = _dedupe_paths(resolved.knowledge_dirs)
+    from unify.knowledge_manager.custom_knowledge import (
+        collect_knowledge_from_directories,
+    )
+
+    source_knowledge = collect_knowledge_from_directories(knowledge_dirs)
+    knowledge_start = perf_counter()
+    km = ManagerRegistry.get_knowledge_manager()
+    knowledge_changed = km.sync_custom(source_tables=source_knowledge)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_knowledge assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - knowledge_start,
+        knowledge_changed,
+    )
+
     secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
     source_secrets = collect_secrets_from_directories(secrets_dirs)
     source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
@@ -448,13 +470,14 @@ def materialize_runtime_state(
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         seed_changed,
         custom_changed,
         guidance_changed,
         contacts_changed,
+        knowledge_changed,
         secrets_changed,
         blacklist_changed,
     )
@@ -466,6 +489,7 @@ def materialize_runtime_state(
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
         contacts_changed=contacts_changed,
+        knowledge_changed=knowledge_changed,
         secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )

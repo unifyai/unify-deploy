@@ -50,7 +50,7 @@ class ResolvedAssistantDeployment:
     guidance_dirs: list[Path]
     contacts_dirs: list[Path]
     secrets_dirs: list[Path]
-    knowledge: dict[str, dict[str, Any]]
+    knowledge_dirs: list[Path]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
@@ -136,6 +136,15 @@ def _append_guidance_dir(dirs: list[Path], guidance_dir: Path | None) -> list[Pa
     return [*dirs, Path(guidance_dir)]
 
 
+def _append_knowledge_dir(dirs: list[Path], knowledge_dir: Path | None) -> list[Path]:
+    if knowledge_dir is None:
+        return dirs
+    resolved = str(Path(knowledge_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(knowledge_dir)]
+
+
 def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
     if blacklist_dir is None:
         return dirs
@@ -147,36 +156,6 @@ def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[
 
 def _secret_key(r: Secret) -> str:
     return r.name
-
-
-def _merge_knowledge(
-    base: dict[str, dict],
-    overlay: dict[str, dict],
-) -> dict[str, dict]:
-    """Deep-merge knowledge tables.  Overlay columns and rows win on collision."""
-    merged = {k: dict(v) for k, v in base.items()}
-    for table_name, spec in overlay.items():
-        if table_name not in merged:
-            merged[table_name] = dict(spec)
-            continue
-        existing = merged[table_name]
-        if spec.get("columns"):
-            existing.setdefault("columns", {}).update(spec["columns"])
-        if spec.get("description"):
-            existing["description"] = spec["description"]
-        seed_key = spec.get("seed_key") or existing.get("seed_key")
-        if seed_key:
-            existing["seed_key"] = seed_key
-        if spec.get("rows"):
-            all_rows = existing.get("rows", []) + spec["rows"]
-            if seed_key:
-                seen: dict[str, dict] = {}
-                for row in all_rows:
-                    seen[str(row.get(seed_key, id(row)))] = row
-                existing["rows"] = list(seen.values())
-            else:
-                existing["rows"] = all_rows
-    return merged
 
 
 def _merge_integrations(base: list[str], overlay: list[str]) -> list[str]:
@@ -269,7 +248,9 @@ def _spec_to_resolved(
     guidance_dirs: list[Path] = []
     if spec.guidance_dir is not None:
         guidance_dirs = _append_guidance_dir(guidance_dirs, spec.guidance_dir)
-    knowledge: dict[str, dict] = dict(spec.knowledge)
+    knowledge_dirs: list[Path] = []
+    if spec.knowledge_dir is not None:
+        knowledge_dirs = _append_knowledge_dir(knowledge_dirs, spec.knowledge_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
@@ -290,8 +271,8 @@ def _spec_to_resolved(
             secrets_dirs = _append_secrets_dir(secrets_dirs, layer.secrets_dir)
         if layer.guidance_dir is not None:
             guidance_dirs = _append_guidance_dir(guidance_dirs, layer.guidance_dir)
-        if layer.knowledge:
-            knowledge = _merge_knowledge(knowledge, layer.knowledge)
+        if layer.knowledge_dir is not None:
+            knowledge_dirs = _append_knowledge_dir(knowledge_dirs, layer.knowledge_dir)
         if layer.blacklist_dir is not None:
             blacklist_dirs = _append_blacklist_dir(
                 blacklist_dirs,
@@ -337,7 +318,7 @@ def _spec_to_resolved(
         guidance_dirs=guidance_dirs,
         contacts_dirs=contacts_dirs,
         secrets_dirs=secrets_dirs,
-        knowledge=knowledge,
+        knowledge_dirs=knowledge_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
@@ -446,7 +427,7 @@ def resolve(
         guidance_dirs=[],
         contacts_dirs=[],
         secrets_dirs=[],
-        knowledge={},
+        knowledge_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=[],
