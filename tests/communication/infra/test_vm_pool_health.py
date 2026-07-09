@@ -1092,6 +1092,92 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-staging"]
 
 
+def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
+    """Cold-start idle VMs must stay claimable until the grace window elapses."""
+
+    now = datetime.now(UTC)
+    fresh_idle = SimpleNamespace(
+        name="unity-pool-ubuntu-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "pool-progress-phase": "idle",
+                "pool-progress-epoch": str(int(now.timestamp()) - 30),
+            },
+        ),
+        status="RUNNING",
+        last_start_timestamp=(now - timedelta(seconds=30)).isoformat(),
+    )
+    client = MagicMock()
+    set_labels = MagicMock(return_value=True)
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (client, [], [fresh_idle], [], [], {fresh_idle.name}),
+    )
+    monkeypatch.setattr(vm_helpers_module, "_set_pool_labels", set_labels)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+
+    result = vm_helpers_module.trim_pool("ubuntu")
+
+    assert result["actions"] == []
+    set_labels.assert_not_called()
+    client.stop.assert_not_called()
+
+
+def test_trim_pool_respects_pending_claims_target(monkeypatch):
+    """In-process pending claims raise the idle floor above POOL_TARGET_IDLE."""
+
+    now = datetime.now(UTC)
+    old_idle = SimpleNamespace(
+        name="unity-pool-ubuntu-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "pool-progress-phase": "idle",
+                "pool-progress-epoch": str(int(now.timestamp()) - 900),
+            },
+        ),
+        status="RUNNING",
+        last_start_timestamp=(now - timedelta(seconds=900)).isoformat(),
+    )
+    client = MagicMock()
+    set_labels = MagicMock(return_value=True)
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (client, [], [old_idle], [], [], {old_idle.name}),
+    )
+    monkeypatch.setattr(vm_helpers_module, "_set_pool_labels", set_labels)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    with vm_helpers_module._pending_lock:
+        vm_helpers_module._pending_claims["ubuntu"] = 1
+
+    try:
+        result = vm_helpers_module.trim_pool("ubuntu")
+    finally:
+        with vm_helpers_module._pending_lock:
+            vm_helpers_module._pending_claims.pop("ubuntu", None)
+
+    assert result["actions"] == []
+    set_labels.assert_not_called()
+    client.stop.assert_not_called()
+
+
 def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     client = MagicMock()
     deleted_vm_names = []

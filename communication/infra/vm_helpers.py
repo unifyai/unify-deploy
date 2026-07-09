@@ -91,6 +91,11 @@ POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS = 0.5
 POOL_STATIC_IP_DELETE_MAX_ATTEMPTS = 5
 POOL_STATIC_IP_DELETE_RETRY_SECONDS = 1.0
 POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS = 600.0
+# Keep freshly-idle VMs claimable across process boundaries. With
+# POOL_TARGET_IDLE=0, replenish boots a VM for demand in one process while
+# trim in another (pool controller) would otherwise stop it the moment it
+# becomes idle — before the assign poll can claim it.
+POOL_IDLE_TRIM_GRACE_SECONDS = float(POOL_BOOT_TIMEOUT_SECONDS)
 RECYCLEABLE_STALE_POOL_ROLES = frozenset(
     {
         "idle",
@@ -3841,6 +3846,28 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
         lock.release()
 
 
+def _idle_vm_age_seconds(vm, *, now: Optional[datetime] = None) -> Optional[float]:
+    """Return how long a VM has been idle, or None when unknown."""
+
+    reference = now or datetime.now(timezone.utc)
+    progress_at = _pool_progress_reference_time(vm)
+    if progress_at is not None and _pool_progress_phase(vm) == "idle":
+        return max(0.0, (reference - progress_at).total_seconds())
+
+    last_start = getattr(vm, "last_start_timestamp", None) or getattr(
+        vm,
+        "lastStartTimestamp",
+        None,
+    )
+    if last_start:
+        try:
+            started_at = datetime.fromisoformat(str(last_start).replace("Z", "+00:00"))
+            return max(0.0, (reference - started_at).total_seconds())
+        except (TypeError, ValueError, OSError):
+            logger.warning("Invalid last_start_timestamp on %s", vm.name)
+    return None
+
+
 def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     """Uses label-first ordering: CAS-sets pool-role from idle to stopped
     before issuing the stop, so a concurrent claim that already flipped
@@ -3848,6 +3875,11 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
     Re-verifies idle count on each iteration so that concurrent claims
     reducing the pool below target cause the loop to break early.
+
+    Demand-aware and grace-aware: keeps at least
+    ``max(POOL_TARGET_IDLE, pending_claims)`` idle VMs, and never stops an
+    idle VM younger than ``POOL_IDLE_TRIM_GRACE_SECONDS`` so cold-start
+    replenish in one process cannot be undone by trim in another.
     """
     client = compute_v1.InstancesClient()
     actions: list[str] = []
@@ -3856,10 +3888,28 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     for _ in range(max_iterations):
         try:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
-            if len(idle_vms) <= POOL_TARGET_IDLE:
+            with _pending_lock:
+                pending = _pending_claims.get(vm_type, 0)
+            target = max(POOL_TARGET_IDLE, pending)
+            if len(idle_vms) <= target:
                 break
 
-            candidate = sorted(idle_vms, key=lambda v: v.name, reverse=True)[0]
+            now = datetime.now(timezone.utc)
+            trimmable = []
+            for vm in idle_vms:
+                age = _idle_vm_age_seconds(vm, now=now)
+                if age is None or age < POOL_IDLE_TRIM_GRACE_SECONDS:
+                    continue
+                trimmable.append(vm)
+            if not trimmable:
+                break
+            # Keep enough idle capacity for the target; prefer trimming the
+            # newest excess VMs once they are past the claim grace window.
+            excess = len(idle_vms) - target
+            if excess <= 0:
+                break
+            candidates = sorted(trimmable, key=lambda v: v.name, reverse=True)
+            candidate = candidates[0]
 
             if not _set_pool_labels(
                 client,
@@ -3906,6 +3956,9 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 "trim_stop",
                 vm_name=candidate.name,
                 vm_type=vm_type,
+                pending=pending,
+                target=target,
+                idle_before=len(idle_vms),
             )
         except Exception as e:
             # Per-VM errors (e.g. CAS exhausting retries, or a failed
