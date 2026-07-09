@@ -46,7 +46,9 @@ def init_metrics() -> None:
     Fully wrapped in try/except so metrics issues can never crash the
     container.  Skipped automatically when:
     - ``TEST`` env var is set (unit-test runs)
-    - ``GOOGLE_APPLICATION_CREDENTIALS`` is not set (local dev without GCP)
+    - No GCP credentials are available: neither an explicit
+      ``GOOGLE_APPLICATION_CREDENTIALS`` key file nor an in-cluster
+      Workload Identity metadata server (``KUBERNETES_SERVICE_HOST``).
     """
     global _provider
 
@@ -56,7 +58,14 @@ def init_metrics() -> None:
         )
         return
 
-    if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    # Assistant Jobs authenticate via Workload Identity (no key file), so accept
+    # either an explicit credentials file or presence in a GKE pod, where ADC is
+    # served by the metadata server.
+    has_gcp_credentials = bool(
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        or os.getenv("KUBERNETES_SERVICE_HOST"),
+    )
+    if not has_gcp_credentials:
         LOGGER.debug(
             f"{ICONS['metrics']} [metrics] Metrics export disabled (no GCP credentials)",
         )

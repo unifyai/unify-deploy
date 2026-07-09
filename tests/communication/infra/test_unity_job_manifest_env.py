@@ -360,8 +360,18 @@ def test_job_top_level_shape() -> None:
     assert manifest["metadata"]["name"] == "shape-staging"
     assert manifest["metadata"]["namespace"] == "staging"
     assert manifest["spec"]["backoffLimit"] == 0
-    assert manifest["spec"]["template"]["spec"]["restartPolicy"] == "Never"
-    assert manifest["spec"]["template"]["spec"]["serviceAccountName"] == "comm-sa"
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert pod_spec["restartPolicy"] == "Never"
+    # Assistant Jobs run under the minimally-scoped Workload Identity SA, not the
+    # fleet-wide comm-sa, and mount no JSON service-account key.
+    assert pod_spec["serviceAccountName"] == "assistant-runtime-sa"
+    volume_names = {v["name"] for v in pod_spec.get("volumes", [])}
+    assert "sa-key" not in volume_names
+    container = pod_spec["containers"][0]
+    mount_names = {m["name"] for m in container.get("volumeMounts", [])}
+    assert "sa-key" not in mount_names
+    env_names = {e["name"] for e in container["env"]}
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
 
 
 # ---------------------------------------------------------------------------
