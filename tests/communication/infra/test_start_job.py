@@ -47,6 +47,18 @@ def _mock_idle_pool_replenishment():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_orchestra_assistant_lookup():
+    with patch(
+        "communication.infra.views.get_assistant",
+        return_value={
+            "desktop_mode": "ubuntu",
+            "managed_desktop_status": "active",
+        },
+    ):
+        yield
+
+
 def _start_job_payload(**overrides) -> dict[str, str]:
     payload = {
         "api_key": "test-api-key",
@@ -612,7 +624,7 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     assert response.status_code == 200
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
-    assert refreshed_spec["desktop"] == {"mode": "macos", "required": False}
+    assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
 
 
 def test_start_job_reuses_inflight_restart_activation_for_terminal_session(client):

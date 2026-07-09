@@ -12,7 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
-COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 # Adapters intentionally cap start-intent waits at the comms edge so webhook
 # handlers can return quickly. This is a best-effort handoff, not a durable
 # acceptance boundary.
@@ -30,7 +29,7 @@ from common.metrics import (
     UNITY_JOBS_RUNNING,
     UNITY_JOBS_IDLE,
 )
-from common.assistant_lookup import get_assistant
+from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.coordinator_voice import resolve_runtime_voice
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,12 +69,9 @@ def _required_contact_id(assistant_data: dict, field_name: str) -> int:
 
 
 def _resolve_desktop_mode(assistant_data: dict) -> str:
-    """Resolve runtime desktop mode with Coordinator-aware fallback semantics."""
-    desktop_mode = assistant_data.get("desktop_mode")
-    if desktop_mode:
-        return desktop_mode
-    if assistant_data.get("is_coordinator", False):
-        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    """Resolve runtime desktop mode from Orchestra entitlement."""
+    if managed_desktop_entitled(assistant_data):
+        return str(assistant_data["desktop_mode"])
     return NO_DESKTOP_MODE
 
 
@@ -2168,6 +2164,8 @@ def build_webhook_context(
         assistant_data,
     ):
         effective_desktop_required = False
+    if effective_desktop_required is None:
+        effective_desktop_required = managed_desktop_entitled(assistant_data)
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         _WEBHOOK_BG_POOL.submit(

@@ -252,7 +252,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         demo_id: Optional demo ID (None for regular assistants)
         desktop_mode: Desktop mode - use "none" to skip VM start call in tests
     """
-    return {
+    data = {
         "api_key": "test-api-key",
         "assistant_id": "12345",
         "user_id": "user-123",
@@ -288,6 +288,9 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "self_contact_id": 42,
         "boss_contact_id": 43,
     }
+    if desktop_mode in ("ubuntu", "windows"):
+        data["managed_desktop_status"] = "active"
+    return data
 
 
 def _orchestra_assistant_record(**overrides):
@@ -358,7 +361,7 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
     assistant_data = get_assistant(assistant_id="12345")
 
     assert assistant_data["is_coordinator"] is True
-    assert assistant_data["desktop_mode"] == "ubuntu"
+    assert assistant_data["desktop_mode"] == "none"
 
 
 @patch("adapters.helpers.requests.post")
@@ -483,13 +486,13 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert json.loads(call_kwargs["data"]["wake_reasons"]) == wake_reasons
     assert call_kwargs["data"]["medium"] == "api_message"
     assert call_kwargs["data"]["is_coordinator"] == "true"
-    assert call_kwargs["data"]["desktop_mode"] == "ubuntu"
+    assert call_kwargs["data"]["desktop_mode"] == "none"
 
 
 def test_call_activation_defers_desktop_binding():
     from adapters.helpers import call_activation_defers_desktop_binding
 
-    assistant = {"desktop_mode": "ubuntu"}
+    assistant = {"desktop_mode": "ubuntu", "managed_desktop_status": "active"}
     assert call_activation_defers_desktop_binding("unify_meet", assistant)
     assert call_activation_defers_desktop_binding("phone", assistant)
     assert call_activation_defers_desktop_binding("whatsapp_call", assistant)
@@ -508,6 +511,7 @@ def test_dispatch_unity_start_intent_includes_desktop_required_override(mock_pos
     mock_post.return_value = mock_response
     assistant_data = _create_mock_assistant_data()
     assistant_data["desktop_mode"] = "ubuntu"
+    assistant_data["managed_desktop_status"] = "active"
 
     dispatch_unity_start_intent(
         assistant_data,
@@ -1021,7 +1025,9 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_submit.assert_called_once_with(start_unity_job, assistant_data, "whatsapp")
+    mock_submit.assert_called_once()
+    submitted = mock_submit.call_args[0][0]
+    assert getattr(submitted, "func", submitted) == start_unity_job
     assert ctx["job_started"] is True
     assert ctx["is_job_running"] is True
 

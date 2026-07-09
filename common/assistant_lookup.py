@@ -15,26 +15,31 @@ from common.settings import SETTINGS
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
-COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 ASSISTANT_LOOKUP_TIMEOUT_SECONDS = 30
 ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
-    "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
+    "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,demo_id,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
     "about,job_title,timezone,default_model,default_reasoning_effort"
 )
 
 
-def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:
+def managed_desktop_entitled(assistant: dict[str, Any]) -> bool:
+    """Return whether the assistant may receive a managed pool VM."""
     desktop_mode = assistant.get("desktop_mode")
-    if desktop_mode:
-        return str(desktop_mode)
-    if assistant.get("is_coordinator", False):
-        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    return (
+        desktop_mode in ("ubuntu", "windows")
+        and assistant.get("managed_desktop_status") == "active"
+    )
+
+
+def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:
+    if managed_desktop_entitled(assistant):
+        return str(assistant["desktop_mode"])
     return NO_DESKTOP_MODE
 
 
@@ -68,7 +73,7 @@ def _local_assistant_data() -> dict[str, Any]:
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
         "assistant_discord_bot_id": "",
-        "desktop_mode": COORDINATOR_DEFAULT_DESKTOP_MODE,
+        "desktop_mode": NO_DESKTOP_MODE,
         "user_desktops": [],
         "is_local": True,
         "team_ids": [],
@@ -123,6 +128,7 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "default_reasoning_effort": assistant.get("default_reasoning_effort"),
         "secrets": assistant.get("secrets", {}),
         "desktop_mode": _resolve_desktop_mode(assistant),
+        "managed_desktop_status": assistant.get("managed_desktop_status"),
         "user_desktops": assistant.get("user_desktops", []),
         "demo_id": assistant.get("demo_id"),
         "is_local": assistant.get("is_local", False),

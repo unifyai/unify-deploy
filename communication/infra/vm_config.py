@@ -8,8 +8,6 @@ Environment-derived values (project IDs, zones, suffixes) live in
 
 import os
 
-from common.settings import SETTINGS
-
 # =============================================================================
 # Shared VM Configuration
 # =============================================================================
@@ -90,8 +88,8 @@ MAK_KEY = os.getenv("MAK_KEY", "")
 # VM Pool Configuration
 # =============================================================================
 POOL_SSH_USERNAME = "unityuser"
-POOL_TARGET_IDLE = 2 if SETTINGS.deploy_env == "staging" else 5
-POOL_TARGET_STOPPED = 3
+POOL_TARGET_IDLE = 0
+POOL_TARGET_STOPPED = 0
 POOL_BOOT_TIMEOUT_SECONDS = 300
 POOL_RELEASE_TIMEOUT_SECONDS = 600
 POOL_VM_CONTRACT_GENERATION = os.getenv(

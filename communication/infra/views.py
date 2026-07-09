@@ -16,6 +16,7 @@ import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from common.int_list_codec import normalize_int_list
+from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.team_summaries_codec import decode_team_summaries_from_form
 from .helpers import (
     acquire_named_lease,
@@ -246,6 +247,26 @@ async def _assert_job_owned_by_assistant(
             status_code=403,
             detail="Job does not belong to the authenticated assistant session.",
         )
+
+
+def _resolve_session_desktop_requirements(
+    assistant_id: str,
+    desktop_mode: str,
+    raw_desktop_required: str,
+) -> tuple[str, bool]:
+    """Resolve desktop mode and VM requirement from Orchestra entitlement."""
+    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    entitled = managed_desktop_entitled(orchestra_assistant)
+    effective_desktop_mode = orchestra_assistant.get("desktop_mode", "none")
+    parsed_override = _parse_desktop_required_form(
+        raw_desktop_required,
+        effective_desktop_mode,
+    )
+    if parsed_override is None:
+        session_desktop_required = entitled
+    else:
+        session_desktop_required = parsed_override and entitled
+    return effective_desktop_mode, session_desktop_required
 
 
 def _parse_desktop_required_form(
@@ -545,6 +566,7 @@ def _build_startup_payload(
     default_model: str,
     default_reasoning_effort: str,
     desktop_mode: str,
+    managed_desktop_status: str | None = None,
     desktop_url: str,
     user_desktops: str,
     is_coordinator: str,
@@ -592,6 +614,7 @@ def _build_startup_payload(
         "default_model": default_model,
         "default_reasoning_effort": default_reasoning_effort,
         "desktop_mode": desktop_mode,
+        "managed_desktop_status": managed_desktop_status,
         "desktop_url": desktop_url if desktop_url else None,
         "user_desktops": json.loads(user_desktops) if user_desktops else [],
         "is_coordinator": is_coordinator.lower() == "true",
@@ -1185,6 +1208,14 @@ async def start_job(
     try:
         batch_api, core_api, _, coord_api = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
+        orchestra_assistant = get_assistant(assistant_id=assistant_id)
+        effective_desktop_mode, session_desktop_required = (
+            _resolve_session_desktop_requirements(
+                assistant_id,
+                desktop_mode,
+                desktop_required,
+            )
+        )
         startup_payload = _build_startup_payload(
             api_key=api_key,
             medium=medium,
@@ -1213,7 +1244,8 @@ async def start_job(
             voice_id=voice_id,
             default_model=default_model,
             default_reasoning_effort=default_reasoning_effort,
-            desktop_mode=desktop_mode,
+            desktop_mode=effective_desktop_mode,
+            managed_desktop_status=orchestra_assistant.get("managed_desktop_status"),
             desktop_url=desktop_url,
             user_desktops=user_desktops,
             is_coordinator=is_coordinator,
@@ -1354,13 +1386,10 @@ async def start_job(
             assistant_id=assistant_id,
             user_id=user_id,
             medium=medium,
-            desktop_mode=desktop_mode,
+            desktop_mode=effective_desktop_mode,
             startup_secret_ref=secret_name,
             activation_id=activation_id,
-            desktop_required=_parse_desktop_required_form(
-                desktop_required,
-                desktop_mode,
-            ),
+            desktop_required=session_desktop_required,
         )
         try:
             session = await asyncio.to_thread(
@@ -1419,13 +1448,10 @@ async def start_job(
                 assistant_id=assistant_id,
                 user_id=user_id,
                 medium=medium,
-                desktop_mode=desktop_mode,
+                desktop_mode=effective_desktop_mode,
                 startup_secret_ref=secret_name,
                 activation_id=activation_id,
-                desktop_required=_parse_desktop_required_form(
-                    desktop_required,
-                    desktop_mode,
-                ),
+                desktop_required=session_desktop_required,
             )
             try:
                 session = await asyncio.to_thread(
@@ -3369,6 +3395,10 @@ async def request_desktop_binding_endpoint(assistant_id: str, request: Request):
     )
     if session is None:
         raise HTTPException(status_code=404, detail="AssistantSession not found")
+
+    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    if not managed_desktop_entitled(orchestra_assistant):
+        return {"accepted": False, "reason": "addon_not_enabled"}
 
     desktop_mode = session_desktop_mode(session)
     if desktop_mode not in ("ubuntu", "windows"):
