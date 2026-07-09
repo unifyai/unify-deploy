@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import sys
 import types
 from functools import lru_cache
@@ -21,8 +22,41 @@ from unity_deploy.client_bundle.fetch import client_deployment_root
 logger = logging.getLogger(__name__)
 
 
+def _ensure_namespace_package(name: str, path: Path | None = None) -> types.ModuleType:
+    """Register ``name`` as a namespace/package module if missing."""
+
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    module = types.ModuleType(name)
+    if path is not None:
+        module.__file__ = str(path / "__init__.py")
+        module.__path__ = [str(path)]
+    else:
+        module.__path__ = []
+    module.__package__ = name
+    sys.modules[name] = module
+    return module
+
+
 def _register_bundle_package(client_name: str, root: Path) -> None:
-    """Expose the unpacked bundle under the canonical client import path."""
+    """Expose the unpacked bundle under the canonical client import path.
+
+    Registers the full package tree so ``@custom_function`` bodies can
+    ``from unity_deploy.assistant_deployments.clients.{client}...._impl import …``
+    after GCS unpack (P1). Parent namespaces are created as needed.
+    """
+
+    _ensure_namespace_package("unity_deploy")
+    _ensure_namespace_package("unity_deploy.assistant_deployments")
+    clients_pkg = _ensure_namespace_package(
+        "unity_deploy.assistant_deployments.clients",
+    )
+    if str(root.parent) not in getattr(clients_pkg, "__path__", []):
+        # Keep clients.__path__ pointing at a real directory when possible.
+        clients_dir = root.parent
+        if clients_dir.is_dir():
+            clients_pkg.__path__ = [str(clients_dir)]
 
     client_pkg = f"unity_deploy.assistant_deployments.clients.{client_name}"
     if client_pkg not in sys.modules:
@@ -30,7 +64,35 @@ def _register_bundle_package(client_name: str, root: Path) -> None:
         init_path = root / "__init__.py"
         module.__file__ = str(init_path if init_path.exists() else root)
         module.__path__ = [str(root)]
+        module.__package__ = client_pkg
         sys.modules[client_pkg] = module
+
+    # Walk the unpacked tree and register every package directory so absolute
+    # imports into ``...functions._impl.*`` resolve without pip-installing the
+    # client into site-packages.
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames if d != "__pycache__" and not d.startswith(".")
+        ]
+        rel = Path(dirpath).relative_to(root)
+        if rel == Path("."):
+            continue
+        if "__init__.py" not in filenames and not any(
+            (Path(dirpath) / d / "__init__.py").exists() for d in dirnames
+        ):
+            # Skip non-package data dirs (guidance/, knowledge/, …).
+            if "__init__.py" not in filenames:
+                continue
+        parts = rel.parts
+        pkg_name = ".".join((client_pkg, *parts))
+        if pkg_name in sys.modules:
+            continue
+        pkg = types.ModuleType(pkg_name)
+        init_file = Path(dirpath) / "__init__.py"
+        pkg.__file__ = str(init_file if init_file.exists() else Path(dirpath))
+        pkg.__path__ = [dirpath]
+        pkg.__package__ = pkg_name
+        sys.modules[pkg_name] = pkg
 
 
 def _load_get_deployment(deployment_dir: Path, *, client_name: str):
@@ -202,10 +264,15 @@ def _spec_to_resolved(
     materialised_scenarios: list = []
     activations = list(spec.scenarios or [])
     if activations:
+        # Client-owned scenario templates (e.g. brain_jobs/) live at the
+        # bundle root alongside deployments/; search there first.
+        client_root = client_deployment_root()
+        search_paths = [client_root] if client_root is not None else None
         materialised_scenarios, activation_secrets = materialise_scenario_activations(
             activations,
             client_slug=client_name,
             deployment_name=deployment,
+            search_paths=search_paths,
         )
         if activation_secrets:
             secrets = [*secrets, *activation_secrets]

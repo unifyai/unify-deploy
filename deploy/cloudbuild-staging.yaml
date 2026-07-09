@@ -46,10 +46,8 @@ steps:
     SHA="$$(cat /workspace/unity_sha.txt)"
     echo "Base image: ${_BASE_IMAGE}"
     echo "Unity SHA:  $$SHA"
-    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
-      --build-arg BRAIN_REF=${_BRAIN_REF} \
       --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
       --build-arg BRAIN_OPERATOR_TASKS_ENABLED=${_BRAIN_OPERATOR_TASKS_ENABLED} \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
@@ -384,6 +382,7 @@ steps:
   id: 'publish-client-bundles'
   entrypoint: 'bash'
   args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'staging', '${COMMIT_SHA}']
+  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['resolve-unity-sha']
 
   # --- Single idle-pool refresh (authoritative) ---------------------------
@@ -586,7 +585,6 @@ substitutions:
   # in Orchestra so the gateway recognizes coordinator senders.
   _UNITY_COORDINATOR_EMAIL_ADDRESS: 'staging-twin@unify.ai'
   # Brain commit / branch installed into the overlay image (staging tracks main).
-  _BRAIN_REF: 'main'
   # brain_operator: assistant id + task flag from Cloud Build substitutions.
   _BRAIN_OPERATOR_ASSISTANT_ID: '7367'
   _BRAIN_OPERATOR_TASKS_ENABLED: 'false'

@@ -350,10 +350,26 @@ def _spec_to_resolved(
             team_ids=team_ids,
             assistant_id=assistant_id,
         )
+        # Prefer client-root scenario packages (e.g. unify_company/brain_jobs/)
+        # when the deployment tree is available on disk.
+        client_roots: list[Path] = []
+        for candidate in (
+            spec.function_dir,
+            spec.guidance_dir,
+            spec.knowledge_dir,
+            spec.tasks_dir,
+        ):
+            if candidate is None:
+                continue
+            # deployments/<name>/{functions,guidance,...} -> client root
+            root = Path(candidate).resolve().parent.parent.parent
+            if root.is_dir() and root not in client_roots:
+                client_roots.append(root)
         materialised_scenarios, activation_secrets = materialise_scenario_activations(
             activations,
             client_slug=client_name,
             deployment_name=deployment_name,
+            search_paths=client_roots or None,
         )
         if activation_secrets:
             secrets = _merge_by_key(secrets, activation_secrets, _secret_key)

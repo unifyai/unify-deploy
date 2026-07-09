@@ -18,12 +18,17 @@ def _staging_env(monkeypatch):
     )
 
 
-def test_resolve_unify_company_org_staging():
-    target = resolve_client_bundle_target(org_id=5)
+def test_resolve_unify_company_operator_staging():
+    # Only the brain-operator assistant receives this bundle (not the whole org).
+    target = resolve_client_bundle_target(assistant_id=7367)
     assert target is not None
     assert target.client_name == "unify_company"
     assert target.deployment == "default"
     assert target.bundle_key == "unify_company"
+
+
+def test_resolve_unify_company_org_alone_is_blank():
+    assert resolve_client_bundle_target(org_id=5) is None
 
 
 def test_resolve_client_alpha_assistant_staging():

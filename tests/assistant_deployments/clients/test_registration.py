@@ -779,26 +779,10 @@ class TestUnifyCompanyRouting:
 
         return importlib.reload(uc)
 
-    def test_production_default_deployment_is_unify_org_only(self, monkeypatch):
+    def test_production_routes_operator_assistant_only(self, monkeypatch):
         self._reload_unify_company(monkeypatch, "https://api.unify.ai/v0")
 
-        matched = resolve_from_deployments(org_id=1)
-        assert matched is not None
-        assert _guidance_titles(matched) >= {
-            "CRM stage hygiene",
-            "CRM email sending policy",
-        }
-
-        assert resolve_from_deployments(org_id=2) is None
-        assert resolve_from_deployments(user_id="cli3t38uc0000s60k5zmgj8ez") is None
-
-    def test_staging_default_deployment_is_unify_org_only(self, monkeypatch):
-        self._reload_unify_company(
-            monkeypatch,
-            "https://internal.example.com/v0",
-        )
-
-        matched = resolve_from_deployments(org_id=5)
+        matched = resolve_from_deployments(assistant_id=1406)
         assert matched is not None
         assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
@@ -806,37 +790,43 @@ class TestUnifyCompanyRouting:
         }
 
         assert resolve_from_deployments(org_id=1) is None
+        assert resolve_from_deployments(assistant_id=9999) is None
 
-    def test_org_id_override(self, monkeypatch):
-        monkeypatch.setenv("UNIFY_COMPANY_ORG_ID", "123")
-        self._reload_unify_company(monkeypatch, "http://127.0.0.1:8000/v0")
-
-        assert resolve_from_deployments(org_id=123) is not None
-        assert resolve_from_deployments(org_id=5) is None
-
-    def test_unify_org_resolves_any_assistant_in_org(self, monkeypatch):
+    def test_staging_routes_operator_assistant_only(self, monkeypatch):
         self._reload_unify_company(
             monkeypatch,
             "https://internal.example.com/v0",
-            brain_operator_assistant_id="7367",
         )
-        matched = resolve_from_deployments(org_id=5, assistant_id=7367)
+
+        matched = resolve_from_deployments(assistant_id=7367)
         assert matched is not None
         assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
             "CRM email sending policy",
         }
 
-    def test_no_assistant_scoped_brain_operator_target(self, monkeypatch):
+        assert resolve_from_deployments(org_id=5) is None
+        assert resolve_from_deployments(assistant_id=1406) is None
+
+    def test_operator_assistant_id_override(self, monkeypatch):
+        self._reload_unify_company(
+            monkeypatch,
+            "http://127.0.0.1:8000/v0",
+            brain_operator_assistant_id="999",
+        )
+
+        assert resolve_from_deployments(assistant_id=999) is not None
+        assert resolve_from_deployments(assistant_id=7367) is None
+
+    def test_operator_target_is_assistant_scoped_default(self, monkeypatch):
         uc = self._reload_unify_company(
             monkeypatch,
             "https://internal.example.com/v0",
             brain_operator_assistant_id="7367",
         )
-        assert all(t.deployment != "brain_operator" for t in uc._MAPPING.targets)
-        assert any(
-            t.scope == "org" and t.deployment == "default" for t in uc._MAPPING.targets
-        )
+        assert all(t.deployment == "default" for t in uc._MAPPING.targets)
+        assert all(t.scope == "assistant" for t in uc._MAPPING.targets)
+        assert any(t.scope_id == "7367" for t in uc._MAPPING.targets)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
