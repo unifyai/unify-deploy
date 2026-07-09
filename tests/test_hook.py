@@ -62,6 +62,7 @@ def _resolved_startup_spec():
         custom_data_dirs=[],
         dashboards_dirs=[],
         tasks_dirs=[],
+        files_dirs=[],
         secrets=[],
         blacklist_dirs=[],
         function_dirs=[],

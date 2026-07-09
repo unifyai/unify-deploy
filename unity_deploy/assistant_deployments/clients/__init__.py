@@ -54,6 +54,7 @@ class ResolvedAssistantDeployment:
     custom_data_dirs: list[Path]
     dashboards_dirs: list[Path]
     tasks_dirs: list[Path]
+    files_dirs: list[Path]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
@@ -179,6 +180,15 @@ def _append_tasks_dir(dirs: list[Path], tasks_dir: Path | None) -> list[Path]:
     return [*dirs, Path(tasks_dir)]
 
 
+def _append_files_dir(dirs: list[Path], files_dir: Path | None) -> list[Path]:
+    if files_dir is None:
+        return dirs
+    resolved = str(Path(files_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(files_dir)]
+
+
 def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
     if blacklist_dir is None:
         return dirs
@@ -297,6 +307,9 @@ def _spec_to_resolved(
     tasks_dirs: list[Path] = []
     if spec.tasks_dir is not None:
         tasks_dirs = _append_tasks_dir(tasks_dirs, spec.tasks_dir)
+    files_dirs: list[Path] = []
+    if spec.files_dir is not None:
+        files_dirs = _append_files_dir(files_dirs, spec.files_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
@@ -331,6 +344,8 @@ def _spec_to_resolved(
             )
         if layer.tasks_dir is not None:
             tasks_dirs = _append_tasks_dir(tasks_dirs, layer.tasks_dir)
+        if layer.files_dir is not None:
+            files_dirs = _append_files_dir(files_dirs, layer.files_dir)
         if layer.blacklist_dir is not None:
             blacklist_dirs = _append_blacklist_dir(
                 blacklist_dirs,
@@ -396,6 +411,7 @@ def _spec_to_resolved(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
@@ -536,6 +552,7 @@ def resolve(
         custom_data_dirs=[],
         dashboards_dirs=[],
         tasks_dirs=[],
+        files_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=[],

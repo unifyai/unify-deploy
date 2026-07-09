@@ -163,6 +163,7 @@ def _apply_manifest_layers(
     custom_data_dirs = list(resolved.custom_data_dirs)
     dashboards_dirs = list(resolved.dashboards_dirs)
     tasks_dirs = list(resolved.tasks_dirs)
+    files_dirs = list(resolved.files_dirs)
     secrets_dirs = list(resolved.secrets_dirs)
     blacklist_dirs = list(resolved.blacklist_dirs)
     integrations = list(resolved.integrations)
@@ -186,6 +187,9 @@ def _apply_manifest_layers(
         tasks = _resolve_layer_path(client_root, layer.tasks_dir)
         if tasks is not None:
             tasks_dirs.append(tasks)
+        files = _resolve_layer_path(client_root, layer.files_dir)
+        if files is not None:
+            files_dirs.append(files)
         secrets = _resolve_layer_path(client_root, layer.secrets_dir)
         if secrets is not None:
             secrets_dirs.append(secrets)
@@ -206,6 +210,7 @@ def _apply_manifest_layers(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=resolved.secrets,
         integrations=integrations,
@@ -256,6 +261,9 @@ def _spec_to_resolved(
     tasks_dirs: list[Path] = []
     if spec.tasks_dir is not None:
         tasks_dirs.append(spec.tasks_dir)
+    files_dirs: list[Path] = []
+    if spec.files_dir is not None:
+        files_dirs.append(spec.files_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs.append(spec.blacklist_dir)
@@ -298,6 +306,7 @@ def _spec_to_resolved(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=list(spec.integrations or []),

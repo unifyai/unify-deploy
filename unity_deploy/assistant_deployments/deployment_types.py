@@ -108,6 +108,13 @@ class SeedLayer(BaseModel):
         default=None,
         description="Directory containing tasks.jsonl for this layer.",
     )
+    files_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing files_map.json and required seed files for "
+            "FileManager overlay sync."
+        ),
+    )
     blacklist_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing blacklist.jsonl for this layer.",
@@ -224,6 +231,13 @@ class DeploymentSpec(BaseModel):
     tasks_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing tasks.jsonl for this layer.",
+    )
+    files_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing files_map.json and required seed files for "
+            "FileManager overlay sync."
+        ),
     )
     blacklist_dir: Optional[Path] = Field(
         default=None,
