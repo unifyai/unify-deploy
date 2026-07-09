@@ -69,7 +69,6 @@ class ResolvedAssistantDeployment:
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None
-    scenarios: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -266,21 +265,7 @@ def _spec_to_resolved(
     scope order (org -> team -> user -> assistant) and merged onto
     the spec's seed data.  File-based secrets from ``.secrets.json``
     are applied last.
-
-    Scenario activations declared on the deployment spec and on each
-    matching seed layer are materialised here: their generic templates
-    are loaded from disk, placeholder fields substituted with the
-    per-client values, validated as :class:`ScenarioSpec`, and appended
-    to ``resolved.scenarios``.  Env-var overlay produced by activations
-    is merged into the secrets bundle.
     """
-    from unity_deploy.assistant_deployments.deployment_types import (
-        resolve_deployment_name,
-    )
-    from unity_deploy.assistant_deployments.scenarios.loader import (
-        materialise_scenario_activations,
-    )
-    from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
     contacts_dirs: list[Path] = []
@@ -315,7 +300,6 @@ def _spec_to_resolved(
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
     secrets: list[Secret] = []
     integrations: list[str] = list(spec.integrations)
-    activations: list[ScenarioActivation] = list(spec.scenarios)
 
     for layer in _collect_layers(
         entry,
@@ -353,41 +337,6 @@ def _spec_to_resolved(
             )
         if layer.integrations:
             integrations = _merge_integrations(integrations, list(layer.integrations))
-        if layer.scenarios:
-            activations = [*activations, *layer.scenarios]
-
-    materialised_scenarios: list[Any] = []
-    if activations:
-        deployment_name = resolve_deployment_name(
-            entry.mapping,
-            user_id=user_id,
-            org_id=org_id,
-            team_ids=team_ids,
-            assistant_id=assistant_id,
-        )
-        # Prefer client-root scenario packages (e.g. unify_company/brain_jobs/)
-        # when the deployment tree is available on disk.
-        client_roots: list[Path] = []
-        for candidate in (
-            spec.function_dir,
-            spec.guidance_dir,
-            spec.knowledge_dir,
-            spec.tasks_dir,
-        ):
-            if candidate is None:
-                continue
-            # deployments/<name>/{functions,guidance,...} -> client root
-            root = Path(candidate).resolve().parent.parent.parent
-            if root.is_dir() and root not in client_roots:
-                client_roots.append(root)
-        materialised_scenarios, activation_secrets = materialise_scenario_activations(
-            activations,
-            client_slug=client_name,
-            deployment_name=deployment_name,
-            search_paths=client_roots or None,
-        )
-        if activation_secrets:
-            secrets = _merge_by_key(secrets, activation_secrets, _secret_key)
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -418,7 +367,6 @@ def _spec_to_resolved(
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
-        scenarios=list(materialised_scenarios),
     )
 
 
@@ -558,7 +506,6 @@ def resolve(
         integrations=[],
         mcp_configs=[],
         url_mappings={},
-        scenarios=[],
     )
 
 

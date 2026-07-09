@@ -51,14 +51,12 @@ spec:
           value: "__CLIENT__"
         - name: UNITY_DEPLOYMENT_ASSISTANT_ID
           value: "__ASSISTANT_ID__"
-        # brain_operator/deployment.py reads these at reconcile time to
-        # decide whether to activate the brain.scheduled cron scenarios.
-        # Empty (the default for envs that don't pass the flags) => no
-        # activation, which is the safe no-op.
+        # brain_operator client routing reads this at reconcile time to
+        # decide which assistant receives the unify_company bundle.
+        # Empty (the default for envs that don't pass the flag) => no
+        # operator target, which is the safe no-op.
         - name: BRAIN_OPERATOR_ASSISTANT_ID
           value: "__BRAIN_OPERATOR_ASSISTANT_ID__"
-        - name: BRAIN_OPERATOR_TASKS_ENABLED
-          value: "__BRAIN_OPERATOR_TASKS_ENABLED__"
         - name: ORCHESTRA_URL
           value: "__ORCHESTRA_URL__"
         - name: UNITY_COMMS_URL

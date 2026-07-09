@@ -108,7 +108,8 @@ def test_build_control_plane_plan_filters_by_client():
     assert operations[0].assistant_id == "999"
 
 
-def test_build_control_plane_plan_projects_scenario_to_generic_task_activation():
+def test_build_control_plane_plan_does_not_emit_task_activation_ops():
+    """Integrations do not project schedules into task activations."""
     registry = {
         "client_alpha": ClientDeploymentEntry(
             mapping=DeploymentMapping(
@@ -137,41 +138,8 @@ def test_build_control_plane_plan_projects_scenario_to_generic_task_activation()
         registry=registry,
     )
 
-    task_ops = [op for op in operations if op.field == "task_activation"]
-    assert task_ops == []
-
-
-def test_build_control_plane_plan_keeps_clientepsilon_disabled_schedule_private():
-    registry = {
-        "clientepsilon_homes": ClientDeploymentEntry(
-            mapping=DeploymentMapping(
-                targets=[
-                    DeploymentTarget(
-                        scope="assistant",
-                        scope_id="2999",
-                        deployment="demo",
-                    ),
-                ],
-            ),
-            specs={
-                "demo": DeploymentSpec(
-                    name="demo",
-                    actor_config=ActorConfig(guidelines="demo guidelines"),
-                    integrations=["clientepsilon_homes_compliance_mock"],
-                ),
-            },
-            environment="staging",
-        ),
-    }
-
-    operations = reconcile.build_control_plane_plan(
-        environment="staging",
-        client="clientepsilon_homes",
-        registry=registry,
-    )
-
-    task_ops = [op for op in operations if op.field == "task_activation"]
-    assert task_ops == []
+    assert all(op.field != "task_activation" for op in operations)
+    assert all(op.field == "console_config" for op in operations)
 
 
 def test_build_control_plane_plan_skips_environment_mismatch():
@@ -253,32 +221,9 @@ def test_apply_operations_rejects_unresolved_task_activation():
         reconcile.apply_operations([operation])
 
 
-def test_scenario_task_activation_action_defers_unseeded_ids():
-    from types import SimpleNamespace
+def test_apply_operations_defers_generic_task_activation(monkeypatch):
+    """Deferred control-plane ops are recorded locally and not transmitted."""
 
-    unseeded = SimpleNamespace(
-        activation=SimpleNamespace(
-            task_id=None,
-            source_task_log_id=None,
-            scheduled_for=None,
-        ),
-    )
-    assert reconcile._scenario_task_activation_action(unseeded) == "deferred"
-
-    seeded = SimpleNamespace(
-        activation=SimpleNamespace(
-            task_id=10,
-            source_task_log_id=20,
-            scheduled_for="2026-01-01T00:00:00Z",
-        ),
-    )
-    assert reconcile._scenario_task_activation_action(seeded) == "upsert"
-
-
-def test_apply_operations_defers_unseeded_task_activation(monkeypatch):
-    # A not-yet-seeded scenario task must NOT crash the deploy: the control
-    # plane defers it to the runtime plane (which seeds it on wake) and the
-    # deploy stays green.  Neither Communication nor Orchestra is contacted.
     def _boom(*args, **kwargs):
         raise AssertionError("deferred operations must not be transmitted")
 

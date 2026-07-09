@@ -1,6 +1,6 @@
 """HubSpot sync orchestrator + state.
 
-``run_hubspot_sync_tick`` is the entrypoint the scenario runtime calls
+``run_hubspot_sync_tick`` is the entrypoint the sync scheduler calls
 on its interval.  It dispatches per-object sync functions, gates by
 per-object cadence config, and emits an audit row.
 """

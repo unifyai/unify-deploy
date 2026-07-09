@@ -193,7 +193,7 @@ class TestClientIntegrations:
 
 
 class TestMockIntegrations:
-    """Mock packages: opt-in deterministic test doubles for scenarios."""
+    """Mock packages: opt-in deterministic test doubles for demos and E2E."""
 
     def test_manifest_exists(self, mock_integration):
         slug, root = mock_integration
@@ -349,7 +349,7 @@ class TestClientEpsilonHomesComplianceClientSpecifics:
 
 
 class TestClientAlphaRepairsMockSpecifics:
-    """Specifics for the deterministic mock used by ClientAlpha scenarios."""
+    """Specifics for the deterministic Client Alpha repairs mock."""
 
     def _manifest(self):
         return _load_manifest(
@@ -364,10 +364,6 @@ class TestClientAlphaRepairsMockSpecifics:
             assert (
                 s.required is False
             ), f"Mock package secret '{s.name}' must not be required."
-
-    def test_declares_repairs_monitoring_scenario(self):
-        manifest = self._manifest()
-        assert "repairs_monitoring.yaml" in manifest.scenarios
 
     def test_capability_advertises_repairs_snapshot(self):
         ids = {c.id for c in self._manifest().capabilities}
@@ -390,10 +386,6 @@ class TestClientEpsilonHomesComplianceMockSpecifics:
             assert (
                 s.required is False
             ), f"Mock package secret '{s.name}' must not be required."
-
-    def test_declares_compliance_monitoring_scenario(self):
-        manifest = self._manifest()
-        assert "compliance_monitoring.yaml" in manifest.scenarios
 
     def test_declares_demo_site(self):
         manifest = self._manifest()

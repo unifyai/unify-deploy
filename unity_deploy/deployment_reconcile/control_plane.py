@@ -8,9 +8,6 @@ including Orchestra assistant metadata and Communication task activations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-import hashlib
-import json
 import logging
 import os
 from typing import Any, Mapping, TYPE_CHECKING
@@ -21,7 +18,6 @@ if TYPE_CHECKING:
     from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
 
 _ASSISTANT_UPDATE_PATH = "/admin/assistant/{assistant_id}"
-_TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
 
 
 @dataclass(frozen=True)
@@ -88,179 +84,8 @@ def build_control_plane_plan(
                     missing_ok=target.missing_ok,
                 ),
             )
-            operations.extend(
-                _build_scenario_schedule_operations(
-                    client_name=client_name,
-                    entry=entry,
-                    spec=spec,
-                    assistant_id=target_assistant_id,
-                    deployment=target.deployment,
-                    missing_ok=target.missing_ok,
-                ),
-            )
 
     return operations
-
-
-def _build_scenario_schedule_operations(
-    *,
-    client_name: str,
-    entry: "ClientDeploymentEntry",
-    spec: Any,
-    assistant_id: str,
-    deployment: str,
-    missing_ok: bool,
-) -> list[ReconcileOperation]:
-    """Project private scenario schedules into generic task activation operations."""
-
-    from unity_deploy.assistant_deployments.clients import _spec_to_resolved
-    from unity_deploy.assistant_deployments.integrations.activation import (
-        expand_integrations,
-    )
-
-    assistant_id_int = int(assistant_id) if str(assistant_id).isdigit() else None
-    resolved = _spec_to_resolved(
-        spec,
-        entry,
-        client_name=client_name,
-        assistant_id=assistant_id_int,
-    )
-    resolved = expand_integrations(resolved)
-
-    operations: list[ReconcileOperation] = []
-    for scenario in resolved.scenarios:
-        for task in scenario.tasks:
-            if not task.enabled:
-                continue
-            if str(task.target.assistant_id) != assistant_id:
-                continue
-            operations.append(
-                ReconcileOperation(
-                    client_name=client_name,
-                    assistant_id=assistant_id,
-                    deployment=deployment,
-                    field="task_activation",
-                    action=_scenario_task_activation_action(task),
-                    path=_TASK_ACTIVATION_UPSERT_PATH,
-                    payload=_scenario_task_activation_payload(
-                        client_name=client_name,
-                        deployment=deployment,
-                        scenario=scenario,
-                        task=task,
-                    ),
-                    service="communication",
-                    method="post",
-                    missing_ok=missing_ok,
-                ),
-            )
-    return operations
-
-
-def _scenario_task_activation_action(task: Any) -> str:
-    """Return whether a scenario-backed task can be materialized now.
-
-    The control plane runs at deploy time, *before* the assistant wakes.  The
-    authoritative seeder is the runtime plane
-    (:func:`unity_deploy.runtime_reconcile.materialize.materialize_runtime_state`),
-    which runs in the woken assistant's own identity/context and calls
-    ``sync_custom_integration_registry`` plus manager ``sync_custom`` hooks.
-    Until that has happened the activation ids do not exist yet, so a brand-new
-    activation is ``"deferred"`` rather than a hard failure: the control plane
-    leaves it to the runtime plane and converges on a later reconcile.
-    """
-
-    activation = task.activation
-    if (
-        activation.task_id is None
-        or activation.source_task_log_id is None
-        or activation.scheduled_for is None
-    ):
-        return "deferred"
-    return "upsert"
-
-
-def _scenario_activation_revision(
-    *,
-    client_name: str,
-    deployment: str,
-    scenario: Any,
-    task: Any,
-) -> str:
-    """Stable generic task activation revision for a scenario schedule."""
-
-    payload = {
-        "client": client_name,
-        "deployment": deployment,
-        "scenario_id": scenario.scenario_id,
-        "integration_slug": scenario.integration.package_slug,
-        "schedule_id": task.id,
-        "schedule": task.schedule.model_dump(mode="json"),
-        "target": task.target.model_dump(mode="json"),
-        "activation": task.activation.model_dump(mode="json"),
-        "delivery": task.delivery.model_dump(mode="json"),
-        "execution_mode": task.execution_mode,
-    }
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, default=str).encode("utf-8"),
-    ).hexdigest()[:16]
-    return f"scenario-task:{task.id}:{digest}"
-
-
-def _scenario_task_activation_payload(
-    *,
-    client_name: str,
-    deployment: str,
-    scenario: Any,
-    task: Any,
-) -> dict[str, Any]:
-    """Serialize a scenario schedule as a generic task activation request."""
-
-    activation = task.activation
-    base = {
-        "assistant_id": str(task.target.assistant_id),
-        "task_id": activation.task_id,
-        "source_task_log_id": activation.source_task_log_id,
-        "activation_revision": _scenario_activation_revision(
-            client_name=client_name,
-            deployment=deployment,
-            scenario=scenario,
-            task=task,
-        ),
-        "scheduled_for": activation.scheduled_for,
-        "execution_mode": task.execution_mode,
-        "source_type": "scheduled",
-        "task_label": activation.task_name,
-        "task_summary": activation.task_description,
-        "visibility_policy": activation.visibility_policy,
-        "recurrence_hint": activation.recurrence_hint,
-        "deployment_context": {
-            "client": client_name,
-            "deployment": deployment,
-            "scenario_id": scenario.scenario_id,
-            "schedule_id": task.id,
-            "integration_slug": scenario.integration.package_slug,
-            "entrypoint_function": activation.entrypoint_function,
-            "target": task.target.model_dump(mode="json"),
-            "delivery": task.delivery.model_dump(mode="json"),
-            "requested_at": datetime.now(timezone.utc).isoformat(),
-        },
-    }
-    if _scenario_task_activation_action(task) == "deferred":
-        missing = []
-        if activation.task_id is None:
-            missing.append("activation.task_id")
-        if activation.source_task_log_id is None:
-            missing.append("activation.source_task_log_id")
-        if activation.scheduled_for is None:
-            missing.append("activation.scheduled_for")
-        base["deferred_reason"] = (
-            "Scenario schedule is private to unity-deploy and its activation "
-            "ids are not seeded yet; the runtime plane "
-            "(materialize_runtime_state) seeds them in the woken assistant's "
-            "own context. Deferring control-plane materialization until then: "
-            f"missing {', '.join(missing)}"
-        )
-    return base
 
 
 def apply_operations(operations: list[ReconcileOperation]) -> list[dict[str, Any]]:

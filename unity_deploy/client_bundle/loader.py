@@ -218,7 +218,6 @@ def _apply_manifest_layers(
         mcp_configs=resolved.mcp_configs,
         url_mappings=resolved.url_mappings,
         console_config=resolved.console_config,
-        scenarios=resolved.scenarios,
     )
 
 
@@ -232,9 +231,6 @@ def _spec_to_resolved(
     user_id: str | None,
     assistant_id: int | None,
 ) -> ResolvedAssistantDeployment:
-    from unity_deploy.assistant_deployments.scenarios.loader import (
-        materialise_scenario_activations,
-    )
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
     function_dirs: list[Path] = []
@@ -269,21 +265,6 @@ def _spec_to_resolved(
         blacklist_dirs.append(spec.blacklist_dir)
 
     secrets: list[Secret] = list(spec.secrets or [])
-    materialised_scenarios: list = []
-    activations = list(spec.scenarios or [])
-    if activations:
-        # Client-owned scenario templates (e.g. brain_jobs/) live at the
-        # bundle root alongside deployments/; search there first.
-        client_root = client_deployment_root()
-        search_paths = [client_root] if client_root is not None else None
-        materialised_scenarios, activation_secrets = materialise_scenario_activations(
-            activations,
-            client_slug=client_name,
-            deployment_name=deployment,
-            search_paths=search_paths,
-        )
-        if activation_secrets:
-            secrets = [*secrets, *activation_secrets]
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -313,7 +294,6 @@ def _spec_to_resolved(
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
-        scenarios=list(materialised_scenarios),
     )
 
 

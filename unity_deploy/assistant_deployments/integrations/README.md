@@ -76,7 +76,7 @@ unity_deploy/assistant_deployments/integrations/
 |------|------------------|------------|
 | `packages/` | Platform; reusable across clients | Default |
 | `client_packages/` | One named client; private composition or real connector | Default |
-| `mock_packages/` | Internal scenario E2Es and offline pilot smoke | Opt-in only |
+| `mock_packages/` | Internal E2Es and offline pilot smoke | Opt-in only |
 
 Each integration package must include a `manifest.yaml`. Optional directories
 are loaded by convention:
@@ -87,7 +87,6 @@ are loaded by convention:
 | `guidance/` | Markdown guidance synced into GuidanceManager |
 | `venvs/` | Virtual environment definitions for third-party Python dependencies |
 | `demo_site/` | Browser-tier demo site assets copied by `aggregate_demo_sites.py` |
-| `scenarios/` | YAML scenario specs loaded by the scenario runtime |
 
 ## Manifest Shape
 
@@ -202,7 +201,7 @@ still syncing?" before it searches for executable functions.
 | `clientepsilon_homes_compliance` | `client_packages/` | API | Private ClientEpsilon Homes compliance connector for SharePoint-backed certificate assurance (fail-closed until Graph credentials land) |
 | `clientepsilon_homes_compliance_mock` | `mock_packages/` | API | Deterministic ClientEpsilon compliance mock used for certificate renewal demo and video capture |
 | `client_alpha_repairs` | `client_packages/` | API | Private Client Alpha repairs client connector (fail-closed until live credentials land) |
-| `client_alpha_repairs_mock` | `mock_packages/` | API | Deterministic Client Alpha repairs mock used by scenario E2Es; activated only when `include_mock_packages=True` or a `*_mock` slug is enabled |
+| `client_alpha_repairs_mock` | `mock_packages/` | API | Deterministic Client Alpha repairs mock; activated only when `include_mock_packages=True` or a `*_mock` slug is enabled |
 
 ## FunctionManager-Compatible Functions
 
@@ -273,11 +272,7 @@ FunctionManager guarantees as production connectors:
   also cover all three roots. ``EXECUTION_CONFIG`` entries pin a
   representative callable per integration -- including
   ``client_alpha_repairs_mock`` -- so we exercise the same registration
-  surface that scenario E2Es and offline task activations rely on.
-* Scenario runtime tests (`tests/assistant_deployments/scenarios/test_scenarios.py`)
-  cover side-effecting tick logic with a fake DataManager. Anything that
-  needs a real DataManager ingest is reserved for the staging smoke order
-  documented below.
+  surface that offline task activations and pilot E2Es rely on.
 
 Useful narrower commands:
 
@@ -285,11 +280,8 @@ Useful narrower commands:
 tests/parallel_run.sh tests/assistant_deployments/integrations
 tests/parallel_run.sh tests/assistant_deployments/integrations/sync
 tests/parallel_run.sh --timeout 300 tests/assistant_deployments/integrations/sync/test_function_execution.py
-tests/parallel_run.sh tests/assistant_deployments/scenarios
 .venv/bin/python tests/assistant_deployments/integrations/validate_e2e.py
 .venv/bin/python tests/assistant_deployments/integrations/validate_e2e.py --real
-.venv/bin/python deploy/scripts/dev/run_clientepsilon_compliance_scenario.py --no-materialize --no-outbox
-.venv/bin/python deploy/scripts/dev/run_clientepsilon_compliance_scenario.py --tick 0
 ```
 
 To add live callable execution coverage for a new API-tier integration in any
@@ -300,25 +292,10 @@ functions import third-party packages, also provide a matching test venv entry.
 ### Staging Smoke Order
 
 Local tests cannot exercise functions that hit a real `DataManager` ingest or
-the offline task activation lane. Run these in order against staging after a
-deploy/release that includes the affected integration:
-
-1. **FunctionManager registration smoke** -- invoke
-   ``unity_deploy.assistant_deployments.scenarios.cli`` with ``--no-materialize
-   --no-outbox`` to confirm the integration's functions register and execute
-   in mock mode end-to-end.
-2. **Scenario tick smoke** -- run the same CLI without the ``--no-*`` flags
-   so the scenario tick materializes contexts through the real
-   ``DataManager`` and writes the simulated alert outbox.
-3. **Offline task activation smoke** -- trigger the materialized
-   ``ScheduledTaskActivation`` (e.g. via the reconcile job's
-   ``run_now`` path) and confirm the headless lane wakes the activation,
-   runs the entrypoint function, and clears the activation.
-
-Steps 1-2 cover the FunctionManager and scenario surfaces; step 3 covers the
-generic offline task activation lane that orchestrates scheduled scenarios in
-production. Failures at any step should block promotion of the
-integration's deployment.
+the offline task activation lane. Against staging after a deploy/release that
+includes the affected integration, confirm FunctionManager registration for
+the package's callables, then exercise any scheduled offline task activations
+via the generic Communication task-activation lane.
 
 ## Current Caveat
 

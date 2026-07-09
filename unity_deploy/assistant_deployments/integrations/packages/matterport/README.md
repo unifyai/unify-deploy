@@ -62,10 +62,9 @@ return BASE_SPEC.derive(
 )
 ```
 
-To also schedule the incremental sync, add a per-client sync package
-that defines the scenario YAML with the client's assistant id pinned in
-`tasks[*].target.assistant_id`, or activate the bundled
-`matterport_listing_analytics_v0` template via `ScenarioActivation`.
+Schedule incremental sync from the client deployment (TaskScheduler seed
+or Communication task activation) by calling `run_matterport_sync_tick`
+with the client's assistant identity.
 
 ## Tier limitations
 

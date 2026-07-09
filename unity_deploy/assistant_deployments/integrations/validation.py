@@ -3,7 +3,7 @@
 Checks that the files referenced by a manifest actually exist on disk
 and that cross-references (functions in capabilities, secret placeholders
 in MCP env) are consistent. The same checks apply to generic packages,
-client-specific real packages, and scenario-only mock packages.
+client-specific real packages, and mock packages.
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ def validate_integration(manifest: IntegrationManifest, root: Path) -> list[str]
 
     _validate_functions(manifest, root, errors)
     _validate_guidance(manifest, root, errors)
-    _validate_scenarios(manifest, root, errors)
     _validate_demo_site(manifest, root, errors)
     _validate_mcp_secrets(manifest, errors)
 
@@ -128,30 +127,6 @@ def _validate_demo_site(
             errors.append(
                 f"demo_site.dir='{manifest.demo_site.dir}' declared but "
                 f"directory not found at {demo_dir}",
-            )
-
-
-def _validate_scenarios(
-    manifest: IntegrationManifest,
-    root: Path,
-    errors: list[str],
-) -> None:
-    """Check that scenario files declared by the manifest exist."""
-    if not manifest.scenarios:
-        return
-
-    scenarios_dir = root / "scenarios"
-    if not scenarios_dir.is_dir():
-        errors.append(
-            f"Manifest declares scenarios but scenarios/ dir is missing in {root}",
-        )
-        return
-
-    for scenario_file in manifest.scenarios:
-        if not (scenarios_dir / scenario_file).is_file():
-            errors.append(
-                f"Manifest references scenario '{scenario_file}' but it was not "
-                f"found in {scenarios_dir}",
             )
 
 

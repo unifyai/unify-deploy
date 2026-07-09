@@ -49,7 +49,6 @@ steps:
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
-      --build-arg BRAIN_OPERATOR_TASKS_ENABLED=${_BRAIN_OPERATOR_TASKS_ENABLED} \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
@@ -270,8 +269,7 @@ steps:
       --planes control-plane \
       --concurrency 8 \
       --timeout 600s \
-      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}" \
-      --brain-operator-tasks-enabled "${_BRAIN_OPERATOR_TASKS_ENABLED}"
+      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}"
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
@@ -585,9 +583,8 @@ substitutions:
   # in Orchestra so the gateway recognizes coordinator senders.
   _UNITY_COORDINATOR_EMAIL_ADDRESS: 'staging-twin@unify.ai'
   # Brain commit / branch installed into the overlay image (staging tracks main).
-  # brain_operator: assistant id + task flag from Cloud Build substitutions.
+  # brain_operator: assistant id from Cloud Build substitutions.
   _BRAIN_OPERATOR_ASSISTANT_ID: '7367'
-  _BRAIN_OPERATOR_TASKS_ENABLED: 'false'
 
 availableSecrets:
   secretManager:
