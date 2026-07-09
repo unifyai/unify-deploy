@@ -90,7 +90,8 @@ scrub_git_tokens() {
 # Runtime dependencies not baked into image
 # =============================================================================
 apt-get update -qq
-apt-get install -y --no-install-recommends xdotool
+# scrot: agent-service DisplayHarness screenshots (xfce4-screenshooter || scrot)
+apt-get install -y --no-install-recommends xdotool scrot
 
 # =============================================================================
 # Read Configuration
