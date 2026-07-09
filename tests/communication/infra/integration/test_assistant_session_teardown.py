@@ -67,7 +67,9 @@ pytestmark = [pytest.mark.integration]
 DELETE_RESPONSE_TIMEOUT_SECONDS = 10
 
 # How long to wait for the background cleanup task to finish.
-CLEANUP_TIMEOUT_SECONDS = 240
+# Cold-start VM release + Orchestra Cloud Run CPU-throttling after the DELETE
+# response can leave the durable task pending until an explicit redrive.
+CLEANUP_TIMEOUT_SECONDS = 480
 
 # CRD coordinates (must match common/settings.py)
 _SESSION_CRD_GROUP = "infra.unify.ai"
@@ -143,7 +145,27 @@ def _get_cleanup_tasks(agent_id: str) -> list[dict]:
     return []
 
 
+def _redrive_cleanup_tasks() -> None:
+    """Nudge Orchestra to process pending AssistantCleanupTask rows.
+
+    DELETE schedules cleanup as a FastAPI BackgroundTask. On Cloud Run with
+    CPU throttling, that task can stall with ``attempt_count=0`` after the
+    response returns. The admin process endpoint re-drives the durable queue.
+    """
+    resp = requests.post(
+        f"{ORCHESTRA_URL}/admin/cleanup/assistant-runtime",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=60,
+    )
+    assert (
+        resp.status_code == 200
+    ), f"cleanup redrive failed: {resp.status_code} {resp.text}"
+
+
 def _cleanup_task_completed(agent_id: str) -> bool:
+    if any(t.get("status") == "completed" for t in _get_cleanup_tasks(agent_id)):
+        return True
+    _redrive_cleanup_tasks()
     return any(t.get("status") == "completed" for t in _get_cleanup_tasks(agent_id))
 
 
