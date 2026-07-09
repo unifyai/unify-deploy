@@ -318,13 +318,17 @@ if (Test-Path $envFile) {
 if (Test-Path "$agentServiceDir\.git") {
     Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $gcpGithubToken -RepoName "unity"
 } else {
+    # observationScaling.ts resolves ../../unify/common from src → C:\unify\common
+    $obsScalingPolicyPath = 'C:\unify\common\observation_scaling_policy.json'
     $savedHash = Get-SavedCommitHash -Dir $agentServiceDir
     $remoteHash = Get-RemoteCommitHash -RepoUrl $unityUrl -Branch $unityBranch
     $needsUpdate = $true
 
-    if ((Test-Path "$agentServiceDir\package.json") -and $savedHash -and $remoteHash -and ($savedHash -eq $remoteHash)) {
+    if ((Test-Path "$agentServiceDir\package.json") -and $savedHash -and $remoteHash -and ($savedHash -eq $remoteHash) -and (Test-Path $obsScalingPolicyPath)) {
         Write-Host "  Agent Service up-to-date (commit: $savedHash)" -ForegroundColor Green
         $needsUpdate = $false
+    } elseif ((Test-Path "$agentServiceDir\package.json") -and $savedHash -and $remoteHash -and ($savedHash -eq $remoteHash)) {
+        Write-Host "  Agent Service commit current but observation scaling policy missing; refreshing" -ForegroundColor Yellow
     } elseif ($savedHash -and $remoteHash) {
         Write-Host "  Agent Service update available ($savedHash -> $remoteHash)" -ForegroundColor Yellow
     }
@@ -349,7 +353,7 @@ if (Test-Path "$agentServiceDir\.git") {
             $commitHash = $null
             Push-Location $unityRepoDir
             $commitHash = Invoke-Git rev-parse --short=12 HEAD
-            Invoke-Git sparse-checkout set agent-service | Out-Null
+            Invoke-Git sparse-checkout set agent-service unify/common | Out-Null
             Pop-Location
 
             if (Test-Path "$unityRepoDir\agent-service") {
@@ -361,6 +365,13 @@ if (Test-Path "$agentServiceDir\.git") {
                     & $script:CmdExe /c "rmdir /s /q `"$agentServiceDir`" 2>nul"
                 }
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
+                New-Item -ItemType Directory -Force -Path 'C:\unify\common' | Out-Null
+                if (Test-Path "$unityRepoDir\unify\common\observation_scaling_policy.json") {
+                    Copy-Item "$unityRepoDir\unify\common\observation_scaling_policy.json" $obsScalingPolicyPath -Force
+                    Write-Host "  Installed observation scaling policy at $obsScalingPolicyPath" -ForegroundColor Green
+                } else {
+                    Write-Host "  WARNING: observation_scaling_policy.json missing from sparse checkout" -ForegroundColor Yellow
+                }
                 if ($commitHash) {
                     Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                 }

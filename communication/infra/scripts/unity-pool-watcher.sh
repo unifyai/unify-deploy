@@ -313,19 +313,26 @@ do_update() {
     fi
 
     # ── Agent Service (sparse checkout from unity monorepo) ──
+    # observationScaling.ts loads /unify/common/observation_scaling_policy.json;
+    # include that path in the sparse checkout and install it after move.
     local as_saved as_remote
+    local obs_scaling_policy_path="/unify/common/observation_scaling_policy.json"
     as_saved=$(get_saved_commit_hash /agent-service)
     as_remote=$(get_remote_commit_hash "$unity_url" "$unity_branch")
 
-    if [[ -n "$as_saved" && -n "$as_remote" && "$as_saved" == "$as_remote" ]]; then
+    if [[ -n "$as_saved" && -n "$as_remote" && "$as_saved" == "$as_remote" && -f "$obs_scaling_policy_path" ]]; then
         log "Agent Service up-to-date ($as_saved)"
     else
-        log "Agent Service updating ($as_saved -> $as_remote)"
+        if [[ -n "$as_saved" && -n "$as_remote" && "$as_saved" == "$as_remote" ]]; then
+            log "Agent Service commit current but observation scaling policy missing; refreshing"
+        else
+            log "Agent Service updating ($as_saved -> $as_remote)"
+        fi
         local tmp_dir
         tmp_dir=$(mktemp -d)
         git clone --depth 1 --branch "$unity_branch" --filter=blob:none --sparse "$unity_url" "$tmp_dir" 2>&1
         cd "$tmp_dir"
-        git sparse-checkout set agent-service 2>&1
+        git sparse-checkout set agent-service unify/common 2>&1
         local commit
         commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
 
@@ -335,6 +342,13 @@ do_update() {
         fi
         rm -rf /agent-service
         mv agent-service /agent-service
+        mkdir -p /unify/common
+        if [[ -f unify/common/observation_scaling_policy.json ]]; then
+            cp unify/common/observation_scaling_policy.json "$obs_scaling_policy_path"
+            log "Installed observation scaling policy at $obs_scaling_policy_path"
+        else
+            log "WARNING: observation_scaling_policy.json missing from sparse checkout"
+        fi
         save_commit_hash /agent-service "$commit"
         rm -rf "$tmp_dir"
 

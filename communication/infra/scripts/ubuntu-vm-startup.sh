@@ -317,13 +317,20 @@ fi
 echo ""
 echo "=== Updating Agent Service ==="
 
+# agent-service's observationScaling.ts resolves the shared policy from
+# /unify/common (and a few fallbacks). Pool VMs sparse-checkout only the
+# service tree, so that file must be installed explicitly after clone.
+OBS_SCALING_POLICY_PATH="/unify/common/observation_scaling_policy.json"
+
 saved_hash=$(get_saved_commit_hash /agent-service)
 remote_hash=$(get_remote_commit_hash "$UNITY_URL" "$UNITY_BRANCH")
 needs_update=true
 
-if [[ -f "/agent-service/package.json" && -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" ]]; then
+if [[ -f "/agent-service/package.json" && -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" && -f "$OBS_SCALING_POLICY_PATH" ]]; then
     echo "  Agent Service up-to-date (commit: $saved_hash)"
     needs_update=false
+elif [[ -f "/agent-service/package.json" && -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" ]]; then
+    echo "  Agent Service commit current but observation scaling policy missing; refreshing"
 elif [[ -n "$saved_hash" && -n "$remote_hash" ]]; then
     echo "  Agent Service update available ($saved_hash -> $remote_hash)"
 fi
@@ -332,7 +339,7 @@ if [[ "$needs_update" == "true" ]]; then
     tmp_dir=$(mktemp -d)
     git clone --depth 1 --branch "$UNITY_BRANCH" --filter=blob:none --sparse "$UNITY_URL" "$tmp_dir" 2>&1
     cd "$tmp_dir"
-    git sparse-checkout set agent-service 2>&1
+    git sparse-checkout set agent-service unify/common 2>&1
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
 
     # Preserve node_modules to speed up npm install
@@ -341,6 +348,13 @@ if [[ "$needs_update" == "true" ]]; then
     fi
     rm -rf /agent-service
     mv agent-service /agent-service
+    mkdir -p /unify/common
+    if [[ -f unify/common/observation_scaling_policy.json ]]; then
+        cp unify/common/observation_scaling_policy.json "$OBS_SCALING_POLICY_PATH"
+        echo "  Installed observation scaling policy at $OBS_SCALING_POLICY_PATH"
+    else
+        echo "  WARNING: observation_scaling_policy.json missing from sparse checkout"
+    fi
     save_commit_hash /agent-service "$commit"
     rm -rf "$tmp_dir"
     echo "  Agent Service updated (commit: $commit)"
