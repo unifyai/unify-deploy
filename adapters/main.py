@@ -1912,6 +1912,7 @@ async def ms_teams_bot_messages_webhook(request: Request):
             "is_channel": is_channel,
             "attachments": attachments,
             "routing_metadata": routing_metadata,
+            "sender_is_owner": bool(data.get("sender_is_owner")),
             "contacts": contacts,
         },
     }
