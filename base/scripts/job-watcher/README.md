@@ -57,7 +57,7 @@ scripts set the Docker build context to the repo root and pass
 |---|---|---|
 | `mark_job_done()` (in Unity container) | Graceful exit | K8s label patch + VM release + session duration metric |
 | **job-watcher** (this) | Any exit (crash-safe) | VM release |
-| `expire_all_stale_jobs()` (adapters) | Periodic sweep | Safety net: suspend stale K8s jobs + VM release |
+| `expire_all_stale_jobs()` (adapters) | Periodic sweep | Safety net: delete stale done Jobs + stop stale runtimes |
 
 All layers call the same idempotent operations.  Running any
 combination is harmless.

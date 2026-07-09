@@ -1896,8 +1896,16 @@ def _job_date_selector(now: datetime, hours: int | None) -> str | None:
     return f"unity-date in ({','.join(relevant_dates)})"
 
 
+def _job_is_suspended(job) -> bool:
+    """Return True only when the Job explicitly has ``spec.suspend=True``."""
+    spec = getattr(job, "spec", None)
+    return getattr(spec, "suspend", False) is True
+
+
 def _job_status(job) -> str:
     """Translate a Kubernetes Job status into the public /infra/jobs contract."""
+    if _job_is_suspended(job):
+        return "Suspended"
     if job.status.active:
         return "Running"
     if job.status.succeeded:
@@ -1915,6 +1923,7 @@ def _serialize_job(job) -> dict:
         "assistant_id": labels.get("assistant-id", "unknown"),
         "labels": labels,
         "status": _job_status(job),
+        "suspend": _job_is_suspended(job),
         "resource_version": job.metadata.resource_version,
         "creation_timestamp": (
             job.metadata.creation_timestamp.isoformat()

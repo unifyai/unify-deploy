@@ -1057,6 +1057,7 @@ def _stale_job(*, job_name: str, assistant_id: str, status: str = "running") -> 
 
 
 @patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")
 @patch("adapters.helpers.requests.get")
@@ -1064,11 +1065,17 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
     mock_get,
     mock_post,
     mock_delete,
+    _mock_active_call,
 ):
     events = []
 
     def _get(url, *args, **kwargs):
         if url.endswith("/infra/jobs"):
+            params = kwargs.get("params") or {}
+            assert "hours" not in params, params
+            assert params.get("label_selector") == (
+                "app=unity,unity-status in (running,done)"
+            )
             return _Response(
                 200,
                 {
@@ -1118,6 +1125,7 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
 
 
 @patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")
 @patch("adapters.helpers.requests.get")
@@ -1125,6 +1133,7 @@ def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
     mock_get,
     mock_post,
     mock_delete,
+    _mock_active_call,
 ):
     def _get(url, *args, **kwargs):
         if url.endswith("/infra/jobs"):

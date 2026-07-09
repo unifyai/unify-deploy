@@ -1174,11 +1174,13 @@ def expire_all_stale_jobs(
     headers = {"Authorization": f"Bearer {admin_key}"}
 
     try:
+        # No ``hours`` lookback: suspended/done Jobs older than a short window
+        # must stay visible or they accumulate forever. Staleness is decided
+        # below from ``creation_timestamp`` vs ``max_age_hours``.
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
                 "label_selector": "app=unity,unity-status in (running,done)",
-                "hours": max(max_age_hours + 12, 36),
             },
             headers=headers,
         )

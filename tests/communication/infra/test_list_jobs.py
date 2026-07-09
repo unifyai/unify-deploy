@@ -8,7 +8,7 @@ for jobs matching a label selector and returns structured status info.
 Orchestra expects:
   - jobs[].job_name (str)
   - jobs[].assistant_id (str)
-  - jobs[].status ("Running" | "Completed" | "Failed" | "Unknown")
+  - jobs[].status ("Running" | "Completed" | "Failed" | "Suspended" | "Unknown")
 """
 
 from datetime import datetime, timezone, timedelta
@@ -37,6 +37,7 @@ def _make_k8s_job(
     failed: int = 0,
     minutes_ago: int = 0,
     labels: dict | None = None,
+    suspend: bool = False,
 ):
     """Build a mock K8s Job object matching the kubernetes client schema.
 
@@ -55,6 +56,7 @@ def _make_k8s_job(
     }
     job.metadata.resource_version = "12345"
     job.metadata.creation_timestamp = ts
+    job.spec.suspend = suspend
     job.status.active = active or None
     job.status.succeeded = succeeded or None
     job.status.failed = failed or None
@@ -167,7 +169,24 @@ class TestListJobsContract:
         assert "status" in j
         assert isinstance(j["job_name"], str)
         assert isinstance(j["assistant_id"], str)
-        assert j["status"] in ("Running", "Completed", "Failed", "Unknown")
+        assert j["status"] in (
+            "Running",
+            "Completed",
+            "Failed",
+            "Suspended",
+            "Unknown",
+        )
+        assert j["suspend"] is False
+
+    def test_suspended_job_reports_suspended_status(self, client):
+        job = _make_k8s_job("abc", suspend=True)
+
+        with _mock_k8s_returning([job]):
+            resp = client.get("/infra/jobs")
+
+        j = resp.json()["jobs"][0]
+        assert j["status"] == "Suspended"
+        assert j["suspend"] is True
 
     def test_default_listing_does_not_hide_jobs_older_than_eight_hours(self, client):
         job = _make_k8s_job("abc", active=1, minutes_ago=9 * 60)
