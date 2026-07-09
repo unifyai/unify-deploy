@@ -48,11 +48,15 @@ apt-get install -y --no-install-recommends \
     xfce4 \
     xfce4-goodies \
     xfce4-terminal \
+    xfce4-screenshooter \
     tigervnc-standalone-server \
     tigervnc-common \
     dbus-x11 \
     x11-utils \
     x11-xserver-utils \
+    xdotool \
+    scrot \
+    wmctrl \
     python3 \
     python3-pip \
     python3-venv \

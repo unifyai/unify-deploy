@@ -90,8 +90,12 @@ scrub_git_tokens() {
 # Runtime dependencies not baked into image
 # =============================================================================
 apt-get update -qq
-# scrot: agent-service DisplayHarness screenshots (xfce4-screenshooter || scrot)
-apt-get install -y --no-install-recommends xdotool scrot
+# DisplayHarness deps (pool images use --no-install-recommends, so these are
+# not pulled in via xfce4-goodies the way the local desktop Docker image is):
+#   xdotool  — mouse/keyboard
+#   scrot    — screenshot fallback when xfce4-screenshooter is absent
+#   wmctrl   — Chromium window discovery/focus
+apt-get install -y --no-install-recommends xdotool scrot wmctrl
 
 # =============================================================================
 # Read Configuration
