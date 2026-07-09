@@ -61,9 +61,12 @@ def _sync_console_config(
     startup does not fail if Orchestra is temporarily unavailable.
     """
     try:
+        from unify.session_details import SESSION_DETAILS
+
         patch_json(
-            f"/admin/assistant/{assistant_id}",
+            f"/assistant/{assistant_id}/runtime-profile",
             {"console_config": console_config},
+            auth_token=SESSION_DETAILS.unify_key or None,
         )
         logger.info("Synced console_config for assistant %s", assistant_id)
     except OrchestraClientError:

@@ -390,7 +390,11 @@ def build_unity_job_manifest(
             "LIVEKIT_URL",
             "OPENAI_API_KEY",
             "OPENROUTER_API_KEY",
-            "ORCHESTRA_ADMIN_KEY",
+            # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
+            # authenticate to Orchestra and the hosted gateway with their own
+            # per-assistant UNIFY_KEY against ownership-scoped routes, so a
+            # compromised pod can only act as itself. The platform admin key
+            # stays on controllers / Cloud Run / reconcile jobs only.
             "SHARED_UNIFY_KEY",
             "TAVILY_API_KEY",
             "VERTEXAI_CREDENTIALS",

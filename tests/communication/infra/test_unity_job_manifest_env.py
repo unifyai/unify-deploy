@@ -67,12 +67,23 @@ def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
     }
 
 
-def test_orchestra_admin_key_sourced_from_unity_secrets() -> None:
+def test_orchestra_admin_key_not_mounted_on_assistant_pods() -> None:
+    """The platform admin key must never reach an assistant Job pod.
+
+    Pods authenticate to Orchestra and the hosted gateway with their own
+    per-assistant UNIFY_KEY against ownership-scoped routes; the fleet-wide
+    ORCHESTRA_ADMIN_KEY stays on controllers / Cloud Run / reconcile jobs only.
+    """
     manifest = build_unity_job_manifest(job_name="orch-admin-key-staging")
-    entry = _env_by_name(manifest)["ORCHESTRA_ADMIN_KEY"]
+    assert "ORCHESTRA_ADMIN_KEY" not in _env_names(manifest)
+
+
+def test_shared_unify_key_still_sourced_from_unity_secrets() -> None:
+    manifest = build_unity_job_manifest(job_name="shared-key-staging")
+    entry = _env_by_name(manifest)["SHARED_UNIFY_KEY"]
     assert entry["valueFrom"]["secretKeyRef"] == {
         "name": "unity-secrets",
-        "key": "ORCHESTRA_ADMIN_KEY",
+        "key": "SHARED_UNIFY_KEY",
     }
 
 
