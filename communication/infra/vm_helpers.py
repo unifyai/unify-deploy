@@ -62,6 +62,8 @@ from .vm_config import (
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     pool_vm_name_prefix,
+    pool_vm_name_prefixes,
+    POOL_RETIRED_ENV_SUFFIXES,
     POOL_ASSISTANT_ARCHIVE_BUCKET,
     POOL_ASSISTANT_DISK_IDLE_HOURS,
     POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
@@ -89,6 +91,11 @@ POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS = 0.5
 POOL_STATIC_IP_DELETE_MAX_ATTEMPTS = 5
 POOL_STATIC_IP_DELETE_RETRY_SECONDS = 1.0
 POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS = 600.0
+# Keep freshly-idle VMs claimable across process boundaries. With
+# POOL_TARGET_IDLE=0, replenish boots a VM for demand in one process while
+# trim in another (pool controller) would otherwise stop it the moment it
+# becomes idle — before the assign poll can claim it.
+POOL_IDLE_TRIM_GRACE_SECONDS = float(POOL_BOOT_TIMEOUT_SECONDS)
 RECYCLEABLE_STALE_POOL_ROLES = frozenset(
     {
         "idle",
@@ -937,50 +944,104 @@ def _pool_hostname(vm_type: str, n: int) -> str:
     )
 
 
-def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
-    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"
-    if not vm_name.startswith(prefix):
-        return None
-    number_text = vm_name[len(prefix) :]
-    if SETTINGS.env_suffix:
-        if not number_text.endswith(SETTINGS.env_suffix):
-            return None
-        number_text = number_text[: -len(SETTINGS.env_suffix)]
-    try:
-        return int(number_text)
-    except ValueError:
-        return None
+def _pool_name_env_suffixes() -> tuple[str, ...]:
+    """Env suffixes this controller may parse for pool VM/IP names.
+
+    Always includes the live suffix. Retired suffixes (e.g. ``-preview``) are
+    included so orphan reclaim can clean up network resources from deleted
+    environments that no longer have a controller of their own.
+    """
+    suffixes = [SETTINGS.env_suffix]
+    for retired in POOL_RETIRED_ENV_SUFFIXES:
+        if retired not in suffixes:
+            suffixes.append(retired)
+    return tuple(suffixes)
 
 
-def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
-    vm_number = _pool_vm_number(vm_name, vm_type)
-    if vm_number is None:
-        return f"{vm_name}.{DOMAIN_SUFFIX}"
-    return _pool_hostname(vm_type, vm_number)
+def _parse_pool_vm_identity(
+    vm_name: str,
+    vm_type: str | None = None,
+) -> Optional[tuple[str, str, int, str]]:
+    """Parse ``(prefix, vm_type, number, env_suffix)`` from a pool VM name.
 
-
-def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
-    for vm_type in ("ubuntu", "windows"):
-        if vm_name.startswith(f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"):
-            return vm_type
+    Recognizes live and historical prefixes plus the live and retired env
+    suffixes. Returns ``None`` for names that are not pool VMs, or that belong
+    to a still-active foreign env (e.g. staging names when running in prod).
+    """
+    types = (vm_type,) if vm_type else ("ubuntu", "windows")
+    for candidate_type in types:
+        for prefix in pool_vm_name_prefixes(candidate_type):
+            head = f"{prefix}-{candidate_type}-"
+            if not vm_name.startswith(head):
+                continue
+            remainder = vm_name[len(head) :]
+            for env_suffix in _pool_name_env_suffixes():
+                number_text = remainder
+                if env_suffix:
+                    if not number_text.endswith(env_suffix):
+                        continue
+                    number_text = number_text[: -len(env_suffix)]
+                elif any(
+                    number_text.endswith(other)
+                    for other in ("-staging",) + POOL_RETIRED_ENV_SUFFIXES
+                    if other
+                ):
+                    # Bare production names must not swallow active staging
+                    # (or retired) suffixes as part of the numeric id.
+                    continue
+                try:
+                    return prefix, candidate_type, int(number_text), env_suffix
+                except ValueError:
+                    continue
     return None
 
 
-def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
-    vm_number = _pool_vm_number(vm_name, vm_type)
-    if vm_number is None:
+def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
         return None
-    return _pool_ip_name(vm_type, vm_number)
+    return parsed[2]
+
+
+def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
+        return f"{vm_name}.{DOMAIN_SUFFIX}"
+    prefix, _, vm_number, env_suffix = parsed
+    return f"{prefix}-{vm_type}-{vm_number}{env_suffix}.{DOMAIN_SUFFIX}"
+
+
+def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
+    parsed = _parse_pool_vm_identity(vm_name)
+    if parsed is None:
+        return None
+    return parsed[1]
+
+
+def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
+        return None
+    prefix, _, vm_number, env_suffix = parsed
+    return f"{prefix}-{vm_type}-ip-{vm_number}{env_suffix}"
+
+
+def _pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
+    """Map a pool static-IP name to its VM name, including historical aliases."""
+    for prefix in pool_vm_name_prefixes(vm_type):
+        head = f"{prefix}-{vm_type}-ip-"
+        if not ip_name.startswith(head):
+            continue
+        vm_name = ip_name.replace("-ip-", "-", 1)
+        if _parse_pool_vm_identity(vm_name, vm_type) is None:
+            return None
+        return vm_name
+    return None
 
 
 def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
-    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-ip-"
-    if not ip_name.startswith(prefix):
-        return None
-    vm_name = ip_name.replace("-ip-", "-", 1)
-    if _pool_vm_number(vm_name, vm_type) is None:
-        return None
-    return vm_name
+    """Backward-compatible alias for :func:`_pool_vm_name_from_ip_name`."""
+    return _pool_vm_name_from_ip_name(ip_name, vm_type)
 
 
 def _assistant_disk_name(assistant_id: str) -> str:
@@ -2643,7 +2704,13 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
 
 def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
-    """Delete old reserved pool IPs and stale DNS for missing current-env VMs."""
+    """Delete old reserved pool IPs and stale DNS for missing pool VMs.
+
+    Reclaims network resources for the live env suffix and retired suffixes
+    (e.g. ``-preview``), including historical name prefixes such as
+    ``droid-pool-*``. Active foreign-env names (staging vs production) are
+    left for that env's controller.
+    """
 
     instance_client = compute_v1.InstancesClient()
     address_client = compute_v1.AddressesClient()
@@ -2663,7 +2730,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
         region=SETTINGS.vm_region,
     ):
         ip_name = str(getattr(address, "name", "") or "")
-        vm_name = _current_env_pool_vm_name_from_ip_name(ip_name, vm_type)
+        vm_name = _pool_vm_name_from_ip_name(ip_name, vm_type)
         if not vm_name:
             continue
         if str(getattr(address, "status", "") or "") != "RESERVED":
@@ -3779,6 +3846,28 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
         lock.release()
 
 
+def _idle_vm_age_seconds(vm, *, now: Optional[datetime] = None) -> Optional[float]:
+    """Return how long a VM has been idle, or None when unknown."""
+
+    reference = now or datetime.now(timezone.utc)
+    progress_at = _pool_progress_reference_time(vm)
+    if progress_at is not None and _pool_progress_phase(vm) == "idle":
+        return max(0.0, (reference - progress_at).total_seconds())
+
+    last_start = getattr(vm, "last_start_timestamp", None) or getattr(
+        vm,
+        "lastStartTimestamp",
+        None,
+    )
+    if last_start:
+        try:
+            started_at = datetime.fromisoformat(str(last_start).replace("Z", "+00:00"))
+            return max(0.0, (reference - started_at).total_seconds())
+        except (TypeError, ValueError, OSError):
+            logger.warning("Invalid last_start_timestamp on %s", vm.name)
+    return None
+
+
 def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     """Uses label-first ordering: CAS-sets pool-role from idle to stopped
     before issuing the stop, so a concurrent claim that already flipped
@@ -3786,6 +3875,11 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
     Re-verifies idle count on each iteration so that concurrent claims
     reducing the pool below target cause the loop to break early.
+
+    Demand-aware and grace-aware: keeps at least
+    ``max(POOL_TARGET_IDLE, pending_claims)`` idle VMs, and never stops an
+    idle VM younger than ``POOL_IDLE_TRIM_GRACE_SECONDS`` so cold-start
+    replenish in one process cannot be undone by trim in another.
     """
     client = compute_v1.InstancesClient()
     actions: list[str] = []
@@ -3794,10 +3888,28 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     for _ in range(max_iterations):
         try:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
-            if len(idle_vms) <= POOL_TARGET_IDLE:
+            with _pending_lock:
+                pending = _pending_claims.get(vm_type, 0)
+            target = max(POOL_TARGET_IDLE, pending)
+            if len(idle_vms) <= target:
                 break
 
-            candidate = sorted(idle_vms, key=lambda v: v.name, reverse=True)[0]
+            now = datetime.now(timezone.utc)
+            trimmable = []
+            for vm in idle_vms:
+                age = _idle_vm_age_seconds(vm, now=now)
+                if age is None or age < POOL_IDLE_TRIM_GRACE_SECONDS:
+                    continue
+                trimmable.append(vm)
+            if not trimmable:
+                break
+            # Keep enough idle capacity for the target; prefer trimming the
+            # newest excess VMs once they are past the claim grace window.
+            excess = len(idle_vms) - target
+            if excess <= 0:
+                break
+            candidates = sorted(trimmable, key=lambda v: v.name, reverse=True)
+            candidate = candidates[0]
 
             if not _set_pool_labels(
                 client,
@@ -3844,6 +3956,9 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 "trim_stop",
                 vm_name=candidate.name,
                 vm_type=vm_type,
+                pending=pending,
+                target=target,
+                idle_before=len(idle_vms),
             )
         except Exception as e:
             # Per-VM errors (e.g. CAS exhausting retries, or a failed

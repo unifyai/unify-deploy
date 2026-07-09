@@ -1092,6 +1092,92 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-staging"]
 
 
+def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
+    """Cold-start idle VMs must stay claimable until the grace window elapses."""
+
+    now = datetime.now(UTC)
+    fresh_idle = SimpleNamespace(
+        name="unity-pool-ubuntu-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "pool-progress-phase": "idle",
+                "pool-progress-epoch": str(int(now.timestamp()) - 30),
+            },
+        ),
+        status="RUNNING",
+        last_start_timestamp=(now - timedelta(seconds=30)).isoformat(),
+    )
+    client = MagicMock()
+    set_labels = MagicMock(return_value=True)
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (client, [], [fresh_idle], [], [], {fresh_idle.name}),
+    )
+    monkeypatch.setattr(vm_helpers_module, "_set_pool_labels", set_labels)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+
+    result = vm_helpers_module.trim_pool("ubuntu")
+
+    assert result["actions"] == []
+    set_labels.assert_not_called()
+    client.stop.assert_not_called()
+
+
+def test_trim_pool_respects_pending_claims_target(monkeypatch):
+    """In-process pending claims raise the idle floor above POOL_TARGET_IDLE."""
+
+    now = datetime.now(UTC)
+    old_idle = SimpleNamespace(
+        name="unity-pool-ubuntu-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "pool-progress-phase": "idle",
+                "pool-progress-epoch": str(int(now.timestamp()) - 900),
+            },
+        ),
+        status="RUNNING",
+        last_start_timestamp=(now - timedelta(seconds=900)).isoformat(),
+    )
+    client = MagicMock()
+    set_labels = MagicMock(return_value=True)
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (client, [], [old_idle], [], [], {old_idle.name}),
+    )
+    monkeypatch.setattr(vm_helpers_module, "_set_pool_labels", set_labels)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    with vm_helpers_module._pending_lock:
+        vm_helpers_module._pending_claims["ubuntu"] = 1
+
+    try:
+        result = vm_helpers_module.trim_pool("ubuntu")
+    finally:
+        with vm_helpers_module._pending_lock:
+            vm_helpers_module._pending_claims.pop("ubuntu", None)
+
+    assert result["actions"] == []
+    set_labels.assert_not_called()
+    client.stop.assert_not_called()
+
+
 def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     client = MagicMock()
     deleted_vm_names = []
@@ -1216,6 +1302,12 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
         f"{vm_helpers_module.pool_vm_name_prefix('windows')}"
         f"-windows-ip-77{foreign_suffix}"
     )
+    legacy_ip_name = "droid-pool-ubuntu-ip-9"
+    if vm_helpers_module.SETTINGS.env_suffix:
+        legacy_ip_name = (
+            f"droid-pool-ubuntu-ip-9{vm_helpers_module.SETTINGS.env_suffix}"
+        )
+    preview_ip_name = "unity-pool-ubuntu-ip-4-preview"
 
     instance_client = MagicMock()
     instance_client.list.return_value = [SimpleNamespace(name=attached_vm_name)]
@@ -1241,6 +1333,18 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
         ),
         SimpleNamespace(
             name=foreign_ip_name,
+            status="RESERVED",
+            users=[],
+            creation_timestamp=old_timestamp,
+        ),
+        SimpleNamespace(
+            name=legacy_ip_name,
+            status="RESERVED",
+            users=[],
+            creation_timestamp=old_timestamp,
+        ),
+        SimpleNamespace(
+            name=preview_ip_name,
             status="RESERVED",
             users=[],
             creation_timestamp=old_timestamp,
@@ -1273,25 +1377,104 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
         lambda *_args, **_kwargs: None,
     )
 
-    result = vm_helpers_module.cleanup_orphaned_pool_network_resources("windows")
-
+    # Windows pass should reclaim current-env windows leak only.
+    windows_result = vm_helpers_module.cleanup_orphaned_pool_network_resources(
+        "windows",
+    )
     assert deleted_ips == [current_ip_name]
     assert deleted_dns == [
         vm_helpers_module._pool_vm_hostname(current_vm_name, "windows"),
     ]
-    assert result == {
-        "vm_type": "windows",
-        "found": 1,
-        "deleted_addresses": [current_ip_name],
-        "deleted_dns": [
-            vm_helpers_module._pool_vm_hostname(current_vm_name, "windows"),
-        ],
-        "errors": [],
-        "actions": [
-            f"Deleted stale pool DNS {vm_helpers_module._pool_vm_hostname(current_vm_name, 'windows')}",
-            f"Deleted orphaned pool static IP {current_ip_name}",
-        ],
+    assert windows_result["deleted_addresses"] == [current_ip_name]
+
+    deleted_ips.clear()
+    deleted_dns.clear()
+
+    # Ubuntu pass should reclaim historical droid-pool + retired preview leftovers.
+    ubuntu_result = vm_helpers_module.cleanup_orphaned_pool_network_resources("ubuntu")
+    assert set(deleted_ips) == {legacy_ip_name, preview_ip_name}
+    assert set(deleted_dns) == {
+        vm_helpers_module._pool_vm_hostname(
+            legacy_ip_name.replace("-ip-", "-", 1),
+            "ubuntu",
+        ),
+        vm_helpers_module._pool_vm_hostname(
+            preview_ip_name.replace("-ip-", "-", 1),
+            "ubuntu",
+        ),
     }
+    assert set(ubuntu_result["deleted_addresses"]) == {legacy_ip_name, preview_ip_name}
+
+
+def test_pool_identity_parsers_accept_historical_prefixes_and_retired_suffixes(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.SETTINGS.env_suffix",
+        "",
+    )
+    assert vm_helpers_module._parse_pool_vm_identity(
+        "droid-pool-ubuntu-3",
+        "ubuntu",
+    ) == ("droid-pool", "ubuntu", 3, "")
+    assert (
+        vm_helpers_module._pool_ip_name_for_vm("droid-pool-ubuntu-3", "ubuntu")
+        == "droid-pool-ubuntu-ip-3"
+    )
+    assert (
+        vm_helpers_module._pool_vm_name_from_ip_name(
+            "unity-pool-windows-ip-2-preview",
+            "windows",
+        )
+        == "unity-pool-windows-2-preview"
+    )
+    assert (
+        vm_helpers_module._pool_vm_hostname(
+            "unity-pool-windows-2-preview",
+            "windows",
+        )
+        == "unity-pool-windows-2-preview.vm.unify.ai"
+    )
+    # Active foreign env must stay untouched by the production controller.
+    assert (
+        vm_helpers_module._pool_vm_name_from_ip_name(
+            "unity-pool-ubuntu-ip-1-staging",
+            "ubuntu",
+        )
+        is None
+    )
+
+
+def test_cleanup_deleted_pool_vm_network_resources_uses_historical_ip_name(
+    monkeypatch,
+):
+    deleted_ips = []
+    deleted_dns = []
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_dns_record",
+        lambda hostname: deleted_dns.append(hostname) or True,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_static_ip",
+        lambda ip_name: deleted_ips.append(ip_name) or True,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_log_vm_pool_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = vm_helpers_module._cleanup_deleted_pool_vm_network_resources(
+        "droid-pool-ubuntu-7",
+        vm_type="ubuntu",
+    )
+
+    assert deleted_ips == ["droid-pool-ubuntu-ip-7"]
+    assert deleted_dns == ["droid-pool-ubuntu-7.vm.unify.ai"]
+    assert result["ip_deleted"] is True
+    assert result["dns_deleted"] is True
 
 
 def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):

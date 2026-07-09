@@ -54,6 +54,7 @@ class ResolvedAssistantDeployment:
     custom_data_dirs: list[Path]
     dashboards_dirs: list[Path]
     tasks_dirs: list[Path]
+    files_dirs: list[Path]
     blacklist_dirs: list[Path]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
@@ -68,7 +69,6 @@ class ResolvedAssistantDeployment:
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None
-    scenarios: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +179,15 @@ def _append_tasks_dir(dirs: list[Path], tasks_dir: Path | None) -> list[Path]:
     return [*dirs, Path(tasks_dir)]
 
 
+def _append_files_dir(dirs: list[Path], files_dir: Path | None) -> list[Path]:
+    if files_dir is None:
+        return dirs
+    resolved = str(Path(files_dir).resolve())
+    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
+        return dirs
+    return [*dirs, Path(files_dir)]
+
+
 def _append_blacklist_dir(dirs: list[Path], blacklist_dir: Path | None) -> list[Path]:
     if blacklist_dir is None:
         return dirs
@@ -256,21 +265,7 @@ def _spec_to_resolved(
     scope order (org -> team -> user -> assistant) and merged onto
     the spec's seed data.  File-based secrets from ``.secrets.json``
     are applied last.
-
-    Scenario activations declared on the deployment spec and on each
-    matching seed layer are materialised here: their generic templates
-    are loaded from disk, placeholder fields substituted with the
-    per-client values, validated as :class:`ScenarioSpec`, and appended
-    to ``resolved.scenarios``.  Env-var overlay produced by activations
-    is merged into the secrets bundle.
     """
-    from unity_deploy.assistant_deployments.deployment_types import (
-        resolve_deployment_name,
-    )
-    from unity_deploy.assistant_deployments.scenarios.loader import (
-        materialise_scenario_activations,
-    )
-    from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
     contacts_dirs: list[Path] = []
@@ -297,12 +292,14 @@ def _spec_to_resolved(
     tasks_dirs: list[Path] = []
     if spec.tasks_dir is not None:
         tasks_dirs = _append_tasks_dir(tasks_dirs, spec.tasks_dir)
+    files_dirs: list[Path] = []
+    if spec.files_dir is not None:
+        files_dirs = _append_files_dir(files_dirs, spec.files_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs = _append_blacklist_dir(blacklist_dirs, spec.blacklist_dir)
     secrets: list[Secret] = []
     integrations: list[str] = list(spec.integrations)
-    activations: list[ScenarioActivation] = list(spec.scenarios)
 
     for layer in _collect_layers(
         entry,
@@ -331,6 +328,8 @@ def _spec_to_resolved(
             )
         if layer.tasks_dir is not None:
             tasks_dirs = _append_tasks_dir(tasks_dirs, layer.tasks_dir)
+        if layer.files_dir is not None:
+            files_dirs = _append_files_dir(files_dirs, layer.files_dir)
         if layer.blacklist_dir is not None:
             blacklist_dirs = _append_blacklist_dir(
                 blacklist_dirs,
@@ -338,25 +337,6 @@ def _spec_to_resolved(
             )
         if layer.integrations:
             integrations = _merge_integrations(integrations, list(layer.integrations))
-        if layer.scenarios:
-            activations = [*activations, *layer.scenarios]
-
-    materialised_scenarios: list[Any] = []
-    if activations:
-        deployment_name = resolve_deployment_name(
-            entry.mapping,
-            user_id=user_id,
-            org_id=org_id,
-            team_ids=team_ids,
-            assistant_id=assistant_id,
-        )
-        materialised_scenarios, activation_secrets = materialise_scenario_activations(
-            activations,
-            client_slug=client_name,
-            deployment_name=deployment_name,
-        )
-        if activation_secrets:
-            secrets = _merge_by_key(secrets, activation_secrets, _secret_key)
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -380,13 +360,13 @@ def _spec_to_resolved(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=integrations,
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
-        scenarios=list(materialised_scenarios),
     )
 
 
@@ -520,12 +500,12 @@ def resolve(
         custom_data_dirs=[],
         dashboards_dirs=[],
         tasks_dirs=[],
+        files_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=[],
         mcp_configs=[],
         url_mappings={},
-        scenarios=[],
     )
 
 

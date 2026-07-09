@@ -162,6 +162,9 @@ RUN mkdir -p /root/.vnc && chmod 777 /root /root/.vnc && \
 # Read-only platform source snapshots for the CodeActActor's system
 # self-knowledge (grep-able ground truth for "how does X work / is Y
 # possible" questions; the unify runtime source itself is already at /app).
+# unify-deploy is intentionally omitted: client trees are delivered via GCS
+# bundles at bind time, and shipping the private deploy checkout would
+# re-expose every client's source to every assistant pod.
 # Kept outside ~/Unity/Local so they are never synced to any user-visible
 # desktop, root-owned so the runtime user cannot modify them, and
 # .git-stripped so they are pure snapshots.  SYSTEM_REPOS_SHA is set at
@@ -175,7 +178,7 @@ RUN echo "system_repos_sha=${SYSTEM_REPOS_SHA}" && \
     git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
     SRC_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
     mkdir -p /opt/system-sources && \
-    for repo in orchestra console unify-deploy docs; do \
+    for repo in orchestra console docs; do \
         git clone --depth 1 --branch $SRC_BRANCH https://github.com/unifyai/$repo.git /opt/system-sources/$repo && \
         rm -rf /opt/system-sources/$repo/.git; \
     done && \

@@ -95,14 +95,19 @@ def patch_job_label(
         labels["assistant-id"] = str(assistant_id).lower().replace("_", "-")
     if ack_ts is not None:
         labels["unity-startup-ack"] = ack_ts
+    form: dict[str, str] = {
+        "job_name": job_name,
+        "labels": json.dumps(labels),
+    }
+    # Comms self-scopes non-admin (UNIFY_KEY) callers to their own bound Job by
+    # the raw assistant id form field, so send it whenever known.
+    if assistant_id is not None:
+        form["assistant_id"] = str(assistant_id)
     for attempt in range(1 + retries):
         try:
             resp = requests.patch(
                 f"{comms_url}/infra/job/labels",
-                data={
-                    "job_name": job_name,
-                    "labels": json.dumps(labels),
-                },
+                data=form,
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=timeout,
             )

@@ -30,10 +30,16 @@ class OrchestraClientError(Exception):
         super().__init__(f"Orchestra {status_code}: {detail}")
 
 
-def _admin_headers() -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()}",
-    }
+def _admin_headers(auth_token: str | None = None) -> dict[str, str]:
+    """Bearer headers for Orchestra.
+
+    Defaults to the platform admin key (used by the reconcile control plane).
+    Pass ``auth_token`` to authenticate as a specific assistant (its UNIFY_KEY)
+    against ownership-scoped routes, e.g. from the wake-time hook on a pod that
+    no longer carries the admin key.
+    """
+    token = auth_token or SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _build_url(path: str) -> str:
@@ -83,14 +89,15 @@ def patch_json(
     body: dict[str, Any],
     *,
     timeout: float = _HTTP_TIMEOUT_SECONDS,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
-    """PATCH JSON to an Orchestra admin endpoint. Returns parsed response."""
+    """PATCH JSON to an Orchestra endpoint. Returns parsed response."""
     url = _build_url(path)
     try:
         resp = httpx.patch(
             url,
             json=body,
-            headers=_admin_headers(),
+            headers=_admin_headers(auth_token),
             timeout=timeout,
         )
     except httpx.HTTPError as exc:

@@ -13,8 +13,8 @@ Lives under `integrations/packages/` so any client can opt in via
   defaults to `mock=True` for safe testing; pass `mock=False` to hit live
   Employment Hero.
 * **Sync functions** — pull deltas into the assistant's DataManager.
-  Returns the canonical `{schema_version, tables, metadata}` envelope so
-  the scenario runtime can route output via `data_targets`.
+  Returns the canonical `{schema_version, tables, metadata}` envelope for
+  DataManager ingest.
 * **Local-query functions** — read the synced DataManager copy with a
   freshness signal. Preferred over live calls when freshness allows.
 * **Sync orchestrator** — `run_employmenthero_sync_tick` aggregates all
@@ -78,23 +78,16 @@ return BASE_SPEC.derive(
 ```
 
 That's it. The startup hook expands the `employment_hero` slug into the
-package's function/guidance assets via `expand_integrations`. To also
-schedule the incremental sync, add a per-client sync package (e.g.
-`clientzeta_eh_sync`) that defines the scenario YAML with the client's
-assistant id pinned in `tasks[*].target.assistant_id`.
+package's function/guidance assets via `expand_integrations`. Schedule
+`run_employmenthero_sync_tick` from the client deployment when incremental
+sync is required.
 
 ## Running the sync
 
-A client's `<client>_eh_sync` package ships
-`<client>_eh_full_sync_v0.yaml`, scheduling `run_employmenthero_sync_tick`
-on a low-overhead 60-second scheduler tick. The actual sync cadence is
-gated by `EMPLOYMENTHERO_SYNC_MIN_INTERVAL_SECONDS` plus per-object
-overrides inside the orchestrator, so operators can tune freshness via
-env-var without redeploying the YAML.
-
-The scenario's `tasks[*].enabled` ships `false`. Operators flip it to
-`true` after the control-plane has the TaskScheduler + FunctionManager
-ids seeded for the client (per the `a71a840` convention).
+Call `run_employmenthero_sync_tick` on demand or from a client-owned
+schedule. Cadence is gated by `EMPLOYMENTHERO_SYNC_MIN_INTERVAL_SECONDS`
+plus per-object overrides inside the orchestrator, so operators can tune
+freshness via env-var without redeploying.
 
 ## High-stakes writes
 

@@ -33,6 +33,7 @@ class RuntimeStateResult:
     custom_data_changed: bool = False
     dashboards_changed: bool = False
     tasks_changed: bool = False
+    files_changed: bool = False
     blacklist_changed: bool = False
 
 
@@ -101,6 +102,10 @@ def compute_runtime_state_fingerprint(
         "tasks_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.tasks_dirs
+        ],
+        "files_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.files_dirs
         ],
         "blacklist_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
@@ -381,6 +386,7 @@ def materialize_runtime_state(
     custom_data_changed = False
     dashboards_changed = False
     tasks_changed = False
+    files_changed = False
     blacklist_changed = False
     custom_start = perf_counter()
     if can_sync_custom:
@@ -541,6 +547,21 @@ def materialize_runtime_state(
         tasks_changed,
     )
 
+    files_dirs = _dedupe_paths(resolved.files_dirs)
+    from unify.file_manager.custom_files import collect_files_from_directories
+
+    source_files = collect_files_from_directories(files_dirs)
+    files_start = perf_counter()
+    file_mgr = ManagerRegistry.get_file_manager()
+    files_changed = file_mgr.sync_custom(source_files=source_files)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_files assistant=%s duration=%.2fs changed=%s",
+        identity.assistant_id,
+        perf_counter() - files_start,
+        files_changed,
+    )
+
     secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
     source_secrets = collect_secrets_from_directories(secrets_dirs)
     source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
@@ -589,13 +610,14 @@ def materialize_runtime_state(
                 "data": "ready",
                 "dashboards": "ready",
                 "tasks": "ready",
+                "files": "ready",
                 "secrets": "ready",
                 "functions": "ready",
             },
             data_freshness="ready",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s tasks_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s tasks_changed=%s files_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         integration_registry_changed,
@@ -606,6 +628,7 @@ def materialize_runtime_state(
         custom_data_changed,
         dashboards_changed,
         tasks_changed,
+        files_changed,
         secrets_changed,
         blacklist_changed,
     )
@@ -621,6 +644,7 @@ def materialize_runtime_state(
         custom_data_changed=custom_data_changed,
         dashboards_changed=dashboards_changed,
         tasks_changed=tasks_changed,
+        files_changed=files_changed,
         secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )

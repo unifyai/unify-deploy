@@ -67,12 +67,23 @@ def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
     }
 
 
-def test_orchestra_admin_key_sourced_from_unity_secrets() -> None:
+def test_orchestra_admin_key_not_mounted_on_assistant_pods() -> None:
+    """The platform admin key must never reach an assistant Job pod.
+
+    Pods authenticate to Orchestra and the hosted gateway with their own
+    per-assistant UNIFY_KEY against ownership-scoped routes; the fleet-wide
+    ORCHESTRA_ADMIN_KEY stays on controllers / Cloud Run / reconcile jobs only.
+    """
     manifest = build_unity_job_manifest(job_name="orch-admin-key-staging")
-    entry = _env_by_name(manifest)["ORCHESTRA_ADMIN_KEY"]
+    assert "ORCHESTRA_ADMIN_KEY" not in _env_names(manifest)
+
+
+def test_shared_unify_key_still_sourced_from_unity_secrets() -> None:
+    manifest = build_unity_job_manifest(job_name="shared-key-staging")
+    entry = _env_by_name(manifest)["SHARED_UNIFY_KEY"]
     assert entry["valueFrom"]["secretKeyRef"] == {
         "name": "unity-secrets",
-        "key": "ORCHESTRA_ADMIN_KEY",
+        "key": "SHARED_UNIFY_KEY",
     }
 
 
@@ -360,8 +371,18 @@ def test_job_top_level_shape() -> None:
     assert manifest["metadata"]["name"] == "shape-staging"
     assert manifest["metadata"]["namespace"] == "staging"
     assert manifest["spec"]["backoffLimit"] == 0
-    assert manifest["spec"]["template"]["spec"]["restartPolicy"] == "Never"
-    assert manifest["spec"]["template"]["spec"]["serviceAccountName"] == "comm-sa"
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert pod_spec["restartPolicy"] == "Never"
+    # Assistant Jobs run under the minimally-scoped Workload Identity SA, not the
+    # fleet-wide comm-sa, and mount no JSON service-account key.
+    assert pod_spec["serviceAccountName"] == "assistant-runtime-sa"
+    volume_names = {v["name"] for v in pod_spec.get("volumes", [])}
+    assert "sa-key" not in volume_names
+    container = pod_spec["containers"][0]
+    mount_names = {m["name"] for m in container.get("volumeMounts", [])}
+    assert "sa-key" not in mount_names
+    env_names = {e["name"] for e in container["env"]}
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
 
 
 # ---------------------------------------------------------------------------

@@ -17,12 +17,25 @@ from common.settings import SETTINGS
 
 
 @pytest.fixture
-def client():
-    from communication.infra.views import router
+def client(monkeypatch):
+    from communication.infra.views import assistant_self_router, router
+
+    # Self-scoped routes authorize with admin-or-assistant; set a known admin
+    # key and send it by default so these logic-focused tests hit the admin
+    # short-circuit rather than the per-assistant session lookup.
+    monkeypatch.setattr(
+        SETTINGS,
+        "orchestra_admin_key",
+        "TEST-ADMIN-KEY",
+        raising=False,
+    )
 
     app = FastAPI()
     app.include_router(router, prefix="/infra")
-    return TestClient(app)
+    app.include_router(assistant_self_router, prefix="/infra")
+    test_client = TestClient(app)
+    test_client.headers.update({"Authorization": "Bearer TEST-ADMIN-KEY"})
+    return test_client
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +43,18 @@ def _mock_idle_pool_replenishment():
     with patch(
         "communication.infra.views.schedule_idle_job_pool_replenishment",
         return_value=True,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_orchestra_assistant_lookup():
+    with patch(
+        "communication.infra.views.get_assistant",
+        return_value={
+            "desktop_mode": "ubuntu",
+            "managed_desktop_status": "active",
+        },
     ):
         yield
 
@@ -599,7 +624,7 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     assert response.status_code == 200
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
-    assert refreshed_spec["desktop"] == {"mode": "macos", "required": False}
+    assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
 
 
 def test_start_job_reuses_inflight_restart_activation_for_terminal_session(client):

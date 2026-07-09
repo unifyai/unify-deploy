@@ -380,7 +380,7 @@ The startup hook:
 unity_deploy/
 ├── hook.py                       # entry point: startup_hook()
 └── assistant_deployments/
-    ├── clients/                  # client_alpha/, clientgamma/, clientzeta/, …  (self-register)
+    ├── clients/                  # client_alpha/, clientzeta/, client_beta/, …  (self-register)
     ├── configs/types/            # ActorConfig
     ├── environments/             # serialized environment reconstruction
     ├── seed_sync.py              # generic hash-based seed sync

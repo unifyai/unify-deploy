@@ -14,7 +14,6 @@ def test_runtime_profile_excludes_client_packages():
         "unity_deploy.assistant_deployments.clients.clientepsilon_homes",
         "unity_deploy.assistant_deployments.clients.clientzeta",
         "unity_deploy.assistant_deployments.clients.client_beta",
-        "unity_deploy.assistant_deployments.clients.clientgamma",
         "unity_deploy.assistant_deployments.clients.unify_company",
     )
     runtime_excludes = [f"{name}*" for name in client_subpackages]

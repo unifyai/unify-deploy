@@ -14,8 +14,8 @@ async def sync_hubspot_contacts(
     mock: bool = True,
 ) -> dict:
     """Pull contacts modified since ``since`` (ISO-8601) into the
-    ``{schema_version, tables, metadata}`` envelope used by the scenario
-    runtime.  Returns ``tables['contacts']`` flattened for DataManager."""
+    ``{schema_version, tables, metadata}`` envelope.  Returns
+    ``tables['contacts']`` flattened for DataManager."""
     if mock:
         from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._normalize import (
             normalize_contact,

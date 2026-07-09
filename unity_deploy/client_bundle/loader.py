@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import sys
 import types
 from functools import lru_cache
@@ -21,8 +22,41 @@ from unity_deploy.client_bundle.fetch import client_deployment_root
 logger = logging.getLogger(__name__)
 
 
+def _ensure_namespace_package(name: str, path: Path | None = None) -> types.ModuleType:
+    """Register ``name`` as a namespace/package module if missing."""
+
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    module = types.ModuleType(name)
+    if path is not None:
+        module.__file__ = str(path / "__init__.py")
+        module.__path__ = [str(path)]
+    else:
+        module.__path__ = []
+    module.__package__ = name
+    sys.modules[name] = module
+    return module
+
+
 def _register_bundle_package(client_name: str, root: Path) -> None:
-    """Expose the unpacked bundle under the canonical client import path."""
+    """Expose the unpacked bundle under the canonical client import path.
+
+    Registers the full package tree so ``@custom_function`` bodies can
+    ``from unity_deploy.assistant_deployments.clients.{client}...._impl import …``
+    after GCS unpack (P1). Parent namespaces are created as needed.
+    """
+
+    _ensure_namespace_package("unity_deploy")
+    _ensure_namespace_package("unity_deploy.assistant_deployments")
+    clients_pkg = _ensure_namespace_package(
+        "unity_deploy.assistant_deployments.clients",
+    )
+    if str(root.parent) not in getattr(clients_pkg, "__path__", []):
+        # Keep clients.__path__ pointing at a real directory when possible.
+        clients_dir = root.parent
+        if clients_dir.is_dir():
+            clients_pkg.__path__ = [str(clients_dir)]
 
     client_pkg = f"unity_deploy.assistant_deployments.clients.{client_name}"
     if client_pkg not in sys.modules:
@@ -30,7 +64,35 @@ def _register_bundle_package(client_name: str, root: Path) -> None:
         init_path = root / "__init__.py"
         module.__file__ = str(init_path if init_path.exists() else root)
         module.__path__ = [str(root)]
+        module.__package__ = client_pkg
         sys.modules[client_pkg] = module
+
+    # Walk the unpacked tree and register every package directory so absolute
+    # imports into ``...functions._impl.*`` resolve without pip-installing the
+    # client into site-packages.
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames if d != "__pycache__" and not d.startswith(".")
+        ]
+        rel = Path(dirpath).relative_to(root)
+        if rel == Path("."):
+            continue
+        if "__init__.py" not in filenames and not any(
+            (Path(dirpath) / d / "__init__.py").exists() for d in dirnames
+        ):
+            # Skip non-package data dirs (guidance/, knowledge/, …).
+            if "__init__.py" not in filenames:
+                continue
+        parts = rel.parts
+        pkg_name = ".".join((client_pkg, *parts))
+        if pkg_name in sys.modules:
+            continue
+        pkg = types.ModuleType(pkg_name)
+        init_file = Path(dirpath) / "__init__.py"
+        pkg.__file__ = str(init_file if init_file.exists() else Path(dirpath))
+        pkg.__path__ = [dirpath]
+        pkg.__package__ = pkg_name
+        sys.modules[pkg_name] = pkg
 
 
 def _load_get_deployment(deployment_dir: Path, *, client_name: str):
@@ -101,6 +163,7 @@ def _apply_manifest_layers(
     custom_data_dirs = list(resolved.custom_data_dirs)
     dashboards_dirs = list(resolved.dashboards_dirs)
     tasks_dirs = list(resolved.tasks_dirs)
+    files_dirs = list(resolved.files_dirs)
     secrets_dirs = list(resolved.secrets_dirs)
     blacklist_dirs = list(resolved.blacklist_dirs)
     integrations = list(resolved.integrations)
@@ -124,6 +187,9 @@ def _apply_manifest_layers(
         tasks = _resolve_layer_path(client_root, layer.tasks_dir)
         if tasks is not None:
             tasks_dirs.append(tasks)
+        files = _resolve_layer_path(client_root, layer.files_dir)
+        if files is not None:
+            files_dirs.append(files)
         secrets = _resolve_layer_path(client_root, layer.secrets_dir)
         if secrets is not None:
             secrets_dirs.append(secrets)
@@ -144,6 +210,7 @@ def _apply_manifest_layers(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=resolved.secrets,
         integrations=integrations,
@@ -151,7 +218,6 @@ def _apply_manifest_layers(
         mcp_configs=resolved.mcp_configs,
         url_mappings=resolved.url_mappings,
         console_config=resolved.console_config,
-        scenarios=resolved.scenarios,
     )
 
 
@@ -165,9 +231,6 @@ def _spec_to_resolved(
     user_id: str | None,
     assistant_id: int | None,
 ) -> ResolvedAssistantDeployment:
-    from unity_deploy.assistant_deployments.scenarios.loader import (
-        materialise_scenario_activations,
-    )
     from unity_deploy.assistant_deployments.secrets_file import load_secrets
 
     function_dirs: list[Path] = []
@@ -194,21 +257,14 @@ def _spec_to_resolved(
     tasks_dirs: list[Path] = []
     if spec.tasks_dir is not None:
         tasks_dirs.append(spec.tasks_dir)
+    files_dirs: list[Path] = []
+    if spec.files_dir is not None:
+        files_dirs.append(spec.files_dir)
     blacklist_dirs: list[Path] = []
     if spec.blacklist_dir is not None:
         blacklist_dirs.append(spec.blacklist_dir)
 
     secrets: list[Secret] = list(spec.secrets or [])
-    materialised_scenarios: list = []
-    activations = list(spec.scenarios or [])
-    if activations:
-        materialised_scenarios, activation_secrets = materialise_scenario_activations(
-            activations,
-            client_slug=client_name,
-            deployment_name=deployment,
-        )
-        if activation_secrets:
-            secrets = [*secrets, *activation_secrets]
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -231,13 +287,13 @@ def _spec_to_resolved(
         custom_data_dirs=custom_data_dirs,
         dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
+        files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
         secrets=secrets,
         integrations=list(spec.integrations or []),
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
-        scenarios=list(materialised_scenarios),
     )
 
 

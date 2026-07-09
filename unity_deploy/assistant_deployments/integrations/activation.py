@@ -58,7 +58,6 @@ def expand_integrations(
     resolved.secrets.extend(loaded.secrets)
     resolved.url_mappings.update(loaded.url_mappings)
     resolved.mcp_configs.extend(loaded.mcp_configs)
-    resolved.scenarios.extend(loaded.scenarios)
 
     # Runtime reconcile (``sync_custom_integration_registry`` in
     # ``unify.integration_registry``) reads ``resolved.integration_registry`` and

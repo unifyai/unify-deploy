@@ -61,9 +61,12 @@ def _sync_console_config(
     startup does not fail if Orchestra is temporarily unavailable.
     """
     try:
+        from unify.session_details import SESSION_DETAILS
+
         patch_json(
-            f"/admin/assistant/{assistant_id}",
+            f"/assistant/{assistant_id}/runtime-profile",
             {"console_config": console_config},
+            auth_token=SESSION_DETAILS.unify_key or None,
         )
         logger.info("Synced console_config for assistant %s", assistant_id)
     except OrchestraClientError:
@@ -130,7 +133,7 @@ def startup_hook(
         logger,
         (
             "⏱️ [StartupTiming] unity_deploy.startup_hook resolved "
-            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_tables=%d custom_data_tables=%d dashboard_entities=%d tasks_dirs=%d blacklist_dirs=%d "
+            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_tables=%d custom_data_tables=%d dashboard_entities=%d tasks_dirs=%d files_dirs=%d blacklist_dirs=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
         len(resolved.contacts_dirs),
@@ -144,6 +147,7 @@ def startup_hook(
             for names in list_dashboard_entity_ids(resolved.dashboards_dirs).values()
         ),
         len(resolved.tasks_dirs),
+        len(resolved.files_dirs),
         len(resolved.blacklist_dirs),
         len(resolved.function_dirs),
         len(resolved.venv_dirs),

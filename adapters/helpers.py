@@ -12,7 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
-COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 # Adapters intentionally cap start-intent waits at the comms edge so webhook
 # handlers can return quickly. This is a best-effort handoff, not a durable
 # acceptance boundary.
@@ -30,7 +29,7 @@ from common.metrics import (
     UNITY_JOBS_RUNNING,
     UNITY_JOBS_IDLE,
 )
-from common.assistant_lookup import get_assistant
+from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.coordinator_voice import resolve_runtime_voice
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,12 +69,9 @@ def _required_contact_id(assistant_data: dict, field_name: str) -> int:
 
 
 def _resolve_desktop_mode(assistant_data: dict) -> str:
-    """Resolve runtime desktop mode with Coordinator-aware fallback semantics."""
-    desktop_mode = assistant_data.get("desktop_mode")
-    if desktop_mode:
-        return desktop_mode
-    if assistant_data.get("is_coordinator", False):
-        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    """Resolve runtime desktop mode from Orchestra entitlement."""
+    if managed_desktop_entitled(assistant_data):
+        return str(assistant_data["desktop_mode"])
     return NO_DESKTOP_MODE
 
 
@@ -741,6 +737,60 @@ def ensure_ms_teams_bot_pending_install(activity: dict) -> None:
     )
 
 
+def revoke_ms_teams_bot_install(activity: dict) -> None:
+    """Soft-revoke the install when the bot is removed from a tenant.
+
+    Teams sends a ``conversationUpdate`` carrying the bot itself in
+    ``membersRemoved`` when the app is uninstalled from the tenant. We hold
+    no per-tenant token to revoke at Microsoft, so mirroring that removal
+    into Orchestra (marking the install revoked, dropping routes) is the only
+    teardown we can perform — it stops inbound routing to a bot that is no
+    longer installed.
+    """
+    channel_data = activity.get("channelData") or {}
+    tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
+    if not tenant_id:
+        return
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    try:
+        resp = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/ms-teams-bot/install",
+            params={"tenant_id": tenant_id},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception(
+            "ms_teams_bot: failed to resolve install for tenant %s",
+            tenant_id,
+        )
+        return
+    if resp.status_code == 404:
+        return
+    if resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot GET install failed: {resp.status_code} {resp.text}",
+        )
+        return
+    install_id = (resp.json() or {}).get("id")
+    if not install_id:
+        return
+    try:
+        del_resp = requests.delete(
+            f"{SETTINGS.orchestra_url}/admin/ms-teams-bot/install/{install_id}",
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("ms_teams_bot: failed to revoke install %s", install_id)
+        return
+    if del_resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot DELETE install {install_id} failed: "
+            f"{del_resp.status_code} {del_resp.text}",
+        )
+
+
 def resolve_ms_teams_bot_inbound(activity: dict) -> dict | None:
     """Route a Teams ``message`` activity via Orchestra.
 
@@ -1124,11 +1174,13 @@ def expire_all_stale_jobs(
     headers = {"Authorization": f"Bearer {admin_key}"}
 
     try:
+        # No ``hours`` lookback: suspended/done Jobs older than a short window
+        # must stay visible or they accumulate forever. Staleness is decided
+        # below from ``creation_timestamp`` vs ``max_age_hours``.
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
                 "label_selector": "app=unity,unity-status in (running,done)",
-                "hours": max(max_age_hours + 12, 36),
             },
             headers=headers,
         )
@@ -2114,6 +2166,8 @@ def build_webhook_context(
         assistant_data,
     ):
         effective_desktop_required = False
+    if effective_desktop_required is None:
+        effective_desktop_required = managed_desktop_entitled(assistant_data)
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         _WEBHOOK_BG_POOL.submit(

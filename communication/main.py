@@ -50,6 +50,7 @@ from communication.dependencies import auth_admin_key
 from communication.infra.helpers import setup_kubernetes_client
 from communication.infra.views import (
     _get_pubsub_clients,
+    assistant_self_router,
     router as infra_router,
     tunnel_router,
     vm_self_router,
@@ -179,6 +180,9 @@ app = create_app(
         ExtraRouter(infra_router, prefix="/infra", dependencies=admin_auth),
         ExtraRouter(tunnel_router, prefix="/infra"),
         ExtraRouter(vm_self_router, prefix="/infra"),
+        # Self-scoped assistant routes perform their own admin-or-assistant
+        # authorization per route, so no blanket admin dependency here.
+        ExtraRouter(assistant_self_router, prefix="/infra"),
     ],
     extra_setup_hooks=[setup_kubernetes_client, _get_pubsub_clients],
     gateway_context=gateway_context,

@@ -4,7 +4,7 @@ Two cross-joins:
 
 * **Matterport models <-> RealPage units** — populated three ways:
   internal-label convention (preferred, auto), manual via chat, address
-  heuristic (deferred until RealPage scenario lands).  v1 stores
+  heuristic (deferred until RealPage lands).  v1 stores
   ``unit_id`` as a free string in ``Matterport/Links/ModelUnit``;
   tighten to typed FK once RealPage's units table arrives.
 

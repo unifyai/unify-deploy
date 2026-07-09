@@ -7,11 +7,11 @@ in mock mode to verify they work in FunctionManager's isolated exec
 namespace.
 
 Mocks are deliberately included here because they are exactly the surface
-that scenario E2Es and offline task activations register at runtime, so we
-must guarantee they survive AST extraction and decorator stripping just
-like any production connector. The full Unity backend is required because
-``FunctionManager`` resolves manager contexts; ``sync/conftest.py``
-installs an explicit per-test base context for real manager instances.
+offline task activations register at runtime, so we must guarantee they
+survive AST extraction and decorator stripping just like any production
+connector. The full Unity backend is required because ``FunctionManager``
+resolves manager contexts; ``sync/conftest.py`` installs an explicit
+per-test base context for real manager instances.
 
 To add execution coverage for a new integration, add an entry to
 ``EXECUTION_CONFIG`` below. Functions that import third-party packages
@@ -64,8 +64,7 @@ EXECUTION_CONFIG: Dict[str, Dict[str, Any]] = {
 
 # ---------------------------------------------------------------------------
 # Discovery -- all roots including mocks because mock connectors are the
-# exact surface that FunctionManager registers when scenario tests or
-# offline task activations run them.
+# exact surface that FunctionManager registers for offline task activations.
 # ---------------------------------------------------------------------------
 
 _INTEGRATION_DIRS = discover_all_function_dirs(include_mock=True)

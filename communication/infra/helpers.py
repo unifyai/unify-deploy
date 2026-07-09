@@ -390,7 +390,11 @@ def build_unity_job_manifest(
             "LIVEKIT_URL",
             "OPENAI_API_KEY",
             "OPENROUTER_API_KEY",
-            "ORCHESTRA_ADMIN_KEY",
+            # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
+            # authenticate to Orchestra and the hosted gateway with their own
+            # per-assistant UNIFY_KEY against ownership-scoped routes, so a
+            # compromised pod can only act as itself. The platform admin key
+            # stays on controllers / Cloud Run / reconcile jobs only.
             "SHARED_UNIFY_KEY",
             "TAVILY_API_KEY",
             "VERTEXAI_CREDENTIALS",
@@ -402,10 +406,8 @@ def build_unity_job_manifest(
     env_vars = [
         {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
         {"name": "DEPLOY_ENV", "value": deploy_env},
-        {
-            "name": "GOOGLE_APPLICATION_CREDENTIALS",
-            "value": "/secrets/key.json",
-        },
+        # No GOOGLE_APPLICATION_CREDENTIALS: assistant Jobs get GCP creds from
+        # the Workload Identity metadata server via assistant-runtime-sa.
         {"name": "PYTHONUNBUFFERED", "value": "1"},
         {
             "name": "TOKENIZERS_PARALLELISM",
@@ -494,7 +496,11 @@ def build_unity_job_manifest(
                 },
                 "spec": {
                     "restartPolicy": "Never",
-                    "serviceAccountName": "comm-sa",
+                    # Minimally-scoped Workload Identity SA (not fleet-wide
+                    # comm-sa): GCP auth comes from the metadata server via WI,
+                    # so no JSON key is mounted and a compromised pod cannot use
+                    # comm-sa's broad GCS/compute access.
+                    "serviceAccountName": "assistant-runtime-sa",
                     "terminationGracePeriodSeconds": 30,  # Faster termination
                     "priorityClassName": (priority_class_name or "unity-idle"),
                     "containers": [
@@ -531,11 +537,6 @@ def build_unity_job_manifest(
                             },
                             "volumeMounts": [
                                 {
-                                    "name": "sa-key",
-                                    "mountPath": "/secrets",
-                                    "readOnly": True,
-                                },
-                                {
                                     "name": "tmp-vol",
                                     "mountPath": "/tmp",
                                 },
@@ -543,7 +544,6 @@ def build_unity_job_manifest(
                         },
                     ],
                     "volumes": [
-                        {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
                         {"name": "tmp-vol", "emptyDir": {}},
                     ],
                 },

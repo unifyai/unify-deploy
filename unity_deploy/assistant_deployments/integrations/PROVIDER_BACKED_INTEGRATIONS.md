@@ -45,8 +45,8 @@ Console and Orchestra own the dynamic provider lifecycle:
 - Unity reads Builtins catalog artifacts and exposes searchable virtual tools
   under `primitives.integrations.<app>.<tool>`.
 - `unity-deploy` contributes a package only when Unify needs local code,
-  deploy-time guidance/secrets, a custom scenario, or deterministic tests that
-  cannot be delegated to a provider backend.
+  deploy-time guidance/secrets, or deterministic tests that cannot be
+  delegated to a provider backend.
 
 ## Unified App Catalog
 

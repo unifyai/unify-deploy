@@ -16,8 +16,8 @@ async def sync_employmenthero_workforce(
     teams, team_memberships, locations.
 
     Returns the canonical
-    ``{schema_version, tables, metadata}`` envelope so the scenario
-    runtime can route output to its declared ``data_targets`` contexts.
+    ``{schema_version, tables, metadata}`` envelope for DataManager
+    ingestion into the declared sync contexts.
 
     ``since`` is an ISO 8601 timestamp; when provided, only employees
     whose ``updated_at`` is on or after the watermark are pulled.

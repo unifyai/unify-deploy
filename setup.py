@@ -13,7 +13,6 @@ _CLIENT_SUBPACKAGES = (
     "unity_deploy.assistant_deployments.clients.clientepsilon_homes",
     "unity_deploy.assistant_deployments.clients.clientzeta",
     "unity_deploy.assistant_deployments.clients.client_beta",
-    "unity_deploy.assistant_deployments.clients.clientgamma",
     "unity_deploy.assistant_deployments.clients.unify_company",
 )
 

@@ -1,6 +1,6 @@
 """Salesforce sync orchestrator + state.
 
-``run_salesforce_sync_tick`` is the entrypoint the scenario runtime
+``run_salesforce_sync_tick`` is the entrypoint the sync scheduler
 calls on its interval.  It dispatches per-object sync functions, gates
 by per-object cadence config, aggregates returned tables, and emits an
 audit row.

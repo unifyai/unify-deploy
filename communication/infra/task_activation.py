@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from google.api_core.exceptions import (
     AlreadyExists,
     NotFound as GcpNotFound,
@@ -41,6 +41,7 @@ from unify.task_scheduler.offline_runner_contract import (
     build_offline_runner_env as _build_offline_runner_env_shared,
 )
 
+from communication.dependencies import authorize_admin_or_assistant
 from .helpers import create_unity_job
 from .models import (
     OfflineTaskDispatchRequest,
@@ -52,6 +53,7 @@ from .runtime_clients import (
     get_cloud_tasks_client as _get_cloud_tasks_client,
     get_k8s_clients as _get_k8s_clients,
 )
+from .self_router import assistant_self_router
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1601,9 +1603,21 @@ def _validate_offline_dispatch_request(request: OfflineTaskDispatchRequest) -> N
         )
 
 
-@router.post("/task-activation/offline-dispatch")
-async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
-    """Validate and launch one headless offline task execution attempt."""
+@assistant_self_router.post("/task-activation/offline-dispatch")
+async def dispatch_offline_task(
+    request: OfflineTaskDispatchRequest,
+    request_fastapi: Request,
+):
+    """Validate and launch one headless offline task execution attempt.
+
+    Auth: platform admin key (control-plane) or the dispatching assistant's own
+    UNIFY_KEY, self-scoped to ``request.assistant_id``.
+    """
+
+    await authorize_admin_or_assistant(
+        request_fastapi,
+        assistant_id=request.assistant_id,
+    )
 
     _validate_offline_dispatch_request(request)
 

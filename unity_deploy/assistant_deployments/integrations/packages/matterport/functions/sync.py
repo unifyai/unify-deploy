@@ -1,6 +1,6 @@
 """Matterport sync orchestrator + state.
 
-``run_matterport_sync_tick`` is the entrypoint the scenario runtime
+``run_matterport_sync_tick`` is the entrypoint the sync scheduler
 calls on its interval.  Dispatches per-object sync functions, gates by
 per-object cadence config, aggregates returned tables, and emits an
 audit row.  Mirrors hubspot/sync.py and employment_hero/sync.py.

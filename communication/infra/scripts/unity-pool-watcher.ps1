@@ -479,11 +479,13 @@ function Invoke-Update {
     }
 
     # ── Agent Service (sparse checkout from unity monorepo) ──
+    # observationScaling.ts resolves ../../unify/common from src → C:\unify\common
     $agentServiceDir = "C:\agent-service"
+    $obsScalingPolicyPath = "C:\unify\common\observation_scaling_policy.json"
     $asSaved = Get-SavedCommitHash $agentServiceDir
     $asRemote = Get-RemoteCommitHash $unityUrl $unityBranch
 
-    if ($asSaved -and $asRemote -and ($asSaved -eq $asRemote)) {
+    if ($asSaved -and $asRemote -and ($asSaved -eq $asRemote) -and (Test-Path $obsScalingPolicyPath)) {
         Write-Log "Agent Service up-to-date ($asSaved)"
 
         # Install dependencies
@@ -495,7 +497,11 @@ function Invoke-Update {
         }
         Write-Log "Agent Service dependencies installed"
     } else {
-        Write-Log "Agent Service updating ($asSaved -> $asRemote)"
+        if ($asSaved -and $asRemote -and ($asSaved -eq $asRemote)) {
+            Write-Log "Agent Service commit current but observation scaling policy missing; refreshing"
+        } else {
+            Write-Log "Agent Service updating ($asSaved -> $asRemote)"
+        }
 
         # Backup .env if exists
         $envBackup = $null
@@ -508,7 +514,7 @@ function Invoke-Update {
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $tmpDir 2>&1
         if (Test-Path $tmpDir) {
             Push-Location $tmpDir
-            git sparse-checkout set agent-service 2>&1
+            git sparse-checkout set agent-service unify/common 2>&1
             $commit = (git rev-parse --short=12 HEAD 2>&1)
             Pop-Location
         }
@@ -522,6 +528,13 @@ function Invoke-Update {
                 Remove-Item $agentServiceDir -Recurse -Force -ErrorAction SilentlyContinue
             }
             Move-Item "$tmpDir\agent-service" $agentServiceDir
+            New-Item -ItemType Directory -Force -Path "C:\unify\common" | Out-Null
+            if (Test-Path "$tmpDir\unify\common\observation_scaling_policy.json") {
+                Copy-Item "$tmpDir\unify\common\observation_scaling_policy.json" $obsScalingPolicyPath -Force
+                Write-Log "Installed observation scaling policy at $obsScalingPolicyPath"
+            } else {
+                Write-Log "WARNING: observation_scaling_policy.json missing from sparse checkout"
+            }
             Save-CommitHash $agentServiceDir $commit
             Write-Log "Agent Service cloned (commit: $commit)"
         } else {

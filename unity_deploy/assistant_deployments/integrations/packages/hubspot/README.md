@@ -13,8 +13,7 @@ under `integrations/packages/` so any client can opt in via `integrations:
   hit the live HubSpot API.
 * **Sync functions** — pull deltas from HubSpot into the assistant's
   DataManager. Returns the canonical
-  `{schema_version, tables, metadata}` envelope so the scenario runtime can
-  route output to DataManager contexts via `data_targets`.
+  `{schema_version, tables, metadata}` envelope for DataManager ingest.
 * **Local-query functions** — read the synced DataManager copy. Preferred
   over live calls when freshness allows.
 * **Sync orchestrator** — `run_hubspot_sync_tick` aggregates all enabled
@@ -61,16 +60,13 @@ return BASE_SPEC.derive(
 ```
 
 That's it. The startup hook expands the `hubspot` slug into the package's
-function/guidance/scenario assets via `expand_integrations`.
+function/guidance assets via `expand_integrations`.
 
 ## Running the sync
 
-The default scenario `scenarios/crm_full_sync_v0.yaml` schedules
-`run_hubspot_sync_tick` on an interval. The scenario YAML's
-`interval_seconds` is the *task scheduler tick rate*; the actual sync
-cadence is gated by `HUBSPOT_SYNC_MIN_INTERVAL_SECONDS` plus per-object
-overrides inside the orchestrator. Operators can shorten the env-var
-minimum without redeploying the YAML.
+Call `run_hubspot_sync_tick` on demand or from a client-owned schedule.
+Cadence is gated by `HUBSPOT_SYNC_MIN_INTERVAL_SECONDS` plus per-object
+overrides inside the orchestrator.
 
 ## High-stakes writes
 

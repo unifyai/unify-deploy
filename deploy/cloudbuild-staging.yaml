@@ -46,12 +46,9 @@ steps:
     SHA="$$(cat /workspace/unity_sha.txt)"
     echo "Base image: ${_BASE_IMAGE}"
     echo "Unity SHA:  $$SHA"
-    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
-      --build-arg BRAIN_REF=${_BRAIN_REF} \
       --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
-      --build-arg BRAIN_OPERATOR_TASKS_ENABLED=${_BRAIN_OPERATOR_TASKS_ENABLED} \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
@@ -272,8 +269,7 @@ steps:
       --planes control-plane \
       --concurrency 8 \
       --timeout 600s \
-      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}" \
-      --brain-operator-tasks-enabled "${_BRAIN_OPERATOR_TASKS_ENABLED}"
+      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}"
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
@@ -312,7 +308,7 @@ steps:
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
       --region=${_REGION} \
       --allow-unauthenticated \
-      --min-instances=1 \
+      --min-instances=0 \
       --memory=2Gi \
       --update-env-vars=DEPLOY_ENV=staging,GCP_PROJECT_ID=${PROJECT_ID},UNITY_GKE_CLUSTER_NAME=${_CLUSTER},ORCHESTRA_URL=${_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_COMMS_HOST},UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST},UNITY_COORDINATOR_EMAIL_ADDRESS=${_UNITY_COORDINATOR_EMAIL_ADDRESS} \
       --service-account=comm-sa@${PROJECT_ID}.iam.gserviceaccount.com \
@@ -339,7 +335,7 @@ steps:
       --region=${_REGION} \
       --platform=managed \
       --allow-unauthenticated \
-      --min-instances=1 \
+      --min-instances=0 \
       --max-instances=100 \
       --concurrency=80 \
       --memory=2Gi \
@@ -384,6 +380,7 @@ steps:
   id: 'publish-client-bundles'
   entrypoint: 'bash'
   args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'staging', '${COMMIT_SHA}']
+  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['resolve-unity-sha']
 
   # --- Single idle-pool refresh (authoritative) ---------------------------
@@ -586,10 +583,8 @@ substitutions:
   # in Orchestra so the gateway recognizes coordinator senders.
   _UNITY_COORDINATOR_EMAIL_ADDRESS: 'staging-twin@unify.ai'
   # Brain commit / branch installed into the overlay image (staging tracks main).
-  _BRAIN_REF: 'main'
-  # brain_operator: assistant id + task flag from Cloud Build substitutions.
+  # brain_operator: assistant id from Cloud Build substitutions.
   _BRAIN_OPERATOR_ASSISTANT_ID: '7367'
-  _BRAIN_OPERATOR_TASKS_ENABLED: 'false'
 
 availableSecrets:
   secretManager:

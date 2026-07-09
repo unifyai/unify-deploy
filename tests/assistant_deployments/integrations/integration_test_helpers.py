@@ -9,7 +9,7 @@ ownership and runtime use. Tests follow the same separation:
   compositions (the ``"client"`` root). Always discovered for compliance,
   symbolic, and registration tests.
 * ``mock_packages/`` holds opt-in deterministic test doubles used by
-  scenarios and pilot E2E flows (the ``"mock"`` root). Only discovered
+  demos and pilot E2E flows (the ``"mock"`` root). Only discovered
   when callers explicitly request it.
 
 These helpers extract standalone function sources (stripping decorators
@@ -72,9 +72,9 @@ def discover_mock_function_dirs() -> list[tuple[str, Path]]:
     """Auto-discover ``mock_packages/`` integrations with a ``functions/`` dir.
 
     Mock packages are opt-in: production deploy resolution does not include
-    them by default. Tests that need scenario-test-double execution coverage
-    must explicitly call this helper or :func:`discover_all_function_dirs`
-    with ``include_mock=True``.
+    them by default. Tests that need mock-connector execution coverage must
+    explicitly call this helper or :func:`discover_all_function_dirs` with
+    ``include_mock=True``.
     """
     return _discover_in_root(_MOCK_DIR)
 

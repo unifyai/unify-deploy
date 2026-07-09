@@ -42,6 +42,7 @@ def _empty_resolved(*, integrations: list[str]) -> ResolvedAssistantDeployment:
         custom_data_dirs=[],
         dashboards_dirs=[],
         tasks_dirs=[],
+        files_dirs=[],
         blacklist_dirs=[],
         secrets=[],
         integrations=integrations,
@@ -97,7 +98,6 @@ def test_native_package_expansion_survives_provider_backed_sync_model():
     assert len(expanded.mcp_configs) == 1
     assert expanded.mcp_configs[0].command == "npx"
     assert "@modelcontextprotocol/server-fetch" in expanded.mcp_configs[0].args
-    assert expanded.scenarios
     assert _guidance_titles(expanded) >= {
         "Repo Lookup",
         "Pilot Usage",

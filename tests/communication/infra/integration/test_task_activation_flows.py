@@ -499,6 +499,8 @@ class TestTaskActivationFlows:
                 batch_api=batch_api,
                 core_api=core_api,
                 gce_client=gce_client,
+                # Staging services may cold-start after Cloud Run minScale=0.
+                timeout=360,
             )
             _assert_no_outbound_messages(subscriber, assistant_id)
         finally:

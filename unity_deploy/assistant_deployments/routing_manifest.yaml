@@ -56,16 +56,18 @@ clients:
       staging:
         targets: []
 
+  # Only the brain-operator assistant receives the unify_company bundle.
+  # All other Unify-org assistants are blank slates (L1+L4).
   unify_company:
     bundle_key: unify_company
     environments:
       staging:
         targets:
-        - scope: org
-          scope_id: "5"
+        - scope: assistant
+          scope_id: "7367"
           deployment: default
       production:
         targets:
-        - scope: org
-          scope_id: "1"
+        - scope: assistant
+          scope_id: "1406"
           deployment: default
