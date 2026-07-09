@@ -21,6 +21,7 @@ from .conftest import (
     UNIFY_KEY,
     VM_PROJECT_ID,
     VM_ZONE,
+    assign_pool_vm_with_cold_start,
     list_assigned_vms,
     list_idle_vms,
     list_stopped_vms,
@@ -49,18 +50,16 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
     vm_name = None
 
     try:
-        resp = comms.post(
-            "/infra/vm/pool/assign",
-            json={
+        resp = assign_pool_vm_with_cold_start(
+            comms,
+            {
                 "assistant_id": assistant_id,
                 "binding_id": binding_id,
                 "unify_apikey": "test-api-key-for-integration",
                 "vm_type": "ubuntu",
             },
+            poll=poll,
         )
-        assert (
-            resp.status_code == 200
-        ), f"VM assign failed: {resp.status_code} {resp.text}"
         result = resp.json()
         vm_name = result.get("vm_name")
         assert vm_name, "Response should include vm_name"
@@ -68,8 +67,8 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
 
         assigned = poll(
             lambda: list_assigned_vms(gce_client, assistant_id),
-            timeout=30,
-            interval=3,
+            timeout=60,
+            interval=5,
             description=f"VM assigned to {assistant_id}",
         )
         assert len(assigned) == 1, f"Expected 1 assigned VM, got {len(assigned)}"

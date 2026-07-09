@@ -1968,6 +1968,72 @@ def wait_for_idle_vm_pool(
     )
 
 
+def purge_quarantined_pool_vms(comms_client, vm_type: str = "ubuntu") -> dict:
+    """Delete quarantined pool VMs so replenish can create fresh replacements."""
+    resp = comms_client.post(
+        "/infra/vm/pool/purge-quarantined",
+        params={"vm_type": vm_type},
+        timeout=120,
+    )
+    assert (
+        resp.status_code == 200
+    ), f"purge-quarantined failed: {resp.status_code} {resp.text}"
+    return resp.json()
+
+
+def assign_pool_vm_with_cold_start(
+    comms_client,
+    payload: dict,
+    *,
+    poll=poll_until,
+    timeout: float = 600,
+    interval: float = 15,
+):
+    """Assign a pool VM, tolerating cold-start when the warm idle pool is empty.
+
+    With ``POOL_TARGET_IDLE=0``, ``/infra/vm/pool/assign`` returns 503 and kicks
+    replenish when no idle VM is claimable. Callers that need a VM immediately
+    must poll through that deferred-retry window (and clear quarantined VMs that
+    would otherwise block slot reuse).
+    """
+    vm_type = str(payload.get("vm_type") or "ubuntu")
+    purge_quarantined_pool_vms(comms_client, vm_type=vm_type)
+
+    last_resp = None
+
+    def _attempt():
+        nonlocal last_resp
+        last_resp = comms_client.post(
+            "/infra/vm/pool/assign",
+            json=payload,
+            timeout=120,
+        )
+        if last_resp.status_code == 200:
+            return last_resp
+        if last_resp.status_code == 503 and "No idle" in last_resp.text:
+            # Assign already triggers demand-aware replenish; keep polling until
+            # the newly provisioned VM becomes claimable.
+            return None
+        raise AssertionError(
+            f"VM assign failed: {last_resp.status_code} {last_resp.text}",
+        )
+
+    return poll(
+        _attempt,
+        timeout=timeout,
+        interval=interval,
+        description=(
+            f"cold-start pool assign for assistant "
+            f"{payload.get('assistant_id')} ({vm_type})"
+        ),
+        failure_snapshot=lambda: {
+            "last_status": getattr(last_resp, "status_code", None),
+            "last_body": getattr(last_resp, "text", None),
+            "payload": payload,
+        },
+    )
+
+
 @dataclass
 class JobTracker:
     """Tracks created Jobs and cleans them up via the correct authority."""

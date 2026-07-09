@@ -51,6 +51,7 @@ from .conftest import (
     get_assistant_session,
     list_assigned_vms,
     list_jobs_with_assistant_id,
+    purge_quarantined_pool_vms,
     start_real_job,
     wait_for_assistant_runtime_stopped,
 )
@@ -248,6 +249,11 @@ def test_delete_assistant_runtime_cleanup_completes(
         ), f"Pub/Sub topic {topic_name} was not created during assistant setup"
         print(f"\n[Setup] Pub/Sub topic {topic_name} confirmed ✓")
 
+        has_gce = gce_client is not None
+        if has_gce:
+            # Clear quarantined VMs so cold-start replenish can reuse pool slots.
+            purge_quarantined_pool_vms(comms, vm_type="ubuntu")
+
         start_real_job(comms, assistant)
 
         poll(
@@ -258,12 +264,13 @@ def test_delete_assistant_runtime_cleanup_completes(
         )
         print(f"[Setup] K8s job confirmed running for assistant {agent_id} ✓")
 
-        has_gce = gce_client is not None
         if has_gce:
+            # With POOL_TARGET_IDLE=0, assignment waits on cold-start replenish
+            # (provision + boot) rather than claiming a warm idle VM.
             poll(
                 lambda: bool(list_assigned_vms(gce_client, agent_id)),
-                timeout=120,
-                interval=10,
+                timeout=600,
+                interval=15,
                 description=f"Pool VM to be assigned to assistant {agent_id}",
             )
             print(f"[Setup] Pool VM assigned to assistant {agent_id} ✓")
