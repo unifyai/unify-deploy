@@ -61,7 +61,7 @@ steps:
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
     echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8}"
     SYSTEM_SHAS=""
-    for repo in orchestra console unify-deploy docs; do
+    for repo in orchestra console docs; do
       SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/$${repo}.git refs/heads/main | cut -f1)
       SYSTEM_SHAS="$${SYSTEM_SHAS}$${SHA:0:12}-"
     done
