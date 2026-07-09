@@ -44,13 +44,13 @@ def _comms_base_url() -> str:
     ).rstrip("/")
 
 
-def _bundle_api_url(*, org_id: int | None, assistant_id: int | None) -> str:
+def _bundle_api_url(*, assistant_id: int, binding_id: str | None) -> str:
     params = urlencode(
         {
             key: value
             for key, value in {
-                "org_id": org_id,
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
             }.items()
             if value is not None
         },
@@ -58,20 +58,23 @@ def _bundle_api_url(*, org_id: int | None, assistant_id: int | None) -> str:
     return f"{_comms_base_url()}/infra/client-bundle?{params}"
 
 
-def _admin_headers() -> dict[str, str]:
-    admin_key = (os.environ.get("ORCHESTRA_ADMIN_KEY") or "").strip()
-    if not admin_key:
+def _auth_headers() -> dict[str, str]:
+    # Authenticate as this assistant, not with the platform admin key. Comms
+    # verifies this UNIFY_KEY against the assistant's own AssistantSession, so a
+    # pod can only fetch the bundle mapped to its own assistant.
+    unify_key = (os.environ.get("UNIFY_KEY") or "").strip()
+    if not unify_key:
         return {}
-    return {"Authorization": f"Bearer {admin_key}"}
+    return {"Authorization": f"Bearer {unify_key}"}
 
 
 def fetch_bundle_metadata(
     *,
-    org_id: int | None,
-    assistant_id: int | None,
+    assistant_id: int,
+    binding_id: str | None = None,
 ) -> dict:
-    url = _bundle_api_url(org_id=org_id, assistant_id=assistant_id)
-    response = httpx.get(url, headers=_admin_headers(), timeout=30.0)
+    url = _bundle_api_url(assistant_id=assistant_id, binding_id=binding_id)
+    response = httpx.get(url, headers=_auth_headers(), timeout=30.0)
     response.raise_for_status()
     return response.json()
 
@@ -106,6 +109,7 @@ def ensure_client_bundle(
     team_ids: list[int] | None,
     user_id: str | None,
     assistant_id: int | None,
+    binding_id: str | None = None,
 ) -> BundleTarget | None:
     """Fetch and unpack the client bundle when running in bundled mode."""
 
@@ -121,11 +125,20 @@ def ensure_client_bundle(
     if target is None:
         return None
 
+    if assistant_id is None:
+        # The bundle endpoint authorizes per assistant session, so a concrete
+        # assistant id is required to fetch. A blank-slate assistant with no
+        # mapped target returns above; reaching here without an id is a bug.
+        raise ValueError("assistant_id is required to fetch a client bundle")
+
     existing_root = client_deployment_root()
     if existing_root is not None and existing_root.is_dir():
         return target
 
-    metadata = fetch_bundle_metadata(org_id=org_id, assistant_id=assistant_id)
+    metadata = fetch_bundle_metadata(
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+    )
     signed_url = metadata["signed_url"]
     sha256 = metadata["sha256"]
     client_name = metadata.get("client_name", target.client_name)

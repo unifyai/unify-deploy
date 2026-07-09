@@ -17,12 +17,25 @@ from common.settings import SETTINGS
 
 
 @pytest.fixture
-def client():
-    from communication.infra.views import router
+def client(monkeypatch):
+    from communication.infra.views import assistant_self_router, router
+
+    # Self-scoped routes authorize with admin-or-assistant; set a known admin
+    # key and send it by default so these logic-focused tests hit the admin
+    # short-circuit rather than the per-assistant session lookup.
+    monkeypatch.setattr(
+        SETTINGS,
+        "orchestra_admin_key",
+        "TEST-ADMIN-KEY",
+        raising=False,
+    )
 
     app = FastAPI()
     app.include_router(router, prefix="/infra")
-    return TestClient(app)
+    app.include_router(assistant_self_router, prefix="/infra")
+    test_client = TestClient(app)
+    test_client.headers.update({"Authorization": "Bearer TEST-ADMIN-KEY"})
+    return test_client
 
 
 @pytest.fixture(autouse=True)

@@ -132,7 +132,9 @@ from common.settings import SETTINGS
 from communication.dependencies import (
     authenticate_user_api_key,
     authenticate_vm_identity,
+    authorize_admin_or_assistant,
     extract_api_key,
+    verify_assistant_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,6 +207,45 @@ async def _publish_desktop_ready(
 router = APIRouter()
 router.include_router(task_activation_router)
 router.include_router(dashboard_actions_router)
+
+# Routes a pod may call for its OWN assistant are attached to
+# ``assistant_self_router`` (defined in ``self_router`` to avoid import cycles).
+# It is mounted at /infra without the blanket admin dependency; each route calls
+# authorize_admin_or_assistant, which accepts the platform admin key
+# (control-plane callers) or the assistant's own UNIFY_KEY verified against its
+# AssistantSession (self-scoped).
+from communication.infra.self_router import assistant_self_router
+
+
+async def _assert_job_owned_by_assistant(
+    *,
+    job_name: str,
+    assistant_id: int,
+) -> None:
+    """Reject a label patch for a job the caller's session does not own."""
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        str(assistant_id),
+    )
+    if session is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active AssistantSession for the requested assistant.",
+        )
+    owned_job = str(binding_job_ref(session_binding(session)).get("name", "") or "")
+    if owned_job != job_name:
+        raise HTTPException(
+            status_code=403,
+            detail="Job does not belong to the authenticated assistant session.",
+        )
 
 
 def _parse_desktop_required_form(
@@ -935,11 +976,13 @@ async def delete_kubernetes_job(
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
-@router.patch("/job/labels")
+@assistant_self_router.patch("/job/labels")
 async def patch_kubernetes_job_labels(
+    request: Request,
     job_name: str = Form(...),
     labels: str = Form(...),
     namespace: str = Form(SETTINGS.default_namespace),
+    assistant_id: int | None = Form(None),
 ):
     """
     Patch labels on an existing Kubernetes Job.
@@ -948,7 +991,25 @@ async def patch_kubernetes_job_labels(
         job_name: Name of the job (required)
         labels: JSON-encoded dict of labels to set (required)
         namespace: Kubernetes namespace (optional, defaults to production/staging)
+        assistant_id: Owning assistant id (required for non-admin callers).
+
+    Auth: platform admin key (control-plane) or the owning assistant's
+    UNIFY_KEY. A self-scoped caller may only patch its own bound Job.
     """
+    caller = await authorize_admin_or_assistant(
+        request,
+        assistant_id=assistant_id if assistant_id is not None else -1,
+    )
+    if not caller.is_admin:
+        if assistant_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="assistant_id is required for non-admin callers.",
+            )
+        await _assert_job_owned_by_assistant(
+            job_name=job_name,
+            assistant_id=int(assistant_id),
+        )
     try:
         parsed_labels = json.loads(labels)
 
@@ -1591,9 +1652,15 @@ def _persist_assistant_session_stop_request(
     return updated, current_binding_id
 
 
-@router.post("/session/{assistant_id}/stop")
-async def stop_current_assistant_session(assistant_id: str):
-    """Declare that the assistant runtime should stop."""
+@assistant_self_router.post("/session/{assistant_id}/stop")
+async def stop_current_assistant_session(assistant_id: str, request: Request):
+    """Declare that the assistant runtime should stop.
+
+    Auth: platform admin key (control-plane) or the assistant's own UNIFY_KEY.
+    A self-scoped caller may only stop its own session.
+    """
+
+    await authorize_admin_or_assistant(request, assistant_id=assistant_id)
 
     causal_token = push_causal_context(
         build_causal_context(
@@ -1987,12 +2054,35 @@ async def get_latest_unity_image_commit():
         )
 
 
-@router.get("/client-bundle")
+# The client-bundle endpoint is defined on ``tunnel_router`` (per-assistant
+# auth), not the admin-gated ``router`` -- see ``get_client_bundle_signed_url``
+# below. This keeps a leaked platform admin key from fetching other tenants'
+# bundles: a caller can only obtain the bundle for the assistant whose
+# ``UNIFY_KEY`` it holds.
+
+
+# =============================================================================
+# Tunnel Management Endpoints (user API key auth, not admin key)
+# =============================================================================
+
+tunnel_router = APIRouter()
+
+
+@tunnel_router.get("/client-bundle")
 async def get_client_bundle_signed_url(
-    org_id: int | None = None,
-    assistant_id: int | None = None,
+    request: Request,
+    assistant_id: int,
+    binding_id: str | None = None,
 ):
-    """Return a short-lived signed URL for the client deployment bundle."""
+    """Return a short-lived signed URL for the assistant's client bundle.
+
+    Authenticated as the assistant's own session: the caller's ``UNIFY_KEY``
+    must match the bootstrap secret of the ``AssistantSession`` for
+    *assistant_id* (see :func:`verify_assistant_session`). The bundle target is
+    resolved from the server-verified identity, so a caller can only fetch the
+    bundle mapped to the assistant whose key it holds -- a leaked platform admin
+    key is useless here, and ``org_id`` is never taken from the client.
+    """
 
     from datetime import timedelta
 
@@ -2000,9 +2090,18 @@ async def get_client_bundle_signed_url(
         resolve_client_bundle_target,
     )
 
-    target = resolve_client_bundle_target(
-        org_id=org_id,
+    api_key = extract_api_key(request)
+    identity = await verify_assistant_session(
+        api_key=api_key,
         assistant_id=assistant_id,
+        requested_binding_id=binding_id,
+    )
+
+    target = resolve_client_bundle_target(
+        org_id=identity.org_id,
+        team_ids=identity.team_ids or None,
+        user_id=identity.user_id,
+        assistant_id=identity.assistant_id,
     )
     if target is None:
         raise HTTPException(
@@ -2050,13 +2149,6 @@ async def get_client_bundle_signed_url(
         "signed_url": signed_url,
         "expires_in": 300,
     }
-
-
-# =============================================================================
-# Tunnel Management Endpoints (user API key auth, not admin key)
-# =============================================================================
-
-tunnel_router = APIRouter()
 
 
 @tunnel_router.post("/tunnel/register", response_model=TunnelRegisterResponse)
@@ -2723,8 +2815,8 @@ async def _resolve_release_vm_name(
     return vm_name, None
 
 
-@router.post("/vm/pool/release")
-async def release_pool_endpoint(request: PoolReleaseRequest):
+@assistant_self_router.post("/vm/pool/release")
+async def release_pool_endpoint(request: PoolReleaseRequest, request_fastapi: Request):
     """Start guest cleanup for a pool VM release.
 
     The VM transitions to ``releasing`` immediately so it is no longer
@@ -2734,7 +2826,15 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
     being returned to idle. Product callers should pass ``job_name`` or
     ``vm_name`` so Comms can verify that the cleanup request still owns the
     current runtime before releasing anything.
+
+    Auth: platform admin key (control-plane) or the assistant's own UNIFY_KEY,
+    self-scoped to the requested assistant + binding.
     """
+    await authorize_admin_or_assistant(
+        request_fastapi,
+        assistant_id=request.assistant_id,
+        requested_binding_id=request.binding_id,
+    )
     try:
         resolved_vm_name, skipped = await _resolve_release_vm_name(request)
         if skipped is not None:
@@ -3249,13 +3349,17 @@ async def prune_terminal_assistant_sessions(
     }
 
 
-@router.post("/runtime/{assistant_id}/request-desktop")
-async def request_desktop_binding_endpoint(assistant_id: str):
+@assistant_self_router.post("/runtime/{assistant_id}/request-desktop")
+async def request_desktop_binding_endpoint(assistant_id: str, request: Request):
     """Promote a voice-only activation to require managed desktop binding.
 
     Used after a voice call reaches ``ready_to_speak`` so VM assignment and
     file sync run off the call-connect critical path.
+
+    Auth: platform admin key (control-plane) or the assistant's own UNIFY_KEY.
     """
+    await authorize_admin_or_assistant(request, assistant_id=assistant_id)
+
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     session = await asyncio.to_thread(
         get_assistant_session,

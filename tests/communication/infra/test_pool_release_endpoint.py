@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from common.settings import SETTINGS
+
 
 def _views_module():
     import communication.infra.views as views_module
@@ -11,11 +13,17 @@ def _views_module():
 
 
 def _client() -> TestClient:
-    from communication.infra.views import router
+    from communication.infra.views import assistant_self_router, router
 
+    # /vm/pool/release is now a self-scoped route; send the admin key so the
+    # admin short-circuit applies (these tests target release logic, not auth).
+    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
     app = FastAPI()
     app.include_router(router, prefix="/infra")
-    return TestClient(app)
+    app.include_router(assistant_self_router, prefix="/infra")
+    test_client = TestClient(app)
+    test_client.headers.update({"Authorization": "Bearer TEST-ADMIN-KEY"})
+    return test_client
 
 
 def test_release_endpoint_resolves_job_name_to_current_vm():

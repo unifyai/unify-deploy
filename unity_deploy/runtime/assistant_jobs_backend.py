@@ -70,18 +70,26 @@ def mark_job_label(
 ) -> bool:
     """Patch the K8s Job unity-status label via the communication service.
 
+    Authenticates as this assistant (its own ``UNIFY_KEY``); Comms self-scopes
+    the patch to the caller's bound Job, so the assistant id is always sent.
     Returns True on success, False on failure or if config is missing.
     """
     comms_url = SETTINGS.conversation.COMMS_URL.rstrip("/")
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-    if not comms_url or not admin_key:
+    unify_key = SESSION_DETAILS.unify_key
+    if assistant_id is None:
+        assistant_id = (
+            str(SESSION_DETAILS.assistant.agent_id)
+            if SESSION_DETAILS.assistant.agent_id is not None
+            else None
+        )
+    if not comms_url or not unify_key:
         LOGGER.debug(
-            f"{ICONS['assistant_jobs']} [assistant_jobs] Skipping label update: COMMS_URL or admin key not configured",
+            f"{ICONS['assistant_jobs']} [assistant_jobs] Skipping label update: COMMS_URL or UNIFY_KEY not configured",
         )
         return False
     ok = patch_job_label(
         comms_url,
-        admin_key,
+        unify_key,
         job_name,
         status,
         assistant_id,
@@ -215,12 +223,14 @@ def mark_job_done(
     assistant_id_value = SESSION_DETAILS.assistant.agent_id
     assistant_id = str(assistant_id_value) if assistant_id_value is not None else ""
     comms_url = SETTINGS.conversation.COMMS_URL.rstrip("/")
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+    # Lifecycle calls authenticate as this assistant (its own UNIFY_KEY), which
+    # Comms self-scopes to this session; no platform admin key on the pod.
+    unify_key = SESSION_DETAILS.unify_key
 
-    if shutdown_reason == "idle_timeout" and comms_url and admin_key and assistant_id:
-        stop_assistant_session(comms_url, admin_key, assistant_id)
+    if shutdown_reason == "idle_timeout" and comms_url and unify_key and assistant_id:
+        stop_assistant_session(comms_url, unify_key, assistant_id)
 
-    mark_job_label(job_name, "done")
+    mark_job_label(job_name, "done", assistant_id=assistant_id)
 
     # U9: session duration (log_job_startup -> mark_job_done), excluding idle tail
     if _session_start_perf is not None:
@@ -235,7 +245,7 @@ def mark_job_done(
     # Release pool VM if applicable (managed VM, not user's own desktop)
     if (
         comms_url
-        and admin_key
+        and unify_key
         and SESSION_DETAILS.assistant.desktop_mode in ("windows", "ubuntu")
     ):
         binding_id = SESSION_DETAILS.assistant.binding_id
@@ -248,7 +258,7 @@ def mark_job_done(
             return
         release_pool_vm(
             comms_url,
-            admin_key,
+            unify_key,
             assistant_id,
             binding_id,
             job_name=job_name,
