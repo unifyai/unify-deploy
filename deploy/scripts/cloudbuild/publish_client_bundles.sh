@@ -3,7 +3,7 @@ set -euo pipefail
 
 ENVIRONMENT="${1:-staging}"
 BUCKET="${UNITY_CLIENT_BUNDLE_BUCKET:-unity-client-bundles}"
-SHA="$(git rev-parse HEAD)"
+SHA="${2:-$(git rev-parse HEAD)}"
 CLIENTS=(
   client_alpha
   clientepsilon_homes
