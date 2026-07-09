@@ -371,10 +371,10 @@ steps:
     cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash.txt
   waitFor: ['deploy-comms', 'reconcile-deployment']
 
-- name: 'gcr.io/cloud-builders/bash'
+- name: 'gcr.io/cloud-builders/gsutil'
   id: 'publish-client-bundles'
   entrypoint: 'bash'
-  args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'production']
+  args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'production', '${COMMIT_SHA}']
   waitFor: ['resolve-unity-sha']
 
   # --- Single idle-pool refresh (authoritative) ---------------------------
