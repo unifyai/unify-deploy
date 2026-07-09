@@ -28,6 +28,7 @@ from adapters.helpers import (
     check_contact_details,
     dispatch_unity_start_intent,
     replenish_idle_pool,
+    revoke_ms_teams_bot_install,
     start_unity_job,
 )
 from common.settings import SETTINGS
@@ -1173,3 +1174,54 @@ def test_dialed_leg_waits_in_silence():
     twiml = str(create_conference_response("conf-1", ringback=False))
     assert 'waitUrl=""' in twiml
     assert "ring-tone" not in twiml
+
+
+# --- revoke_ms_teams_bot_install tests ---
+
+
+def _ms_teams_removed_activity(tenant_id="tenant-1"):
+    """A conversationUpdate carrying the bot itself in membersRemoved."""
+    return {
+        "type": "conversationUpdate",
+        "recipient": {"id": "28:bot-app-id"},
+        "membersRemoved": [{"id": "28:bot-app-id"}],
+        "channelData": {"tenant": {"id": tenant_id}},
+    }
+
+
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.get")
+def test_revoke_ms_teams_bot_install_deletes_resolved_install(mock_get, mock_delete):
+    """Bot removed from a tenant → resolve the install then DELETE it."""
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"id": 77})
+    mock_delete.return_value = MagicMock(status_code=200)
+
+    revoke_ms_teams_bot_install(_ms_teams_removed_activity(tenant_id="tenant-9"))
+
+    mock_get.assert_called_once()
+    get_kwargs = mock_get.call_args.kwargs
+    assert get_kwargs["params"] == {"tenant_id": "tenant-9"}
+    mock_delete.assert_called_once()
+    assert mock_delete.call_args.args[0].endswith("/admin/ms-teams-bot/install/77")
+
+
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.get")
+def test_revoke_ms_teams_bot_install_no_tenant_is_noop(mock_get, mock_delete):
+    """No tenant id on the activity → nothing to resolve or revoke."""
+    revoke_ms_teams_bot_install({"type": "conversationUpdate", "channelData": {}})
+
+    mock_get.assert_not_called()
+    mock_delete.assert_not_called()
+
+
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.get")
+def test_revoke_ms_teams_bot_install_unknown_install_is_noop(mock_get, mock_delete):
+    """No live install for the tenant (404) → no DELETE attempted."""
+    mock_get.return_value = MagicMock(status_code=404, json=lambda: {})
+
+    revoke_ms_teams_bot_install(_ms_teams_removed_activity())
+
+    mock_get.assert_called_once()
+    mock_delete.assert_not_called()

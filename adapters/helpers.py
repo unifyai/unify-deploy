@@ -741,6 +741,60 @@ def ensure_ms_teams_bot_pending_install(activity: dict) -> None:
     )
 
 
+def revoke_ms_teams_bot_install(activity: dict) -> None:
+    """Soft-revoke the install when the bot is removed from a tenant.
+
+    Teams sends a ``conversationUpdate`` carrying the bot itself in
+    ``membersRemoved`` when the app is uninstalled from the tenant. We hold
+    no per-tenant token to revoke at Microsoft, so mirroring that removal
+    into Orchestra (marking the install revoked, dropping routes) is the only
+    teardown we can perform — it stops inbound routing to a bot that is no
+    longer installed.
+    """
+    channel_data = activity.get("channelData") or {}
+    tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
+    if not tenant_id:
+        return
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    try:
+        resp = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/ms-teams-bot/install",
+            params={"tenant_id": tenant_id},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception(
+            "ms_teams_bot: failed to resolve install for tenant %s",
+            tenant_id,
+        )
+        return
+    if resp.status_code == 404:
+        return
+    if resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot GET install failed: {resp.status_code} {resp.text}",
+        )
+        return
+    install_id = (resp.json() or {}).get("id")
+    if not install_id:
+        return
+    try:
+        del_resp = requests.delete(
+            f"{SETTINGS.orchestra_url}/admin/ms-teams-bot/install/{install_id}",
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("ms_teams_bot: failed to revoke install %s", install_id)
+        return
+    if del_resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot DELETE install {install_id} failed: "
+            f"{del_resp.status_code} {del_resp.text}",
+        )
+
+
 def resolve_ms_teams_bot_inbound(activity: dict) -> dict | None:
     """Route a Teams ``message`` activity via Orchestra.
 
