@@ -62,6 +62,8 @@ from .vm_config import (
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     pool_vm_name_prefix,
+    pool_vm_name_prefixes,
+    POOL_RETIRED_ENV_SUFFIXES,
     POOL_ASSISTANT_ARCHIVE_BUCKET,
     POOL_ASSISTANT_DISK_IDLE_HOURS,
     POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
@@ -937,50 +939,104 @@ def _pool_hostname(vm_type: str, n: int) -> str:
     )
 
 
-def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
-    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"
-    if not vm_name.startswith(prefix):
-        return None
-    number_text = vm_name[len(prefix) :]
-    if SETTINGS.env_suffix:
-        if not number_text.endswith(SETTINGS.env_suffix):
-            return None
-        number_text = number_text[: -len(SETTINGS.env_suffix)]
-    try:
-        return int(number_text)
-    except ValueError:
-        return None
+def _pool_name_env_suffixes() -> tuple[str, ...]:
+    """Env suffixes this controller may parse for pool VM/IP names.
+
+    Always includes the live suffix. Retired suffixes (e.g. ``-preview``) are
+    included so orphan reclaim can clean up network resources from deleted
+    environments that no longer have a controller of their own.
+    """
+    suffixes = [SETTINGS.env_suffix]
+    for retired in POOL_RETIRED_ENV_SUFFIXES:
+        if retired not in suffixes:
+            suffixes.append(retired)
+    return tuple(suffixes)
 
 
-def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
-    vm_number = _pool_vm_number(vm_name, vm_type)
-    if vm_number is None:
-        return f"{vm_name}.{DOMAIN_SUFFIX}"
-    return _pool_hostname(vm_type, vm_number)
+def _parse_pool_vm_identity(
+    vm_name: str,
+    vm_type: str | None = None,
+) -> Optional[tuple[str, str, int, str]]:
+    """Parse ``(prefix, vm_type, number, env_suffix)`` from a pool VM name.
 
-
-def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
-    for vm_type in ("ubuntu", "windows"):
-        if vm_name.startswith(f"{pool_vm_name_prefix(vm_type)}-{vm_type}-"):
-            return vm_type
+    Recognizes live and historical prefixes plus the live and retired env
+    suffixes. Returns ``None`` for names that are not pool VMs, or that belong
+    to a still-active foreign env (e.g. staging names when running in prod).
+    """
+    types = (vm_type,) if vm_type else ("ubuntu", "windows")
+    for candidate_type in types:
+        for prefix in pool_vm_name_prefixes(candidate_type):
+            head = f"{prefix}-{candidate_type}-"
+            if not vm_name.startswith(head):
+                continue
+            remainder = vm_name[len(head) :]
+            for env_suffix in _pool_name_env_suffixes():
+                number_text = remainder
+                if env_suffix:
+                    if not number_text.endswith(env_suffix):
+                        continue
+                    number_text = number_text[: -len(env_suffix)]
+                elif any(
+                    number_text.endswith(other)
+                    for other in ("-staging",) + POOL_RETIRED_ENV_SUFFIXES
+                    if other
+                ):
+                    # Bare production names must not swallow active staging
+                    # (or retired) suffixes as part of the numeric id.
+                    continue
+                try:
+                    return prefix, candidate_type, int(number_text), env_suffix
+                except ValueError:
+                    continue
     return None
 
 
-def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
-    vm_number = _pool_vm_number(vm_name, vm_type)
-    if vm_number is None:
+def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
         return None
-    return _pool_ip_name(vm_type, vm_number)
+    return parsed[2]
+
+
+def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
+        return f"{vm_name}.{DOMAIN_SUFFIX}"
+    prefix, _, vm_number, env_suffix = parsed
+    return f"{prefix}-{vm_type}-{vm_number}{env_suffix}.{DOMAIN_SUFFIX}"
+
+
+def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
+    parsed = _parse_pool_vm_identity(vm_name)
+    if parsed is None:
+        return None
+    return parsed[1]
+
+
+def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
+    parsed = _parse_pool_vm_identity(vm_name, vm_type)
+    if parsed is None:
+        return None
+    prefix, _, vm_number, env_suffix = parsed
+    return f"{prefix}-{vm_type}-ip-{vm_number}{env_suffix}"
+
+
+def _pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
+    """Map a pool static-IP name to its VM name, including historical aliases."""
+    for prefix in pool_vm_name_prefixes(vm_type):
+        head = f"{prefix}-{vm_type}-ip-"
+        if not ip_name.startswith(head):
+            continue
+        vm_name = ip_name.replace("-ip-", "-", 1)
+        if _parse_pool_vm_identity(vm_name, vm_type) is None:
+            return None
+        return vm_name
+    return None
 
 
 def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
-    prefix = f"{pool_vm_name_prefix(vm_type)}-{vm_type}-ip-"
-    if not ip_name.startswith(prefix):
-        return None
-    vm_name = ip_name.replace("-ip-", "-", 1)
-    if _pool_vm_number(vm_name, vm_type) is None:
-        return None
-    return vm_name
+    """Backward-compatible alias for :func:`_pool_vm_name_from_ip_name`."""
+    return _pool_vm_name_from_ip_name(ip_name, vm_type)
 
 
 def _assistant_disk_name(assistant_id: str) -> str:
@@ -2643,7 +2699,13 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
 
 def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
-    """Delete old reserved pool IPs and stale DNS for missing current-env VMs."""
+    """Delete old reserved pool IPs and stale DNS for missing pool VMs.
+
+    Reclaims network resources for the live env suffix and retired suffixes
+    (e.g. ``-preview``), including historical name prefixes such as
+    ``droid-pool-*``. Active foreign-env names (staging vs production) are
+    left for that env's controller.
+    """
 
     instance_client = compute_v1.InstancesClient()
     address_client = compute_v1.AddressesClient()
@@ -2663,7 +2725,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
         region=SETTINGS.vm_region,
     ):
         ip_name = str(getattr(address, "name", "") or "")
-        vm_name = _current_env_pool_vm_name_from_ip_name(ip_name, vm_type)
+        vm_name = _pool_vm_name_from_ip_name(ip_name, vm_type)
         if not vm_name:
             continue
         if str(getattr(address, "status", "") or "") != "RESERVED":

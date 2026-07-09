@@ -99,15 +99,29 @@ POOL_VM_CONTRACT_GENERATION = os.getenv(
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
 POOL_VM_NAME_PREFIX = "unity-pool"
-# The Ubuntu pool was migrated to unity-pool-*, but the Windows pool VMs, static
-# IPs, and DNS records are still unity-pool-* (not migrated), so the live name
-# prefix is per OS family.
+# Live Windows pool VMs/IPs/DNS also use unity-pool-* (same as Ubuntu).
 WINDOWS_POOL_VM_NAME_PREFIX = "unity-pool"
+# Historical prefixes that may still own reserved IPs/DNS after renames.
+# Orphan reclaim must recognize these; new provisioning uses the live prefix.
+POOL_VM_NAME_PREFIX_ALIASES: tuple[str, ...] = ("unity-pool", "droid-pool")
+# Retired env suffixes with no controller of their own. Both prod and staging
+# reclaimers may delete leftover network resources for these suffixes.
+POOL_RETIRED_ENV_SUFFIXES: tuple[str, ...] = ("-preview",)
 
 
 def pool_vm_name_prefix(vm_type: str) -> str:
     """Return the live pool VM name prefix for the given OS family."""
     return WINDOWS_POOL_VM_NAME_PREFIX if vm_type == "windows" else POOL_VM_NAME_PREFIX
+
+
+def pool_vm_name_prefixes(vm_type: str) -> tuple[str, ...]:
+    """Live prefix first, then historical aliases (deduped)."""
+    live = pool_vm_name_prefix(vm_type)
+    prefixes = [live]
+    for alias in POOL_VM_NAME_PREFIX_ALIASES:
+        if alias not in prefixes:
+            prefixes.append(alias)
+    return tuple(prefixes)
 
 
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
