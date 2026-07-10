@@ -714,19 +714,21 @@ def _post_ms_teams_bot(path: str, body: dict) -> dict | None:
     return resp.json()
 
 
-def ensure_ms_teams_bot_pending_install(activity: dict) -> None:
+def ensure_ms_teams_bot_pending_install(activity: dict) -> dict | None:
     """Record a pending (unbound) install when the bot is added to a tenant.
 
     Captures ``serviceUrl`` (required for every future outbound call) so the
     tenant-to-org bind handshake can complete later without another inbound
-    round-trip.
+    round-trip. Returns Orchestra's install response (carrying ``bind_nonce``
+    and a one-click ``connect_url``) so the caller can DM the installer the
+    connect link; ``None`` on a missing tenant or transport failure.
     """
     channel_data = activity.get("channelData") or {}
     tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
     if not tenant_id:
-        return
+        return None
     installer = activity.get("from") or {}
-    _post_ms_teams_bot(
+    return _post_ms_teams_bot(
         "/admin/ms-teams-bot/pending-install",
         {
             "tenant_id": tenant_id,
@@ -735,6 +737,166 @@ def ensure_ms_teams_bot_pending_install(activity: dict) -> None:
             "installer_aad_object_id": installer.get("aadObjectId") or "",
         },
     )
+
+
+# The Azure bot is a *single-tenant* registration in Unify's home tenant
+# (``MS365_ADMIN_TENANT_ID``), so Connector tokens are minted from that
+# tenant's authority — not the shared ``botframework.com`` authority. One
+# minted token (valid ~24h) authenticates outbound into every customer tenant
+# the bot is installed in; a tiny process-local cache avoids a mint per send.
+_MS_TEAMS_BOT_CONNECTOR_SCOPE = "https://api.botframework.com/.default"
+_ms_teams_bot_connector_token_cache: dict[str, tuple[str, float]] = {}
+_MS_TEAMS_BOT_TOKEN_SKEW_SECONDS = 300
+
+
+def _mint_ms_teams_bot_connector_token() -> str | None:
+    """Mint (or reuse) a Bot Connector token via client credentials.
+
+    Returns ``None`` (best-effort) when the bot credentials or home tenant are
+    unconfigured, or the mint fails — the welcome DM is a nicety, never a hard
+    dependency of recording the install.
+    """
+    app_id = SETTINGS.ms_teams_bot_app_id or ""
+    app_secret = SETTINGS.ms_teams_bot_app_secret or ""
+    tenant_id = SETTINGS.ms365_admin_tenant_id or ""
+    if not app_id or not app_secret or not tenant_id:
+        logger.warning(
+            "ms_teams_bot: connector token mint skipped — missing app "
+            "credentials or MS365_ADMIN_TENANT_ID",
+        )
+        return None
+
+    cached = _ms_teams_bot_connector_token_cache.get(app_id)
+    now = time.time()
+    if cached is not None and cached[1] - _MS_TEAMS_BOT_TOKEN_SKEW_SECONDS > now:
+        return cached[0]
+
+    try:
+        resp = requests.post(
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": app_id,
+                "client_secret": app_secret,
+                "scope": _MS_TEAMS_BOT_CONNECTOR_SCOPE,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("ms_teams_bot: connector token mint transport error")
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot: connector token mint failed: "
+            f"{resp.status_code} {resp.text}",
+        )
+        return None
+    payload = resp.json() or {}
+    token = payload.get("access_token") or ""
+    if not token:
+        return None
+    expires_in = int(payload.get("expires_in") or 3600)
+    _ms_teams_bot_connector_token_cache[app_id] = (token, now + expires_in)
+    return token
+
+
+def _ms_teams_bot_welcome_card(connect_url: str) -> dict:
+    """Adaptive Card attachment: a one-tap "Connect to Unify" button.
+
+    Tapping ``Connect`` opens Console with the pending install's nonce, which
+    binds the tenant to the signed-in owner — no code to copy.
+    """
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "body": [
+            {
+                "type": "TextBlock",
+                "size": "Medium",
+                "weight": "Bolder",
+                "text": "Thanks for adding Unify to Teams",
+            },
+            {
+                "type": "TextBlock",
+                "wrap": True,
+                "text": (
+                    "One more step: connect this Teams tenant to your Unify "
+                    "account or organization. Tap Connect below and finish in "
+                    "Console — you only do this once."
+                ),
+            },
+        ],
+        "actions": [
+            {
+                "type": "Action.OpenUrl",
+                "title": "Connect to Unify",
+                "url": connect_url,
+            },
+        ],
+    }
+    return {
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "content": card,
+    }
+
+
+def send_ms_teams_bot_install_welcome(
+    activity: dict,
+    install: dict | None,
+) -> None:
+    """Proactively DM the installer a one-click connect link.
+
+    Best-effort: any missing piece (no ``connect_url`` because the install was
+    already bound, no ``service_url``, no connector token, or a send failure)
+    is logged and swallowed so it never breaks the webhook. The connect link
+    itself comes from Orchestra (single source of the Console URL + nonce).
+    """
+    if not install:
+        return
+    connect_url = install.get("connect_url") or ""
+    # A refreshed already-bound install returns no nonce/connect_url; nothing
+    # to invite in that case.
+    if not connect_url:
+        return
+    conversation = activity.get("conversation") or {}
+    conversation_id = conversation.get("id") or ""
+    service_url = (
+        activity.get("serviceUrl") or install.get("service_url") or ""
+    ).rstrip(
+        "/",
+    )
+    if not conversation_id or not service_url:
+        logger.warning(
+            "ms_teams_bot: welcome DM skipped — missing conversation_id or "
+            "service_url",
+        )
+        return
+    token = _mint_ms_teams_bot_connector_token()
+    if not token:
+        return
+    message = {
+        "type": "message",
+        "attachments": [_ms_teams_bot_welcome_card(connect_url)],
+    }
+    try:
+        resp = requests.post(
+            f"{service_url}/v3/conversations/{conversation_id}/activities",
+            json=message,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+    except Exception:
+        logger.exception("ms_teams_bot: welcome DM send transport error")
+        return
+    if resp.status_code >= 400:
+        logger.error(
+            f"ms_teams_bot: welcome DM send failed: {resp.status_code} {resp.text}",
+        )
 
 
 def revoke_ms_teams_bot_install(activity: dict) -> None:

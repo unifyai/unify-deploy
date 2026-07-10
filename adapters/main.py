@@ -213,6 +213,7 @@ from .helpers import (
     slack_message_already_seen,
     resolve_ms_teams_bot_inbound,
     ensure_ms_teams_bot_pending_install,
+    send_ms_teams_bot_install_welcome,
     revoke_ms_teams_bot_install,
     verify_ms_teams_bot_token,
     _strip_ms_teams_bot_mention,
@@ -1811,17 +1812,34 @@ async def ms_teams_bot_messages_webhook(request: Request):
         members_removed = activity.get("membersRemoved") or []
         recipient_id = (activity.get("recipient") or {}).get("id") or ""
         if any(m.get("id") == recipient_id for m in members_added):
-            await asyncio.to_thread(ensure_ms_teams_bot_pending_install, activity)
+            # Personal-scope add: this fires with a live 1:1 conversation
+            # reference, so record the install and DM the installer a
+            # one-click connect link (no code to copy).
+            install = await asyncio.to_thread(
+                ensure_ms_teams_bot_pending_install,
+                activity,
+            )
+            await asyncio.to_thread(
+                send_ms_teams_bot_install_welcome,
+                activity,
+                install,
+            )
         elif any(m.get("id") == recipient_id for m in members_removed):
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}
 
-    # Personal-scope uninstall emits an ``installationUpdate`` rather than a
-    # ``conversationUpdate`` member change. ``remove-upgrade`` is a transient
-    # step during an app upgrade (remove then re-add), not a real disconnect,
-    # so only a plain ``remove`` tears the install down.
+    # ``installationUpdate`` fires for app install/uninstall across scopes.
+    # ``add`` for an org-wide/admin-center install registers the tenant so the
+    # owner can bind it; we do NOT DM here because a personal add already
+    # emits the ``conversationUpdate`` above (double-DM) and an org install may
+    # have no personal 1:1 to message. ``remove`` tears the install down;
+    # ``remove-upgrade`` is a transient app-upgrade step, not a real
+    # disconnect, so it is ignored.
     if activity_type == "installationUpdate":
-        if (activity.get("action") or "") == "remove":
+        action = activity.get("action") or ""
+        if action == "add":
+            await asyncio.to_thread(ensure_ms_teams_bot_pending_install, activity)
+        elif action == "remove":
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}
 
