@@ -19,8 +19,12 @@ from unity_deploy.startup_config import expand_startup_integrations
 
 
 def _load_registry() -> Mapping[str, Any]:
-    from unity_deploy.assistant_deployments.clients import _CLIENT_DEPLOYMENTS
+    from unity_deploy.assistant_deployments.clients import (
+        _CLIENT_DEPLOYMENTS,
+        _ensure_embedded_clients_registered,
+    )
 
+    _ensure_embedded_clients_registered()
     return _CLIENT_DEPLOYMENTS
 
 
