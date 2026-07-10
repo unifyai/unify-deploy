@@ -36,11 +36,13 @@ class ReconcileOperation:
     missing_ok: bool = False
 
 
-def _load_registry() -> Mapping[str, "ClientDeploymentEntry"]:
-    # Importing the clients package self-registers environment-active clients.
-    from unity_deploy.assistant_deployments.clients import _CLIENT_DEPLOYMENTS
+def _load_registry(
+    *,
+    environment: str | None = None,
+) -> Mapping[str, "ClientDeploymentEntry"]:
+    from unity_deploy.deployment_reconcile.registry import load_deployment_registry
 
-    return _CLIENT_DEPLOYMENTS
+    return load_deployment_registry(environment=environment)
 
 
 def build_control_plane_plan(
@@ -51,7 +53,9 @@ def build_control_plane_plan(
     registry: Mapping[str, "ClientDeploymentEntry"] | None = None,
 ) -> list[ReconcileOperation]:
     """Return desired writes for assistant-scoped deployment state."""
-    entries = registry if registry is not None else _load_registry()
+    entries = (
+        registry if registry is not None else _load_registry(environment=environment)
+    )
     assistant_filter = str(assistant_id) if assistant_id is not None else None
     operations: list[ReconcileOperation] = []
 

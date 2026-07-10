@@ -264,7 +264,8 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['apply-unity-external-secrets']
+  # Bundled-mode registry load reads the just-published GCS client tarballs.
+  waitFor: ['apply-unity-external-secrets', 'publish-client-bundles']
 
   # --- Session controller + comms rollout (gated on comms image change) ----
 - name: 'gcr.io/cloud-builders/kubectl'

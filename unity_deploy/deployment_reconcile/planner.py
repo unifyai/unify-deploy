@@ -18,14 +18,10 @@ from unity_deploy.deployment_reconcile.types import (
 from unity_deploy.startup_config import expand_startup_integrations
 
 
-def _load_registry() -> Mapping[str, Any]:
-    from unity_deploy.assistant_deployments.clients import (
-        _CLIENT_DEPLOYMENTS,
-        _ensure_embedded_clients_registered,
-    )
+def _load_registry(*, environment: str | None = None) -> Mapping[str, Any]:
+    from unity_deploy.deployment_reconcile.registry import load_deployment_registry
 
-    _ensure_embedded_clients_registered()
-    return _CLIENT_DEPLOYMENTS
+    return load_deployment_registry(environment=environment)
 
 
 def _hash_payload(payload: Any) -> str:
@@ -115,7 +111,9 @@ def build_deployment_target_plans(
 
     from unity_deploy.assistant_deployments.clients import _spec_to_resolved
 
-    entries = registry if registry is not None else _load_registry()
+    entries = (
+        registry if registry is not None else _load_registry(environment=environment)
+    )
     assistant_filter = str(assistant_id) if assistant_id is not None else None
     plans: list[DeploymentTargetPlan] = []
 
