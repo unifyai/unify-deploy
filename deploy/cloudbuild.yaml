@@ -242,6 +242,15 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['push-overlay']
 
+  # Publish client bundles before reconcile so bundled-mode registry load
+  # can read this commit's tarballs from GCS.
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'publish-client-bundles'
+  entrypoint: 'bash'
+  args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'production', '${COMMIT_SHA}']
+  secretEnv: ['GITHUB_TOKEN']
+  waitFor: ['resolve-unity-sha']
+
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'reconcile-deployment'
   entrypoint: 'bash'
@@ -367,13 +376,6 @@ steps:
     set -euo pipefail
     cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash.txt
   waitFor: ['deploy-comms', 'reconcile-deployment']
-
-- name: 'gcr.io/cloud-builders/gsutil'
-  id: 'publish-client-bundles'
-  entrypoint: 'bash'
-  args: ['deploy/scripts/cloudbuild/publish_client_bundles.sh', 'production', '${COMMIT_SHA}']
-  secretEnv: ['GITHUB_TOKEN']
-  waitFor: ['resolve-unity-sha']
 
   # --- Single idle-pool refresh (authoritative) ---------------------------
   # Runs after comms has taken traffic (manifest-safe), adapters are live,
