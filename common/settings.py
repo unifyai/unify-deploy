@@ -137,10 +137,18 @@ class Settings:
         # App-level (one registration shared across every tenant that
         # installs the Teams app). ``ms_teams_bot_app_id`` is the audience
         # the /ms-teams-bot/messages webhook validates inbound activity JWTs
-        # against; the secret is used only for outbound token minting in the
-        # gateway (not needed here). Per-tenant install state (service_url,
-        # conversation references) lives in Orchestra (ms_teams_bot_installs).
+        # against; ``ms_teams_bot_app_secret`` mints a Bot Connector token for
+        # the one proactive send we originate here — the install-welcome DM
+        # (every other outbound reply is minted+sent by the gateway). The bot
+        # is a single-tenant registration in Unify's home tenant, so the token
+        # is minted from ``ms365_admin_tenant_id``'s authority. Per-tenant
+        # install state (service_url, conversation references) lives in
+        # Orchestra (ms_teams_bot_installs).
         self.ms_teams_bot_app_id: str = os.environ.get("MS_TEAMS_BOT_APP_ID", "")
+        self.ms_teams_bot_app_secret: str = os.environ.get(
+            "MS_TEAMS_BOT_APP_SECRET",
+            "",
+        )
 
         # Cleanup / Workspace integration.  ``workspace_admin_subject`` is
         # the Workspace user we impersonate for Admin SDK Directory calls;

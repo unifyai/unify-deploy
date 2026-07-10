@@ -29,6 +29,7 @@ from adapters.helpers import (
     dispatch_unity_start_intent,
     replenish_idle_pool,
     revoke_ms_teams_bot_install,
+    send_ms_teams_bot_install_welcome,
     start_unity_job,
 )
 from common.settings import SETTINGS
@@ -1240,3 +1241,85 @@ def test_revoke_ms_teams_bot_install_unknown_install_is_noop(mock_get, mock_dele
 
     mock_get.assert_called_once()
     mock_delete.assert_not_called()
+
+
+# --- send_ms_teams_bot_install_welcome tests ---
+
+
+def _ms_teams_added_activity(tenant_id="tenant-1"):
+    return {
+        "type": "conversationUpdate",
+        "recipient": {"id": "28:bot-app-id"},
+        "membersAdded": [{"id": "28:bot-app-id"}],
+        "conversation": {"id": "conv-1"},
+        "serviceUrl": "https://smba.example/",
+        "channelData": {"tenant": {"id": tenant_id}},
+    }
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token", return_value="tok-1")
+def test_send_welcome_posts_connect_card(mock_mint, mock_post):
+    """Happy path: mint a token, POST an Adaptive Card with the connect URL."""
+    mock_post.return_value = MagicMock(status_code=201)
+
+    send_ms_teams_bot_install_welcome(
+        _ms_teams_added_activity(),
+        {"id": 5, "connect_url": "https://console/assistants?ms_teams_bind=abc"},
+    )
+
+    mock_mint.assert_called_once()
+    mock_post.assert_called_once()
+    url = mock_post.call_args.args[0]
+    assert url == "https://smba.example/v3/conversations/conv-1/activities"
+    body = mock_post.call_args.kwargs["json"]
+    card = body["attachments"][0]["content"]
+    action_url = card["actions"][0]["url"]
+    assert action_url == "https://console/assistants?ms_teams_bind=abc"
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token")
+def test_send_welcome_noop_without_install(mock_mint, mock_post):
+    """No install (e.g. transport failure upstream) → nothing to send."""
+    send_ms_teams_bot_install_welcome(_ms_teams_added_activity(), None)
+
+    mock_mint.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token")
+def test_send_welcome_noop_when_already_bound(mock_mint, mock_post):
+    """An already-bound install returns no connect_url → no DM."""
+    send_ms_teams_bot_install_welcome(_ms_teams_added_activity(), {"id": 5})
+
+    mock_mint.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token")
+def test_send_welcome_noop_without_conversation(mock_mint, mock_post):
+    """Missing conversation/service_url → skip before minting a token."""
+    activity = {"type": "conversationUpdate", "channelData": {"tenant": {"id": "t"}}}
+    send_ms_teams_bot_install_welcome(
+        activity,
+        {"id": 5, "connect_url": "https://console/x"},
+    )
+
+    mock_mint.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token", return_value=None)
+def test_send_welcome_noop_without_token(mock_mint, mock_post):
+    """No connector token (unconfigured/mint failed) → no send, no raise."""
+    send_ms_teams_bot_install_welcome(
+        _ms_teams_added_activity(),
+        {"id": 5, "connect_url": "https://console/x"},
+    )
+
+    mock_mint.assert_called_once()
+    mock_post.assert_not_called()
