@@ -1937,17 +1937,16 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
 
     Called by `/scheduled/jobs/create` and by `/scheduled/infra/maintenance`.
 
-    Fill mode has two regimes:
-    - Floor regime (demand_buffer <= min_idle_floor): Creates exactly 1 job per
-      call with no pool size check. This avoids race conditions when multiple
-      webhooks fire concurrently — each sees the same stale inventory and would
-      otherwise over- or under-provision. The hourly cleanup trims the excess.
-    - Demand regime (demand_buffer > min_idle_floor): Checks inventory and fills
-      the gap to the demand-based target. At this scale, small race-induced
-      discrepancies are negligible relative to pool size.
-    - Reactive regime (`extra_demand > 0`): Ensures blocked `PendingJob`
-      sessions can be satisfied immediately while still maintaining the steady
-      warm-pool floor.
+    Every regime gap-fills to ``effective_target`` using current-image-hash
+    idle inventory (``matching_idle_count``), so the warm pool converges to
+    ``max(min_floor, ceil(running / demand_factor))`` rather than overshooting:
+
+    - Refresh (``refresh=True``): ensure ``target`` jobs on the current image
+      hash after an image bump; does not blindly spawn a full new batch on top
+      of existing matching idle. Stale-hash leftovers are removed by cleanup.
+    - Floor / demand regimes: create only the shortfall to target.
+    - Reactive regime (``extra_demand > 0``): satisfy blocked ``PendingJob``
+      sessions while still respecting the same matching-hash gap-fill.
     """
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
@@ -1967,15 +1966,7 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     extra_demand = max(0, int(extra_demand))
     pool_target = get_target_idle_count(running_count)
     effective_target = max(pool_target.target, extra_demand)
-
-    if refresh:
-        num_to_create = effective_target
-    elif extra_demand > 0:
-        num_to_create = max(0, effective_target - matching_idle_count)
-    elif not pool_target.demand_exceeds_floor:
-        num_to_create = 1
-    else:
-        num_to_create = max(0, effective_target - matching_idle_count)
+    num_to_create = max(0, effective_target - matching_idle_count)
 
     pool_counts = {
         "current": current_idle_count,
@@ -2122,10 +2113,12 @@ def cleanup_idle_pool() -> dict:
 
     idle_jobs = {job["job_name"]: job.get("resource_version") for job in matching_jobs}
 
-    # Classify idle jobs by age into three buckets
-    very_new_idle_jobs = []  # < 1 min: always retained, exempt from quota
-    new_idle_jobs = []  # 1–11 min: preferred when filling the quota
-    old_idle_jobs = []  # >= 11 min: used to fill quota if new ones aren't enough
+    # Prefer newer idle jobs, but never retain more than target_retain total.
+    # (Previously very-new jobs were exempt from the quota, which stacked with
+    # hourly refresh creates to ~2x target.)
+    very_new_idle_jobs = []  # < 1 min
+    new_idle_jobs = []  # 1–11 min
+    old_idle_jobs = []  # >= 11 min
     now = datetime.now(timezone.utc)
     for job_name in idle_jobs:
         # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
@@ -2147,22 +2140,20 @@ def cleanup_idle_pool() -> dict:
         else:
             old_idle_jobs.append(job_name)
 
-    # Very-new jobs are unconditionally retained (not counted against the quota).
-    # From the remaining jobs, retain up to target_retain, preferring newer ones.
-    new_idle_jobs = sorted(new_idle_jobs, reverse=True)
-    old_idle_jobs = sorted(old_idle_jobs, reverse=True)
-    retain = list(very_new_idle_jobs)
-    quota_retain = new_idle_jobs[:target_retain]
-    if len(quota_retain) < target_retain:
-        quota_retain += old_idle_jobs[: target_retain - len(quota_retain)]
-    retain += quota_retain
+    candidates = (
+        sorted(very_new_idle_jobs, reverse=True)
+        + sorted(new_idle_jobs, reverse=True)
+        + sorted(old_idle_jobs, reverse=True)
+    )
+    retain = candidates[:target_retain]
     retain_set = set(retain)
 
     to_delete = {j: idle_jobs[j] for j in idle_jobs if j not in retain_set}
     logger.info(
         f"Cleanup: retain={len(retain)} "
-        f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
-        f"target={target_retain}), delete_quota={len(to_delete)}, "
+        f"(very_new={len(very_new_idle_jobs)}, new={len(new_idle_jobs)}, "
+        f"old={len(old_idle_jobs)}, target={target_retain}), "
+        f"delete_quota={len(to_delete)}, "
         f"delete_stale_hash={len(stale_to_delete)}, running={running_count}",
     )
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
