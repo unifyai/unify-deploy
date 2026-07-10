@@ -566,6 +566,66 @@ def test_offline_dispatch_allows_agentic_activation_without_entrypoint():
     )
 
 
+def test_explicit_offline_dispatch_accepts_scheduled_activation():
+    """REST explicit triggers may fire scheduled offline activations."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(
+            source_type="explicit",
+            scheduled_for=None,
+            source_ref="req-rest-1",
+            source_medium="api",
+        ),
+    )
+    activation = _activation(activation_kind="scheduled")
+
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_explicit_offline_dispatch_accepts_triggered_activation():
+    """REST explicit triggers may also fire triggered offline activations."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(
+            source_type="explicit",
+            scheduled_for=None,
+            source_ref="req-rest-2",
+        ),
+    )
+    activation = _activation(
+        activation_kind="triggered",
+        next_due_at=None,
+    )
+
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_triggered_offline_dispatch_rejects_scheduled_activation_kind():
+    """Inbound triggered dispatch still requires activation_kind=triggered."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="triggered", scheduled_for=None),
+    )
+    activation = _activation(activation_kind="scheduled")
+
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        == "activation_kind_changed"
+    )
+
+
 def test_offline_dispatch_rejects_stale_request_entrypoint():
     """A request cannot claim a function when the current activation is agentic."""
 

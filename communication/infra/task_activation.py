@@ -782,9 +782,14 @@ def _validate_current_offline_activation(
 
     if activation is None:
         return "activation_missing"
-    expected_kind = "scheduled" if request.source_type == "scheduled" else "triggered"
-    if activation.get("activation_kind") != expected_kind:
-        return "activation_kind_changed"
+    # Explicit REST triggers may fire any offline activation (scheduled or
+    # triggered). Scheduled/triggered dispatches still require kind match.
+    if request.source_type != "explicit":
+        expected_kind = (
+            "scheduled" if request.source_type == "scheduled" else "triggered"
+        )
+        if activation.get("activation_kind") != expected_kind:
+            return "activation_kind_changed"
     if activation.get("execution_mode") != "offline":
         return "execution_mode_changed"
     if activation.get("activation_revision") != request.activation_revision:
