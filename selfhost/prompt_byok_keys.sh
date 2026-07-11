@@ -233,7 +233,7 @@ ensure_default_chat_model() {
   elif has_env_value ANTHROPIC_API_KEY; then
     model="claude-4.6-sonnet@anthropic"
   elif has_env_value OPENAI_API_KEY; then
-    model="gpt-5.4@openai"
+    model="gpt-5.6-sol@openai"
   else
     return 0
   fi
