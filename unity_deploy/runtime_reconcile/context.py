@@ -18,6 +18,7 @@ class RuntimeIdentity:
     user_id: str
     org_id: int | None = None
     team_ids: tuple[int, ...] = ()
+    owner_team_id: int | None = None
     client_name: str | None = None
     deployment: str | None = None
     api_key: str | None = None
@@ -43,6 +44,7 @@ def runtime_identity_from_session(
         user_id=str(user_id or ""),
         org_id=getattr(session_details, "org_id", None),
         team_ids=tuple(getattr(session_details, "team_ids", None) or ()),
+        owner_team_id=getattr(session_details, "owner_team_id", None),
         client_name=client_name,
         deployment=deployment,
         api_key=api_key,
@@ -71,6 +73,7 @@ def activate_runtime_context(identity: RuntimeIdentity) -> None:
     if (
         current_assistant_id != identity.assistant_id
         or current_user_id != identity.user_id
+        or SESSION_DETAILS.owner_team_id != identity.owner_team_id
     ):
         SESSION_DETAILS.populate(
             agent_id=(
@@ -81,6 +84,7 @@ def activate_runtime_context(identity: RuntimeIdentity) -> None:
             user_id=identity.user_id,
             org_id=identity.org_id,
             team_ids=list(identity.team_ids),
+            owner_team_id=identity.owner_team_id,
         )
     SESSION_DETAILS.unify_key = identity.api_key
     SESSION_DETAILS.export_to_env()

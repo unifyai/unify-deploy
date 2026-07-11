@@ -57,11 +57,17 @@ def _resolve_runtime_identity(item: DeploymentWorkItem):
                 team_ids.append(int(raw))
             except (TypeError, ValueError):
                 continue
+    owner_team_id = info.get("owner_team_id")
+    try:
+        owner_team_id = int(owner_team_id) if owner_team_id is not None else None
+    except (TypeError, ValueError):
+        owner_team_id = None
     return RuntimeIdentity(
         assistant_id=item.target.assistant_id,
         user_id=user_id,
         org_id=org_id,
         team_ids=tuple(team_ids),
+        owner_team_id=owner_team_id,
         client_name=item.target.client_name,
         deployment=item.target.deployment,
         api_key=api_key,

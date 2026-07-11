@@ -18,6 +18,9 @@ spec:
         component: deployment-reconcile
         environment: __ENVIRONMENT__
     spec:
+      # Pipeline-worker SA already has storage.objectAdmin for reading
+      # gs://bucket during bundled-mode registry load.
+      serviceAccountName: unity-pipeline-worker
       restartPolicy: Never
       containers:
       - name: reconciler

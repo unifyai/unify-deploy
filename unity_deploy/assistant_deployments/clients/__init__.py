@@ -511,15 +511,38 @@ def resolve(
 
 _EMBEDDED_CLIENTS_REGISTERED = False
 
+_EMBEDDED_CLIENT_MODULES = (
+    "clientzeta",
+    "clientepsilon_homes",
+    "client_beta",
+    "client_alpha",
+    "unify_company",
+)
+
 
 def _ensure_embedded_clients_registered() -> None:
+    """Import client subpackages so they self-register into ``_CLIENT_DEPLOYMENTS``.
+
+    Runtime images exclude client trees (and ``unify_company`` is a brain
+    submodule symlink that is never pip-installed). Missing modules are
+    skipped so bundled-mode callers can fall back to GCS bundle loading
+    instead of crashing on ``ImportError``.
+    """
+
     global _EMBEDDED_CLIENTS_REGISTERED
     if _EMBEDDED_CLIENTS_REGISTERED:
         return
-    from . import clientzeta  # noqa: F401
-    from . import clientepsilon_homes  # noqa: F401
-    from . import client_beta  # noqa: F401
-    from . import client_alpha  # noqa: F401
-    from . import unify_company  # noqa: F401
+    import importlib
 
+    for name in _EMBEDDED_CLIENT_MODULES:
+        try:
+            importlib.import_module(
+                f"unity_deploy.assistant_deployments.clients.{name}",
+            )
+        except ImportError as exc:
+            logger.warning(
+                "Skipping embedded client '%s' (not installed): %s",
+                name,
+                exc,
+            )
     _EMBEDDED_CLIENTS_REGISTERED = True

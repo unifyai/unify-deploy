@@ -100,7 +100,7 @@ class OfflineTaskDispatchRequest(BaseModel):
     activation_revision: str
     execution_mode: Literal["offline"] = "offline"
     entrypoint: Optional[int] = None
-    source_type: Literal["scheduled", "triggered"] = "scheduled"
+    source_type: Literal["scheduled", "triggered", "explicit"] = "scheduled"
     scheduled_for: Optional[datetime] = None
     source_ref: Optional[str] = None
     source_medium: Optional[str] = None
