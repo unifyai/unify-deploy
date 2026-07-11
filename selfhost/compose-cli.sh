@@ -28,12 +28,41 @@ log_ok() { echo -e "${GREEN}✓${NC} $1"; }
 log_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 log_err() { echo -e "${RED}✗${NC} $1" >&2; }
 
+_env_value() {
+  local key="$1"
+  grep -E "^${key}=" "$ENV_FILE" 2>/dev/null \
+    | tail -1 \
+    | cut -d= -f2- \
+    | tr -d '\r'
+}
+
+_enabled() {
+  case "$(_env_value "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+compose_profile_args() {
+  if _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    || _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    printf '%s\n' --profile internal-comms
+  fi
+  if _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    printf '%s\n' --profile internal-calls
+  fi
+}
+
 # Compose gives the caller's shell environment precedence over --env-file
 # values during ${VAR} interpolation, so stray exports (direnv, dotfiles, CI)
 # would silently override the stack's secrets. Run compose under a minimal
 # environment so $ENV_FILE is the single source of truth; keep only PATH,
 # HOME (docker CLI config), TERM, and Docker connectivity settings.
 compose() {
+  local profile_args=()
+  while IFS= read -r argument; do
+    [[ -n "$argument" ]] && profile_args+=("$argument")
+  done < <(compose_profile_args)
   env -i \
     PATH="$PATH" \
     HOME="$HOME" \
@@ -43,7 +72,8 @@ compose() {
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
     ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+      "${profile_args[@]}" "$@"
 }
 
 require_compose() {
@@ -62,14 +92,191 @@ require_compose() {
   fi
 }
 
+validate_optional_profiles() {
+  if ! _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    && ! _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    return 0
+  fi
+
+  local twilio_file="$COMPOSE_DIR/comms_twilio.env"
+  local gmail_file="$COMPOSE_DIR/comms_sa.json"
+  local main_sid_configured=false
+  local main_token_configured=false
+  local main_twilio_configured=false
+  local wa_sid_configured=false
+  local wa_token_configured=false
+  local wa_twilio_configured=false
+  local gmail_configured=false
+  if [[ -s "$twilio_file" ]] \
+    && grep -qE '^TWILIO_ACCOUNT_SID=.+$' "$twilio_file"; then
+    main_sid_configured=true
+  fi
+  if [[ -s "$twilio_file" ]] \
+    && grep -qE '^TWILIO_AUTH_TOKEN=.+$' "$twilio_file"; then
+    main_token_configured=true
+  fi
+  if [[ -s "$twilio_file" ]] \
+    && grep -qE '^TWILIO_WA_ACCOUNT_SID=.+$' "$twilio_file"; then
+    wa_sid_configured=true
+  fi
+  if [[ -s "$twilio_file" ]] \
+    && grep -qE '^TWILIO_WA_AUTH_TOKEN=.+$' "$twilio_file"; then
+    wa_token_configured=true
+  fi
+  if [[ "$main_sid_configured" == "true" && "$main_token_configured" == "true" ]]; then
+    main_twilio_configured=true
+  fi
+  if [[ "$wa_sid_configured" == "true" && "$wa_token_configured" == "true" ]]; then
+    wa_twilio_configured=true
+  fi
+  if [[ "$main_sid_configured" != "$main_token_configured" ]]; then
+    log_err "Twilio main account SID/token must be configured as a complete pair"
+    return 1
+  fi
+  if [[ "$wa_sid_configured" != "$wa_token_configured" ]]; then
+    log_err "Twilio WhatsApp SID/token must be configured as a complete pair"
+    return 1
+  fi
+  if [[ -s "$gmail_file" ]] \
+    && grep -q '"client_email"[[:space:]]*:' "$gmail_file" \
+    && grep -q '"private_key"[[:space:]]*:' "$gmail_file"; then
+    gmail_configured=true
+  fi
+  if _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    if [[ "$main_twilio_configured" != "true" ]]; then
+      log_err "Internal calls need main-account Twilio credentials in $twilio_file"
+      return 1
+    fi
+    if [[ "$wa_twilio_configured" != "true" ]]; then
+      log_err "Internal calls need WhatsApp Twilio credentials in $twilio_file"
+      return 1
+    fi
+    local key
+    for key in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET LIVEKIT_SIP_URI; do
+      if ! _has_env "$key"; then
+        log_err "Internal calls require $key in $ENV_FILE"
+        return 1
+      fi
+    done
+  else
+    if [[ "$gmail_configured" != "true" ]]; then
+      log_err "Internal comms without calls requires Gmail credentials at $gmail_file"
+      return 1
+    fi
+  fi
+}
+
+release_owned_webhooks() {
+  if ! _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    && ! _enabled SELF_HOST_INTERNAL_CALLS_ENABLED \
+    && ! compose ps -a --services 2>/dev/null \
+      | awk '$0=="comms-bridge" || $0=="call-controller"{found=1} END{exit !found}'; then
+      return 0
+  fi
+  log_info "Releasing this installation's communications callbacks..."
+  compose run --rm --no-deps call-controller --release
+}
+
+stop_disabled_profile_services() {
+  if ! _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    if compose ps -a --services 2>/dev/null \
+      | awk '$0=="call-controller"{found=1} END{exit !found}'; then
+      if ! compose run --rm --no-deps call-controller --release-voice; then
+        log_err "Refusing to disable internal calls because voice release failed"
+        return 1
+      fi
+    fi
+    compose stop call-controller call-tunnel call-proxy >/dev/null 2>&1 || true
+    compose rm -f call-controller call-tunnel call-proxy >/dev/null 2>&1 || true
+  fi
+  if ! _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    && ! _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    if compose ps -a --services 2>/dev/null \
+      | awk '$0=="comms-bridge"{found=1} END{exit !found}'; then
+      if ! compose run --rm --no-deps call-controller --release-text; then
+        log_err "Refusing to disable internal comms because callback release failed"
+        return 1
+      fi
+    fi
+    compose stop comms-bridge >/dev/null 2>&1 || true
+    compose rm -f comms-bridge comms-runtime-init >/dev/null 2>&1 || true
+  fi
+}
+
+rollback_failed_start() {
+  log_warn "Rolling back failed stack startup..."
+  if ! release_owned_webhooks; then
+    log_err "Webhook release failed; leaving the call edge running to avoid dead callbacks"
+    return 1
+  fi
+  compose down || true
+}
+
+verify_optional_profiles() {
+  local container_id health attempt
+  if _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    container_id="$(compose ps -q call-controller)"
+    [[ -n "$container_id" ]] || {
+      log_err "Call controller was not created"
+      return 1
+    }
+    for attempt in $(seq 1 60); do
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+      case "$health" in
+        healthy) log_ok "Internal call edge acquired"; break ;;
+        exited|dead|unhealthy)
+          log_err "Call controller failed before acquiring the call edge"
+          return 1
+          ;;
+      esac
+      sleep 2
+    done
+    if [[ "$health" != "healthy" ]]; then
+      log_err "Timed out waiting for the internal call edge"
+      return 1
+    fi
+  fi
+  if _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    || _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    container_id="$(compose ps -q comms-bridge)"
+    [[ -n "$container_id" ]] || {
+      log_err "Internal communications bridge was not created"
+      return 1
+    }
+    health=""
+    for attempt in $(seq 1 60); do
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+      case "$health" in
+        healthy) log_ok "Internal communications bridge acquired"; return 0 ;;
+        exited|dead|unhealthy)
+          log_err "Internal communications bridge failed before acquiring callbacks"
+          return 1
+          ;;
+      esac
+      sleep 2
+    done
+    log_err "Timed out waiting for the internal communications bridge"
+    return 1
+  fi
+}
+
 cmd_up() {
   require_compose
   if declare -F stack_state_refuse_if_source_active >/dev/null 2>&1; then
     stack_state_refuse_if_source_active || return 1
   fi
+  validate_optional_profiles || return 1
+  stop_disabled_profile_services || return 1
   mkdir -p "$(grep -E '^UNITY_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Unity/Local")"
   log_info "Starting Unity self-host stack..."
-  compose up -d "$@"
+  if ! compose up -d "$@"; then
+    rollback_failed_start
+    return 1
+  fi
+  if ! verify_optional_profiles; then
+    rollback_failed_start
+    return 1
+  fi
   if [[ $# -eq 0 ]]; then
     if _has_env COMPOSIO_API_KEY; then
       log_info "Builtins catalogue seed runs in the background (~30 min with Composio); Console is ready now"
@@ -104,6 +311,10 @@ cmd_builtins_sync() {
 cmd_down() {
   require_compose
   if [[ "${1:-}" == "--full" ]]; then
+    if ! release_owned_webhooks; then
+      log_err "Refusing full shutdown because callback ownership release failed"
+      return 1
+    fi
     log_info "Stopping all services..."
     compose down
   else
@@ -116,14 +327,33 @@ cmd_down() {
 
 cmd_restart() {
   require_compose
+  validate_optional_profiles || return 1
+  if ! release_owned_webhooks; then
+    log_err "Refusing restart because callback ownership release failed"
+    return 1
+  fi
+  stop_disabled_profile_services || return 1
   log_info "Recreating stack with updated .env..."
-  compose up -d --force-recreate
+  if ! compose up -d --force-recreate; then
+    rollback_failed_start
+    return 1
+  fi
+  if ! verify_optional_profiles; then
+    rollback_failed_start
+    return 1
+  fi
   log_info "Builtins catalogue seed runs in the background — unity stack logs unity-builtins-seed"
   log_ok "Restart complete"
 }
 
 cmd_status() {
   require_compose
+  if _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    || _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    log_info "Internal communications profile enabled"
+  else
+    log_info "Internal communications profiles disabled"
+  fi
   compose ps
 }
 
@@ -139,12 +369,14 @@ _has_env() {
 
 cmd_doctor() {
   require_compose
+  local doctor_ok=true
   echo -e "${BOLD}Self-host compose doctor${NC}"
   echo "========================"
   if docker info >/dev/null 2>&1; then
     log_ok "Docker daemon running"
   else
     log_err "Docker daemon not running"
+    doctor_ok=false
   fi
   if [[ -f "$ENV_FILE" ]]; then
     log_ok ".env present"
@@ -154,12 +386,14 @@ cmd_doctor() {
         log_ok "Secret configured ($key)"
       else
         log_err "Missing installer secret: $key — re-run install or set manually"
+        doctor_ok=false
       fi
     done
     if _has_env OPENAI_API_KEY || _has_env ANTHROPIC_API_KEY || _has_env DEEPSEEK_API_KEY; then
       log_ok "LLM provider key configured"
     else
       log_err "Missing LLM key — set OPENAI_API_KEY, ANTHROPIC_API_KEY, or DEEPSEEK_API_KEY"
+      doctor_ok=false
     fi
     if _has_env OPENAI_API_KEY; then
       log_ok "OpenAI key present (chat and tool-search embeddings)"
@@ -176,8 +410,20 @@ cmd_doctor() {
     else
       log_info "COMPOSIO_API_KEY not set — third-party app integrations disabled (optional)"
     fi
+    if _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+      || _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+      if validate_optional_profiles; then
+        log_ok "Internal communications credentials configured"
+      else
+        log_err "Internal communications profile configuration invalid"
+        doctor_ok=false
+      fi
+    else
+      log_info "Internal communications profiles disabled (default)"
+    fi
   else
     log_err ".env missing at $ENV_FILE"
+    doctor_ok=false
   fi
   local seed_status
   seed_status="$(compose ps -a --format '{{.Service}}\t{{.State}}\t{{.ExitCode}}' 2>/dev/null \
@@ -206,7 +452,35 @@ cmd_doctor() {
       log_info "Builtins catalogue seed not started — run: unity stack builtins-sync"
       ;;
   esac
+  if _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
+    || _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    local bridge_id bridge_health
+    bridge_id="$(compose ps -q comms-bridge)"
+    bridge_health=""
+    if [[ -n "$bridge_id" ]]; then
+      bridge_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$bridge_id" 2>/dev/null || true)"
+    fi
+    if [[ "$bridge_health" == "healthy" ]]; then
+      log_ok "Internal communications bridge healthy"
+    else
+      log_warn "Internal communications bridge is not healthy (${bridge_health:-not started})"
+    fi
+  fi
+  if _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
+    local controller_id controller_health
+    controller_id="$(compose ps -q call-controller)"
+    controller_health=""
+    if [[ -n "$controller_id" ]]; then
+      controller_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$controller_id" 2>/dev/null || true)"
+    fi
+    if [[ "$controller_health" == "healthy" ]]; then
+      log_ok "Internal call edge healthy"
+    else
+      log_warn "Internal call edge is not healthy (${controller_health:-not started})"
+    fi
+  fi
   compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
+  [[ "$doctor_ok" == "true" ]]
 }
 
 cmd_pull() {

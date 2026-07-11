@@ -11,6 +11,7 @@
 #   ./scripts/prompt_byok_keys.sh --non-interactive   # skip prompts (CI)
 #
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
@@ -90,6 +91,31 @@ read_env_value() {
   grep -E "^${key}=" "$ENV_FILE" | head -1 | sed 's/^[^=]*=//'
 }
 
+write_env_value() {
+  local file="$1"
+  local key="$2"
+  local val="$3"
+  local temporary="${file}.$$"
+  local replaced=false line
+
+  : >"$temporary"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$key="* ]]; then
+      if [[ "$replaced" == "false" ]]; then
+        printf '%s=%s\n' "$key" "$val" >>"$temporary"
+        replaced=true
+      fi
+    else
+      printf '%s\n' "$line" >>"$temporary"
+    fi
+  done <"$file"
+  if [[ "$replaced" == "false" ]]; then
+    printf '%s=%s\n' "$key" "$val" >>"$temporary"
+  fi
+  chmod 0600 "$temporary"
+  mv "$temporary" "$file"
+}
+
 upsert_env() {
   local key="$1"
   local val="$2"
@@ -98,25 +124,7 @@ upsert_env() {
   if [[ ! -f "$ENV_FILE" ]]; then
     touch "$ENV_FILE"
   fi
-  if grep -qE "^${key}=" "$ENV_FILE"; then
-    python3 - "$ENV_FILE" "$key" "$val" <<'PYEOF'
-import sys, re
-path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path) as f:
-    lines = f.readlines()
-pat = re.compile(rf'^{re.escape(key)}=')
-for i, line in enumerate(lines):
-    if pat.match(line):
-        lines[i] = f'{key}={val}\n'
-        break
-else:
-    lines.append(f'{key}={val}\n')
-with open(path, 'w') as f:
-    f.writelines(lines)
-PYEOF
-  else
-    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
-  fi
+  write_env_value "$ENV_FILE" "$key" "$val"
 }
 
 prompt_secret() {
@@ -397,7 +405,11 @@ _calls_enabled() {
 }
 
 livekit_cloud_file() {
-  printf '%s' "${SELF_HOST_LIVEKIT_CLOUD_FILE:-$UNITY_HOME/livekit_cloud.env}"
+  if compose_install_mode; then
+    printf '%s' "$ENV_FILE"
+  else
+    printf '%s' "${SELF_HOST_LIVEKIT_CLOUD_FILE:-$UNITY_HOME/livekit_cloud.env}"
+  fi
 }
 
 file_has_key() {
@@ -414,26 +426,7 @@ upsert_file_kv() {
     touch "$file"
     chmod 600 "$file" 2>/dev/null || true
   fi
-  if grep -qE "^${key}=" "$file" 2>/dev/null; then
-    python3 - "$file" "$key" "$val" <<'PYEOF'
-import re
-import sys
-path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path) as f:
-    lines = f.readlines()
-pat = re.compile(rf'^{re.escape(key)}=')
-for i, line in enumerate(lines):
-    if pat.match(line):
-        lines[i] = f'{key}={val}\n'
-        break
-else:
-    lines.append(f'{key}={val}\n')
-with open(path, 'w') as f:
-    f.writelines(lines)
-PYEOF
-  else
-    printf '%s=%s\n' "$key" "$val" >>"$file"
-  fi
+  write_env_value "$file" "$key" "$val"
 }
 
 prompt_to_file() {
@@ -550,7 +543,7 @@ compose_install_mode() {
 }
 
 main() {
-  if ! _looks_like_unity_repo "$UNITY_REPO"; then
+  if ! _looks_like_unify_repo "$UNITY_REPO"; then
     if compose_install_mode; then
       log_info "Compose install — configuring $ENV_FILE"
     else

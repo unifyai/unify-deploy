@@ -3,6 +3,7 @@
 # install-compose.sh — Stranger install via prebuilt Docker Compose images
 # =============================================================================
 set -euo pipefail
+umask 077
 
 # This installer lives in unity-deploy/selfhost/. Run from a unity-deploy
 # checkout it copies the local compose bundle; the remote fallback targets the
@@ -16,6 +17,7 @@ UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
 CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
 CREATE_CLI=true
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+INSTALLED_COMPOSE_CLI=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -81,16 +83,58 @@ fetch_remote() {
 }
 
 install_compose_bundle() {
-  mkdir -p "$UNITY_HOME"
+  mkdir -p -m 0700 "$UNITY_HOME"
+  chmod 0700 "$UNITY_HOME"
   mkdir -p "${UNITY_HOME}/workspace"
-  local file
-  for file in docker-compose.yml Caddyfile .env.example ensure-pubsub-topics.sh cm-entrypoint.sh desktop-entrypoint.sh publish-desktop-ready.sh integration-bootstrap.selfhost.toml README.md; do
+  local files=(
+    docker-compose.yml
+    Caddyfile
+    call-proxy.Caddyfile
+    coordinator.env
+    .env.example
+    ensure-pubsub-topics.sh
+    cm-entrypoint.sh
+    gateway-entrypoint.sh
+    desktop-entrypoint.sh
+    publish-desktop-ready.sh
+    comms-bridge-entrypoint.sh
+    call-controller-entrypoint.sh
+    load-comms-secrets.sh
+    comms_ingress_bridge.py
+    provision_call_sip.py
+    sync_comms_webhooks.py
+    integration-bootstrap.selfhost.toml
+    README.md
+  )
+  local seen="|" file
+  for file in "${files[@]}"; do
+    if [[ "$seen" == *"|${file}|"* ]]; then
+      log_err "Compose bundle collision: $file appears more than once"
+      return 1
+    fi
+    seen+="${file}|"
+    if [[ -e "$UNITY_HOME/$file" && ! -f "$UNITY_HOME/$file" ]]; then
+      log_err "Refusing to replace non-file bundle path: $UNITY_HOME/$file"
+      return 1
+    fi
     if [[ -n "$SELFHOST_SRC" && -f "$SELFHOST_SRC/$file" ]]; then
       cp "$SELFHOST_SRC/$file" "$UNITY_HOME/$file"
     else
       fetch_remote "deploy/selfhost/$file" "$UNITY_HOME/$file"
     fi
   done
+  chmod 0644 \
+    "$UNITY_HOME/docker-compose.yml" \
+    "$UNITY_HOME/Caddyfile" \
+    "$UNITY_HOME/call-proxy.Caddyfile" \
+    "$UNITY_HOME/.env.example" \
+    "$UNITY_HOME/comms_ingress_bridge.py" \
+    "$UNITY_HOME/provision_call_sip.py" \
+    "$UNITY_HOME/sync_comms_webhooks.py" \
+    "$UNITY_HOME/integration-bootstrap.selfhost.toml" \
+    "$UNITY_HOME/README.md"
+  chmod 0600 "$UNITY_HOME/coordinator.env"
+  chmod 0755 "$UNITY_HOME"/*.sh
   if [[ ! -f "$UNITY_HOME/.env" ]]; then
     cp "$UNITY_HOME/.env.example" "$UNITY_HOME/.env"
     # Expand ${HOME} for workspace path
@@ -98,6 +142,17 @@ install_compose_bundle() {
       sed -i '' "s|\${HOME}|$HOME|g" "$UNITY_HOME/.env"
     rm -f "$UNITY_HOME/.env.bak"
   fi
+  for file in comms_twilio.env comms_sa.json; do
+    if [[ -e "$UNITY_HOME/$file" && ! -f "$UNITY_HOME/$file" ]]; then
+      log_err "Refusing secret path collision: $UNITY_HOME/$file"
+      return 1
+    fi
+    touch "$UNITY_HOME/$file"
+  done
+  chmod 0600 \
+    "$UNITY_HOME/.env" \
+    "$UNITY_HOME/comms_twilio.env" \
+    "$UNITY_HOME/comms_sa.json"
   log_ok "Compose bundle installed to $UNITY_HOME"
 }
 
@@ -105,65 +160,49 @@ upsert_env_value() {
   local env_file="$1"
   local key="$2"
   local val="$3"
-  python3 - "$env_file" "$key" "$val" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-key, val = sys.argv[2], sys.argv[3]
-lines = path.read_text().splitlines() if path.exists() else []
-pat = re.compile(rf"^{re.escape(key)}=")
-replaced = False
-for i, line in enumerate(lines):
-    if pat.match(line):
-        lines[i] = f"{key}={val}"
-        replaced = True
-        break
-if not replaced:
-    lines.append(f"{key}={val}")
-path.write_text("\n".join(lines) + "\n")
-PY
+  local temporary="${env_file}.$$"
+  local replaced=false line
+  : >"$temporary"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$key="* ]]; then
+      if [[ "$replaced" == "false" ]]; then
+        printf '%s=%s\n' "$key" "$val" >>"$temporary"
+        replaced=true
+      fi
+    else
+      printf '%s\n' "$line" >>"$temporary"
+    fi
+  done <"$env_file"
+  if [[ "$replaced" == "false" ]]; then
+    printf '%s=%s\n' "$key" "$val" >>"$temporary"
+  fi
+  chmod 0600 "$temporary"
+  mv "$temporary" "$env_file"
 }
 
 normalize_env_file() {
   local env_file="$1"
   [[ -f "$env_file" ]] || return 0
-  python3 - "$env_file" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-secret_keys = {
-    "POSTGRES_PASSWORD",
-    "ORCHESTRA_ADMIN_KEY",
-    "NEXTAUTH_SECRET",
-    "JWT_SECRET",
-}
-lines = path.read_text().splitlines()
-seen: dict[str, tuple[int, str]] = {}
-out: list[str] = []
-
-for line in lines:
-    if "=" in line and not line.strip().startswith("#"):
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if key in seen:
-            idx, kept = seen[key]
-            if value and not kept:
-                out[idx] = f"{key}={value}"
-                seen[key] = (idx, value)
-            continue
-        if key in secret_keys and not value:
-            continue
-        seen[key] = (len(out), value)
-        out.append(line)
-    else:
-        out.append(line)
-
-path.write_text("\n".join(out) + ("\n" if out else ""))
-PY
+  local temporary="${env_file}.$$"
+  awk '
+    function is_secret(key) {
+      return key == "POSTGRES_PASSWORD" ||
+        key == "ORCHESTRA_ADMIN_KEY" ||
+        key == "NEXTAUTH_SECRET" ||
+        key == "JWT_SECRET"
+    }
+    /^[[:space:]]*#/ || index($0, "=") == 0 { print; next }
+    {
+      key = $0
+      sub(/=.*/, "", key)
+      value = substr($0, index($0, "=") + 1)
+      if (is_secret(key) && value == "") next
+      if (seen[key]++) next
+      print
+    }
+  ' "$env_file" >"$temporary"
+  chmod 0600 "$temporary"
+  mv "$temporary" "$env_file"
 }
 
 generate_secrets() {
@@ -206,12 +245,13 @@ run_byok_wizard() {
 }
 
 create_compose_cli() {
-  [[ "$CREATE_CLI" == "true" ]] || return 0
   local compose_cli="${SCRIPT_DIR:+$SCRIPT_DIR/compose-cli.sh}"
   if [[ -z "$compose_cli" || ! -f "$compose_cli" ]]; then
     compose_cli="$UNITY_HOME/compose-cli.sh"
     fetch_remote "selfhost/compose-cli.sh" "$compose_cli"
   fi
+  INSTALLED_COMPOSE_CLI="$compose_cli"
+  [[ "$CREATE_CLI" == "true" ]] || return 0
   mkdir -p "$CLI_DIR"
   local shim="$CLI_DIR/unify"
   cat > "$shim" <<EOF
@@ -279,6 +319,18 @@ EOF
 # would silently override the stack's secrets. Run compose under a minimal
 # environment so $UNITY_HOME/.env is the single source of truth.
 compose_cmd() {
+  local profile_args=()
+  local comms_enabled calls_enabled
+  comms_enabled="$(grep -E '^SELF_HOST_INTERNAL_COMMS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  calls_enabled="$(grep -E '^SELF_HOST_INTERNAL_CALLS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  case "$comms_enabled:$calls_enabled" in
+    1:*|true:*|yes:*|on:*|*:1|*:true|*:yes|*:on)
+      profile_args+=(--profile internal-comms)
+      ;;
+  esac
+  case "$calls_enabled" in
+    1|true|yes|on) profile_args+=(--profile internal-calls) ;;
+  esac
   env -i \
     PATH="$PATH" \
     HOME="$HOME" \
@@ -288,7 +340,8 @@ compose_cmd() {
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
     ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
-    docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" "$@"
+    docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" \
+      "${profile_args[@]}" "$@"
 }
 
 verify_orchestra_seed() {
@@ -323,7 +376,10 @@ pull_and_start() {
   log_info "Pulling images (first run may take several minutes)..."
   compose_cmd pull
   log_info "Starting stack..."
-  compose_cmd up -d
+  if ! UNITY_HOME="$UNITY_HOME" bash "$INSTALLED_COMPOSE_CLI" up; then
+    log_err "Stack startup failed and was rolled back"
+    return 1
+  fi
   verify_orchestra_seed
   start_composio_catalog_sync
   log_ok "Stack started"
