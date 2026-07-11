@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-import os
 import sys
 import types
 from functools import lru_cache
@@ -42,57 +41,35 @@ def _ensure_namespace_package(name: str, path: Path | None = None) -> types.Modu
 def _register_bundle_package(client_name: str, root: Path) -> None:
     """Expose the unpacked bundle under the canonical client import path.
 
-    Registers the full package tree so ``@custom_function`` bodies can
-    ``from unity_deploy.assistant_deployments.clients.{client}...._impl import …``
-    after GCS unpack (P1). Parent namespaces are created as needed.
+    Extends ``clients.__path__`` so Python discovers the client package on disk
+    and executes real ``__init__.py`` files. Empty stubs must not be pre-
+    registered: they shadow package exports such as ``_impl.DATA_DIR`` and
+    break ``@custom_function`` absolute imports after GCS unpack.
     """
 
-    _ensure_namespace_package("unity_deploy")
-    _ensure_namespace_package("unity_deploy.assistant_deployments")
-    clients_pkg = _ensure_namespace_package(
-        "unity_deploy.assistant_deployments.clients",
-    )
-    if str(root.parent) not in getattr(clients_pkg, "__path__", []):
-        # Keep clients.__path__ pointing at a real directory when possible.
-        clients_dir = root.parent
-        if clients_dir.is_dir():
-            clients_pkg.__path__ = [str(clients_dir)]
+    try:
+        import unity_deploy.assistant_deployments.clients as clients_pkg
+    except ImportError:
+        _ensure_namespace_package("unity_deploy")
+        _ensure_namespace_package("unity_deploy.assistant_deployments")
+        clients_pkg = _ensure_namespace_package(
+            "unity_deploy.assistant_deployments.clients",
+        )
+
+    clients_dir = root.parent
+    if clients_dir.is_dir():
+        existing = list(getattr(clients_pkg, "__path__", []))
+        if str(clients_dir) not in existing:
+            clients_pkg.__path__ = [str(clients_dir), *existing]
 
     client_pkg = f"unity_deploy.assistant_deployments.clients.{client_name}"
-    if client_pkg not in sys.modules:
-        module = types.ModuleType(client_pkg)
-        init_path = root / "__init__.py"
-        module.__file__ = str(init_path if init_path.exists() else root)
-        module.__path__ = [str(root)]
-        module.__package__ = client_pkg
-        sys.modules[client_pkg] = module
-
-    # Walk the unpacked tree and register every package directory so absolute
-    # imports into ``...functions._impl.*`` resolve without pip-installing the
-    # client into site-packages.
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if d != "__pycache__" and not d.startswith(".")
-        ]
-        rel = Path(dirpath).relative_to(root)
-        if rel == Path("."):
-            continue
-        if "__init__.py" not in filenames and not any(
-            (Path(dirpath) / d / "__init__.py").exists() for d in dirnames
-        ):
-            # Skip non-package data dirs (guidance/, knowledge/, …).
-            if "__init__.py" not in filenames:
-                continue
-        parts = rel.parts
-        pkg_name = ".".join((client_pkg, *parts))
-        if pkg_name in sys.modules:
-            continue
-        pkg = types.ModuleType(pkg_name)
-        init_file = Path(dirpath) / "__init__.py"
-        pkg.__file__ = str(init_file if init_file.exists() else Path(dirpath))
-        pkg.__path__ = [dirpath]
-        pkg.__package__ = pkg_name
-        sys.modules[pkg_name] = pkg
+    stale = [
+        name
+        for name in sys.modules
+        if name == client_pkg or name.startswith(f"{client_pkg}.")
+    ]
+    for name in stale:
+        del sys.modules[name]
 
 
 def _load_get_deployment(deployment_dir: Path, *, client_name: str):

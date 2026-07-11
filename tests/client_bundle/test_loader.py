@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 import tarfile
 from pathlib import Path
 
 import pytest
 
-from unity_deploy.client_bundle.loader import resolve_from_bundle
+from unity_deploy.client_bundle.loader import (
+    _register_bundle_package,
+    resolve_from_bundle,
+)
 
 
 @pytest.fixture
@@ -39,4 +44,32 @@ def test_resolve_from_bundle_client_alpha_v2(client_alpha_bundle):
     )
     assert resolved is not None
     assert resolved.guidance_dirs
-    assert any(path.name == "guidance" for path in resolved.guidance_dirs)
+    assert any("client_alpha" in str(path) for path in resolved.guidance_dirs)
+
+
+def test_register_bundle_package_executes_real_init(tmp_path):
+    """Registration must not stub packages — real ``__init__.py`` exports load."""
+
+    client_name = "marker_client"
+    root = tmp_path / client_name
+    impl = root / "deployments" / "default" / "functions" / "_impl"
+    impl.mkdir(parents=True)
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    (root / "deployments" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "deployments" / "default" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "deployments" / "default" / "functions" / "__init__.py").write_text(
+        "",
+        encoding="utf-8",
+    )
+    (impl / "__init__.py").write_text("MARKER = 'from-real-init'\n", encoding="utf-8")
+
+    client_pkg = f"unity_deploy.assistant_deployments.clients.{client_name}"
+    for name in list(sys.modules):
+        if name == client_pkg or name.startswith(f"{client_pkg}."):
+            del sys.modules[name]
+
+    _register_bundle_package(client_name, root)
+    loaded = importlib.import_module(
+        f"{client_pkg}.deployments.default.functions._impl",
+    )
+    assert loaded.MARKER == "from-real-init"
