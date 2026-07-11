@@ -86,6 +86,8 @@ _ASSISTANT_UPDATE_STRING_FIELDS = {
     "voice_id",
     "default_model",
     "default_reasoning_effort",
+    "slow_brain_model",
+    "slow_brain_reasoning_effort",
     "desktop_mode",
 }
 
