@@ -145,27 +145,40 @@ def _get_cleanup_tasks(agent_id: str) -> list[dict]:
     return []
 
 
-def _redrive_cleanup_tasks() -> None:
+def _redrive_cleanup_tasks(agent_id: str) -> None:
     """Nudge Orchestra to process pending AssistantCleanupTask rows.
 
     DELETE schedules cleanup as a FastAPI BackgroundTask. On Cloud Run with
     CPU throttling, that task can stall with ``attempt_count=0`` after the
     response returns. The admin process endpoint re-drives the durable queue.
+
+    Non-200 responses are treated as transient: Orchestra claims with
+    ``SKIP LOCKED``, so overlapping redrives should usually return 200, but
+    network blips must not fail the poll predicate.
     """
     resp = requests.post(
         f"{ORCHESTRA_URL}/admin/cleanup/assistant-runtime",
+        params={"assistant_id": agent_id},
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=60,
     )
-    assert (
-        resp.status_code == 200
-    ), f"cleanup redrive failed: {resp.status_code} {resp.text}"
+    if resp.status_code != 200:
+        print(
+            f"[Cleanup] redrive returned {resp.status_code} "
+            f"(treating as transient): {resp.text[:300]}",
+        )
 
 
 def _cleanup_task_completed(agent_id: str) -> bool:
-    if any(t.get("status") == "completed" for t in _get_cleanup_tasks(agent_id)):
+    tasks = _get_cleanup_tasks(agent_id)
+    if any(t.get("status") == "completed" for t in tasks):
         return True
-    _redrive_cleanup_tasks()
+    # An in-flight claim is owned by another worker; wait rather than
+    # hammering the queue. Stalled pre-claim work stays ``pending`` and is
+    # redriven below.
+    if any(t.get("status") == "processing" for t in tasks):
+        return False
+    _redrive_cleanup_tasks(agent_id)
     return any(t.get("status") == "completed" for t in _get_cleanup_tasks(agent_id))
 
 
