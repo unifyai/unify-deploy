@@ -86,6 +86,61 @@ def test_offline_dispatch_skips_stale_activation():
     }
 
 
+def test_explicit_offline_dispatch_skips_orchestra_activation_lookup():
+    """Explicit REST triggers must not re-fetch the activation Orchestra just resolved."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(
+            source_type="explicit",
+            scheduled_for=None,
+            source_ref="req-rest-skip-lookup",
+            source_medium="api",
+            entrypoint=777,
+            task_name="Daily summary",
+            task_description="Send the daily summary email.",
+        ),
+    )
+
+    with patch(
+        "communication.infra.task_activation._lookup_current_task_activation",
+    ) as mock_lookup:
+        activation = task_activation._resolve_offline_dispatch_activation(request)
+
+    mock_lookup.assert_not_called()
+    assert activation is not None
+    assert activation["activation_revision"] == "rev-123"
+    assert activation["entrypoint"] == 777
+    assert activation["source_task_log_id"] == 555
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_scheduled_offline_dispatch_still_looks_up_current_activation():
+    """Delayed scheduled deliveries still re-check the current Orchestra activation."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    current = _activation()
+
+    with patch(
+        "communication.infra.task_activation._lookup_current_task_activation",
+        return_value=current,
+    ) as mock_lookup:
+        activation = task_activation._resolve_offline_dispatch_activation(request)
+
+    mock_lookup.assert_called_once_with(
+        assistant_id="assistant-123",
+        task_id=101,
+        destination=None,
+    )
+    assert activation is current
+
+
 def test_offline_dispatch_launches_job_for_current_activation():
     """Valid offline deliveries should create/adopt a run and launch a headless job."""
 
