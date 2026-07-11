@@ -8,9 +8,10 @@ set -euo pipefail
 SELF_HOST_RUNTIME_OWNER_SERVICE="service"
 SELF_HOST_RUNTIME_OWNER_STACK="stack"
 
-# Directory of this script (selfhost/), used to locate sibling helpers such as
-# the Gmail ingress bridge.
+# Canonical packaged helpers live under deploy/selfhost so source and Compose
+# installs execute the same implementation.
 _SELF_HOST_RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+_SELF_HOST_PACKAGED_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_RUNTIME_DIR/../deploy/selfhost}"
 
 self_host_runtime_state_file() {
   printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
@@ -130,7 +131,7 @@ self_host_comms_bridge_log_file() {
 }
 
 self_host_comms_bridge_script() {
-  printf '%s/comms_ingress_bridge.py' "$_SELF_HOST_RUNTIME_DIR"
+  printf '%s/comms_ingress_bridge.py' "$_SELF_HOST_PACKAGED_DIR"
 }
 
 # Configured = at least one channel is set: a Gmail SA + Coordinator mailbox
@@ -213,7 +214,7 @@ self_host_tunnel_url_file() {
 }
 
 self_host_sync_comms_script() {
-  printf '%s/sync_comms_webhooks.py' "$_SELF_HOST_RUNTIME_DIR"
+  printf '%s/sync_comms_webhooks.py' "$_SELF_HOST_PACKAGED_DIR"
 }
 
 self_host_voice_synced_url_file() {
@@ -336,10 +337,8 @@ self_host_resync_voice_webhooks_if_changed() {
   fi
 }
 
-# Clear the localhost number's voice webhook back to poll-only. Called when the
-# runtime is going away (service stop / stack down --full) so the shared number
-# never keeps pointing at a dead tunnel. Best-effort; no-op only when explicitly
-# disabled.
+# Restore the voice callback state this installation replaced. A changed
+# callback is never overwritten during release.
 self_host_revert_voice_webhooks() {
   self_host_calls_enabled || return 0
   local script py
@@ -350,7 +349,10 @@ self_host_revert_voice_webhooks() {
   fi
   py="${UNITY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
-  "$py" "$script" --revert-voice >/dev/null 2>&1 || true
+  if ! "$py" "$script" --release-voice >/dev/null 2>&1; then
+    echo "[call-tunnel] owned voice callback release failed" >&2
+    return 1
+  fi
   rm -f "$(self_host_voice_synced_url_file)"
 }
 

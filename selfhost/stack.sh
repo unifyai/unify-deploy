@@ -291,7 +291,8 @@ cmd_doctor() {
   return 1
 }
 
-SYNC_COMMS_SCRIPT="$SCRIPT_DIR/sync_comms_webhooks.py"
+PACKAGED_SELFHOST_DIR="$DEPLOY_REPO_PATH/deploy/selfhost"
+SYNC_COMMS_SCRIPT="$PACKAGED_SELFHOST_DIR/sync_comms_webhooks.py"
 
 # Enforce that the localhost Twilio numbers are "poll-only" (no hosted inbound
 # webhook), so a hosted backend never answers localhost traffic. Reads the
@@ -374,11 +375,11 @@ cmd_up_calls_setup() {
   local py="$UNITY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
 
-  if [[ ! -f "$SCRIPT_DIR/provision_call_sip.py" ]]; then
-    log_error "Missing $SCRIPT_DIR/provision_call_sip.py"
+  if [[ ! -f "$PACKAGED_SELFHOST_DIR/provision_call_sip.py" ]]; then
+    log_error "Missing $PACKAGED_SELFHOST_DIR/provision_call_sip.py"
     return 1
   fi
-  if ! "$py" "$SCRIPT_DIR/provision_call_sip.py"; then
+  if ! "$py" "$PACKAGED_SELFHOST_DIR/provision_call_sip.py"; then
     log_error "LiveKit SIP trunk provisioning failed — inbound calls cannot route"
     return 1
   fi
