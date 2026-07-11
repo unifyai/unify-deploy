@@ -80,21 +80,27 @@ latest_tunnel_url() {
 }
 
 tunnel_is_reachable() {
-  python3 - "$1" <<'PY'
-import sys
-import urllib.error
-import urllib.request
-
-try:
-    urllib.request.urlopen(sys.argv[1], timeout=5)
-except urllib.error.HTTPError as exc:
-    if exc.code != 404:
-        raise SystemExit(1)
-except (urllib.error.URLError, OSError):
-    raise SystemExit(1)
-else:
-    raise SystemExit(1)
-PY
+  local url="$1"
+  local status
+  local curl_args=(
+    --silent
+    --show-error
+    --output /dev/null
+    --write-out '%{http_code}'
+    --connect-timeout 2
+    --max-time 4
+  )
+  if status="$(curl "${curl_args[@]}" "$url" 2>/dev/null)"; then
+    [[ "$status" == "404" ]]
+    return
+  fi
+  status="$(
+    curl "${curl_args[@]}" \
+      --doh-url https://1.1.1.1/dns-query \
+      "$url" 2>/dev/null \
+      || true
+  )"
+  [[ "$status" == "404" ]]
 }
 
 publish_tunnel_url() {
@@ -112,64 +118,85 @@ publish_ready() {
   mv "$temporary" "$READY_FILE"
 }
 
+invalidate_call_edge() {
+  rm -f "$READY_FILE" "$TUNNEL_URL_FILE"
+  lease_confirmed=false
+}
+
 configure_calls() {
   local public_url="$1"
-  python3 "$SCRIPT_DIR/provision_call_sip.py"
+  python3 "$SCRIPT_DIR/provision_call_sip.py" || return
+  publish_tunnel_url "$public_url" || return
   acquired=true
-  publish_tunnel_url "$public_url"
   UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$public_url" \
-    python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only
-  publish_ready
+    python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only \
+    || return
+  publish_ready || return
 }
 
 current_url=""
-current_log_signature=""
+candidate_url=""
+last_processed_log_signature=""
 last_lease_check=0
 lease_transient_failures=0
 lease_confirmed=false
 lease_blocked=false
 last_release_attempt=0
+next_acquisition_attempt=0
 while true; do
+  now="$(date +%s)"
   next_log_signature="$(
     stat -c '%Y:%s' "$TUNNEL_LOG" 2>/dev/null \
       || stat -f '%m:%z' "$TUNNEL_LOG" 2>/dev/null \
       || true
   )"
   if [[ -n "$next_log_signature" \
-    && "$next_log_signature" != "$current_log_signature" ]]; then
+    && "$next_log_signature" != "$last_processed_log_signature" ]]; then
     next_url="$(latest_tunnel_url || true)"
-    current_log_signature="$next_log_signature"
-    if [[ "$lease_blocked" != "true" \
-      && -n "$next_url" \
-      && "$next_url" != "$current_url" ]] \
-      && tunnel_is_reachable "$next_url"; then
-      set +e
-      configure_calls "$next_url"
-      configure_status=$?
-      set -e
-      if (( configure_status == 0 )); then
-        current_url="$next_url"
-        last_lease_check="$(date +%s)"
+    last_processed_log_signature="$next_log_signature"
+    if [[ -n "$next_url" && "$next_url" != "$candidate_url" ]]; then
+      candidate_url="$next_url"
+      next_acquisition_attempt=0
+      if [[ -n "$current_url" && "$candidate_url" != "$current_url" ]]; then
+        invalidate_call_edge
+      fi
+    fi
+  fi
+  if [[ "$lease_blocked" != "true" \
+    && -n "$candidate_url" \
+    && "$candidate_url" != "$current_url" \
+    && "$now" -ge "$next_acquisition_attempt" ]]; then
+    next_acquisition_attempt=$((now + LEASE_CHECK_SECONDS))
+    if tunnel_is_reachable "$candidate_url"; then
+      if configure_calls "$candidate_url"; then
+        current_url="$candidate_url"
+        last_lease_check="$now"
         lease_transient_failures=0
         lease_confirmed=true
         echo "[call-controller] call edge ready at $current_url"
       else
-        rm -f "$READY_FILE"
-        current_log_signature=""
-        lease_confirmed=false
+        invalidate_call_edge
+        if release_voice; then
+          acquired=false
+          current_url=""
+        else
+          lease_blocked=true
+          last_release_attempt="$now"
+        fi
         echo "[call-controller] call edge acquisition failed; retrying" >&2
-        sleep "$LEASE_CHECK_SECONDS"
       fi
     fi
   fi
-  now="$(date +%s)"
-  if [[ "$lease_blocked" != "true" && -n "$current_url" ]] \
+  if [[ "$lease_blocked" != "true" \
+    && -n "$current_url" \
+    && "$candidate_url" == "$current_url" ]] \
     && (( now - last_lease_check >= LEASE_CHECK_SECONDS )); then
-    set +e
-    UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$current_url" \
-      python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only --check
-    lease_status=$?
-    set -e
+    if UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$current_url" \
+      python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only --check; then
+      lease_status=0
+    else
+      lease_status=$?
+    fi
     case "$lease_status" in
       0)
         lease_transient_failures=0
@@ -177,21 +204,22 @@ while true; do
         publish_tunnel_url "$current_url"
         ;;
       1)
-        rm -f "$READY_FILE" "$TUNNEL_URL_FILE"
-        lease_confirmed=false
+        invalidate_call_edge
         echo "[call-controller] remote call ownership lease lost" >&2
         if release_voice; then
           acquired=false
+          current_url=""
+          next_acquisition_attempt=$((now + LEASE_CHECK_SECONDS))
+        else
+          last_release_attempt="$now"
+          lease_blocked=true
         fi
-        last_release_attempt="$now"
-        lease_blocked=true
         ;;
       *)
         lease_transient_failures=$((lease_transient_failures + 1))
         echo "[call-controller] lease check unavailable (${lease_transient_failures}/${LEASE_TRANSIENT_FAILURE_LIMIT})" >&2
         if (( lease_transient_failures >= LEASE_TRANSIENT_FAILURE_LIMIT )); then
-          rm -f "$READY_FILE" "$TUNNEL_URL_FILE"
-          lease_confirmed=false
+          invalidate_call_edge
         fi
         ;;
     esac
@@ -201,6 +229,9 @@ while true; do
     && (( now - last_release_attempt >= RELEASE_RETRY_SECONDS )); then
     if release_voice; then
       acquired=false
+      current_url=""
+      lease_blocked=false
+      next_acquisition_attempt=$((now + LEASE_CHECK_SECONDS))
       echo "[call-controller] remaining owned call callbacks released"
     else
       echo "[call-controller] owned callback release still blocked; retrying later" >&2
@@ -209,6 +240,7 @@ while true; do
   fi
   if [[ "$lease_blocked" != "true" \
     && -n "$current_url" \
+    && "$candidate_url" == "$current_url" \
     && "$lease_confirmed" == "true" ]] \
     && (( lease_transient_failures < LEASE_TRANSIENT_FAILURE_LIMIT )); then
     publish_ready
