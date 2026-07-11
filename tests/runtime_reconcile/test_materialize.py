@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from unity_deploy.runtime_reconcile.context import RuntimeIdentity
-from unity_deploy.runtime_reconcile import materialize
+from unify_deploy.runtime_reconcile.context import RuntimeIdentity
+from unify_deploy.runtime_reconcile import materialize
 
 
 class _FakeFunctionManager:
@@ -246,12 +246,12 @@ def _install_materialize_fakes(
     )
 
     catalog_projection = ModuleType(
-        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+        "unify_deploy.assistant_deployments.integrations.catalog_projection",
     )
     catalog_projection.sync_integrations = lambda _rows: None
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+        "unify_deploy.assistant_deployments.integrations.catalog_projection",
         catalog_projection,
     )
 

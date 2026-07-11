@@ -20,14 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from unity_deploy.assistant_deployments.integrations.discovery import (
+from unify_deploy.assistant_deployments.integrations.discovery import (
     _BUILTIN_DIR,
     _load_manifest,
     discover_integrations,
 )
-from unity_deploy.assistant_deployments.integrations.loader import load_integration
+from unify_deploy.assistant_deployments.integrations.loader import load_integration
 from unify.guidance_manager.custom_guidance import collect_custom_guidance
-from unity_deploy.assistant_deployments.integrations.validation import (
+from unify_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
 
@@ -247,15 +247,15 @@ async def run_validation(include_real: bool = False) -> int:
     # ---------------------------------------------------------------
     print("\n--- Step 5: Mock Function Calls ---")
 
-    from unity_deploy.assistant_deployments.integrations.packages.github.functions.users import (
+    from unify_deploy.assistant_deployments.integrations.packages.github.functions.users import (
         get_user,
         get_user_repos,
     )
-    from unity_deploy.assistant_deployments.integrations.packages.github.functions.repos import (
+    from unify_deploy.assistant_deployments.integrations.packages.github.functions.repos import (
         get_repo,
         search_repos,
     )
-    from unity_deploy.assistant_deployments.integrations.packages.github.functions.issues import (
+    from unify_deploy.assistant_deployments.integrations.packages.github.functions.issues import (
         get_repo_issues,
     )
 

@@ -23,7 +23,7 @@ from pathlib import Path
 
 _INTEGRATIONS_PARENT = (
     Path(__file__).resolve().parent.parent.parent.parent
-    / "unity_deploy"
+    / "unify_deploy"
     / "assistant_deployments"
     / "integrations"
 )

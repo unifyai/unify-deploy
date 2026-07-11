@@ -7,14 +7,14 @@ from pathlib import Path
 from unify.guidance_manager.custom_guidance import GUIDANCE_JSONL_FILENAME
 
 
-from unity_deploy.assistant_deployments.integrations.types import (
+from unify_deploy.assistant_deployments.integrations.types import (
     Capability,
     DemoSiteConfig,
     IntegrationManifest,
     MCPServerConfig,
     SecretSchema,
 )
-from unity_deploy.assistant_deployments.integrations.validation import (
+from unify_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
 

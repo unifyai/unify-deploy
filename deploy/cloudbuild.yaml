@@ -114,7 +114,7 @@ steps:
     SHA="$$(cat /workspace/unity_sha.txt)"
     IMG="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA"
     for cmd in reconcile-dlq reconcile-stale recover-stale worker-refresh-check; do
-      docker run --rm "$$IMG" python -m unity_deploy.infra.cli.pipeline_control "$$cmd" --help >/dev/null
+      docker run --rm "$$IMG" python -m unify_deploy.infra.cli.pipeline_control "$$cmd" --help >/dev/null
     done
   waitFor: ['build-overlay']
 
@@ -492,7 +492,7 @@ steps:
         --env="UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts" \
         --env="UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}" \
         --env="ORCHESTRA_URL=${_ORCHESTRA_URL}" \
-        --command -- python -m unity_deploy.infra.cli.pipeline_control \
+        --command -- python -m unify_deploy.infra.cli.pipeline_control \
           worker-refresh-check --env production --dispatch-limit 20 --json $$extra_args
       rc="$$?"
       set -e

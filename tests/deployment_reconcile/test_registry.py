@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from unity_deploy.assistant_deployments import clients as clients_mod
-from unity_deploy.deployment_reconcile import registry as registry_mod
+from unify_deploy.assistant_deployments import clients as clients_mod
+from unify_deploy.deployment_reconcile import registry as registry_mod
 
-_CLIENT_MODULE_PREFIX = "unity_deploy.assistant_deployments.clients."
+_CLIENT_MODULE_PREFIX = "unify_deploy.assistant_deployments.clients."
 
 
 def _clear_embedded_client_state() -> None:
@@ -20,7 +20,7 @@ def _clear_embedded_client_state() -> None:
     clients_mod._CLIENT_DEPLOYMENTS.clear()
     for name in list(sys.modules):
         if name.startswith(_CLIENT_MODULE_PREFIX) and name != (
-            "unity_deploy.assistant_deployments.clients"
+            "unify_deploy.assistant_deployments.clients"
         ):
             del sys.modules[name]
 
@@ -73,7 +73,7 @@ def test_load_bundled_registry_builds_entries_from_manifest(monkeypatch):
 
     src = (
         Path(__file__).resolve().parents[2]
-        / "unity_deploy"
+        / "unify_deploy"
         / "assistant_deployments"
         / "clients"
         / "client_alpha"
@@ -92,7 +92,7 @@ def test_load_bundled_registry_builds_entries_from_manifest(monkeypatch):
 
     monkeypatch.setattr(registry_mod, "_download_client_bundle", fake_download)
 
-    import unity_deploy.assistant_deployments.routing_manifest as rm
+    import unify_deploy.assistant_deployments.routing_manifest as rm
 
     monkeypatch.setattr(
         rm,
@@ -152,7 +152,7 @@ def test_download_client_bundle_reads_latest_pointer(monkeypatch, tmp_path):
 
     src = (
         Path(__file__).resolve().parents[2]
-        / "unity_deploy"
+        / "unify_deploy"
         / "assistant_deployments"
         / "clients"
         / "clientzeta"

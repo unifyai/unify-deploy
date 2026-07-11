@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from unity_deploy.client_bundle import fetch
+from unify_deploy.client_bundle import fetch
 
 
 def test_auth_headers_use_unify_key(monkeypatch):

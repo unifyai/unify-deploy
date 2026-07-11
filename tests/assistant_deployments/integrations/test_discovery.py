@@ -8,12 +8,12 @@ from pathlib import Path
 
 import yaml
 
-from unity_deploy.assistant_deployments.integrations.discovery import (
+from unify_deploy.assistant_deployments.integrations.discovery import (
     discover_from_directory,
     discover_integrations,
     _load_manifest,
 )
-from unity_deploy.assistant_deployments.integrations.types import IntegrationManifest
+from unify_deploy.assistant_deployments.integrations.types import IntegrationManifest
 
 
 @pytest.fixture

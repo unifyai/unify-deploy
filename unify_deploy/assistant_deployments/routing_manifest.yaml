@@ -1,0 +1,73 @@
+# Identity routing for assistant deployments. No secrets — only org/assistant ids
+# and deployment names. Client code is delivered via GCS bundles at bind time.
+
+clients:
+  client_alpha:
+    bundle_key: client_alpha
+    environments:
+      staging:
+        targets:
+        - scope: assistant
+          scope_id: "2242"
+          deployment: v2
+        - scope: assistant
+          scope_id: "2243"
+          deployment: v1
+        layers:
+        - scope: assistant
+          scope_id: "2242"
+          integrations:
+          - client_alpha_repairs_mock
+          contacts_dir: contacts
+          knowledge_dir: knowledge
+      production:
+        targets: []
+
+  clientepsilon_homes:
+    bundle_key: clientepsilon_homes
+    environments:
+      staging:
+        targets:
+        - scope: assistant
+          scope_id: "2244"
+          deployment: demo
+      production:
+        targets: []
+
+  clientzeta:
+    bundle_key: clientzeta
+    environments:
+      staging:
+        targets:
+        - scope: assistant
+          scope_id: "2245"
+          deployment: v0
+      production:
+        targets: []
+
+  client_beta:
+    bundle_key: client_beta
+    environments:
+      production:
+        targets:
+        - scope: assistant
+          scope_id: "457"
+          deployment: v0
+      staging:
+        targets: []
+
+  # Only the brain-operator assistant receives the unify_company bundle.
+  # All other Unify-org assistants are blank slates (L1+L4).
+  unify_company:
+    bundle_key: unify_company
+    environments:
+      staging:
+        targets:
+        - scope: assistant
+          scope_id: "7367"
+          deployment: default
+      production:
+        targets:
+        - scope: assistant
+          scope_id: "1406"
+          deployment: default

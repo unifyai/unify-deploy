@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unity_deploy.infra.cli import pipeline_control
+from unify_deploy.infra.cli import pipeline_control
 
 
 def _job(job_id: str, committed: int, *, expected: int = 0, status: str = "running"):

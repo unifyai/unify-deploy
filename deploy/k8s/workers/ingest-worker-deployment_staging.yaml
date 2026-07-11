@@ -45,7 +45,7 @@ spec:
         command:
         - python
         - -m
-        - unity_deploy.infra.workers.entrypoint_ingest
+        - unify_deploy.infra.workers.entrypoint_ingest
         lifecycle:
           preStop:
             exec:

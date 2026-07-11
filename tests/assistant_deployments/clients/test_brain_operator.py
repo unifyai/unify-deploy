@@ -14,7 +14,7 @@ def _clear_brain_operator_env(monkeypatch):
 
 
 def _reload():
-    import unity_deploy.assistant_deployments.clients.unify_company as mod
+    import unify_deploy.assistant_deployments.clients.unify_company as mod
 
     return importlib.reload(mod)
 

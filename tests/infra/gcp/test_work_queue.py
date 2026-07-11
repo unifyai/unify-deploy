@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from unify.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity_deploy.infra.gcp.work_queue import PubSubWorkQueue
+from unify_deploy.infra.gcp.work_queue import PubSubWorkQueue
 
 
 def _make_queue() -> tuple[PubSubWorkQueue, MagicMock]:

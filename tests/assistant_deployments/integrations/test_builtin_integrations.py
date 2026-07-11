@@ -10,18 +10,18 @@ import ast
 import pytest
 from pathlib import Path
 
-from unity_deploy.assistant_deployments.integrations.discovery import (
+from unify_deploy.assistant_deployments.integrations.discovery import (
     _BUILTIN_DIR,
     _CLIENT_DIR,
     _MOCK_DIR,
     discover_from_directory,
     _load_manifest,
 )
-from unity_deploy.assistant_deployments.integrations.types import (
+from unify_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     QualityTier,
 )
-from unity_deploy.assistant_deployments.integrations.validation import (
+from unify_deploy.assistant_deployments.integrations.validation import (
     validate_integration,
 )
 

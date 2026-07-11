@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from unity_deploy.deployment_reconcile import control_plane as reconcile
-from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.deployment_types import (
+from unify_deploy.deployment_reconcile import control_plane as reconcile
+from unify_deploy.assistant_deployments.clients import ClientDeploymentEntry
+from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unify_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
@@ -158,7 +158,7 @@ def test_apply_operations_patches_each_assistant(monkeypatch):
         captured.append((path, body))
         return {"status": "ok", "path": path}
 
-    from unity_deploy.utils import orchestra_client
+    from unify_deploy.utils import orchestra_client
 
     monkeypatch.setattr(orchestra_client, "patch_json", fake_patch_json)
     operations = reconcile.build_control_plane_plan(
@@ -228,7 +228,7 @@ def test_apply_operations_defers_generic_task_activation(monkeypatch):
         raise AssertionError("deferred operations must not be transmitted")
 
     monkeypatch.setattr(reconcile, "_post_communication_json", _boom)
-    from unity_deploy.utils import orchestra_client
+    from unify_deploy.utils import orchestra_client
 
     monkeypatch.setattr(orchestra_client, "patch_json", _boom)
 
@@ -257,7 +257,7 @@ def test_apply_operations_defers_generic_task_activation(monkeypatch):
 
 
 def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
-    from unity_deploy.utils import orchestra_client
+    from unify_deploy.utils import orchestra_client
 
     def missing_assistant(*args, **kwargs):
         raise orchestra_client.OrchestraClientError(404, "not found")
@@ -312,7 +312,7 @@ def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
 
 
 def test_apply_operations_keeps_missing_required_assistant_fatal(monkeypatch):
-    from unity_deploy.utils import orchestra_client
+    from unify_deploy.utils import orchestra_client
 
     def missing_assistant(*args, **kwargs):
         raise orchestra_client.OrchestraClientError(404, "not found")

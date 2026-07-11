@@ -1,0 +1,105 @@
+name: Matterport
+slug: matterport
+version: "0.2.0"
+sector: real-estate
+tier: api
+quality: bronze
+description: >
+  Matterport 3D virtual-tour analytics connector.  Live reads go through
+  a single ``matterport_graphql_query`` tool that exposes the underlying
+  authenticated GraphQL client to the actor; bulk pulls and snapshots go
+  through ``run_matterport_sync_tick``.  Cross-app DataManager joins
+  (model<->unit links, view-events<->HubSpot leads) and the Showcase
+  embed-URL builder are kept as typed helpers.  Authenticated via an
+  account API token pair (Token ID + Token Secret) supplied through
+  Console -> Integrations -> Matterport.  403 responses return a
+  graceful error envelope rather than raising, so capability gating is
+  uniform.
+homepage: https://matterport.com/developers
+
+secrets:
+  # ----- Customer-provided API credentials ------------------------------
+  # Pasted via Console -> Integrations -> Matterport (paste-and-go; no
+  # OAuth callback needed).  Generate at Matterport account Settings ->
+  # Account -> API Access.  Sandbox is free but only returns demo models;
+  # production access requires the Developer Tools add-on on the
+  # customer's Matterport plan.
+
+- name: MATTERPORT_TOKEN_ID
+  description: >
+    Matterport API Token ID (the public half of the credential pair).
+    Generate at Matterport account Settings -> Account -> API Access.
+    Used as the username half of HTTP Basic auth on every GraphQL call.
+  required: true
+  sensitive: true
+
+- name: MATTERPORT_TOKEN_SECRET
+  description: >
+    Matterport API Token Secret (the private half), generated alongside
+    MATTERPORT_TOKEN_ID.  Used as the password half of HTTP Basic auth.
+  required: true
+  sensitive: true
+
+  # ----- Optional overrides --------------------------------------------
+- name: MATTERPORT_ORG_ID
+  description: >
+    Optional organisation slug pinning calls to a single Matterport
+    organisation when the credentials grant access to multiple orgs.
+  required: false
+  sensitive: false
+
+- name: MATTERPORT_BASE_URL
+  description: >
+    API base URL override.  Defaults to https://api.matterport.com.
+  required: false
+  sensitive: false
+
+capabilities:
+  # ----- Live API access -------------------------------------------------
+  # Single generic GraphQL tool — the actor constructs the query
+  # against Matterport's Model API schema (and the structured 4xx
+  # error envelopes the helper returns when something's malformed).
+- id: matterport_live
+  name: Live API access
+  description: >
+    One tool covering the entire Matterport Model API GraphQL surface
+    (account, organisations, models, mosaics, tags, view stats, view
+    events, etc.).  For bulk model or view-stats pulls go through the
+    sync orchestrator instead.
+  functions: [matterport_graphql_query]
+  guidance: [matterport_overview, matterport_setup]
+
+  # ----- Embed (browser-tier capability) -------------------------------
+- id: embed
+  name: Showcase Embed
+  description: Generate a Showcase URL for embedding a tour in a portal.
+  tier: browser
+  functions: [generate_matterport_embed_url]
+  guidance: [matterport_overview]
+
+  # ----- Cross-integration linking -------------------------------------
+- id: linking
+  name: Cross-integration Linking
+  description: Link Matterport models to RealPage units and to HubSpot leads.
+  functions: [link_matterport_model_to_unit, lookup_matterport_model_for_unit, correlate_matterport_views_to_hubspot_leads]
+  guidance: [matterport_unit_linking]
+
+  # ----- Sync orchestration --------------------------------------------
+- id: incremental_sync
+  name: Incremental sync
+  description: >
+    Single-tick orchestration across enabled object types.  Runs the
+    internal ``sync_matterport_*`` snapshot writers and aggregates
+    their output into the canonical DataManager envelope.
+  functions: [run_matterport_sync_tick, get_matterport_sync_state, probe_matterport_tier]
+  guidance: [matterport_sync_runbook, matterport_tier_gating]
+
+  # ----- Local DataManager query ---------------------------------------
+- id: local_query
+  name: Local DataManager query
+  description: Query the synced Matterport copy in DataManager (preferred over live for analytics).
+  functions: [query_local_matterport_models, query_local_matterport_view_stats]
+  guidance: [matterport_local_vs_live, matterport_overview]
+
+requirements: [httpx]
+tags: [matterport, real-estate, virtual-tours, 3d, analytics, listings, sync, datamanager]

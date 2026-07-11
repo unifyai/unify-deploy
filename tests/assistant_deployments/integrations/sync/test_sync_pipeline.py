@@ -20,11 +20,11 @@ from unify.guidance_manager.custom_guidance import (
     collect_custom_guidance,
 )
 from unify.guidance_manager.guidance_manager import GuidanceManager
-from unity_deploy.assistant_deployments.integrations.loader import (
+from unify_deploy.assistant_deployments.integrations.loader import (
     LoadedIntegration,
     load_integration,
 )
-from unity_deploy.assistant_deployments.integrations.types import (
+from unify_deploy.assistant_deployments.integrations.types import (
     IntegrationManifest,
     SecretSchema,
 )

@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.environments.reconstruct import (
+from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unify_deploy.assistant_deployments.environments.reconstruct import (
     parse_env_path,
     write_files_to_package,
     import_and_resolve,
@@ -21,7 +21,7 @@ from unify.integration_registry.custom_integration_registry import (
     collect_integration_registry_from_rows,
     compute_custom_integration_registry_hash,
 )
-from unity_deploy.assistant_deployments.secrets_file import load_secrets
+from unify_deploy.assistant_deployments.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
 # 1. ActorConfig model

@@ -31,7 +31,7 @@ spec:
         - -c
         - |
           set -eu
-          set -- python -m unity_deploy.scripts.reconcile_deployment \
+          set -- python -m unify_deploy.scripts.reconcile_deployment \
             --environment "${UNITY_DEPLOYMENT_ENVIRONMENT}" \
             --planes "${UNITY_DEPLOYMENT_PLANES}" \
             --concurrency "${UNITY_DEPLOYMENT_CONCURRENCY}" \

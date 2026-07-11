@@ -43,7 +43,7 @@ steadier throughput and avoids churn.
 3. Monitor throughput from durable checkpoints (immune to worker log spam):
 
    ```bash
-   uv run python -m unity_deploy.infra.cli.pipeline_control throughput \
+   uv run python -m unify_deploy.infra.cli.pipeline_control throughput \
      --dispatch-id <DISPATCH_ID> --interval 60
    ```
 
@@ -79,7 +79,7 @@ After any backfill or recovery, confirm declared rows landed in durable
 checkpoints:
 
 ```bash
-uv run python -m unity_deploy.infra.cli.pipeline_control verify \
+uv run python -m unify_deploy.infra.cli.pipeline_control verify \
   --dispatch-id <DISPATCH_ID>
 ```
 

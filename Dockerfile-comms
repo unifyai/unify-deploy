@@ -63,6 +63,7 @@ RUN echo "UNITY_SHA=${UNITY_SHA}" && \
 COPY pyproject.toml README.md ./
 COPY communication/ communication/
 COPY common/ common/
+COPY unify_deploy/ unify_deploy/
 
 # Install dependencies + the local communication package (including script assets).
 RUN pip install --no-cache-dir ".[comms]"
