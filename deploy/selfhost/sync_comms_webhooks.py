@@ -68,6 +68,7 @@ _TWILIO_ENV_FILE = Path(
 )
 _OWNER_QUERY_KEY = "unity_installation_owner"
 _STATE_VERSION = 1
+_VOICE_TUNNEL_MODES = frozenset({"set-voice", "voice-only"})
 _ACTIVE_OWNER = ""
 _ACTIVE_STATE: dict = {}
 
@@ -413,8 +414,9 @@ def _ensure_application(
     headers: dict,
     friendly_name: str,
     voice_url: str,
+    owner: str,
 ) -> str:
-    """Create or update the TwiML Voice App and return its SID."""
+    """Create or update this installation's TwiML Voice App and return its SID."""
     app = _find_application(account_sid, headers, friendly_name)
     post_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
     base = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Applications"
@@ -428,6 +430,12 @@ def _ensure_application(
         ).encode()
         created = _request("POST", f"{base}.json", post_headers, data=form)
         return created.get("sid", "")
+    current_owner = _url_owner(app.get("voice_url") or "")
+    if current_owner != owner:
+        owner_label = current_owner or "an untagged external owner"
+        raise RuntimeError(
+            f"WhatsApp voice app is active for {owner_label}; refusing mutation",
+        )
     sid = app["sid"]
     if (app.get("voice_url") or "") != voice_url:
         form = urllib.parse.urlencode(
@@ -435,6 +443,17 @@ def _ensure_application(
         ).encode()
         _request("POST", f"{base}/{sid}.json", post_headers, data=form)
     return sid
+
+
+def _get_application(account_sid: str, app_sid: str, headers: dict) -> dict:
+    return _request(
+        "GET",
+        (
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}"
+            f"/Applications/{app_sid}.json"
+        ),
+        headers,
+    )
 
 
 def _get_whatsapp_sender(sender_sid: str, headers: dict) -> dict:
@@ -459,6 +478,19 @@ def _set_sender_voice_app(sender_sid: str, headers: dict, app_sid: str) -> None:
     ).encode()
     post_headers = {**headers, "Content-Type": "application/json"}
     _request("POST", f"{_SENDER_BASE}/{sender_sid}", post_headers, data=body)
+
+
+def _require_sender_voice_app(
+    sender_sid: str,
+    headers: dict,
+    expected_app_sid: str,
+) -> None:
+    current_app_sid = _sender_voice_app(_get_whatsapp_sender(sender_sid, headers))
+    if current_app_sid != expected_app_sid:
+        raise RuntimeError(
+            "WhatsApp voice application changed during acquisition; "
+            "refusing takeover",
+        )
 
 
 def reconcile_whatsapp_voice(
@@ -507,19 +539,12 @@ def reconcile_whatsapp_voice(
         full = sender
     cur_app = _sender_voice_app(full)
 
-    if mode == "set-voice":
+    if mode in _VOICE_TUNNEL_MODES:
         owner, state = _ownership()
         want_voice = _tag_url(_wa_voice_target(public_url), owner)
         if check:
             if cur_app:
-                app = _request(
-                    "GET",
-                    (
-                        f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}"
-                        f"/Applications/{cur_app}.json"
-                    ),
-                    headers,
-                )
+                app = _get_application(account_sid, cur_app, headers)
                 if (app.get("voice_url") or "") == want_voice:
                     print(f"[whatsapp-call] {number}: owned voice app attached ✓")
                     return True
@@ -530,11 +555,22 @@ def reconcile_whatsapp_voice(
             return False
         friendly_name = f"{_WA_VOICE_APP_FRIENDLY_NAME} {owner[:12]}"
         try:
+            if cur_app:
+                current_app = _get_application(account_sid, cur_app, headers)
+                current_owner = _url_owner(current_app.get("voice_url") or "")
+                if current_owner != owner:
+                    owner_label = current_owner or "an untagged external owner"
+                    raise RuntimeError(
+                        "WhatsApp voice is active for "
+                        f"{owner_label}; refusing takeover",
+                    )
+            _require_sender_voice_app(sender_sid, headers, cur_app)
             app_sid = _ensure_application(
                 account_sid,
                 headers,
                 friendly_name,
                 want_voice,
+                owner,
             )
             if not app_sid:
                 print(
@@ -542,6 +578,7 @@ def reconcile_whatsapp_voice(
                     file=sys.stderr,
                 )
                 return False if required else True
+            _require_sender_voice_app(sender_sid, headers, cur_app)
             desired = {"voice_application_sid": app_sid}
             current = {"voice_application_sid": cur_app}
             _claim_resource(
@@ -557,23 +594,8 @@ def reconcile_whatsapp_voice(
                 callback_fields=(),
             )
             if app_sid and cur_app != app_sid:
-                if cur_app:
-                    current_app = _request(
-                        "GET",
-                        (
-                            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}"
-                            f"/Applications/{cur_app}.json"
-                        ),
-                        headers,
-                    )
-                    current_owner = _url_owner(current_app.get("voice_url") or "")
-                    if current_owner != owner:
-                        owner_label = current_owner or "an untagged external owner"
-                        raise RuntimeError(
-                            "WhatsApp voice is active for "
-                            f"{owner_label}; refusing takeover",
-                        )
                 _set_sender_voice_app(sender_sid, headers, app_sid)
+                _require_sender_voice_app(sender_sid, headers, app_sid)
             _commit_resource(state, "whatsapp_voice", desired)
         except urllib.error.HTTPError as exc:
             print(
@@ -591,14 +613,7 @@ def reconcile_whatsapp_voice(
         print(f"[whatsapp-call] {number}: no voice app (poll-only) ✓")
         return True
     owner, state = _ownership()
-    app = _request(
-        "GET",
-        (
-            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}"
-            f"/Applications/{cur_app}.json"
-        ),
-        headers,
-    )
+    app = _get_application(account_sid, cur_app, headers)
     current_owner = _url_owner(app.get("voice_url") or "")
     if current_owner != owner:
         if check:
@@ -757,7 +772,7 @@ def reconcile_phone(
         print(f"[sms] {number}: cleared messaging webhook → poll-only ✓")
         return True
 
-    if mode in {"set-voice", "voice-only"}:
+    if mode in _VOICE_TUNNEL_MODES:
         manage_text = mode == "set-voice"
         want_voice = _tag_url(_phone_voice_target(public_url), owner)
         want_status = _tag_url(_phone_status_target(public_url), owner)
@@ -1137,9 +1152,10 @@ def main() -> int:
         mode = "clear"
 
     public_url = _public_url(env)
-    if mode in {"set-voice", "voice-only"} and not public_url:
+    if mode in _VOICE_TUNNEL_MODES and not public_url:
         print(
-            "ERROR: --set-voice needs UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
+            "ERROR: voice acquisition needs "
+            "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
             "(the cloudflared tunnel URL). Is the call tunnel up?",
             file=sys.stderr,
         )
