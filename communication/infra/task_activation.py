@@ -485,6 +485,49 @@ def _lookup_current_task_activation(
     return activation if isinstance(activation, dict) else None
 
 
+def _activation_snapshot_from_explicit_dispatch_request(
+    request: OfflineTaskDispatchRequest,
+) -> dict[str, Any]:
+    """Build an activation-shaped snapshot from an explicit dispatch request.
+
+    Explicit REST triggers are issued by Orchestra immediately after it resolves
+    the current activation. Re-fetching ``/admin/task-activation/current`` is a
+    redundant round-trip (and previously contended on the still-open resolve
+    transaction). Trust the caller-supplied fields for launch + validation.
+    """
+
+    snapshot: dict[str, Any] = {
+        "assistant_id": request.assistant_id,
+        "task_id": request.task_id,
+        "source_task_log_id": request.source_task_log_id,
+        "activation_revision": request.activation_revision,
+        "execution_mode": request.execution_mode,
+        "destination": request.destination,
+        "entrypoint": request.entrypoint,
+        "task_name": request.task_name,
+        "task_description": request.task_description,
+    }
+    if request.scheduled_for is not None:
+        snapshot["next_due_at"] = request.scheduled_for.astimezone(
+            timezone.utc,
+        ).isoformat()
+    return snapshot
+
+
+def _resolve_offline_dispatch_activation(
+    request: OfflineTaskDispatchRequest,
+) -> dict[str, Any] | None:
+    """Return the activation used to validate and launch one offline dispatch."""
+
+    if request.source_type == "explicit":
+        return _activation_snapshot_from_explicit_dispatch_request(request)
+    return _lookup_current_task_activation(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        destination=request.destination,
+    )
+
+
 def _reproject_task_activation(
     *,
     assistant_id: str,
@@ -1646,10 +1689,8 @@ async def dispatch_offline_task(
             **_offline_dispatch_event_fields(request, stage=stage),
         )
         activation = await asyncio.to_thread(
-            _lookup_current_task_activation,
-            assistant_id=request.assistant_id,
-            task_id=request.task_id,
-            destination=request.destination,
+            _resolve_offline_dispatch_activation,
+            request,
         )
         stage = "activation_validate"
         stale_reason = _validate_current_offline_activation(request, activation)

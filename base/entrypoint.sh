@@ -161,6 +161,11 @@ fi
 # row was left stale at "running"). Matching on non-empty is rename-proof.
 if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
     echo "⬥ Starting offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
+    # Fetch/register the assistant client bundle before entrypoint bodies run.
+    # Offline jobs skip the live ConversationManager startup hook that normally
+    # does this; without it, imports like
+    # unity_deploy.assistant_deployments.clients.<client>.* fail in-pod.
+    python3 -m unity_deploy.client_bundle.bootstrap
     python3 -m unify.task_scheduler.offline_runner
     exit $?
 fi
