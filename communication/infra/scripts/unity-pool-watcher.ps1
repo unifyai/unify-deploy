@@ -156,6 +156,149 @@ function Grant-ServiceDirectoryAccess {
     Write-Log "unityuser ACLs set on service directories"
 }
 
+# Desktop-profile paths live in the unityuser home, not C:\Unity\Local, so they
+# are not rcloned into the Unify pod. They ride a sibling GCS blob:
+#   gs://{archive-bucket}/{assistant_id}-desktop-profile.tar.gz
+$script:DesktopProfileChromiumFiles = @(
+    "Cookies",
+    "Login Data",
+    "Login Data-journal",
+    "Web Data",
+    "Web Data-journal",
+    "Preferences",
+    "Bookmarks",
+    "Bookmarks.bak",
+    "Network Persistent State"
+)
+$script:DesktopProfileChromiumDirs = @(
+    "Local Storage",
+    "Session Storage"
+)
+
+function Get-UnityUserProfileRoot {
+    return "C:\Users\unityuser"
+}
+
+function Get-BrowserUserDataRoots {
+    $userProfile = Get-UnityUserProfileRoot
+    $candidates = @(
+        (Join-Path $userProfile "AppData\Local\Google\Chrome\User Data"),
+        (Join-Path $userProfile "AppData\Local\Chromium\User Data"),
+        (Join-Path $userProfile ".config\chromium"),
+        (Join-Path $userProfile ".config\google-chrome")
+    )
+    return $candidates | Where-Object { Test-Path $_ }
+}
+
+function Stage-ChromiumProfile($SrcRoot, $DestRoot) {
+    $srcDefault = Join-Path $SrcRoot "Default"
+    if (-not (Test-Path $srcDefault)) { return $false }
+    $destDefault = Join-Path $DestRoot "Default"
+    New-Item -ItemType Directory -Force -Path $destDefault | Out-Null
+    $copied = $false
+    foreach ($name in $script:DesktopProfileChromiumFiles) {
+        $src = Join-Path $srcDefault $name
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination (Join-Path $destDefault $name) -Force -ErrorAction SilentlyContinue
+            $copied = $true
+        }
+    }
+    foreach ($name in $script:DesktopProfileChromiumDirs) {
+        $src = Join-Path $srcDefault $name
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination (Join-Path $destDefault $name) -Recurse -Force -ErrorAction SilentlyContinue
+            $copied = $true
+        }
+    }
+    $localState = Join-Path $SrcRoot "Local State"
+    if (Test-Path $localState) {
+        Copy-Item -Path $localState -Destination (Join-Path $DestRoot "Local State") -Force -ErrorAction SilentlyContinue
+        $copied = $true
+    }
+    return $copied
+}
+
+function Archive-DesktopProfile($AssistantId, $ArchiveBucket) {
+    $archivePath = "gs://${ArchiveBucket}/${AssistantId}-desktop-profile.tar.gz"
+    $staging = Join-Path $env:TEMP "unity-desktop-profile-$(Get-Random)"
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    $staged = $false
+    $userProfile = Get-UnityUserProfileRoot
+
+    $browserStates = Join-Path $userProfile ".magnitude\browser_states"
+    if (Test-Path $browserStates) {
+        $destMag = Join-Path $staging ".magnitude"
+        New-Item -ItemType Directory -Force -Path $destMag | Out-Null
+        Copy-Item -Path $browserStates -Destination (Join-Path $destMag "browser_states") -Recurse -Force -ErrorAction SilentlyContinue
+        $staged = $true
+    }
+
+    foreach ($srcRoot in (Get-BrowserUserDataRoots)) {
+        $rel = $srcRoot.Substring($userProfile.Length).TrimStart('\')
+        $destRoot = Join-Path $staging $rel
+        if (Stage-ChromiumProfile $srcRoot $destRoot) {
+            $staged = $true
+        } else {
+            Remove-Item $destRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not $staged) {
+        Write-Log "No desktop-profile artifacts to archive"
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    Write-Log "Archiving desktop profile to $archivePath"
+    try {
+        $tempArchive = Join-Path $env:TEMP "unity-desktop-profile-archive-$(Get-Random).tar.gz"
+        tar czf $tempArchive -C $staging .
+        gsutil -q cp $tempArchive $archivePath 2>$null
+        Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
+        Write-Log "Desktop-profile archive uploaded successfully"
+    } catch {
+        Write-Log "WARNING: desktop-profile archive upload failed"
+    }
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Restore-DesktopProfile($AssistantId, $ArchiveBucket) {
+    $archivePath = "gs://${ArchiveBucket}/${AssistantId}-desktop-profile.tar.gz"
+    try {
+        gsutil -q stat $archivePath 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "No desktop-profile archive at $archivePath"
+            return
+        }
+    } catch {
+        Write-Log "No desktop-profile archive at $archivePath"
+        return
+    }
+
+    Write-Log "Restoring desktop profile from $archivePath"
+    $userProfile = Get-UnityUserProfileRoot
+    try {
+        $tempArchive = Join-Path $env:TEMP "unity-desktop-profile-restore-$(Get-Random).tar.gz"
+        gsutil -q cp $archivePath $tempArchive 2>$null
+        tar xzf $tempArchive -C $userProfile
+        Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
+        foreach ($path in @(
+            (Join-Path $userProfile ".magnitude"),
+            (Join-Path $userProfile "AppData\Local\Google\Chrome"),
+            (Join-Path $userProfile "AppData\Local\Chromium"),
+            (Join-Path $userProfile ".config\chromium"),
+            (Join-Path $userProfile ".config\google-chrome")
+        )) {
+            if (Test-Path $path) {
+                icacls $path /grant "unityuser:(OI)(CI)F" /T /Q 2>$null | Out-Null
+            }
+        }
+        Write-Log "Desktop profile restored"
+    } catch {
+        Write-Log "WARNING: desktop-profile restore failed"
+    }
+}
+
 function Scrub-Filesystem {
     Write-Log "SCRUB: cleaning session artifacts from filesystem"
 
@@ -166,14 +309,24 @@ function Scrub-Filesystem {
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    # unityuser profile — wipe session data from known directories
-    $userProfile = "C:\Users\unityuser"
+    # unityuser profile — wipe session data including browser/magnitude state
+    # (those ride the per-assistant desktop-profile archive, not the shared pool disk).
+    $userProfile = Get-UnityUserProfileRoot
     if (Test-Path $userProfile) {
-        foreach ($subdir in @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Favorites', '.cache')) {
+        foreach ($subdir in @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Favorites', '.cache', '.magnitude', '.config')) {
             $path = Join-Path $userProfile $subdir
             if (Test-Path $path) {
                 Get-ChildItem $path -Force -ErrorAction SilentlyContinue |
                     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Remove-Item (Join-Path $userProfile ".magnitude") -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($browserRoot in @(
+            (Join-Path $userProfile "AppData\Local\Google\Chrome\User Data"),
+            (Join-Path $userProfile "AppData\Local\Chromium\User Data")
+        )) {
+            if (Test-Path $browserRoot) {
+                Remove-Item $browserRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
         # User temp
@@ -670,6 +823,14 @@ function Invoke-Assign($unifyKey) {
         }
     }
 
+    # Restore browser/GUI profile into home (always when companion blob exists).
+    if ($assistantId) {
+        $profileBucket = Get-Metadata "archive-bucket"
+        if ($profileBucket) {
+            Restore-DesktopProfile $assistantId $profileBucket
+        }
+    }
+
     # SSH authorized_keys + restart SSHD
     try {
         if ($sshPublicKey) {
@@ -887,10 +1048,10 @@ function Invoke-Release {
         Write-Log "WARNING: failed to reset VNC password: $_"
     }
 
-    # Archive filesystem to GCS before unmount
+    # Archive Local/ + desktop-profile to GCS before unmount/scrub
+    $assistantId = Get-Metadata "assistant-id"
+    $archiveBucket = Get-Metadata "archive-bucket"
     if (Test-Path "C:\Unity\Local") {
-        $assistantId = Get-Metadata "assistant-id"
-        $archiveBucket = Get-Metadata "archive-bucket"
         if ($assistantId -and $archiveBucket) {
             $archivePath = "gs://${archiveBucket}/${assistantId}.tar.gz"
             Write-Log "Archiving C:\Unity\Local to $archivePath"
@@ -904,6 +1065,9 @@ function Invoke-Release {
                 Write-Log "WARNING: archive upload failed, PD data will be preserved as fallback"
             }
         }
+    }
+    if ($assistantId -and $archiveBucket) {
+        Archive-DesktopProfile $assistantId $archiveBucket
     }
 
     # Unmount persistent disk

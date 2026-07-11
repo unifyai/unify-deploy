@@ -171,7 +171,7 @@ if [[ -z "$CHROME_PATH" ]]; then
     echo "Error: Chromium not found in Playwright cache" >&2
     exit 1
 fi
-exec "$CHROME_PATH" --no-sandbox "$@"
+exec "$CHROME_PATH" --no-sandbox --password-store=basic "$@"
 CHROMEWRAPPER
 chmod +x /usr/local/bin/chromium-browser
 

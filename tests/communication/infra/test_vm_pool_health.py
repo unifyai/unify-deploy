@@ -14,6 +14,7 @@ from communication.infra.vm_helpers import (
     _start_one_stopped_vm,
     assign_pool_vm,
     delete_assistant_disk,
+    delete_assistant_pool_archive,
     reclaim_orphaned_assistant_disk,
     release_pool_vm,
     replenish_pool,
@@ -1002,6 +1003,46 @@ def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
 
     with pytest.raises(AssistantDiskInUseError):
         delete_assistant_disk("assistant-123")
+
+
+def test_delete_assistant_pool_archive_removes_local_and_profile_blobs(monkeypatch):
+    deleted: list[str] = []
+
+    class FakeBlob:
+        def __init__(self, name: str, exists: bool):
+            self.name = name
+            self._exists = exists
+
+        def exists(self):
+            return self._exists
+
+        def delete(self):
+            deleted.append(self.name)
+
+    class FakeBucket:
+        def blob(self, name: str):
+            # Local archive present; profile present
+            return FakeBlob(name, exists=True)
+
+    class FakeClient:
+        def bucket(self, _name: str):
+            return FakeBucket()
+
+    monkeypatch.setattr(
+        "google.cloud.storage.Client",
+        lambda *args, **kwargs: FakeClient(),
+    )
+    monkeypatch.delenv("GCP_SA_KEY", raising=False)
+
+    result = delete_assistant_pool_archive("asst-42")
+
+    assert result["assistant_id"] == "asst-42"
+    assert deleted == [
+        "asst-42.tar.gz",
+        "asst-42-desktop-profile.tar.gz",
+    ]
+    assert result["deleted"] == deleted
+    assert result["missing"] == []
 
 
 def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):

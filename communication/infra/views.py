@@ -104,6 +104,7 @@ from .vm_helpers import (
     split_binding_runtime_vms,
     detach_assistant_disk,
     delete_assistant_disk,
+    delete_assistant_pool_archive,
     reconcile_orphaned_disks,
 )
 from .tunnel_helpers import (
@@ -2920,6 +2921,17 @@ async def delete_pool_disk_endpoint(assistant_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to delete assistant disk: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/vm/pool/archive/{assistant_id}")
+async def delete_pool_archive_endpoint(assistant_id: str):
+    """Delete an assistant's Local + desktop-profile GCS archives (on unhire)."""
+    try:
+        result = await asyncio.to_thread(delete_assistant_pool_archive, assistant_id)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to delete assistant archives: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1944,6 +1944,63 @@ def delete_assistant_disk(assistant_id: str) -> bool:
         return False
 
 
+def _assistant_archive_blob_names(assistant_id: str) -> list[str]:
+    """GCS object names for an assistant's Local and desktop-profile archives."""
+    return [
+        f"{assistant_id}.tar.gz",
+        f"{assistant_id}-desktop-profile.tar.gz",
+    ]
+
+
+def delete_assistant_pool_archive(assistant_id: str) -> dict:
+    """Delete Local + desktop-profile GCS archives for an assistant.
+
+    Returns a summary of which blobs were deleted. Missing blobs are
+    treated as success (idempotent teardown).
+    """
+    import os
+    import json as _json
+    from google.cloud import storage
+    from google.oauth2.service_account import Credentials
+
+    deleted: list[str] = []
+    missing: list[str] = []
+    try:
+        creds_json = os.getenv("GCP_SA_KEY")
+        if creds_json:
+            creds = Credentials.from_service_account_info(_json.loads(creds_json))
+            client = storage.Client(credentials=creds)
+        else:
+            client = storage.Client()
+        bucket = client.bucket(POOL_ASSISTANT_ARCHIVE_BUCKET)
+        for name in _assistant_archive_blob_names(assistant_id):
+            blob = bucket.blob(name)
+            if blob.exists():
+                blob.delete()
+                deleted.append(name)
+                logger.info(
+                    "Deleted assistant archive gs://%s/%s",
+                    POOL_ASSISTANT_ARCHIVE_BUCKET,
+                    name,
+                )
+            else:
+                missing.append(name)
+    except Exception as exc:
+        logger.warning(
+            "Failed deleting assistant archives for %s: %s",
+            assistant_id,
+            exc,
+        )
+        raise
+
+    return {
+        "assistant_id": assistant_id,
+        "bucket": POOL_ASSISTANT_ARCHIVE_BUCKET,
+        "deleted": deleted,
+        "missing": missing,
+    }
+
+
 def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
     """Detach every assistant data disk still attached to this VM.
 
@@ -4446,9 +4503,14 @@ def _assistant_exists(assistant_id: str) -> bool:
 
 
 def _assistant_archive_info(assistant_id: str):
-    """Return ``(exists, updated_at)`` for the assistant's GCS archive.
+    """Return ``(exists, updated_at)`` for the assistant's Local GCS archive.
 
     Looks up ``gs://{POOL_ASSISTANT_ARCHIVE_BUCKET}/{assistant_id}.tar.gz``.
+    The companion desktop-profile blob
+    (``{assistant_id}-desktop-profile.tar.gz``) is best-effort session
+    state and is not required for orphan-disk GC — missing profile only
+    means a cold browser login on next assign.
+
     Any exception is swallowed and reported as ``(False, None)`` so
     callers fail safe (keep the PD) on transient GCS issues.
     """
@@ -4476,6 +4538,32 @@ def _assistant_archive_info(assistant_id: str):
             exc,
         )
         return False, None
+
+
+def _assistant_desktop_profile_archive_exists(assistant_id: str) -> bool:
+    """Return whether the companion desktop-profile archive blob exists."""
+    import os
+    import json as _json
+    from google.cloud import storage
+    from google.oauth2.service_account import Credentials
+
+    try:
+        creds_json = os.getenv("GCP_SA_KEY")
+        if creds_json:
+            creds = Credentials.from_service_account_info(_json.loads(creds_json))
+            client = storage.Client(credentials=creds)
+        else:
+            client = storage.Client()
+        bucket = client.bucket(POOL_ASSISTANT_ARCHIVE_BUCKET)
+        blob = bucket.get_blob(f"{assistant_id}-desktop-profile.tar.gz")
+        return blob is not None
+    except Exception as exc:
+        logger.warning(
+            "GCS desktop-profile probe failed for assistant_id=%s: %s",
+            assistant_id,
+            exc,
+        )
+        return False
 
 
 # =============================================================================
