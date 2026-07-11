@@ -22,6 +22,8 @@ deploy/logs/
 *Zone.Identifier
 comm-sa.json
 cert-manager-dns-key.json
+deploy/selfhost/comms_sa.json
+deploy/selfhost/comms_twilio.env
 CLAUDE.md
 __pypackages__/
 

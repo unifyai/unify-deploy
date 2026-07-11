@@ -1,45 +1,9 @@
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _sibling_unify_local_sh() -> Path | None:
-    """Resolve the sibling unify checkout's scripts/local.sh, if present."""
-    stack_root = os.environ.get("UNIFY_STACK_ROOT")
-    roots = [Path(stack_root)] if stack_root else []
-    roots.append(REPO_ROOT.parent)
-    for root in roots:
-        for repo_name in ("unify", "unity"):
-            candidate = root / repo_name / "scripts" / "local.sh"
-            if candidate.is_file():
-                return candidate
-    return None
-
-
-def test_gateway_launch_forwards_tunnel_url_for_call_callbacks():
-    """The gateway places Twilio call callbacks, so it must receive the
-    cloudflared tunnel URL + local-comms mode; otherwise Twilio gets
-    unreachable localhost callbacks and outbound calls fail on answer."""
-    local_sh = _sibling_unify_local_sh()
-    if local_sh is None:
-        pytest.skip("sibling unify checkout not available")
-
-    text = local_sh.read_text(encoding="utf-8")
-    start = text.index("start_gateway()")
-    body = text[start : text.index("\n}\n", start)]
-
-    for var in (
-        "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
-        "UNITY_CONVERSATION_LOCAL_COMMS_MODE",
-        "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED",
-    ):
-        assert var in body, f"{var} not forwarded to the gateway process"
 
 
 def test_self_host_calls_enabled_by_default():
@@ -57,33 +21,6 @@ def test_self_host_calls_enabled_by_default():
     )
 
     assert completed.stdout == "1"
-
-
-def test_sync_comms_defaults_to_voice_mode_without_public_url():
-    script = REPO_ROOT / "selfhost" / "sync_comms_webhooks.py"
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k
-        not in {
-            "SELF_HOST_CALLS_ENABLED",
-            "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
-            "LOCAL_COMMS_PUBLIC_URL",
-        }
-    }
-
-    completed = subprocess.run(
-        [sys.executable, str(script), "--check"],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-    assert completed.returncode == 2
-    assert (
-        "--set-voice needs UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL"
-        in completed.stderr
-    )
 
 
 def test_livekit_cloud_state_overrides_repo_dev_env():

@@ -76,6 +76,24 @@ PY
 
 update_agent_service_env
 
+disable_desktop_screen_blanking() {
+  # The self-host desktop is a dedicated virtual display. XFCE's screensaver
+  # otherwise re-arms X11's five-minute timeout and view-only VNC sessions
+  # receive a solid black framebuffer until real input wakes the display.
+  rm -f /etc/xdg/autostart/xfce4-screensaver.desktop /etc/xdg/autostart/xscreensaver.desktop
+  (
+    until DISPLAY=:99 xset q >/dev/null 2>&1; do
+      sleep 1
+    done
+    pkill -x xfce4-screensaver >/dev/null 2>&1 || true
+    DISPLAY=:99 xset s off s noblank >/dev/null 2>&1
+    DISPLAY=:99 xset -dpms >/dev/null 2>&1 || true
+    log "Disabled desktop screen blanking"
+  ) &
+}
+
+disable_desktop_screen_blanking
+
 ensure_playwright_cache_for_unityuser() {
   local root_cache="/root/.cache/ms-playwright"
   local user_cache="/Unity/.cache/ms-playwright"

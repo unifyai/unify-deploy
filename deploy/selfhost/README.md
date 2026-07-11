@@ -222,6 +222,41 @@ Edit `~/.unity/.env` for BYOK keys and secrets. After changes:
 unity restart
 ```
 
+### Internal Coordinator communications
+
+Shared Gmail/Twilio Coordinator identities are disabled by default. Internal
+operators can opt in by placing the organization-issued credentials in:
+
+- `~/.unity/comms_sa.json` for the Gmail service account
+- `~/.unity/comms_twilio.env` for the main and WhatsApp Twilio credential pairs
+  when calls are enabled; this file may stay empty for Gmail-only mode
+
+Both files stay on the host with mode `0600` and are mounted read-only only
+into services that need them. Without the calls profile, internal comms is
+Gmail-only: shared Twilio polling is rejected because there is no cross-host
+ownership lease. Enable Gmail polling with:
+
+```dotenv
+SELF_HOST_INTERNAL_COMMS_ENABLED=true
+```
+
+Enable the restricted Twilio call edge as well with:
+
+```dotenv
+SELF_HOST_INTERNAL_CALLS_ENABLED=true
+```
+
+The calls setting activates both Compose profiles. A pinned cloudflared quick
+tunnel reaches a Caddy proxy that accepts only the exact local Twilio call,
+status, and TwiML paths plus the signed LiveKit recording-complete path. The
+call controller publishes the current tunnel URL to `/runtime/call-tunnel-url`,
+provisions LiveKit SIP, and acquires callbacks under a persistent installation
+owner ID. It requires complete main-account and WhatsApp Twilio credential
+pairs. Twilio text polling starts only after both owner-tagged call callbacks
+are verified, and stops if that remote lease is lost. Full shutdown restores
+the captured prior callback state only when the callbacks still match this
+installation; otherwise shutdown stops and reports the ownership conflict.
+
 Workspace files live at `~/Unity/Local` (bind-mounted into CM and desktop containers).
 
 ## Developer source install
@@ -301,8 +336,8 @@ bash selfhost/stack.sh up
 
 On `up` the stack: installs `cloudflared`, starts the tunnel,
 ensures a LiveKit Cloud inbound SIP trunk covers the localhost numbers
-(`selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
-(`selfhost/sync_comms_webhooks.py --set-voice`). If any required call setup
+(`deploy/selfhost/provision_call_sip.py`), and points the voice webhook at the tunnel
+(`deploy/selfhost/sync_comms_webhooks.py --set-voice`). If any required call setup
 step fails, startup stops rather than leaving a broken inbound-call path.
 `stack.sh down --full` reverts the voice webhook and stops the tunnel.
 

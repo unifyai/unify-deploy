@@ -82,6 +82,8 @@ services:
   orchestra-owner-bootstrap:
     <<: *orchestra_image
     command: ["python", "scripts/bootstrap_self_host.py"]
+    env_file:
+    - ./coordinator.env
     environment:
       ORCHESTRA_DB_HOST: postgres
       ORCHESTRA_DB_PORT: 5432
@@ -118,6 +120,8 @@ services:
 
   orchestra:
     <<: *orchestra_image
+    env_file:
+    - ./coordinator.env
     environment:
       ORCHESTRA_HOST: 0.0.0.0
       ORCHESTRA_PORT: 8000
@@ -216,6 +220,8 @@ services:
   gateway:
     <<: *unity_image
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/gateway-entrypoint.sh"]
+    env_file:
+    - ./coordinator.env
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
@@ -227,6 +233,8 @@ services:
       UNITY_COMMS_URL: http://gateway:8001
       UNITY_ADAPTERS_URL: http://gateway:8001
       UNITY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
+      SELF_HOST_INTERNAL_COMMS_ENABLED: ${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}
+      SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
       LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
@@ -239,6 +247,12 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
     - local-bucket:/data/local-bucket
+    - runtime:/runtime
+    - ./gateway-entrypoint.sh:/app/deploy/selfhost/gateway-entrypoint.sh:ro
+    - ./load-comms-secrets.sh:/app/deploy/selfhost/load-comms-secrets.sh:ro
+    secrets:
+    - comms_gmail
+    - comms_twilio
     depends_on:
       orchestra:
         condition: service_healthy
@@ -258,7 +272,7 @@ services:
   console:
     <<: *console_image
     ports:
-    - "${CONSOLE_PORT:-3000}:3000"
+    - "127.0.0.1:${CONSOLE_PORT:-3000}:3000"
     environment:
       SELF_HOST: "1"
       NEXT_PUBLIC_SELF_HOST: "1"
@@ -298,6 +312,8 @@ services:
   unity-cm:
     <<: *unity_image
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/cm-entrypoint.sh"]
+    env_file:
+    - ./coordinator.env
     environment:
       SELF_HOST: "1"
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
@@ -310,6 +326,9 @@ services:
       UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       UNITY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
       UNITY_CONVERSATION_LOCAL_COMMS_PORT: 8787
+      UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL_FILE: /runtime/call-tunnel-url
+      SELF_HOST_INTERNAL_COMMS_ENABLED: ${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}
+      SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
       UNITY_DESKTOP_SHARED_MOUNT: "1"
       UNITY_LOCAL_ROOT: /Unity/Local
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
@@ -337,6 +356,10 @@ services:
     volumes:
     - runtime:/runtime
     - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    - ./cm-entrypoint.sh:/app/deploy/selfhost/cm-entrypoint.sh:ro
+    - ./load-comms-secrets.sh:/app/deploy/selfhost/load-comms-secrets.sh:ro
+    secrets:
+    - comms_twilio
     ports:
     - "127.0.0.1:8787:8787"
     depends_on:
@@ -365,7 +388,7 @@ services:
   desktop-proxy:
     image: caddy:2-alpine
     ports:
-    - "8090:8090"
+    - "127.0.0.1:8090:8090"
     volumes:
     - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
@@ -390,7 +413,134 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  comms-bridge:
+    <<: *unity_image
+    profiles: ["internal-comms"]
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/comms-bridge-entrypoint.sh"]
+    env_file:
+    - ./coordinator.env
+    environment:
+      HOME: /runtime
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      COMMS_BRIDGE_INGRESS_URL: http://unity-cm:8787
+      SELF_HOST_STATE_DIR: /runtime
+      SELF_HOST_COMMS_TWILIO_FILE: /run/secrets/comms_twilio
+      SELF_HOST_COMMS_GMAIL_FILE: /run/secrets/comms_gmail
+      GMAIL_BRIDGE_SA_FILE: /run/secrets/comms_gmail
+      SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
+      SELF_HOST_CALL_CONTROLLER_READY_FILE: /runtime/call-controller-ready
+      SELF_HOST_COMMS_BRIDGE_READY_FILE: /runtime/comms-bridge-ready
+    volumes:
+    - runtime:/runtime
+    - ./comms-bridge-entrypoint.sh:/app/deploy/selfhost/comms-bridge-entrypoint.sh:ro
+    - ./load-comms-secrets.sh:/app/deploy/selfhost/load-comms-secrets.sh:ro
+    - ./comms_ingress_bridge.py:/app/deploy/selfhost/comms_ingress_bridge.py:ro
+    - ./sync_comms_webhooks.py:/app/deploy/selfhost/sync_comms_webhooks.py:ro
+    secrets:
+    - comms_gmail
+    - comms_twilio
+    depends_on:
+      comms-runtime-init:
+        condition: service_completed_successfully
+      orchestra:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      unity-cm:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /runtime/comms-bridge-ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+    restart: unless-stopped
+
+  call-proxy:
+    image: caddy:2-alpine
+    profiles: ["internal-calls"]
+    volumes:
+    - ./call-proxy.Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      unity-cm:
+        condition: service_started
+    restart: unless-stopped
+
+  comms-runtime-init:
+    <<: *unity_image
+    profiles: ["internal-comms", "internal-calls"]
+    command:
+    - /bin/bash
+    - -c
+    - rm -f /runtime/call-tunnel.log /runtime/call-tunnel-url /runtime/call-controller-ready /runtime/comms-bridge-ready
+    volumes:
+    - runtime:/runtime
+    restart: "no"
+
+  call-tunnel:
+    image: cloudflare/cloudflared:2026.7.1
+    profiles: ["internal-calls"]
+    command:
+    - tunnel
+    - --no-autoupdate
+    - --logfile
+    - /runtime/call-tunnel.log
+    - --loglevel
+    - info
+    - --url
+    - http://call-proxy:8080
+    volumes:
+    - runtime:/runtime
+    depends_on:
+      comms-runtime-init:
+        condition: service_completed_successfully
+      call-proxy:
+        condition: service_started
+    restart: unless-stopped
+
+  call-controller:
+    <<: *unity_image
+    profiles: ["internal-calls"]
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/call-controller-entrypoint.sh"]
+    env_file:
+    - ./coordinator.env
+    environment:
+      HOME: /runtime
+      SELF_HOST_STATE_DIR: /runtime
+      SELF_HOST_COMMS_TWILIO_FILE: /run/secrets/comms_twilio
+      SELF_HOST_REQUIRE_PHONE_CALLS: "true"
+      SELF_HOST_REQUIRE_WHATSAPP_CALLS: "true"
+      LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
+      LIVEKIT_SIP_URI: ${LIVEKIT_SIP_URI:-}
+    volumes:
+    - runtime:/runtime
+    - ./call-controller-entrypoint.sh:/app/deploy/selfhost/call-controller-entrypoint.sh:ro
+    - ./load-comms-secrets.sh:/app/deploy/selfhost/load-comms-secrets.sh:ro
+    - ./provision_call_sip.py:/app/deploy/selfhost/provision_call_sip.py:ro
+    - ./sync_comms_webhooks.py:/app/deploy/selfhost/sync_comms_webhooks.py:ro
+    secrets:
+    - comms_twilio
+    depends_on:
+      call-tunnel:
+        condition: service_started
+      unity-cm:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /runtime/call-controller-ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   local-bucket:
   runtime:
+
+secrets:
+  comms_gmail:
+    file: ./comms_sa.json
+  comms_twilio:
+    file: ./comms_twilio.env

@@ -1,0 +1,22 @@
+:8080 {
+	@provider_callbacks {
+		method POST
+		path \
+ /local/livekit/recording-complete \
+ /local/twilio/call \
+ /local/twilio/call-status \
+ /local/twilio/twiml \
+ /local/twilio/whatsapp-call \
+ /local/twilio/whatsapp-call-status \
+ /local/twilio/whatsapp-status \
+ /local/twilio/conference-status
+	}
+
+	handle @provider_callbacks {
+		reverse_proxy unity-cm:8787
+	}
+
+	handle {
+		respond 404
+	}
+}

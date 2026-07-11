@@ -104,6 +104,7 @@ from .vm_helpers import (
     split_binding_runtime_vms,
     detach_assistant_disk,
     delete_assistant_disk,
+    delete_assistant_pool_archive,
     reconcile_orphaned_disks,
 )
 from .tunnel_helpers import (
@@ -565,6 +566,8 @@ def _build_startup_payload(
     voice_id: str,
     default_model: str,
     default_reasoning_effort: str,
+    slow_brain_model: str,
+    slow_brain_reasoning_effort: str,
     desktop_mode: str,
     managed_desktop_status: str | None = None,
     desktop_url: str,
@@ -613,6 +616,8 @@ def _build_startup_payload(
         "voice_id": voice_id,
         "default_model": default_model,
         "default_reasoning_effort": default_reasoning_effort,
+        "slow_brain_model": slow_brain_model,
+        "slow_brain_reasoning_effort": slow_brain_reasoning_effort,
         "desktop_mode": desktop_mode,
         "managed_desktop_status": managed_desktop_status,
         "desktop_url": desktop_url if desktop_url else None,
@@ -1132,6 +1137,8 @@ async def start_job(
     voice_id: str = Form(""),
     default_model: str = Form(""),
     default_reasoning_effort: str = Form(""),
+    slow_brain_model: str = Form(""),
+    slow_brain_reasoning_effort: str = Form(""),
     desktop_mode: str = Form("none"),
     desktop_url: str = Form(""),
     desktop_required: str = Form(""),
@@ -1244,6 +1251,8 @@ async def start_job(
             voice_id=voice_id,
             default_model=default_model,
             default_reasoning_effort=default_reasoning_effort,
+            slow_brain_model=slow_brain_model,
+            slow_brain_reasoning_effort=slow_brain_reasoning_effort,
             desktop_mode=effective_desktop_mode,
             managed_desktop_status=orchestra_assistant.get("managed_desktop_status"),
             desktop_url=desktop_url,
@@ -2920,6 +2929,17 @@ async def delete_pool_disk_endpoint(assistant_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to delete assistant disk: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/vm/pool/archive/{assistant_id}")
+async def delete_pool_archive_endpoint(assistant_id: str):
+    """Delete an assistant's Local + desktop-profile GCS archives (on unhire)."""
+    try:
+        result = await asyncio.to_thread(delete_assistant_pool_archive, assistant_id)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to delete assistant archives: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

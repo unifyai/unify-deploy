@@ -604,16 +604,23 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
             f"https://{vm_hostname}/api/exec",
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             json={
-                "command": "echo 'archive-test-marker' > /Unity/Local/archive-test.txt",
-                "timeout": 5000,
+                "command": (
+                    "echo 'archive-test-marker' > /Unity/Local/archive-test.txt && "
+                    "mkdir -p /Unity/.magnitude/browser_states "
+                    "/Unity/.config/chromium/Default && "
+                    "echo '{\"login\":true}' > /Unity/.magnitude/browser_states/profile.json && "
+                    "echo 'cookie-db' > /Unity/.config/chromium/Default/Cookies && "
+                    "echo '{}' > /Unity/.config/chromium/Default/Preferences"
+                ),
+                "timeout": 10000,
             },
-            timeout=10,
+            timeout=15,
             verify=False,
         )
         assert (
             write_resp.status_code == 200
         ), f"Failed to write marker file: {write_resp.status_code} {write_resp.text}"
-        print("  Marker file written to /Unity/Local/archive-test.txt")
+        print("  Marker + desktop-profile artifacts written")
 
         comms.post(
             "/infra/vm/pool/release",
@@ -623,27 +630,75 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
                 "vm_name": archive_vm_name,
             },
         )
-        print("  VM released, polling for archive (up to 90s)...")
+        print("  VM released, polling for archives (up to 90s)...")
 
         import subprocess
 
+        profile_path = f"gs://{archive_bucket}/{archive_aid}-desktop-profile.tar.gz"
         archive_found = False
+        profile_found = False
         for attempt in range(18):
             time.sleep(5)
-            result = subprocess.run(
-                ["gsutil", "-q", "stat", archive_path],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode == 0:
-                print(f"  GCS archive found after {(attempt + 1) * 5}s")
-                archive_found = True
+            if not archive_found:
+                result = subprocess.run(
+                    ["gsutil", "-q", "stat", archive_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if result.returncode == 0:
+                    print(f"  Local GCS archive found after {(attempt + 1) * 5}s")
+                    archive_found = True
+            if not profile_found:
+                result = subprocess.run(
+                    ["gsutil", "-q", "stat", profile_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if result.returncode == 0:
+                    print(f"  Desktop-profile archive found after {(attempt + 1) * 5}s")
+                    profile_found = True
+            if archive_found and profile_found:
                 break
         if not archive_found:
             pytest.skip(
                 "GCS archive not found after 90s — watcher may not have the "
                 "archive scripts deployed yet (requires VM image update)",
+            )
+        if not profile_found:
+            pytest.skip(
+                "Desktop-profile archive not found — watcher scripts may not "
+                "include desktop-profile archive yet (requires VM image update)",
+            )
+
+        # After release, profile paths must be scrubbed from the pool VM home.
+        scrub_resp = requests.post(
+            f"https://{vm_hostname}/api/exec",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            json={
+                "command": (
+                    "test ! -e /Unity/.magnitude/browser_states/profile.json && "
+                    "test ! -e /Unity/.config/chromium/Default/Cookies && "
+                    "echo scrubbed"
+                ),
+                "timeout": 10000,
+            },
+            timeout=15,
+            verify=False,
+        )
+        # Agent may already be stopped after release; scrub check is best-effort.
+        if scrub_resp.status_code == 200:
+            scrub_out = scrub_resp.json().get(
+                "output",
+                scrub_resp.json().get("stdout", ""),
+            )
+            assert "scrubbed" in scrub_out, f"Profile not scrubbed: {scrub_out!r}"
+            print("  Scrub verified: profile paths removed from VM home")
+        else:
+            print(
+                f"  Scrub UI check skipped (agent status {scrub_resp.status_code}); "
+                "archive presence is the primary assertion",
             )
 
     finally:
@@ -652,6 +707,16 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
 
         subprocess.run(
             ["gsutil", "-q", "rm", archive_path],
+            capture_output=True,
+            timeout=15,
+        )
+        subprocess.run(
+            [
+                "gsutil",
+                "-q",
+                "rm",
+                f"gs://{archive_bucket}/{archive_aid}-desktop-profile.tar.gz",
+            ],
             capture_output=True,
             timeout=15,
         )
@@ -792,6 +857,16 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
 
         subprocess.run(
             ["gsutil", "-q", "rm", archive_path],
+            capture_output=True,
+            timeout=15,
+        )
+        subprocess.run(
+            [
+                "gsutil",
+                "-q",
+                "rm",
+                f"gs://{archive_bucket}/{restore_aid}-desktop-profile.tar.gz",
+            ],
             capture_output=True,
             timeout=15,
         )

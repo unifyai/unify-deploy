@@ -6,9 +6,13 @@ import textwrap
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 BASH_WATCHER = REPO_ROOT / "communication/infra/scripts/unity-pool-watcher.sh"
 POWERSHELL_WATCHER = REPO_ROOT / "communication/infra/scripts/unity-pool-watcher.ps1"
+INSTALL_BASE = (
+    REPO_ROOT
+    / "communication/infra/scripts/ubuntu-vm-custom-image/packer/scripts/install-base.sh"
+)
 POWERSHELL = shutil.which("pwsh")
 
 RELEASE_TRIGGER_CASES = [
@@ -143,3 +147,94 @@ def test_powershell_pool_watcher_release_decision(
         text=True,
     )
     assert (result.stdout.strip() == "true") is expected
+
+
+def test_bash_watcher_defines_desktop_profile_helpers():
+    text = BASH_WATCHER.read_text()
+    assert "archive_desktop_profile()" in text
+    assert "restore_desktop_profile()" in text
+    assert "desktop-profile.tar.gz" in text
+    assert "ensure_chromium_password_store_basic()" in text
+    # xfce4 must no longer be preserved across assistants on the shared pool VM
+    assert '! -path "/Unity/.config/xfce4"' not in text
+    assert "rm -rf /Unity/.magnitude" in text
+
+
+def test_powershell_watcher_scrubs_magnitude_and_archives_profile():
+    text = POWERSHELL_WATCHER.read_text()
+    assert "function Archive-DesktopProfile" in text
+    assert "function Restore-DesktopProfile" in text
+    assert "desktop-profile.tar.gz" in text
+    assert ".magnitude" in text
+    # Scrub must wipe magnitude / Chrome profile dirs after archive
+    assert 'Remove-Item (Join-Path $userProfile ".magnitude")' in text
+    assert "AppData\\Local\\Google\\Chrome\\User Data" in text
+
+
+def test_chromium_wrapper_uses_password_store_basic():
+    text = INSTALL_BASE.read_text()
+    assert "--password-store=basic" in text
+
+
+def test_bash_stage_chromium_profile_copies_essentials(tmp_path):
+    """_stage_chromium_profile keeps Cookies/prefs and skips caches."""
+    src = tmp_path / "chromium"
+    default = src / "Default"
+    default.mkdir(parents=True)
+    (default / "Cookies").write_text("cookie-db")
+    (default / "Preferences").write_text("{}")
+    (default / "Cache").mkdir()
+    (default / "Cache" / "f").write_text("cache")
+    (src / "Local State").write_text("local")
+
+    dest = tmp_path / "staged"
+    command = textwrap.dedent(
+        f"""
+        source {shlex.quote(str(BASH_WATCHER))}
+        if _stage_chromium_profile {shlex.quote(str(src))} {shlex.quote(str(dest))}; then
+            printf 'ok'
+        else
+            printf 'fail'
+        fi
+        """,
+    )
+    result = subprocess.run(
+        ["bash", "-lc", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "ok"
+    assert (dest / "Default" / "Cookies").read_text() == "cookie-db"
+    assert (dest / "Default" / "Preferences").read_text() == "{}"
+    assert (dest / "Local State").read_text() == "local"
+    assert not (dest / "Default" / "Cache").exists()
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="pwsh not installed")
+def test_powershell_stage_chromium_profile_copies_essentials(tmp_path):
+    src = tmp_path / "User Data"
+    default = src / "Default"
+    default.mkdir(parents=True)
+    (default / "Cookies").write_text("cookie-db")
+    (default / "Preferences").write_text("{}")
+    (default / "Cache").mkdir()
+    (src / "Local State").write_text("local")
+    dest = tmp_path / "staged"
+
+    command = textwrap.dedent(
+        f"""
+        . {_powershell_literal(str(POWERSHELL_WATCHER))} -SkipMain
+        $ok = Stage-ChromiumProfile {_powershell_literal(str(src))} {_powershell_literal(str(dest))}
+        if ($ok) {{ [Console]::Write('ok') }} else {{ [Console]::Write('fail') }}
+        """,
+    )
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "ok"
+    assert (dest / "Default" / "Cookies").read_text() == "cookie-db"
+    assert not (dest / "Default" / "Cache").exists()

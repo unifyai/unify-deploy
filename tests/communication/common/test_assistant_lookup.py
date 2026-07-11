@@ -89,6 +89,8 @@ def test_assistant_payload_carries_default_model_fields():
         "voice_id": "voice-1",
         "default_model": "claude-fable-5@anthropic",
         "default_reasoning_effort": "high",
+        "slow_brain_model": "gpt-5.6-terra@openai",
+        "slow_brain_reasoning_effort": "high",
         "self_contact_id": 1,
         "boss_contact_id": 2,
     }
@@ -97,8 +99,12 @@ def test_assistant_payload_carries_default_model_fields():
 
     assert payload["default_model"] == "claude-fable-5@anthropic"
     assert payload["default_reasoning_effort"] == "high"
+    assert payload["slow_brain_model"] == "gpt-5.6-terra@openai"
+    assert payload["slow_brain_reasoning_effort"] == "high"
     assert "default_model" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
     assert "default_reasoning_effort" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    assert "slow_brain_model" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    assert "slow_brain_reasoning_effort" in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
 
 
 def test_get_assistant_skips_universal_coordinator_email_lookup(monkeypatch):

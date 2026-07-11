@@ -124,6 +124,149 @@ scrub_git_tokens() {
     done
 }
 
+# Desktop-profile paths live in unityuser HOME (/Unity), not /Unity/Local, so they
+# are not rcloned into the Unify pod. They ride a sibling GCS blob:
+#   gs://{archive-bucket}/{assistant_id}-desktop-profile.tar.gz
+DESKTOP_PROFILE_CHROMIUM_FILES=(
+    "Cookies"
+    "Login Data"
+    "Login Data-journal"
+    "Web Data"
+    "Web Data-journal"
+    "Preferences"
+    "Bookmarks"
+    "Bookmarks.bak"
+    "Network Persistent State"
+)
+DESKTOP_PROFILE_CHROMIUM_DIRS=(
+    "Local Storage"
+    "Session Storage"
+)
+
+ensure_chromium_password_store_basic() {
+    # Existing pool images may lack --password-store=basic; patch the wrapper
+    # idempotently so archived Cookies/Login Data restore across VMs.
+    local wrapper=/usr/local/bin/chromium-browser
+    [[ -f "$wrapper" ]] || return 0
+    if grep -q -- '--password-store=basic' "$wrapper" 2>/dev/null; then
+        return 0
+    fi
+    if grep -q -- 'exec "$CHROME_PATH"' "$wrapper" 2>/dev/null; then
+        sed -i 's|exec "$CHROME_PATH" --no-sandbox "$@"|exec "$CHROME_PATH" --no-sandbox --password-store=basic "$@"|' "$wrapper"
+        if ! grep -q -- '--password-store=basic' "$wrapper" 2>/dev/null; then
+            sed -i 's|exec "$CHROME_PATH" "$@"|exec "$CHROME_PATH" --no-sandbox --password-store=basic "$@"|' "$wrapper"
+        fi
+        if grep -q -- '--password-store=basic' "$wrapper" 2>/dev/null; then
+            log "Patched chromium-browser wrapper with --password-store=basic"
+        else
+            log "WARNING: failed to patch chromium-browser for password-store=basic"
+        fi
+    fi
+}
+
+_stage_chromium_profile() {
+    local src_root=$1
+    local dest_root=$2
+    local src_default="$src_root/Default"
+    local dest_default="$dest_root/Default"
+    [[ -d "$src_default" ]] || return 1
+    mkdir -p "$dest_default"
+    local name
+    for name in "${DESKTOP_PROFILE_CHROMIUM_FILES[@]}"; do
+        if [[ -e "$src_default/$name" ]]; then
+            cp -a "$src_default/$name" "$dest_default/$name" 2>/dev/null || true
+        fi
+    done
+    for name in "${DESKTOP_PROFILE_CHROMIUM_DIRS[@]}"; do
+        if [[ -d "$src_default/$name" ]]; then
+            cp -a "$src_default/$name" "$dest_default/$name" 2>/dev/null || true
+        fi
+    done
+    if [[ -f "$src_root/Local State" ]]; then
+        cp -a "$src_root/Local State" "$dest_root/Local State" 2>/dev/null || true
+    fi
+    # Only keep the staged profile if we copied at least one artifact.
+    if [[ -z "$(find "$dest_root" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+archive_desktop_profile() {
+    local assistant_id=$1
+    local archive_bucket=$2
+    local archive_path="gs://${archive_bucket}/${assistant_id}-desktop-profile.tar.gz"
+    local staging
+    staging=$(mktemp -d /tmp/unity-desktop-profile.XXXXXX)
+    local staged=0
+
+    if [[ -d /Unity/.magnitude/browser_states ]]; then
+        mkdir -p "$staging/.magnitude"
+        cp -a /Unity/.magnitude/browser_states "$staging/.magnitude/" 2>/dev/null && staged=1
+    fi
+
+    if [[ -d /Unity/.config/chromium ]]; then
+        mkdir -p "$staging/.config"
+        if _stage_chromium_profile /Unity/.config/chromium "$staging/.config/chromium"; then
+            staged=1
+        else
+            rm -rf "$staging/.config/chromium"
+        fi
+    fi
+    if [[ -d /Unity/.config/google-chrome ]]; then
+        mkdir -p "$staging/.config"
+        if _stage_chromium_profile /Unity/.config/google-chrome "$staging/.config/google-chrome"; then
+            staged=1
+        else
+            rm -rf "$staging/.config/google-chrome"
+        fi
+    fi
+
+    if [[ -d /Unity/.config/xfce4 ]]; then
+        mkdir -p "$staging/.config"
+        cp -a /Unity/.config/xfce4 "$staging/.config/" 2>/dev/null && staged=1
+    fi
+
+    if [[ "$staged" -eq 0 ]]; then
+        log "No desktop-profile artifacts to archive"
+        rm -rf "$staging"
+        return 0
+    fi
+
+    log "Archiving desktop profile to $archive_path"
+    if tar czf - -C "$staging" . | gsutil -q cp - "$archive_path" 2>/dev/null; then
+        log "Desktop-profile archive uploaded successfully"
+    else
+        log "WARNING: desktop-profile archive upload failed"
+    fi
+    rm -rf "$staging"
+}
+
+restore_desktop_profile() {
+    local assistant_id=$1
+    local archive_bucket=$2
+    local archive_path="gs://${archive_bucket}/${assistant_id}-desktop-profile.tar.gz"
+
+    if ! gsutil -q stat "$archive_path" 2>/dev/null; then
+        log "No desktop-profile archive at $archive_path"
+        return 0
+    fi
+
+    log "Restoring desktop profile from $archive_path"
+    mkdir -p /Unity
+    if gsutil -q cp "$archive_path" - 2>/dev/null | tar xzf - -C /Unity 2>/dev/null; then
+        chown -R unityuser:unityuser \
+            /Unity/.magnitude \
+            /Unity/.config/chromium \
+            /Unity/.config/google-chrome \
+            /Unity/.config/xfce4 \
+            2>/dev/null || true
+        log "Desktop profile restored"
+    else
+        log "WARNING: desktop-profile restore failed"
+    fi
+}
+
 scrub_filesystem() {
     log "SCRUB: cleaning session artifacts from filesystem"
 
@@ -135,22 +278,23 @@ scrub_filesystem() {
         ! -name '.npm' ! -name '.bun' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
 
-    # /Unity/ — preserve structural dirs and desktop session dirs (wipe contents of session dirs)
+    # /Unity/ — preserve structural dirs; wipe session contents including browser
+    # profile / magnitude / xfce4 (those ride the per-assistant desktop-profile
+    # archive, not the shared pool disk).
     find /Unity -mindepth 1 -maxdepth 1 \
         ! -name '.ssh' ! -name 'Local' \
         ! -name '.bashrc' ! -name '.config' ! -name '.local' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
     for dir in .config .local; do
         if [[ -d "/Unity/$dir" ]]; then
-            find "/Unity/$dir" -mindepth 1 \
-                ! -path "/Unity/.config/xfce4" ! -path "/Unity/.config/xfce4/*" \
-                -exec rm -rf {} + 2>/dev/null || true
+            find "/Unity/$dir" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
         fi
     done
     # Wipe .cache contents but preserve the ms-playwright symlink
     if [[ -d /Unity/.cache ]]; then
         find /Unity/.cache -mindepth 1 ! -name 'ms-playwright' -exec rm -rf {} + 2>/dev/null || true
     fi
+    rm -rf /Unity/.magnitude 2>/dev/null || true
 
     # Application logs
     rm -f /var/log/agent-service.log
@@ -359,6 +503,7 @@ do_update() {
     fi
 
     scrub_git_tokens
+    ensure_chromium_password_store_basic
     log "UPDATE complete"
 }
 
@@ -449,6 +594,16 @@ do_assign() {
                     log "No GCS archive found, starting with empty filesystem"
                 fi
             fi
+        fi
+    fi
+
+    # Restore browser/GUI profile into home (always when companion blob exists).
+    # Independent of Local/ emptiness — profile is not on the PD.
+    if [[ -n "$assistant_id" ]]; then
+        local profile_bucket
+        profile_bucket=$(get_metadata "archive-bucket")
+        if [[ -n "$profile_bucket" ]]; then
+            restore_desktop_profile "$assistant_id" "$profile_bucket"
         fi
     fi
 
@@ -610,12 +765,12 @@ os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
     log "VNC password reset"
 
-    # Archive filesystem to GCS before unmount
+    # Archive Local/ + desktop-profile to GCS before unmount/scrub
+    local assistant_id
+    assistant_id=$(get_metadata "assistant-id")
+    local archive_bucket
+    archive_bucket=$(get_metadata "archive-bucket")
     if mountpoint -q /Unity/Local 2>/dev/null; then
-        local assistant_id
-        assistant_id=$(get_metadata "assistant-id")
-        local archive_bucket
-        archive_bucket=$(get_metadata "archive-bucket")
         if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
             local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
             log "Archiving /Unity/Local to $archive_path"
@@ -625,6 +780,9 @@ PYSCRIPT
                 log "WARNING: archive upload failed, PD data will be preserved as fallback"
             fi
         fi
+    fi
+    if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
+        archive_desktop_profile "$assistant_id" "$archive_bucket"
     fi
 
     # Unmount persistent disk (kill busy processes first, then lazy fallback)

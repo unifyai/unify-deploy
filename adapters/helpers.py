@@ -1635,6 +1635,10 @@ def _build_start_job_request_data(
         "default_reasoning_effort": _runtime_str(
             assistant.get("default_reasoning_effort"),
         ),
+        "slow_brain_model": _runtime_str(assistant.get("slow_brain_model")),
+        "slow_brain_reasoning_effort": _runtime_str(
+            assistant.get("slow_brain_reasoning_effort"),
+        ),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.

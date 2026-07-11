@@ -59,9 +59,11 @@ ok() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; }
 
 run_compose_smoke() {
-  local stamp unity_home
+  local stamp unity_home python_bin
   stamp="$(date +%Y%m%d-%H%M%S)"
   unity_home="${FRESH_INSTALL_ROOT}/unity-compose-smoke-${stamp}"
+  python_bin="${PYTHON_BIN:-$DEPLOY_REPO/.venv/bin/python}"
+  [[ -x "$python_bin" ]] || python_bin="$(command -v python3)"
   mkdir -p "$unity_home"
 
   log "Compose install smoke"
@@ -79,12 +81,183 @@ run_compose_smoke() {
     return 1
   fi
 
+  local required_file
+  for required_file in \
+    Caddyfile \
+    call-controller-entrypoint.sh \
+    call-proxy.Caddyfile \
+    cm-entrypoint.sh \
+    comms-bridge-entrypoint.sh \
+    comms_ingress_bridge.py \
+    coordinator.env \
+    docker-compose.yml \
+    gateway-entrypoint.sh \
+    load-comms-secrets.sh \
+    provision_call_sip.py \
+    sync_comms_webhooks.py; do
+    if [[ ! -f "$unity_home/$required_file" ]]; then
+      fail "Compose bundle missing $required_file"
+      return 1
+    fi
+  done
+  ok "communications bundle installed"
+
+  local mode
+  if mode="$(stat -f '%Lp' "$unity_home" 2>/dev/null)"; then
+    :
+  else
+    mode="$(stat -c '%a' "$unity_home")"
+  fi
+  [[ "$mode" == "700" ]] || {
+    fail "UNITY_HOME permissions are $mode, expected 700"
+    return 1
+  }
+  for required_file in .env comms_sa.json comms_twilio.env; do
+    if mode="$(stat -f '%Lp' "$unity_home/$required_file" 2>/dev/null)"; then
+      :
+    else
+      mode="$(stat -c '%a' "$unity_home/$required_file")"
+    fi
+    [[ "$mode" == "600" ]] || {
+      fail "$required_file permissions are $mode, expected 600"
+      return 1
+    }
+  done
+  for required_file in cm-entrypoint.sh comms-bridge-entrypoint.sh call-controller-entrypoint.sh; do
+    if mode="$(stat -f '%Lp' "$unity_home/$required_file" 2>/dev/null)"; then
+      :
+    else
+      mode="$(stat -c '%a' "$unity_home/$required_file")"
+    fi
+    [[ "$mode" == "755" ]] || {
+      fail "$required_file permissions are $mode, expected 755"
+      return 1
+    }
+  done
+  for required_file in comms_ingress_bridge.py provision_call_sip.py sync_comms_webhooks.py; do
+    if mode="$(stat -f '%Lp' "$unity_home/$required_file" 2>/dev/null)"; then
+      :
+    else
+      mode="$(stat -c '%a' "$unity_home/$required_file")"
+    fi
+    [[ "$mode" == "644" ]] || {
+      fail "$required_file permissions are $mode, expected 644"
+      return 1
+    }
+  done
+  ok "local state and secret permissions hardened"
+
   log "Validating compose file..."
-  if ! docker compose -f "$unity_home/docker-compose.yml" --env-file "$unity_home/.env" config >/dev/null; then
+  local compose=(
+    docker compose
+    -f "$unity_home/docker-compose.yml"
+    --env-file "$unity_home/.env"
+  )
+  if ! "${compose[@]}" config >/dev/null; then
     fail "docker compose config failed"
     return 1
   fi
   ok "compose config valid"
+
+  local default_services
+  default_services="$("${compose[@]}" config --services)"
+  if grep -Eq '^(comms-bridge|call-controller|call-proxy|call-tunnel)$' <<<"$default_services"; then
+    fail "Optional communications services rendered by default"
+    return 1
+  fi
+  ok "optional communications profiles disabled by default"
+
+  "$python_bin" - "$unity_home/.env" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+values = {
+    "SELF_HOST_INTERNAL_COMMS_ENABLED": "true",
+    "SELF_HOST_INTERNAL_CALLS_ENABLED": "true",
+    "LIVEKIT_URL": "wss://smoke.invalid",
+    "LIVEKIT_API_KEY": "smoke-livekit-key",
+    "LIVEKIT_API_SECRET": "smoke-livekit-secret",
+    "LIVEKIT_SIP_URI": "smoke.sip.invalid",
+}
+lines = path.read_text(encoding="utf-8").splitlines()
+seen = set()
+result = []
+for line in lines:
+    key = line.partition("=")[0]
+    if key in values:
+        result.append(f"{key}={values[key]}")
+        seen.add(key)
+    else:
+        result.append(line)
+for key, value in values.items():
+    if key not in seen:
+        result.append(f"{key}={value}")
+path.write_text("\n".join(result) + "\n", encoding="utf-8")
+PY
+  cat >"$unity_home/comms_twilio.env" <<'EOF'
+TWILIO_ACCOUNT_SID=ACsmoke
+TWILIO_AUTH_TOKEN=smoke-main-token
+TWILIO_WA_ACCOUNT_SID=ACwasmoke
+TWILIO_WA_AUTH_TOKEN=smoke-wa-token
+EOF
+  chmod 0600 "$unity_home/.env" "$unity_home/comms_twilio.env"
+
+  local profile_services
+  profile_services="$(
+    "${compose[@]}" \
+      --profile internal-comms \
+      --profile internal-calls \
+      config --services
+  )"
+  for required_file in comms-bridge call-controller call-proxy call-tunnel; do
+    if ! grep -qx "$required_file" <<<"$profile_services"; then
+      fail "Enabled communications profile missing $required_file"
+      return 1
+    fi
+  done
+  ok "communications and calls profiles render"
+
+  "${compose[@]}" \
+    --profile internal-comms \
+    --profile internal-calls \
+    config --format json \
+    | "$python_bin" -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+services = config["services"]
+expected_identity = "local-twin@unify.ai"
+for service in ("orchestra", "gateway", "unity-cm", "comms-bridge"):
+    env = services[service]["environment"]
+    if expected_identity not in env.values():
+        raise SystemExit(f"{service} missing Coordinator email identity")
+
+for service, secret in (
+    ("gateway", "comms_gmail"),
+    ("gateway", "comms_twilio"),
+    ("unity-cm", "comms_twilio"),
+    ("comms-bridge", "comms_gmail"),
+    ("comms-bridge", "comms_twilio"),
+):
+    mounted = {entry["source"]: entry for entry in services[service]["secrets"]}
+    if secret not in mounted:
+        raise SystemExit(f"{service} missing {secret} secret")
+
+gateway_volumes = services["gateway"]["volumes"]
+if not any(
+    volume.get("source") == "runtime" and volume.get("target") == "/runtime"
+    for volume in gateway_volumes
+):
+    raise SystemExit("gateway cannot read the runtime tunnel URL")
+
+for service in ("console", "desktop-proxy", "unity-cm"):
+    for binding in services[service].get("ports", []):
+        if binding.get("host_ip") != "127.0.0.1":
+            raise SystemExit(f"{service} has non-loopback published port")
+'
+  ok "identity, secret mounts, and loopback bindings render correctly"
 
   [[ "$KEEP" == "true" ]] && log "Keeping install at $unity_home (--keep)" || rm -rf "$unity_home"
   ok "Compose smoke passed"

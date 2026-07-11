@@ -967,6 +967,12 @@ def _build_offline_runner_env(
             "ASSISTANT_DEFAULT_REASONING_EFFORT": str(
                 assistant_data.get("default_reasoning_effort") or "",
             ),
+            "ASSISTANT_SLOW_BRAIN_MODEL": str(
+                assistant_data.get("slow_brain_model") or "",
+            ),
+            "ASSISTANT_SLOW_BRAIN_REASONING_EFFORT": str(
+                assistant_data.get("slow_brain_reasoning_effort") or "",
+            ),
             "TEAM_IDS": encode_int_list_for_env(team_ids, field_name="team_ids"),
             "TEAM_SUMMARIES": encode_team_summaries_for_env(
                 team_summaries,

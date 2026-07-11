@@ -168,7 +168,7 @@ CronJobs (prod + staging): `unity-failed-pod-gc` (*/10), `unity-pipeline-dlq-rec
 
 **Artifact Registry:** `unity`, `unity-comms-app-repo`, `unity-adapters-repo`, `link-tracker-repo` + legacy `unity`, `unity-adapters-repo`, `unity-comms-app-repo`, `unity-livekit-app-repo`.
 
-**Service accounts:** `comm-sa@` (all assistant pods + cluster services run as this), `unity-pipeline-worker@` + legacy `unity-pipeline-worker@`, `link-tracker-sa@`, `external-secrets-reader@`. `comm-sa` IAM is hand-managed; required roles include `roles/monitoring.metricWriter`, `roles/logging.logWriter`, `roles/pubsub.editor`, and `roles/compute.admin` + `roles/secretmanager.admin` in `gcp-project-vms`.
+**Service accounts:** `comm-sa@` (all assistant pods + cluster services run as this), `unity-pipeline-worker@` + legacy `unity-pipeline-worker@`, `link-tracker-sa@`, `external-secrets-reader@`. `comm-sa` IAM is hand-managed; required roles include `roles/monitoring.metricWriter`, `roles/logging.logWriter`, `roles/pubsub.editor`, and `roles/compute.admin` + `roles/secretmanager.admin` in `gcp-project-vms`, plus `roles/storage.objectAdmin` on `gs://bucket` (cross-project; unhire archive delete).
 
 **`comm-sa` Workspace domain-wide delegation** (Google Admin → Security → API controls → Domain-wide delegation; client ID `115203909972265828958`): authorize exactly these OAuth scopes (comma-separated when editing the client):
 
@@ -189,8 +189,8 @@ After adding a scope, wait a few minutes for propagation, then run `python3 depl
 - **Pool VMs:** Ubuntu = `unity-pool-ubuntu-<N>[-staging]` ✅ (us-central1-f / -a); Windows = `unity-pool-windows-<N>[-staging]` ⚠️.
 - **Images/families:** `unity-pool-ubuntu-vm`, `unity-pool-windows-vm` (created 2026-06-24) ✅; legacy `unity-pool-ubuntu-vm`, `unity-pool-windows-vm`, `unity-ubuntu-vm`, `unity-windows-vm` (rollback source). Code: `communication/infra/vm_config.py` → `POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"`, `*_IMAGE_PROJECT = "gcp-project-vms"`.
 - **Static IPs:** `unity-pool-ubuntu-ip-<N>[-staging]` ✅; all Windows + preview/staging Ubuntu IPs still `unity-pool-*-ip-*` ⚠️.
-- **Buckets:** `unity-assistant-archives` ✅ (per-assistant home `{id}.tar.gz`, ~1.2 GB) + legacy `unity-assistant-archives` (rollback). Code: `POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"`.
-- **SA:** `pool-vm-sa@gcp-project-vms` (objectAdmin on both archive buckets). Pool/desktop OS user is **`unityuser`** (HOME `/Unity`) ⚠️.
+- **Buckets:** `unity-assistant-archives` ✅ (per-assistant `{id}.tar.gz` Local workspace + `{id}-desktop-profile.tar.gz` browser/GUI session state) + legacy rollback bucket. Code: `POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"`.
+- **SA:** `pool-vm-sa@gcp-project-vms` (objectAdmin — pool VMs write/read archives on release/assign) and `comm-sa@gcp-project-runtime` (objectAdmin — Cloud Run comms app deletes archives on unhire via `DELETE /infra/vm/pool/archive/{id}`; required for both staging and prod). Pool/desktop OS user is **`unityuser`** (HOME `/Unity`) ⚠️.
 - **Secrets:** `VM_WILDCARD_FULLCHAIN`, `VM_WILDCARD_PRIVKEY`, `DEVBOT_GITHUB_TOKEN`.
 
 ### 4.3 `gcp-project-saas` — Orchestra + Console + DB
@@ -263,7 +263,17 @@ Each live assistant can get a dedicated **desktop VM** (Ubuntu or Windows) from 
 
 ### Per-session archive (cross-session persistence)
 
-- On release, the desktop's home is tarred to `gs://bucket/{assistant_id}.tar.gz`; on next assignment it's restored. Bucket name is `POOL_ASSISTANT_ARCHIVE_BUCKET` (`vm_config.py`) and is passed to each VM as the `archive-bucket` metadata key, used by `unity-pool-watcher.sh`. **If the bucket doesn't exist, files don't persist between sessions** (a rename gap fixed 2026-06-24).
+Two GCS blobs per assistant (bucket `POOL_ASSISTANT_ARCHIVE_BUCKET` in
+`vm_config.py`, passed to each VM as the `archive-bucket` metadata key):
+
+| Blob | Contents | Restored when |
+|---|---|---|
+| `{assistant_id}.tar.gz` | `/Unity/Local` (workspace files synced with the Unify pod via rclone) | Next assign if the PD is empty |
+| `{assistant_id}-desktop-profile.tar.gz` | Browser + agent GUI session state in home: Magnitude `browser_states`, selective Chromium/Chrome profile files, xfce4 prefs — **not** under `Local/`, so not rcloned into the pod | Next assign whenever the blob exists |
+
+On release the watcher archives Local then the desktop-profile, unmounts the PD, and scrubs home profile paths off the shared pool VM. On permanent unhire both blobs are deleted via `DELETE /infra/vm/pool/archive/{assistant_id}`. Disk GC treats `{id}.tar.gz` as the durable-workspace signal; a missing profile only means a cold browser login. **If the bucket doesn't exist, files don't persist between sessions** (a rename gap fixed 2026-06-24).
+
+Used by `unity-pool-watcher.sh` / `.ps1`.
 
 ### VM TLS (wildcard)
 

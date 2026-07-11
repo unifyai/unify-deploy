@@ -154,6 +154,10 @@ def _build_dashboard_action_env(
         "ASSISTANT_DEFAULT_REASONING_EFFORT": str(
             assistant_data.get("default_reasoning_effort") or "",
         ),
+        "ASSISTANT_SLOW_BRAIN_MODEL": str(assistant_data.get("slow_brain_model") or ""),
+        "ASSISTANT_SLOW_BRAIN_REASONING_EFFORT": str(
+            assistant_data.get("slow_brain_reasoning_effort") or "",
+        ),
         "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
         "ASSISTANT_JOB_TITLE": str(assistant_data.get("assistant_job_title") or ""),
         "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),

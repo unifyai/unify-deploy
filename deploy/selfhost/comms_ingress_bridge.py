@@ -32,7 +32,7 @@ Adapters & env:
     COMMS_BRIDGE_POLL_SECONDS Poll interval (default ``10``).
     GMAIL_BRIDGE_POLL_SECONDS Gmail poll interval (default ``2``).
     COMMS_BRIDGE_LOOKBACK_SECONDS  Only forward items newer than now minus this
-                              (default ``0`` = since bridge start).
+                              (default ``86400`` = the previous 24 hours).
 """
 
 from __future__ import annotations
@@ -40,8 +40,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sqlite3
 import sys
 import time
+from collections.abc import Iterator, MutableSet
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from email.message import Message
@@ -73,6 +75,125 @@ def _orchestra_admin_headers() -> dict[str, str] | None:
     if not admin_key:
         return None
     return {"Authorization": f"Bearer {admin_key}"}
+
+
+class _RetryableRouteResolutionError(RuntimeError):
+    """Signal that an inbound message should be retried on the next poll."""
+
+
+class _PersistentSeenSet(MutableSet[str]):
+    """Durable provider-message deduplication for restart-safe polling."""
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        channel: str,
+        retention_seconds: float,
+    ) -> None:
+        self._connection = connection
+        self._channel = channel
+        self.prune(retention_seconds)
+
+    def prune(self, retention_seconds: float) -> None:
+        """Delete dedupe records older than the replay retention window."""
+        self._connection.execute(
+            "DELETE FROM seen_messages WHERE channel = ? AND seen_at < ?",
+            (self._channel, time.time() - retention_seconds),
+        )
+        self._connection.commit()
+
+    def __contains__(self, value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        row = self._connection.execute(
+            "SELECT 1 FROM seen_messages WHERE channel = ? AND message_id = ?",
+            (self._channel, value),
+        ).fetchone()
+        return row is not None
+
+    def __iter__(self) -> Iterator[str]:
+        rows = self._connection.execute(
+            "SELECT message_id FROM seen_messages WHERE channel = ?",
+            (self._channel,),
+        )
+        return (row[0] for row in rows)
+
+    def __len__(self) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) FROM seen_messages WHERE channel = ?",
+            (self._channel,),
+        ).fetchone()
+        return int(row[0])
+
+    def add(self, value: str) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO seen_messages (channel, message_id, seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (channel, message_id)
+            DO UPDATE SET seen_at = excluded.seen_at
+            """,
+            (self._channel, value, time.time()),
+        )
+        self._connection.commit()
+
+    def discard(self, value: str) -> None:
+        self._connection.execute(
+            "DELETE FROM seen_messages WHERE channel = ? AND message_id = ?",
+            (self._channel, value),
+        )
+        self._connection.commit()
+
+    def load_cursor(self, default_since_ms: int) -> int:
+        """Load this channel's durable polling high-water cursor."""
+        row = self._connection.execute(
+            "SELECT since_ms FROM poll_cursors WHERE channel = ?",
+            (self._channel,),
+        ).fetchone()
+        return int(row[0]) if row is not None else default_since_ms
+
+    def save_cursor(self, since_ms: int) -> None:
+        """Persist this channel's cursor after a complete successful poll."""
+        self._connection.execute(
+            """
+            INSERT INTO poll_cursors (channel, since_ms)
+            VALUES (?, ?)
+            ON CONFLICT (channel)
+            DO UPDATE SET since_ms = excluded.since_ms
+            """,
+            (self._channel, since_ms),
+        )
+        self._connection.commit()
+
+
+def _open_seen_database() -> sqlite3.Connection:
+    state_dir = Path(_env("SELF_HOST_STATE_DIR", str(Path.home() / ".unity")))
+    path = Path(
+        _env("COMMS_BRIDGE_SEEN_DB", str(state_dir / "comms-bridge-seen.sqlite3")),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    connection = sqlite3.connect(path)
+    path.chmod(0o600)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS seen_messages (
+            channel TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            seen_at REAL NOT NULL,
+            PRIMARY KEY (channel, message_id)
+        )
+        """,
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS poll_cursors (
+            channel TEXT PRIMARY KEY,
+            since_ms INTEGER NOT NULL
+        )
+        """,
+    )
+    connection.commit()
+    return connection
 
 
 def _call_permission_status(button_payload: str) -> tuple[str, str]:
@@ -215,7 +336,8 @@ class GmailAdapter:
         self.poll_interval = float(_env("GMAIL_BRIDGE_POLL_SECONDS", "2"))
 
     def configured(self) -> bool:
-        return bool(self._mailbox and Path(self._sa_file).is_file())
+        path = Path(self._sa_file)
+        return bool(self._mailbox and path.is_file() and path.stat().st_size)
 
     def describe(self) -> str:
         return f"email<{self._mailbox}>"
@@ -242,11 +364,13 @@ class GmailAdapter:
             )
         return self._service
 
-    def poll(self, since_ms: int, seen: set[str]) -> int:
+    def poll(self, since_ms: int, seen: MutableSet[str]) -> int:
         service = self._gmail()
         if self._history_id is None:
-            self._history_id = _gmail_current_history_id(service)
-            return self._poll_unread_since(service, since_ms, seen)
+            initial_history_id = _gmail_current_history_id(service)
+            delivered = self._poll_unread_since(service, since_ms, seen)
+            self._history_id = initial_history_id
+            return delivered
 
         try:
             return self._poll_history(service, since_ms, seen)
@@ -257,25 +381,44 @@ class GmailAdapter:
                     file=sys.stderr,
                     flush=True,
                 )
-                self._history_id = _gmail_current_history_id(service)
-                return self._poll_unread_since(service, since_ms, seen)
+                next_history_id = _gmail_current_history_id(service)
+                delivered = self._poll_unread_since(service, since_ms, seen)
+                self._history_id = next_history_id
+                return delivered
             raise
 
-    def _poll_unread_since(self, service, since_ms: int, seen: set[str]) -> int:
+    def _poll_unread_since(
+        self,
+        service,
+        since_ms: int,
+        seen: MutableSet[str],
+    ) -> int:
         query = f"in:inbox is:unread after:{since_ms // 1000}"
-        listing = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=25)
-            .execute()
-        )
         delivered = 0
-        for entry in listing.get("messages", []):
-            if self._process_gmail_message(service, entry["id"], since_ms, seen):
-                delivered += 1
+        page_token = None
+        while True:
+            kwargs = {
+                "userId": "me",
+                "q": query,
+                "maxResults": 100,
+            }
+            if page_token:
+                kwargs["pageToken"] = page_token
+            listing = service.users().messages().list(**kwargs).execute()
+            for entry in listing.get("messages", []):
+                if self._process_gmail_message(service, entry["id"], since_ms, seen):
+                    delivered += 1
+            page_token = listing.get("nextPageToken")
+            if not page_token:
+                break
         return delivered
 
-    def _poll_history(self, service, since_ms: int, seen: set[str]) -> int:
+    def _poll_history(
+        self,
+        service,
+        since_ms: int,
+        seen: MutableSet[str],
+    ) -> int:
         delivered = 0
         page_token = None
         latest_history_id = self._history_id
@@ -307,7 +450,7 @@ class GmailAdapter:
         service,
         gmail_id: str,
         since_ms: int,
-        seen: set[str],
+        seen: MutableSet[str],
     ) -> bool:
         if gmail_id in seen:
             return False
@@ -327,8 +470,8 @@ class GmailAdapter:
         message = message_from_bytes(
             base64.urlsafe_b64decode(fetched["raw"].encode("ascii")),
         )
-        seen.add(gmail_id)
         if _message_from_mailbox(message, self._mailbox):
+            seen.add(gmail_id)
             _mark_gmail_read(service, gmail_id)
             print(
                 f"[bridge] skipped self email subject={message.get('Subject','')!r}",
@@ -344,6 +487,7 @@ class GmailAdapter:
                 thread_id=fetched.get("threadId"),
             ),
         )
+        seen.add(gmail_id)
         _mark_gmail_read(service, gmail_id)
         print(
             f"[bridge] email from={message.get('From','')!r} "
@@ -497,17 +641,18 @@ class TwilioAdapter:
     def _strip(number: str) -> str:
         return number.replace("whatsapp:", "").strip()
 
-    def poll(self, since_ms: int, seen: set[str]) -> int:
+    def poll(self, since_ms: int, seen: MutableSet[str]) -> int:
         client = self._client_()
         since_dt = datetime.fromtimestamp(since_ms / 1000, tz=timezone.utc)
         # Twilio filters date_sent at day granularity; widen by a day and refine
         # against each message's precise timestamp below.
-        messages = client.messages.list(
+        messages = client.messages.stream(
             to=self._twilio_number(),
             date_sent_after=since_dt - timedelta(days=1),
-            limit=50,
+            page_size=100,
         )
         delivered = 0
+        retryable_failure = False
         for msg in messages:
             if msg.sid in seen:
                 continue
@@ -520,7 +665,11 @@ class TwilioAdapter:
                     seen.add(msg.sid)
                     continue
             sender = self._strip(msg.from_ or "")
-            route = self._resolve_route(sender)
+            try:
+                route = self._resolve_route(sender)
+            except _RetryableRouteResolutionError:
+                retryable_failure = True
+                continue
             if route is None:
                 seen.add(msg.sid)
                 continue
@@ -533,8 +682,12 @@ class TwilioAdapter:
             seen.add(msg.sid)
             delivered += 1
             print(
-                f"[bridge] {self._channel} from={sender!r} body={ (msg.body or '')[:40]!r}",
+                f"[bridge] delivered inbound {self._channel} message",
                 flush=True,
+            )
+        if retryable_failure:
+            raise _RetryableRouteResolutionError(
+                f"{self._channel} route resolution deferred",
             )
         return delivered
 
@@ -555,10 +708,11 @@ class TwilioAdapter:
         headers = _orchestra_admin_headers()
         if headers is None:
             print(
-                f"[bridge] {self._channel} from={sender!r} skipped: ORCHESTRA_ADMIN_KEY missing",
+                f"[bridge] {self._channel} from={sender!r} deferred: "
+                "ORCHESTRA_ADMIN_KEY missing",
                 flush=True,
             )
-            return None
+            raise _RetryableRouteResolutionError("ORCHESTRA_ADMIN_KEY missing")
 
         platform = "whatsapp" if self._wa else "phone"
         try:
@@ -573,7 +727,9 @@ class TwilioAdapter:
                 f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
                 flush=True,
             )
-            return None
+            raise _RetryableRouteResolutionError(
+                "Orchestra resolve request failed",
+            ) from exc
 
         if response.status_code == 404:
             print(
@@ -590,7 +746,9 @@ class TwilioAdapter:
                 f"[bridge] {self._channel} resolve failed for from={sender!r}: {exc}",
                 flush=True,
             )
-            return None
+            raise _RetryableRouteResolutionError(
+                "Invalid Orchestra resolve response",
+            ) from exc
 
         action = route.get("action")
         if action:
@@ -603,10 +761,12 @@ class TwilioAdapter:
         assistant_id = route.get("assistant_id")
         if assistant_id is None:
             print(
-                f"[bridge] {self._channel} from={sender!r} skipped: missing assistant_id",
+                f"[bridge] {self._channel} from={sender!r} deferred: missing assistant_id",
                 flush=True,
             )
-            return None
+            raise _RetryableRouteResolutionError(
+                "Resolve response missing assistant_id",
+            )
 
         return {
             "assistant_id": assistant_id,
@@ -697,8 +857,8 @@ def _build_adapters() -> list:
 
 
 def main() -> None:
-    lookback = float(_env("COMMS_BRIDGE_LOOKBACK_SECONDS", "0"))
-    since_ms = int((time.time() - lookback) * 1000)
+    lookback = float(_env("COMMS_BRIDGE_LOOKBACK_SECONDS", "86400"))
+    initial_since_ms = int((time.time() - lookback) * 1000)
     adapters = _build_adapters()
     if not adapters:
         print("[bridge] no channels configured — nothing to poll; exiting", flush=True)
@@ -707,28 +867,57 @@ def main() -> None:
     print(
         f"[bridge] polling {', '.join(a.describe() for a in adapters)} -> "
         f"{_ingress_url()}; forwarding items newer than "
-        f"{datetime.fromtimestamp(since_ms / 1000)}",
+        f"{datetime.fromtimestamp(initial_since_ms / 1000)}",
         flush=True,
     )
-    seen: dict[str, set[str]] = {a.name: set() for a in adapters}
+    retention = max(
+        lookback,
+        float(_env("COMMS_BRIDGE_DEDUPE_RETENTION_SECONDS", "604800")),
+    )
+    seen_database = _open_seen_database()
+    seen: dict[str, _PersistentSeenSet] = {
+        adapter.name: _PersistentSeenSet(
+            seen_database,
+            adapter.name,
+            retention,
+        )
+        for adapter in adapters
+    }
+    cursor_overlap = float(_env("COMMS_BRIDGE_CURSOR_OVERLAP_SECONDS", "300"))
+    since_ms = {
+        adapter.name: seen[adapter.name].load_cursor(initial_since_ms)
+        for adapter in adapters
+    }
     next_poll_at: dict[str, float] = {a.name: 0 for a in adapters}
     next_permission_hydration_at = time.time() + 60
+    next_dedupe_prune_at = time.time() + 3600
     while True:
         now = time.time()
         if now >= next_permission_hydration_at:
             _hydrate_call_permission_cache()
             next_permission_hydration_at = now + 60
+        if now >= next_dedupe_prune_at:
+            for seen_messages in seen.values():
+                seen_messages.prune(retention)
+            next_dedupe_prune_at = now + 3600
         for adapter in adapters:
             if now < next_poll_at[adapter.name]:
                 continue
             try:
-                adapter.poll(since_ms, seen[adapter.name])
+                adapter.poll(since_ms[adapter.name], seen[adapter.name])
             except Exception as exc:  # keep the bridge alive across transient errors
                 print(
                     f"[bridge] {adapter.name} poll error: {exc}",
                     file=sys.stderr,
                     flush=True,
                 )
+            else:
+                next_since_ms = max(
+                    since_ms[adapter.name],
+                    int((time.time() - cursor_overlap) * 1000),
+                )
+                seen[adapter.name].save_cursor(next_since_ms)
+                since_ms[adapter.name] = next_since_ms
             finally:
                 next_poll_at[adapter.name] = now + getattr(adapter, "poll_interval", 10)
         sleep_for = min(

@@ -10,6 +10,18 @@ set -euo pipefail
 
 # Matches get_local_root() in unity/file_manager/settings.py (~/Unity/Local).
 SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
+# The packaged self-host directory owns fixed non-secret Coordinator identities
+# used by both source and Compose installs.
+_SELF_HOST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SELF_HOST_DEPLOY_SELFHOST_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_ENV_DIR/../deploy/selfhost}"
+SELF_HOST_COORDINATOR_ENV="${SELF_HOST_COORDINATOR_ENV:-$SELF_HOST_DEPLOY_SELFHOST_DIR/coordinator.env}"
+if [[ ! -f "$SELF_HOST_COORDINATOR_ENV" ]]; then
+  echo "Missing self-host Coordinator identities: $SELF_HOST_COORDINATOR_ENV" >&2
+  return 1 2>/dev/null || exit 1
+fi
+# shellcheck disable=SC1090
+source "$SELF_HOST_COORDINATOR_ENV"
+
 # Shared Coordinator contact identities, dedicated per deployment mode so that
 # staging/production traffic never collides with localhost. Each mode owns a
 # distinct WhatsApp number, SMS/voice number, and email mailbox:
@@ -24,11 +36,12 @@ SELF_HOST_DEFAULT_WORKSPACE="${SELF_HOST_DEFAULT_WORKSPACE:-$HOME/Unity/Local}"
 # stack. They are "poll-only": their Twilio inbound webhooks are cleared so a
 # hosted backend never answers localhost traffic — the comms ingress bridge
 # polls Twilio and forwards inbound to the local CM. Run
-# `selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to enforce this.
-SELF_HOST_COORDINATOR_EMAIL_ADDRESS="${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:-local-twin@unify.ai}"
-SELF_HOST_COORDINATOR_PHONE_US="${SELF_HOST_COORDINATOR_PHONE_US:-+15550100010}"
-SELF_HOST_COORDINATOR_WHATSAPP_NUMBER="${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:-+447700900001}"
-SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:-US}"
+# `deploy/selfhost/sync_comms_webhooks.py` (or `stack.sh sync-comms`) to enforce
+# this.
+: "${SELF_HOST_COORDINATOR_EMAIL_ADDRESS:?missing from coordinator.env}"
+: "${SELF_HOST_COORDINATOR_PHONE_US:?missing from coordinator.env}"
+: "${SELF_HOST_COORDINATOR_WHATSAPP_NUMBER:?missing from coordinator.env}"
+: "${SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY:?missing from coordinator.env}"
 
 # Inbound/outbound phone & WhatsApp calls are part of the default self-host
 # stack. Unlike text (which the comms ingress bridge polls), a call is
@@ -37,11 +50,6 @@ SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY="${SELF_HOST_COORDINATOR_DEFAULT_PHO
 # CM ingress) and a LiveKit Cloud SIP trunk for the media leg. Set
 # SELF_HOST_CALLS_ENABLED=0 only for an explicitly poll-only text stack.
 SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-1}"
-
-# The self-host compose bundle (entrypoints, fetch helpers) lives alongside this
-# script in unity-deploy/deploy/selfhost/.
-_SELF_HOST_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SELF_HOST_DEPLOY_SELFHOST_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_ENV_DIR/../deploy/selfhost}"
 
 # Persistent self-host state (survives reboot; unlike /tmp).
 SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"

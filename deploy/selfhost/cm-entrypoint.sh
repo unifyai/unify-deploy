@@ -8,6 +8,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { echo "[unity-cm] $*"; }
 
+comms_enabled="${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}"
+calls_enabled="${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}"
+case "${calls_enabled,,}" in
+  1|true|yes|on)
+    # shellcheck source=load-comms-secrets.sh
+    source "$SCRIPT_DIR/load-comms-secrets.sh"
+    ;;
+  *)
+    case "${comms_enabled,,}" in
+      1|true|yes|on)
+        # shellcheck source=load-comms-secrets.sh
+        source "$SCRIPT_DIR/load-comms-secrets.sh"
+        unset TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN
+        unset TWILIO_WA_ACCOUNT_SID TWILIO_WA_AUTH_TOKEN
+        ;;
+    esac
+    ;;
+esac
+
 wait_for_runtime() {
   while [[ ! -f "$RUNTIME_FILE" ]]; do
     log "Waiting for coordinator runtime file at ${RUNTIME_FILE}..."
