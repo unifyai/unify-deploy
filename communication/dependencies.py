@@ -133,6 +133,62 @@ async def authorize_admin_or_assistant(
     return CallerContext(is_admin=False, identity=identity)
 
 
+async def verify_assistant_identity_from_key(
+    *,
+    api_key: str,
+    assistant_id: int,
+) -> AssistantSessionIdentity:
+    """Authorize a caller that holds the assistant's own Orchestra API key.
+
+    Used by read-only bootstrap endpoints (notably ``/infra/client-bundle``)
+    that must work for headless offline jobs as well as live pods. Offline
+    jobs carry ``UNIFY_KEY`` but never create an ``AssistantSession``, so
+    session-bound auth would 409 them.
+
+    Trust model:
+    1. The bearer must be a valid Orchestra user API key.
+    2. That key must ``compare_digest``-match the server-loaded assistant
+       record for *assistant_id* (looked up with the platform admin key).
+    3. Identity fields (``org_id``, ``user_id``, ``team_ids``) come only from
+       that Orchestra record — never from client query params.
+
+    A leaked ``ORCHESTRA_ADMIN_KEY`` fails step 1 (it is not a user key).
+    Assistant A's key with ``assistant_id=B`` fails step 2.
+    """
+    from common.assistant_lookup import get_assistant
+
+    await authenticate_user_api_key(api_key)
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=str(assistant_id),
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        raise HTTPException(
+            status_code=404,
+            detail="Assistant not found.",
+        )
+
+    expected_api_key = str(assistant_data.get("api_key") or "")
+    if not expected_api_key or not secrets.compare_digest(api_key, expected_api_key):
+        raise HTTPException(
+            status_code=401,
+            detail="API key does not match the requested assistant.",
+        )
+
+    raw_team_ids = assistant_data.get("team_ids") or []
+    team_ids = [int(t) for t in raw_team_ids if str(t).strip()]
+    raw_org = assistant_data.get("org_id")
+    raw_user = assistant_data.get("user_id")
+    return AssistantSessionIdentity(
+        assistant_id=int(assistant_data["assistant_id"]),
+        api_key=expected_api_key,
+        org_id=int(raw_org) if raw_org not in (None, "") else None,
+        user_id=str(raw_user) if raw_user not in (None, "") else None,
+        team_ids=team_ids,
+    )
+
+
 async def verify_assistant_session(
     *,
     api_key: str,
@@ -150,6 +206,8 @@ async def verify_assistant_session(
     by passing a different ``org_id``/``assistant_id``.
 
     Raises ``HTTPException`` (401/409/500) on any mismatch or missing session.
+    Prefer :func:`verify_assistant_identity_from_key` for read-only bootstrap
+    that must also serve headless offline jobs (no live session).
     """
     from communication.infra.assistant_sessions import (
         binding_id as binding_id_of,

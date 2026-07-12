@@ -136,7 +136,7 @@ from communication.dependencies import (
     authenticate_vm_identity,
     authorize_admin_or_assistant,
     extract_api_key,
-    verify_assistant_session,
+    verify_assistant_identity_from_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -2102,7 +2102,8 @@ async def get_latest_unity_image_commit():
 # auth), not the admin-gated ``router`` -- see ``get_client_bundle_signed_url``
 # below. This keeps a leaked platform admin key from fetching other tenants'
 # bundles: a caller can only obtain the bundle for the assistant whose
-# ``UNIFY_KEY`` it holds.
+# ``UNIFY_KEY`` it holds. Auth is Orchestra-record identity (not a live
+# AssistantSession) so headless offline jobs can bootstrap the same way.
 
 
 # =============================================================================
@@ -2120,12 +2121,15 @@ async def get_client_bundle_signed_url(
 ):
     """Return a short-lived signed URL for the assistant's client bundle.
 
-    Authenticated as the assistant's own session: the caller's ``UNIFY_KEY``
-    must match the bootstrap secret of the ``AssistantSession`` for
-    *assistant_id* (see :func:`verify_assistant_session`). The bundle target is
-    resolved from the server-verified identity, so a caller can only fetch the
-    bundle mapped to the assistant whose key it holds -- a leaked platform admin
-    key is useless here, and ``org_id`` is never taken from the client.
+    Authenticated with the assistant's own ``UNIFY_KEY`` verified against the
+    Orchestra assistant record (see :func:`verify_assistant_identity_from_key`).
+    This works for live pods and headless offline jobs alike — offline jobs
+    carry the assistant key but never create an ``AssistantSession``. The
+    bundle target is resolved from the server-verified identity, so a caller
+    can only fetch the bundle mapped to the assistant whose key it holds; a
+    leaked platform admin key is useless here, and ``org_id`` is never taken
+    from the client. ``binding_id`` is accepted for URL compatibility but is
+    not used for authorization (bundles are per-assistant, not per-binding).
     """
 
     from datetime import timedelta
@@ -2134,11 +2138,12 @@ async def get_client_bundle_signed_url(
         resolve_client_bundle_target,
     )
 
+    # binding_id is accepted for URL compatibility; bundle auth is per-assistant.
+    _ = binding_id
     api_key = extract_api_key(request)
-    identity = await verify_assistant_session(
+    identity = await verify_assistant_identity_from_key(
         api_key=api_key,
         assistant_id=assistant_id,
-        requested_binding_id=binding_id,
     )
 
     target = resolve_client_bundle_target(

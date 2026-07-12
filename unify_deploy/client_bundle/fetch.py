@@ -60,8 +60,9 @@ def _bundle_api_url(*, assistant_id: int, binding_id: str | None) -> str:
 
 def _auth_headers() -> dict[str, str]:
     # Authenticate as this assistant, not with the platform admin key. Comms
-    # verifies this UNIFY_KEY against the assistant's own AssistantSession, so a
-    # pod can only fetch the bundle mapped to its own assistant.
+    # verifies this UNIFY_KEY against the Orchestra assistant record, so a
+    # pod (live or headless offline) can only fetch the bundle mapped to
+    # its own assistant — no live AssistantSession required.
     unify_key = (os.environ.get("UNIFY_KEY") or "").strip()
     if not unify_key:
         return {}
