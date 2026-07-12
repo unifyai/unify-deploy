@@ -11,8 +11,8 @@ import pytest
 from pydantic import BaseModel
 
 from unify.common.pipeline import PipelineHeartbeatManifest
-from unity_deploy.infra.workers import worker_utils
-from unity_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
+from unify_deploy.infra.workers import worker_utils
+from unify_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
 
 
 class _StubQueue:

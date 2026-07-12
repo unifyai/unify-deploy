@@ -55,7 +55,7 @@ data = {
     "updated_at": datetime.now(timezone.utc).isoformat(),
     "host": socket.gethostname(),
     "repo_paths": {
-        "unity_deploy": env("DEPLOY_REPO_PATH"),
+        "unify_deploy": env("DEPLOY_REPO_PATH"),
         "unity": env("UNITY_REPO_PATH"),
         "console": env("CONSOLE_REPO_PATH"),
         "orchestra": env("ORCHESTRA_REPO_PATH"),

@@ -15,13 +15,13 @@ from unify.guidance_manager.custom_guidance import (
     GUIDANCE_JSONL_FILENAME,
     collect_custom_guidance,
 )
-from unity_deploy.assistant_deployments.integrations.loader import (
+from unify_deploy.assistant_deployments.integrations.loader import (
     AggregatedIntegrations,
     guidance_titles_for_dir,
     load_integration,
     load_integrations,
 )
-from unity_deploy.assistant_deployments.integrations.types import (
+from unify_deploy.assistant_deployments.integrations.types import (
     Capability,
     IntegrationManifest,
     MCPServerConfig,

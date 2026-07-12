@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
-from unity_deploy.assistant_deployments.integrations.activation import (
+from unify_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
-from unity_deploy.assistant_deployments.integrations.catalog_projection import (
+from unify_deploy.assistant_deployments.integrations.catalog_projection import (
     NATIVE_INTEGRATION_BACKEND_ID,
     native_catalog_app_from_registry_row,
     native_catalog_apps_from_registry,

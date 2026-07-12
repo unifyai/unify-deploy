@@ -9,8 +9,8 @@ from unify.common.pipeline.types import (
     IngestPlan,
     TableMeta,
 )
-from unity_deploy.infra.cli import pipeline_control
-from unity_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
+from unify_deploy.infra.cli import pipeline_control
+from unify_deploy.infra.gcp.pipeline_observability import JobObservabilitySnapshot
 
 
 class _ArtifactStore:
@@ -336,7 +336,7 @@ def _patch_verify(monkeypatch, *, checkpoint_rows: int):
         "_get_job_store",
         lambda _infra: _JobStore(),
     )
-    from unity_deploy.infra.gcp import pipeline_observability
+    from unify_deploy.infra.gcp import pipeline_observability
 
     monkeypatch.setattr(
         pipeline_observability,

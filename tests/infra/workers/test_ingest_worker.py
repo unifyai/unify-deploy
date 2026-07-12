@@ -1,4 +1,4 @@
-"""Unit tests for ``unity_deploy.infra.workers.ingest_worker``.
+"""Unit tests for ``unify_deploy.infra.workers.ingest_worker``.
 
 These focus narrowly on the per-message ``UNIFY_KEY`` lifecycle managed
 by :func:`_with_unify_key`:
@@ -29,15 +29,15 @@ from unify.common.pipeline.types import (
     ObjectStoreArtifactHandle,
     TableMeta,
 )
-from unity_deploy.infra.workers import ingest_worker
-from unity_deploy.infra.gcp.artifact_store import (
+from unify_deploy.infra.workers import ingest_worker
+from unify_deploy.infra.gcp.artifact_store import (
     LeaseNotAcquired,
     LeaseRecord,
     StaleLeaseError,
 )
-from unity_deploy.infra.workers import worker_utils
-from unity_deploy.infra.workers.assistant_key_resolver import ResolvedAssistant
-from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+from unify_deploy.infra.workers import worker_utils
+from unify_deploy.infra.workers.assistant_key_resolver import ResolvedAssistant
+from unify_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
 @pytest.mark.asyncio
@@ -1067,7 +1067,7 @@ def test_table_meta_falls_back_to_default_when_context_absent():
 
 def test_merge_table_config_threads_context():
     """_merge_table_config picks up 'context' from table_config entries."""
-    from unity_deploy.infra.workers.parse_worker import _merge_table_config
+    from unify_deploy.infra.workers.parse_worker import _merge_table_config
 
     plan = IngestPlan(
         run_id="run-merge",

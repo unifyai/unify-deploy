@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from unity_deploy.assistant_deployments.integrations.aggregate_demo_sites import (
+from unify_deploy.assistant_deployments.integrations.aggregate_demo_sites import (
     aggregate_demo_sites,
 )
 

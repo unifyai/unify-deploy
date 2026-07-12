@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unity_deploy.client_bundle import bootstrap
+from unify_deploy.client_bundle import bootstrap
 
 
 def test_ensure_offline_client_bundle_resolves_startup_spec(monkeypatch):
@@ -21,11 +21,11 @@ def test_ensure_offline_client_bundle_resolves_startup_spec(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        "unity_deploy.client_bundle.fetch.bundled_client_mode",
+        "unify_deploy.client_bundle.fetch.bundled_client_mode",
         lambda: True,
     )
     monkeypatch.setattr(
-        "unity_deploy.startup_config.resolve_startup_spec",
+        "unify_deploy.startup_config.resolve_startup_spec",
         fake_resolve_startup_spec,
     )
 
@@ -46,11 +46,11 @@ def test_ensure_offline_client_bundle_skips_without_assistant_id(monkeypatch):
     called = {"resolve": False}
 
     monkeypatch.setattr(
-        "unity_deploy.client_bundle.fetch.bundled_client_mode",
+        "unify_deploy.client_bundle.fetch.bundled_client_mode",
         lambda: True,
     )
     monkeypatch.setattr(
-        "unity_deploy.startup_config.resolve_startup_spec",
+        "unify_deploy.startup_config.resolve_startup_spec",
         lambda identity: called.__setitem__("resolve", True),
     )
 
@@ -64,11 +64,11 @@ def test_ensure_offline_client_bundle_skips_when_not_bundled(monkeypatch):
     called = {"resolve": False}
 
     monkeypatch.setattr(
-        "unity_deploy.client_bundle.fetch.bundled_client_mode",
+        "unify_deploy.client_bundle.fetch.bundled_client_mode",
         lambda: False,
     )
     monkeypatch.setattr(
-        "unity_deploy.startup_config.resolve_startup_spec",
+        "unify_deploy.startup_config.resolve_startup_spec",
         lambda identity: called.__setitem__("resolve", True),
     )
 
@@ -80,8 +80,8 @@ def test_ensure_offline_client_bundle_skips_when_not_bundled(monkeypatch):
 def test_entrypoint_offline_path_bootstraps_client_bundle():
     entrypoint = Path(__file__).resolve().parents[2] / "base" / "entrypoint.sh"
     text = entrypoint.read_text()
-    assert "unity_deploy.client_bundle.bootstrap" in text
+    assert "unify_deploy.client_bundle.bootstrap" in text
     assert "unify.task_scheduler.offline_runner" in text
-    bootstrap_idx = text.index("unity_deploy.client_bundle.bootstrap")
+    bootstrap_idx = text.index("unify_deploy.client_bundle.bootstrap")
     runner_idx = text.index("unify.task_scheduler.offline_runner")
     assert bootstrap_idx < runner_idx

@@ -6,10 +6,10 @@ import pytest
 
 from unify.common.pipeline.types import FileParseResult, IngestPlan, TableMeta
 from unify.common.pipeline.work_queue import ReceivedWorkItem
-from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
-from unity_deploy.infra.workers import parse_worker
-from unity_deploy.infra.workers.parse_worker import _merge_table_config
-from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+from unify_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from unify_deploy.infra.workers import parse_worker
+from unify_deploy.infra.workers.parse_worker import _merge_table_config
+from unify_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
 def _plan_with_tables(*tables: TableMeta) -> IngestPlan:

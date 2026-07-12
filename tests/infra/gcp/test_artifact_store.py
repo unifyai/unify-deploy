@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`unity_deploy.infra.gcp.artifact_store`.
+"""Unit tests for :mod:`unify_deploy.infra.gcp.artifact_store`.
 
 Focused on the retry wrapper semantics. In particular, HTTP 404 responses
 must be treated as definitive ``not found`` answers and bubble up without
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from unify.common.pipeline.retry_policy import ResilientRequestPolicy
-from unity_deploy.infra.gcp.artifact_store import (
+from unify_deploy.infra.gcp.artifact_store import (
     GcsArtifactStore,
     _is_not_found_error,
 )

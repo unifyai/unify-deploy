@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from unity_deploy.infra.workers import entrypoint_ingest
+from unify_deploy.infra.workers import entrypoint_ingest
 
 
 def test_duplicate_defer_seconds_waits_past_steal_grace(monkeypatch) -> None:

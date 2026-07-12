@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from unity_deploy.client_bundle.loader import (
+from unify_deploy.client_bundle.loader import (
     _register_bundle_package,
     resolve_from_bundle,
 )
@@ -20,7 +20,7 @@ def client_alpha_bundle(tmp_path, monkeypatch):
     client_root = tmp_path / "client_alpha"
     src = (
         Path(__file__).resolve().parents[2]
-        / "unity_deploy"
+        / "unify_deploy"
         / "assistant_deployments"
         / "clients"
         / "client_alpha"
@@ -63,7 +63,7 @@ def test_register_bundle_package_executes_real_init(tmp_path):
     )
     (impl / "__init__.py").write_text("MARKER = 'from-real-init'\n", encoding="utf-8")
 
-    client_pkg = f"unity_deploy.assistant_deployments.clients.{client_name}"
+    client_pkg = f"unify_deploy.assistant_deployments.clients.{client_name}"
     for name in list(sys.modules):
         if name == client_pkg or name.startswith(f"{client_pkg}."):
             del sys.modules[name]

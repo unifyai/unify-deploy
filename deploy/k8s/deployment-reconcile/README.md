@@ -65,7 +65,7 @@ environment from inside the container.
 ## Extending Artifacts
 
 The Job is intentionally artifact-agnostic: it runs
-`unity_deploy.scripts.reconcile_deployment` for the whole target environment.
+`unify_deploy.scripts.reconcile_deployment` for the whole target environment.
 New deploy-time artifacts should be added to the code registry and planner, not
 to the Kubernetes Job.
 
@@ -74,7 +74,7 @@ The usual path is:
 1. Add the desired artifact field or model to the deployment declaration layer,
    such as `DeploymentSpec` or a dedicated control-plane spec.
 2. Declare the artifact in each client deployment that owns it.
-3. Extend `unity_deploy.deployment_reconcile.control_plane.build_control_plane_plan()` to
+3. Extend `unify_deploy.deployment_reconcile.control_plane.build_control_plane_plan()` to
    translate registered declarations and `DeploymentTarget` mappings into
    `ReconcileOperation` writes.
 4. Add tests for planning, filtering, clearing stale state, and generic CLI

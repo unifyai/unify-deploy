@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`unity_deploy.infra.workers.assistant_key_resolver`.
+"""Unit tests for :mod:`unify_deploy.infra.workers.assistant_key_resolver`.
 
 Covers:
 
@@ -29,7 +29,7 @@ from pydantic import SecretStr, ValidationError
 
 from unify.common.pipeline.types import DmBinding, FmBinding, IngestBinding
 from unify.settings import SETTINGS
-from unity_deploy.infra.workers.assistant_key_resolver import (
+from unify_deploy.infra.workers.assistant_key_resolver import (
     AssistantKeyLookupError,
     ResolvedAssistant,
     clear_cache,
@@ -270,7 +270,7 @@ class TestCache:
         We monkey-patch ``time.monotonic`` inside the resolver module
         to simulate the 5-minute TTL elapsing without sleeping.
         """
-        from unity_deploy.infra.workers import assistant_key_resolver
+        from unify_deploy.infra.workers import assistant_key_resolver
 
         fake_now = {"t": 1000.0}
         monkeypatch.setattr(

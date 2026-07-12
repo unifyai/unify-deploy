@@ -34,7 +34,7 @@ _ensure_brain_submodule() {
 
 if [ -f .gitmodules ] && grep -q 'third_party/brain' .gitmodules; then
   _ensure_brain_submodule
-  if [ ! -f unity_deploy/assistant_deployments/clients/unify_company/__init__.py ]; then
+  if [ ! -f unify_deploy/assistant_deployments/clients/unify_company/__init__.py ]; then
     echo "unify_company symlink does not resolve after submodule init" >&2
     exit 1
   fi
@@ -49,7 +49,7 @@ CLIENTS=(
 )
 
 for client in "${CLIENTS[@]}"; do
-  src="unity_deploy/assistant_deployments/clients/${client}"
+  src="unify_deploy/assistant_deployments/clients/${client}"
   if [ ! -e "$src" ]; then
     echo "Skipping missing client tree: $src" >&2
     continue

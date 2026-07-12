@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unity-deploy"
+name = "unify-deploy"
 version = "0.0.0"
 description = "Hosted deployment and communication infrastructure for Unity"
 requires-python = ">=3.12,<4.0"
@@ -66,11 +66,11 @@ adapters = [
     "uvicorn[standard]>=0.24.0",
 ]
 
-[project.entry-points."unity_deploy.init"]
-enterprise = "unity_deploy.hook:startup_hook"
+[project.entry-points."unify_deploy.init"]
+enterprise = "unify_deploy.hook:startup_hook"
 
 [project.entry-points."unify.deploy_runtime"]
-enterprise = "unity_deploy.runtime:register_runtime_backends"
+enterprise = "unify_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
 # Formatters are the single source of truth for the pinned versions CI and
@@ -109,10 +109,10 @@ venv = ".venv"
 reportMissingImports = "warning"
 
 [tool.setuptools.packages.find]
-include = ["unity_deploy*", "communication*", "adapters*", "common*"]
+include = ["unify_deploy*", "communication*", "adapters*", "common*"]
 
 [tool.setuptools.package-data]
-"unity_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
+"unify_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
 "*" = ["*.json", "*.md", "*.yaml", "*.yml", "data/*.json", "data/*.md", "data/*.yaml", "data/*.yml"]
 "communication" = ["**/*.md", "**/*.ps1", "**/*.sh", "**/*.html", "**/*.conf", "**/*.hcl"]
 

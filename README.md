@@ -379,7 +379,7 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 
 ## 10. The deployment overlay package
 
-`unity_deploy/` is the enterprise overlay loaded by `unity` at runtime via a Python entry point. When `_UNITY_STARTUP_HOOK_GROUP` is set (K8s Secret in hosted deploys), `unity` calls `importlib.metadata.entry_points()` and runs this package's `startup_hook()`. Absent that env var (open-source), the mechanism is inert.
+`unify_deploy/` is the enterprise overlay loaded by `unity` at runtime via a Python entry point. When `_UNITY_STARTUP_HOOK_GROUP` is set (K8s Secret in hosted deploys), `unity` calls `importlib.metadata.entry_points()` and runs this package's `startup_hook()`. Absent that env var (open-source), the mechanism is inert.
 
 The startup hook:
 1. **Resolves the assistant deployment** — deployment-matched spec with org/team/user/assistant seed layers merged in scope order, plus `.secrets.json`.
@@ -387,7 +387,7 @@ The startup hook:
 3. **Syncs custom functions** — upserts client memoized functions + venvs via `FunctionManager.sync_custom()`.
 
 ```
-unity_deploy/
+unify_deploy/
 ├── hook.py                       # entry point: startup_hook()
 └── assistant_deployments/
     ├── clients/                  # client_alpha/, clientzeta/, client_beta/, …  (self-register)

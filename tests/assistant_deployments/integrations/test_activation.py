@@ -5,21 +5,21 @@ from __future__ import annotations
 import json
 import logging
 
-from unity_deploy.assistant_deployments.clients import (
+from unify_deploy.assistant_deployments.clients import (
     ClientDeploymentEntry,
     ResolvedAssistantDeployment,
     _spec_to_resolved,
 )
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unity_deploy.assistant_deployments.deployment_types import DeploymentMapping
-from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
-from unity_deploy.assistant_deployments.deployment_types import DeploymentTarget
-from unity_deploy.assistant_deployments.deployment_types import SeedLayer
+from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unify_deploy.assistant_deployments.deployment_types import DeploymentMapping
+from unify_deploy.assistant_deployments.deployment_types import DeploymentSpec
+from unify_deploy.assistant_deployments.deployment_types import DeploymentTarget
+from unify_deploy.assistant_deployments.deployment_types import SeedLayer
 from unify.guidance_manager.custom_guidance import (
     collect_guidance_from_directories,
     guidance_titles_from_source,
 )
-from unity_deploy.assistant_deployments.integrations.activation import (
+from unify_deploy.assistant_deployments.integrations.activation import (
     expand_integrations,
 )
 

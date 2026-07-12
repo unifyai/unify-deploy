@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from unity_deploy.runtime_reconcile.context import RuntimeIdentity
-from unity_deploy.runtime_reconcile import materialize
+from unify_deploy.runtime_reconcile.context import RuntimeIdentity
+from unify_deploy.runtime_reconcile import materialize
 
 
 class _FakeFunctionManager:
@@ -69,8 +69,8 @@ class _FakeKnowledgeManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def sync_custom(self, *, source_tables=None) -> bool:
-        self.calls.append({"source_tables": source_tables})
+    def sync_custom(self, *, source_claims=None) -> bool:
+        self.calls.append({"source_claims": source_claims})
         return True
 
 
@@ -246,12 +246,12 @@ def _install_materialize_fakes(
     )
 
     catalog_projection = ModuleType(
-        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+        "unify_deploy.assistant_deployments.integrations.catalog_projection",
     )
     catalog_projection.sync_integrations = lambda _rows: None
     monkeypatch.setitem(
         __import__("sys").modules,
-        "unity_deploy.assistant_deployments.integrations.catalog_projection",
+        "unify_deploy.assistant_deployments.integrations.catalog_projection",
         catalog_projection,
     )
 
@@ -385,7 +385,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
     assert fake_cm.calls == [{"source_contacts": {}}]
-    assert fake_km.calls == [{"source_tables": {}}]
+    assert fake_km.calls == [{"source_claims": {}}]
     assert fake_dm.calls == [{"source_tables": {}}]
     assert fake_dash.calls == [{"source_entities": {"tiles": {}, "layouts": {}}}]
     assert fake_ts.calls == [{"source_tasks": {}, "function_name_to_id": {}}]

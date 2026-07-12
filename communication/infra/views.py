@@ -2130,7 +2130,7 @@ async def get_client_bundle_signed_url(
 
     from datetime import timedelta
 
-    from unity_deploy.assistant_deployments.routing_manifest import (
+    from unify_deploy.assistant_deployments.routing_manifest import (
         resolve_client_bundle_target,
     )
 

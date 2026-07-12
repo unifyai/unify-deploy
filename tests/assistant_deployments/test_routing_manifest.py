@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity_deploy.assistant_deployments.routing_manifest import (
+from unify_deploy.assistant_deployments.routing_manifest import (
     resolve_client_bundle_target,
     resolve_manifest_layers,
 )

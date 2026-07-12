@@ -164,8 +164,8 @@ if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
     # Fetch/register the assistant client bundle before entrypoint bodies run.
     # Offline jobs skip the live ConversationManager startup hook that normally
     # does this; without it, imports like
-    # unity_deploy.assistant_deployments.clients.<client>.* fail in-pod.
-    python3 -m unity_deploy.client_bundle.bootstrap
+    # unify_deploy.assistant_deployments.clients.<client>.* fail in-pod.
+    python3 -m unify_deploy.client_bundle.bootstrap
     python3 -m unify.task_scheduler.offline_runner
     exit $?
 fi
