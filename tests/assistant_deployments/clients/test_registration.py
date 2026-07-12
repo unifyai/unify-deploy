@@ -49,7 +49,7 @@ from unify_deploy.assistant_deployments.guidance_source import (
 from unify.blacklist_manager.custom_blacklist import collect_blacklist_from_directories
 from unify.contact_manager.custom_contacts import collect_contacts_from_directories
 from unify.secret_manager.custom_secrets import collect_secrets_from_directories
-from unify_deploy.assistant_deployments.knowledge_source import write_knowledge_table
+from unify_deploy.assistant_deployments.knowledge_source import write_knowledge_jsonl
 from unify_deploy.assistant_deployments.custom_data_source import write_data_table
 from unify.data_manager.custom_data import collect_data_from_directories
 from unify.knowledge_manager.custom_knowledge import collect_knowledge_from_directories
@@ -81,20 +81,9 @@ def _write_test_custom_data(
 def _write_test_knowledge(
     name: str,
     *,
-    table_name: str,
-    seed_key: str,
-    columns: dict[str, str] | None = None,
-    rows: list[dict[str, object]],
+    entries: list[dict[str, object]],
 ) -> Path:
-    directory = _KNOWLEDGE_ROOT / name
-    write_knowledge_table(
-        directory,
-        table_name,
-        columns=columns,
-        seed_key=seed_key,
-        rows=rows,
-    )
-    return directory
+    return write_knowledge_jsonl(_KNOWLEDGE_ROOT / name, entries)
 
 
 _GUIDANCE_ROOT = Path("/tmp/unify-deploy-test-guidance")
@@ -1050,7 +1039,7 @@ class TestSeedLayers:
 
     # -- knowledge merge --
 
-    def test_knowledge_deep_merge(self, monkeypatch):
+    def test_knowledge_claim_override(self, monkeypatch):
         self._register(monkeypatch)
         register_layer(
             "test_client",
@@ -1059,10 +1048,16 @@ class TestSeedLayers:
             SeedLayer(
                 knowledge_dir=_write_test_knowledge(
                     "org-layer",
-                    table_name="Companies",
-                    seed_key="name",
-                    columns={"name": "str"},
-                    rows=[{"name": "Acme"}],
+                    entries=[
+                        {
+                            "key": "acme-company",
+                            "title": "Acme",
+                            "content": "Acme is a company.",
+                            "kind": "fact",
+                            "topics": ["companies"],
+                            "destination": "personal",
+                        },
+                    ],
                 ),
             ),
         )
@@ -1073,20 +1068,26 @@ class TestSeedLayers:
             SeedLayer(
                 knowledge_dir=_write_test_knowledge(
                     "user-layer",
-                    table_name="Companies",
-                    seed_key="name",
-                    columns={"industry": "str"},
-                    rows=[{"name": "Acme", "industry": "Tech"}],
+                    entries=[
+                        {
+                            "key": "acme-company",
+                            "title": "Acme",
+                            "content": "Acme is a Tech company.",
+                            "kind": "fact",
+                            "topics": ["companies", "tech"],
+                            "destination": "personal",
+                        },
+                    ],
                 ),
             ),
         )
         result = resolve(org_id=10, user_id="user-aaa")
-        tables = collect_knowledge_from_directories(result.knowledge_dirs)
-        tbl = tables["Companies"]
-        assert "name" in tbl["columns"]
-        assert "industry" in tbl["columns"]
-        assert len(tbl["rows"]) == 1
-        assert tbl["rows"][0]["industry"] == "Tech"
+        claims = collect_knowledge_from_directories(result.knowledge_dirs)
+        claim = claims["acme-company"]
+        assert claim["title"] == "Acme"
+        assert claim["content"] == "Acme is a Tech company."
+        assert claim["topics"] == ["companies", "tech"]
+        assert claim["destination"] == "personal"
 
     # -- custom data merge --
 

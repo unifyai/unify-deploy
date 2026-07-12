@@ -70,8 +70,8 @@ class SeedLayer(BaseModel):
     Layers are collected during resolution in scope order
     (org -> team -> user -> assistant) and merged onto the
     deployment spec's seed data.  More specific layers override
-    less specific ones using natural-key dedup (knowledge tables by
-    seed_key, etc.).
+    less specific ones using natural-key dedup (knowledge claims by
+    key, etc.).
     """
 
     contacts_dir: Optional[Path] = Field(
@@ -88,7 +88,9 @@ class SeedLayer(BaseModel):
     )
     knowledge_dir: Optional[Path] = Field(
         default=None,
-        description="Directory containing knowledge table definitions for this layer.",
+        description=(
+            "Directory containing knowledge.jsonl claim definitions for this layer."
+        ),
     )
     custom_data_dir: Optional[Path] = Field(
         default=None,
@@ -188,8 +190,8 @@ class DeploymentSpec(BaseModel):
     knowledge_dir: Optional[Path] = Field(
         default=None,
         description=(
-            "Directory containing deployment-defined knowledge tables. Each "
-            "table is a subdirectory with meta.json and rows.jsonl."
+            "Directory containing deployment-defined knowledge claims as "
+            "knowledge.jsonl (one claim object per line)."
         ),
     )
     custom_data_dir: Optional[Path] = Field(

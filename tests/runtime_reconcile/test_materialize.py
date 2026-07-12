@@ -69,8 +69,8 @@ class _FakeKnowledgeManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def sync_custom(self, *, source_tables=None) -> bool:
-        self.calls.append({"source_tables": source_tables})
+    def sync_custom(self, *, source_claims=None) -> bool:
+        self.calls.append({"source_claims": source_claims})
         return True
 
 
@@ -385,7 +385,7 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert fake_fm.calls == [{"source_functions": {}, "source_venvs": {}}]
     assert fake_gm.calls == [{"source_guidance": {}, "function_name_to_id": {}}]
     assert fake_cm.calls == [{"source_contacts": {}}]
-    assert fake_km.calls == [{"source_tables": {}}]
+    assert fake_km.calls == [{"source_claims": {}}]
     assert fake_dm.calls == [{"source_tables": {}}]
     assert fake_dash.calls == [{"source_entities": {"tiles": {}, "layouts": {}}}]
     assert fake_ts.calls == [{"source_tasks": {}, "function_name_to_id": {}}]

@@ -31,7 +31,10 @@ def _hash_payload(payload: Any) -> str:
 
 
 def _runtime_summary(resolved: Any) -> dict[str, Any]:
-    from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
+    from unify.knowledge_manager.custom_knowledge import (
+        collect_knowledge_from_directories,
+        knowledge_titles_from_source,
+    )
     from unify.data_manager.custom_data import list_data_table_contexts
 
     from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
@@ -40,11 +43,12 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
     from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
     from unify.file_manager.custom_files import collect_files_from_directories
 
+    knowledge_claims = collect_knowledge_from_directories(resolved.knowledge_dirs)
     return {
         "contacts_dirs": len(resolved.contacts_dirs),
         "secrets_dirs": len(resolved.secrets_dirs),
         "guidance_dir_count": len(resolved.guidance_dirs),
-        "knowledge_tables": list_knowledge_table_names(resolved.knowledge_dirs),
+        "knowledge_titles": knowledge_titles_from_source(knowledge_claims),
         "knowledge_dirs": len(resolved.knowledge_dirs),
         "custom_data_tables": list_data_table_contexts(resolved.custom_data_dirs),
         "custom_data_dirs": len(resolved.custom_data_dirs),

@@ -25,7 +25,10 @@ import os
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
-from unify.knowledge_manager.custom_knowledge import list_knowledge_table_names
+from unify.knowledge_manager.custom_knowledge import (
+    collect_knowledge_from_directories,
+    knowledge_titles_from_source,
+)
 from unify.data_manager.custom_data import list_data_table_contexts
 from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
 from unify.logger import LOGGER as logger
@@ -133,14 +136,18 @@ def startup_hook(
         logger,
         (
             "⏱️ [StartupTiming] unify_deploy.startup_hook resolved "
-            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_tables=%d custom_data_tables=%d dashboard_entities=%d tasks_dirs=%d files_dirs=%d blacklist_dirs=%d "
+            "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d knowledge_claims=%d custom_data_tables=%d dashboard_entities=%d tasks_dirs=%d files_dirs=%d blacklist_dirs=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
         len(resolved.contacts_dirs),
         len(resolved.secrets_dirs),
         len(resolved.secrets),
         len(resolved.guidance_dirs),
-        len(list_knowledge_table_names(resolved.knowledge_dirs)),
+        len(
+            knowledge_titles_from_source(
+                collect_knowledge_from_directories(resolved.knowledge_dirs),
+            ),
+        ),
         len(list_data_table_contexts(resolved.custom_data_dirs)),
         sum(
             len(names)

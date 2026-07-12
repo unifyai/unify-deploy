@@ -482,7 +482,7 @@ def materialize_runtime_state(
     source_knowledge = collect_knowledge_from_directories(knowledge_dirs)
     knowledge_start = perf_counter()
     km = ManagerRegistry.get_knowledge_manager()
-    knowledge_changed = km.sync_custom(source_tables=source_knowledge)
+    knowledge_changed = km.sync_custom(source_claims=source_knowledge)
     log_startup_timing(
         logger,
         "⏱️ [StartupTiming] runtime_reconcile.sync_custom_knowledge assistant=%s duration=%.2fs changed=%s",
