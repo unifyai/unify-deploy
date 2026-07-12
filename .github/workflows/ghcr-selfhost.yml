@@ -25,9 +25,10 @@ on:
   repository_dispatch:
     types: [publish-selfhost-images]
 
+# Debouncer semantics: let an in-flight image build finish.
 concurrency:
   group: ghcr-selfhost-${{ github.workflow }}-${{ github.event.client_payload.unity_ref || inputs.unity_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
