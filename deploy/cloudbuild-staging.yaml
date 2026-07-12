@@ -283,7 +283,9 @@ steps:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   # Bundled-mode registry load reads the just-published GCS client tarballs.
-  waitFor: ['apply-unity-external-secrets', 'publish-client-bundles']
+  # Wait for deploy-comms so Cloud Run cutover finishes before reconcile can
+  # fail the build and strand a half-finished traffic migration.
+  waitFor: ['apply-unity-external-secrets', 'publish-client-bundles', 'deploy-comms']
 
   # --- Session controller + comms rollout (gated on comms image change) ----
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -311,8 +313,8 @@ steps:
     set -euo pipefail
     [ -f /workspace/deploy_comms ] || { echo "comms unchanged; skipping comms deploy"; exit 0; }
     source deploy/scripts/cloudbuild/cloud_run_lib.sh
-    run_cloud_run_with_retry repair_traffic_state ${_COMMS_SERVICE} ${_REGION} \
-      || echo "Traffic repair skipped; deploy will create a fresh revision"
+    run_cloud_run_with_retry clear_sticky_revision_pins ${_COMMS_SERVICE} ${_REGION} \
+      || echo "Sticky pin clear skipped; continuing with deploy + canonical route"
     run_cloud_run_with_retry gcloud run deploy ${_COMMS_SERVICE} \
       --platform=managed \
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
@@ -338,8 +340,8 @@ steps:
     set -euo pipefail
     [ -f /workspace/deploy_adapters ] || { echo "adapters unchanged; skipping adapters deploy"; exit 0; }
     source deploy/scripts/cloudbuild/cloud_run_lib.sh
-    run_cloud_run_with_retry repair_traffic_state ${_ADAPTERS_SERVICE} ${_REGION} \
-      || echo "Traffic repair skipped; deploy will create a fresh revision"
+    run_cloud_run_with_retry clear_sticky_revision_pins ${_ADAPTERS_SERVICE} ${_REGION} \
+      || echo "Sticky pin clear skipped; continuing with deploy + canonical route"
     run_cloud_run_with_retry gcloud run deploy ${_ADAPTERS_SERVICE} \
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA} \
       --region=${_REGION} \
@@ -384,7 +386,9 @@ steps:
   - |
     set -euo pipefail
     cat /workspace/unity_sha.txt | gsutil cp - gs://bucket/image_hash_staging.txt
-  waitFor: ['deploy-comms', 'reconcile-deployment']
+  # Do not wait on reconcile-deployment: a control-plane reconcile failure must
+  # not block runtime image-hash cutover after Cloud Run has already taken traffic.
+  waitFor: ['deploy-comms']
 
   # --- Single idle-pool refresh (authoritative) ---------------------------
   # Runs after comms has taken traffic (manifest-safe), adapters are live,
