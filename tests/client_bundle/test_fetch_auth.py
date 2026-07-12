@@ -15,6 +15,8 @@ def test_auth_headers_use_unify_key(monkeypatch):
     assert headers == {"Authorization": "Bearer assistant-scoped-key"}
     # The platform admin key must never be used for bundle fetch.
     assert "platform-admin-key" not in headers.get("Authorization", "")
+    # Server verifies UNIFY_KEY against the Orchestra assistant record
+    # (no live AssistantSession required), so offline jobs can bootstrap.
 
 
 def test_auth_headers_empty_without_unify_key(monkeypatch):

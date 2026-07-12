@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 
 from common.settings import SETTINGS
 from communication import dependencies as deps
@@ -56,8 +57,6 @@ async def test_authorize_falls_back_to_assistant_session(monkeypatch, _admin_key
 
 @pytest.mark.asyncio
 async def test_authorize_rejects_wrong_assistant(monkeypatch, _admin_key):
-    from fastapi import HTTPException
-
     monkeypatch.setattr(deps, "extract_api_key", lambda request: "other-assistant-key")
 
     async def _verify(*, api_key, assistant_id, requested_binding_id=None):
@@ -67,4 +66,103 @@ async def test_authorize_rejects_wrong_assistant(monkeypatch, _admin_key):
 
     with pytest.raises(HTTPException) as exc:
         await deps.authorize_admin_or_assistant(object(), assistant_id=9999)
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_verify_assistant_identity_from_key_success(monkeypatch):
+    async def _auth(api_key: str):
+        assert api_key == "assistant-key"
+        return {"user_id": "u1"}
+
+    def _lookup(*, assistant_id: str):
+        assert assistant_id == "1406"
+        return {
+            "assistant_id": "1406",
+            "api_key": "assistant-key",
+            "org_id": 1,
+            "user_id": "u1",
+            "team_ids": [11],
+        }
+
+    monkeypatch.setattr(deps, "authenticate_user_api_key", _auth)
+    monkeypatch.setattr(
+        "common.assistant_lookup.get_assistant",
+        _lookup,
+    )
+
+    identity = await deps.verify_assistant_identity_from_key(
+        api_key="assistant-key",
+        assistant_id=1406,
+    )
+
+    assert identity.assistant_id == 1406
+    assert identity.api_key == "assistant-key"
+    assert identity.org_id == 1
+    assert identity.user_id == "u1"
+    assert identity.team_ids == [11]
+
+
+@pytest.mark.asyncio
+async def test_verify_assistant_identity_from_key_wrong_key(monkeypatch):
+    async def _auth(api_key: str):
+        return {"user_id": "u1"}
+
+    def _lookup(*, assistant_id: str):
+        return {
+            "assistant_id": "1406",
+            "api_key": "correct-key",
+            "org_id": 1,
+            "user_id": "u1",
+            "team_ids": [],
+        }
+
+    monkeypatch.setattr(deps, "authenticate_user_api_key", _auth)
+    monkeypatch.setattr("common.assistant_lookup.get_assistant", _lookup)
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.verify_assistant_identity_from_key(
+            api_key="wrong-key",
+            assistant_id=1406,
+        )
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_verify_assistant_identity_from_key_missing_assistant(monkeypatch):
+    async def _auth(api_key: str):
+        return {"user_id": "u1"}
+
+    def _lookup(*, assistant_id: str):
+        return {"assistant_id": None, "api_key": ""}
+
+    monkeypatch.setattr(deps, "authenticate_user_api_key", _auth)
+    monkeypatch.setattr("common.assistant_lookup.get_assistant", _lookup)
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.verify_assistant_identity_from_key(
+            api_key="assistant-key",
+            assistant_id=1406,
+        )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_verify_assistant_identity_from_key_rejects_invalid_user_key(
+    monkeypatch,
+):
+    async def _auth(api_key: str):
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+
+    def _should_not_lookup(**kwargs):  # pragma: no cover
+        raise AssertionError("get_assistant must not run when user key is invalid")
+
+    monkeypatch.setattr(deps, "authenticate_user_api_key", _auth)
+    monkeypatch.setattr("common.assistant_lookup.get_assistant", _should_not_lookup)
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.verify_assistant_identity_from_key(
+            api_key="ADMIN-KEY",
+            assistant_id=1406,
+        )
     assert exc.value.status_code == 401

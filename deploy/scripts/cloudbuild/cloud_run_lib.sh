@@ -5,7 +5,7 @@
 # Provides:
 #   run_cloud_run_with_retry <cmd...>   -- retry a gcloud run call through the
 #                                          transient "ABORTED: Conflict" window
-#   repair_traffic_state <service> <region>
+#   clear_sticky_revision_pins <service> <region>
 #   route_canonical_traffic <service> <region> <build_id>
 
 run_cloud_run_with_retry() {
@@ -24,7 +24,10 @@ run_cloud_run_with_retry() {
     if [ "$status" -eq 0 ]; then
       return 0
     fi
-    if [[ "$output" != *"ABORTED: Conflict for resource"* || "$output" != *"was specified but current version is"* || "$attempt" -eq "$max_attempts" ]]; then
+    # Retry only on Cloud Run optimistic-concurrency conflicts.
+    if [ "$attempt" -eq "$max_attempts" ] \
+      || { [[ "$output" != *"ABORTED: Conflict for resource"* ]] \
+        && [[ "$output" != *"was specified but current version is"* ]]; }; then
       return "$status"
     fi
     sleep_for=$((delay + RANDOM % 5))
@@ -34,65 +37,15 @@ run_cloud_run_with_retry() {
   done
 }
 
-# Preserve the currently-live traffic split/tags before a deploy so a new
-# revision does not silently steal 100% traffic from a manually-pinned one.
-repair_traffic_state() {
+# CI deploys overwrite 100% traffic onto the new revision. Clear any sticky
+# named-revision pin left by a previous interrupted cutover so `gcloud run
+# deploy` can allocate traffic to the revision this build creates.
+clear_sticky_revision_pins() {
   local service="$1" region="$2"
-  local service_json traffic_file
-  service_json=$(mktemp)
-  traffic_file=$(mktemp)
-  gcloud run services describe "$service" \
+  gcloud run services update-traffic "$service" \
     --region="$region" \
     --platform=managed \
-    --format=json > "$service_json"
-  python3 - "$service_json" > "$traffic_file" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as service_file:
-    service = json.load(service_file)
-
-revisions: list[str] = []
-status_tags: dict[str, str] = {}
-for entry in service.get("status", {}).get("traffic", []):
-    revision = entry.get("revisionName")
-    if not revision:
-        continue
-    percent = entry.get("percent")
-    if percent is not None and int(percent) > 0:
-        revisions.append(f"{revision}={int(percent)}")
-    tag = entry.get("tag")
-    if tag:
-        status_tags[tag] = revision
-
-if not revisions:
-    raise SystemExit("No live traffic revision found to preserve")
-
-spec_tags = {
-    entry["tag"]: entry.get("revisionName")
-    for entry in service.get("spec", {}).get("traffic", [])
-    if entry.get("tag")
-}
-update_tags = [
-    f"{tag}={revision}"
-    for tag, revision in sorted(status_tags.items())
-    if spec_tags.get(tag) != revision
-]
-remove_tags = sorted(tag for tag in spec_tags if tag not in status_tags)
-
-print("--to-revisions=" + ",".join(revisions))
-if update_tags:
-    print("--update-tags=" + ",".join(update_tags))
-if remove_tags:
-    print("--remove-tags=" + ",".join(remove_tags))
-PY
-  local traffic_args
-  mapfile -t traffic_args < "$traffic_file"
-  rm -f "$service_json" "$traffic_file"
-  run_cloud_run_with_retry gcloud run services update-traffic "$service" \
-    --region="$region" \
-    --platform=managed \
-    "${traffic_args[@]}" \
+    --to-latest \
     --quiet
 }
 
