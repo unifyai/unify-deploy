@@ -251,33 +251,6 @@ steps:
   secretEnv: ['GITHUB_TOKEN']
   waitFor: ['resolve-unity-sha']
 
-- name: 'gcr.io/cloud-builders/kubectl'
-  id: 'reconcile-deployment'
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    set -eu
-    SHA="$$(cat /workspace/unity_sha.txt)"
-    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
-    bash deploy/scripts/run_deployment_reconcile_job.sh \
-      --environment production \
-      --namespace production \
-      --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA" \
-      --orchestra-url "${_ORCHESTRA_URL}" \
-      --unity-comms-url "${_UNITY_COMMS_URL}" \
-      --planes control-plane \
-      --concurrency 8 \
-      --timeout 600s \
-      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}"
-  env:
-  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
-  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  # Bundled-mode registry load reads the just-published GCS client tarballs.
-  # Wait for deploy-comms so Cloud Run cutover finishes before reconcile can
-  # fail the build and strand a half-finished traffic migration.
-  waitFor: ['apply-unity-external-secrets', 'publish-client-bundles', 'deploy-comms']
-
   # --- Session controller + comms rollout (gated on comms image change) ----
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-session-controller'
@@ -320,6 +293,33 @@ steps:
       --quiet
     run_cloud_run_with_retry route_canonical_traffic ${_COMMS_SERVICE} ${_REGION} ${BUILD_ID}
   waitFor: ['push-comms', 'deploy-session-controller']
+
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'reconcile-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -eu
+    SHA="$$(cat /workspace/unity_sha.txt)"
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+    bash deploy/scripts/run_deployment_reconcile_job.sh \
+      --environment production \
+      --namespace production \
+      --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA" \
+      --orchestra-url "${_ORCHESTRA_URL}" \
+      --unity-comms-url "${_UNITY_COMMS_URL}" \
+      --planes control-plane \
+      --concurrency 8 \
+      --timeout 600s \
+      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}"
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  # Bundled-mode registry load reads the just-published GCS client tarballs.
+  # Defined after deploy-comms (Cloud Build requires waitFor targets to appear
+  # earlier in the file) so cutover finishes before reconcile can fail the build.
+  waitFor: ['apply-unity-external-secrets', 'publish-client-bundles', 'deploy-comms']
 
   # --- Adapters rollout (gated on adapters image change) -------------------
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
