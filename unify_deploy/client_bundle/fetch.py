@@ -20,7 +20,8 @@ from unify_deploy.assistant_deployments.routing_manifest import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CLIENT_DEPLOYMENT_ROOT = Path("/opt/client-deployment")
+# Pods only mount a writable emptyDir at /tmp; /opt is read-only on Autopilot.
+DEFAULT_CLIENT_DEPLOYMENT_ROOT = Path("/tmp/client-deployment")
 
 
 def client_deployment_root() -> Path | None:

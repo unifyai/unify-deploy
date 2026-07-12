@@ -41,7 +41,9 @@ from .assistant_sessions import (
     BINDING_ID_ANNOTATION,
     DESIRED_STATE_STOPPED,
     DESIRED_STATE_RUNNING,
+    SIGNAL_CM_ATTACHED,
     SIGNAL_DESKTOP_READY,
+    SIGNAL_PROMOTE_TO_CM,
     SIGNAL_VM_RELEASE_COMPLETE,
     SESSION_REF_ANNOTATION,
     SESSION_REF_LABEL,
@@ -75,6 +77,7 @@ from .assistant_sessions import (
     released_binding,
     resolve_current_binding_vm_ref,
     session_binding,
+    session_cm_attached,
     session_desktop_mode,
     session_desktop_required,
     vm_refs_match,
@@ -632,6 +635,21 @@ def _build_startup_payload(
     }
     if wake_reasons:
         payload["wake_reasons"] = wake_reasons
+        # Offline cold wakes carry headless mode + runner env inside the first
+        # wake_reason so the pod supervisor can boot without ConversationManager.
+        for reason in wake_reasons:
+            if not isinstance(reason, dict):
+                continue
+            if reason.get("headless_offline"):
+                payload["headless_offline"] = True
+            offline_env = reason.get("offline_task_env")
+            if isinstance(offline_env, dict) and offline_env:
+                payload["offline_task"] = {
+                    str(key): str(value)
+                    for key, value in offline_env.items()
+                    if value is not None
+                }
+            break
     return payload
 
 
@@ -1350,6 +1368,57 @@ async def start_job(
         active_session_already_running = bool(
             existing_phase == "Active" and existing_activation_id,
         )
+        # Headless offline pod is Active but CM is not attached: promote in place
+        # so inbound user traffic starts ConversationManager without a second Job.
+        if active_session_already_running and not session_cm_attached(
+            existing_session,
+        ):
+            await asyncio.to_thread(
+                record_assistant_session_signal,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                signal_name=SIGNAL_PROMOTE_TO_CM,
+                payload={
+                    "requestedAt": datetime.now(timezone.utc).isoformat(),
+                    "medium": medium,
+                },
+                source="job-start-promote",
+            )
+            # Refresh bootstrap without headless_offline so CM gets a normal payload.
+            interactive_payload = {
+                key: value
+                for key, value in startup_payload.items()
+                if key not in {"headless_offline", "offline_task"}
+            }
+            secret_name = await asyncio.to_thread(
+                create_or_update_bootstrap_secret,
+                core_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                existing_activation_id,
+                interactive_payload,
+            )
+            emit_observability_event(
+                "infra.job_start.promoted_headless_to_cm",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                activation_id=existing_activation_id,
+                medium=medium,
+            )
+            return {
+                "success": True,
+                "activation_id": existing_activation_id,
+                "phase": existing_phase,
+                "job_name": binding_job_ref(session_binding(existing_session)).get(
+                    "name",
+                ),
+                "reused_active_session": True,
+                "active_session_already_running": True,
+                "promoted_headless_to_cm": True,
+                "wake_reasons_attached_to_startup": False,
+                "startup_secret_ref": secret_name,
+            }
         restart_in_progress = bool(
             release_draining
             or (
@@ -1484,6 +1553,17 @@ async def start_job(
                 existing_phase=existing_phase,
                 existing_startup_secret_ref=existing_secret_name,
                 startup_secret_ref=secret_name,
+            )
+
+        if bootstrap_payload.get("headless_offline"):
+            await asyncio.to_thread(
+                record_assistant_session_signal,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                signal_name=SIGNAL_CM_ATTACHED,
+                payload={"attached": False},
+                source="job-start-headless",
             )
 
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
@@ -1744,6 +1824,42 @@ async def stop_current_assistant_session(assistant_id: str, request: Request):
         }
     finally:
         pop_causal_context(causal_token)
+
+
+@assistant_self_router.post("/session/{assistant_id}/cm-attached")
+async def set_session_cm_attached(
+    assistant_id: str,
+    request: Request,
+    attached: bool = Form(True),
+):
+    """Record whether ConversationManager is attached to this session.
+
+    Headless offline boots leave ``attached=false``. CM sets ``attached=true``
+    after StartupEvent init / promote so offline-dispatch can choose Pub/Sub
+    vs in-pod headless signalling.
+    """
+
+    await authorize_admin_or_assistant(request, assistant_id=assistant_id)
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+    await asyncio.to_thread(
+        record_assistant_session_signal,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+        signal_name=SIGNAL_CM_ATTACHED,
+        payload={"attached": bool(attached)},
+        source="cm-attached",
+    )
+    return {
+        "success": True,
+        "assistant_id": assistant_id,
+        "attached": bool(attached),
+    }
 
 
 # stop kubernetes job
@@ -3082,36 +3198,21 @@ async def _runtime_resource_state(
 ) -> dict[str, object]:
     """Return the live runtime resources currently owned by an assistant.
 
-    Offline task runners (``app=unity-offline``) run outside the AssistantSession
-    lifecycle but still hold writes against the owning body. They are reported
-    alongside online Jobs so callers that gate on quiescence — most notably the
-    membership-change runtime barrier behind ``/infra/runtime`` — wait for
-    in-flight offline runs to drain before declaring cleanup complete.
+    Offline work runs on the same ``app=unity`` AssistantSession Jobs as live
+    traffic, so session phase + ``active_job_names`` already gate quiescence.
+    ``active_offline_job_names`` remains in the response as an empty list for
+    API compatibility with older drain callers.
     """
 
     sanitized = assistant_id.lower().replace("_", "-")
-    jobs, offline_jobs = await asyncio.gather(
-        asyncio.to_thread(
-            batch_api.list_namespaced_job,
-            namespace=SETTINGS.default_namespace,
-            label_selector=f"app=unity,assistant-id={sanitized}",
-        ),
-        asyncio.to_thread(
-            batch_api.list_namespaced_job,
-            namespace=SETTINGS.default_namespace,
-            label_selector=f"app=unity-offline,assistant-id={sanitized}",
-        ),
+    jobs = await asyncio.to_thread(
+        batch_api.list_namespaced_job,
+        namespace=SETTINGS.default_namespace,
+        label_selector=f"app=unity,assistant-id={sanitized}",
     )
     active_job_names = [
         job.metadata.name
         for job in jobs.items
-        if job.status.active
-        and job.status.active > 0
-        and not job.metadata.deletion_timestamp
-    ]
-    active_offline_job_names = [
-        job.metadata.name
-        for job in offline_jobs.items
         if job.status.active
         and job.status.active > 0
         and not job.metadata.deletion_timestamp
@@ -3125,7 +3226,7 @@ async def _runtime_resource_state(
     disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
     return {
         "active_job_names": active_job_names,
-        "active_offline_job_names": active_offline_job_names,
+        "active_offline_job_names": [],
         "owned_vms": owned_vms,
         "other_owned_vms": other_owned_vms,
         "disk_vm_name": disk_vm_name,

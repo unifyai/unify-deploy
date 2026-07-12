@@ -333,8 +333,7 @@ def build_unity_job_manifest(
         priority_class_name: Pod priority class. Defaults to
             ``unity-idle``.
         app_label: Value of the ``app`` label on both Job and pod
-            template. Defaults to ``unity``; offline-task jobs use
-            ``unity-offline``, dashboard-action jobs use
+            template. Defaults to ``unity``; dashboard-action jobs use
             ``unity-dashboard-action``.
         extra_labels: Merged into Job ``metadata.labels`` (does NOT
             propagate to the pod template).
