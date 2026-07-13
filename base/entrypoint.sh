@@ -175,6 +175,16 @@ if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
     OFFLINE_EXIT_CODE=0
     wait $OFFLINE_PID || OFFLINE_EXIT_CODE=$?
     echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') - [ENTRYPOINT] Offline runner exited (code=${OFFLINE_EXIT_CODE}, uptime_ms=$(uptime_ms))"
+    if [ "$OFFLINE_EXIT_CODE" -ne 0 ]; then
+        # Propagate failure so the Job reports Failed instead of Complete.
+        if [ ! -z "$WATCHDOG_PID" ]; then
+            kill $WATCHDOG_PID 2>/dev/null || true
+        fi
+        stop_agent_service
+        kill $DEVICE_PID 2>/dev/null || true
+        kill $DISPLAY_PID 2>/dev/null || true
+        exit "$OFFLINE_EXIT_CODE"
+    fi
 else
     start_conversation_manager
     MAIN_EXIT_CODE=0
