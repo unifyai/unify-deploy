@@ -1024,6 +1024,15 @@ def _build_offline_runner_env(
                 if assistant_data.get("org_id") is not None
                 else ""
             ),
+            # Team-owned assistants have no personal root: shared-scoped tables
+            # (Data, Tasks, Contacts, …) must resolve to Teams/{owner}/… . The
+            # runtime reads this via SESSION_DETAILS.owner_team_id; omitting it
+            # silently routes the offline tick to the personal root.
+            "OWNER_TEAM_ID": (
+                str(assistant_data.get("owner_team_id"))
+                if assistant_data.get("owner_team_id") is not None
+                else ""
+            ),
         },
     )
     destination = request.destination or activation.get("destination")

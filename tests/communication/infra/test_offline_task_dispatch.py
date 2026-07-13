@@ -1063,6 +1063,37 @@ def test_offline_runner_env_carries_team_ids_as_csv():
     assert env["SELF_CONTACT_ID"] == "42"
     assert env["BOSS_CONTACT_ID"] == "43"
     assert "TASK_DESTINATION" not in env
+    # No owner_team_id in assistant data → env present but empty (solo scope).
+    assert env["OWNER_TEAM_ID"] == ""
+
+
+def test_offline_runner_env_carries_owner_team_id_for_team_owned():
+    """Team-owned assistants must propagate owner_team_id so shared-scoped
+    tables (Data, Tasks, …) resolve to Teams/{owner}/… instead of the
+    personal root."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(destination="team:11"),
+    )
+
+    env = task_activation._build_offline_runner_env(
+        request=request,
+        activation=_activation(destination="team:11"),
+        assistant_data={
+            "assistant_id": "1406",
+            "api_key": "test-api-key",
+            "team_ids": [11],
+            "owner_team_id": 11,
+            "self_contact_id": 0,
+            "boss_contact_id": 1,
+        },
+        run_key="run-123",
+        job_name="unity-assistant-abc",
+    )
+
+    assert env["OWNER_TEAM_ID"] == "11"
 
 
 def test_offline_runner_env_carries_task_destination():
