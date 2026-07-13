@@ -142,6 +142,7 @@ def _scheduled_task_entries(
     task_id: int,
     start_at: str,
     offline: bool = False,
+    max_runtime_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Return one minimal scheduled task row for the given assistant."""
 
@@ -163,6 +164,8 @@ def _scheduled_task_entries(
     if offline:
         entries["offline"] = True
         entries["entrypoint"] = TEST_OFFLINE_FUNCTION_ID
+    if max_runtime_seconds is not None:
+        entries["max_runtime_seconds"] = max_runtime_seconds
     return _with_mutable_explicit_types(entries)
 
 
@@ -782,6 +785,7 @@ class TestTaskActivationFlows:
                         task_id=task_id,
                         start_at=scheduled_for_dt.isoformat(),
                         offline=True,
+                        max_runtime_seconds=1800,
                     ),
                 ),
             )
@@ -803,7 +807,9 @@ class TestTaskActivationFlows:
             assert job.metadata.labels.get("task-id") == str(task_id)
             assert job.spec.backoff_limit == 0
             assert job.spec.ttl_seconds_after_finished is not None
-            assert job.spec.active_deadline_seconds is not None
+            # Runtime bound is per-task: the seeded task sets
+            # max_runtime_seconds, which maps onto activeDeadlineSeconds.
+            assert job.spec.active_deadline_seconds == 1800
 
             # Offline work must never create an interactive AssistantSession;
             # a session here means the live ConversationManager lane woke.

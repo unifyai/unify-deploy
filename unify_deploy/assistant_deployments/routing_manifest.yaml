@@ -55,10 +55,13 @@ clients:
     bundle_key: client_beta
     environments:
       production:
+        # Demo assistant churn: the id can be deleted between deploys;
+        # missing_ok keeps reconcile green while an id is absent.
         targets:
         - scope: assistant
           scope_id: "457"
           deployment: v0
+          missing_ok: true
       staging:
         targets: []
 
