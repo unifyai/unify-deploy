@@ -1,9 +1,12 @@
 """Scheduled and offline task-activation materialization for Communication.
 
 This module owns Cloud Tasks materialization, Orchestra admin calls, and
-offline-run routing onto AssistantSession pods (cold ``/infra/job/start``,
-warm Pub/Sub / headless session signals). Live session lifecycle stays in
-``infra/views.py``.
+offline-run launches. An offline run is a plain one-shot Kubernetes Job
+(``unity-task-run-*``) carrying the full runner env: no AssistantSession,
+no controller binding, no wake-reason envelope. The Job name is derived
+from the run key, so dispatch retries and concurrent deliveries collapse
+into a single execution via Kubernetes name uniqueness. Live session
+lifecycle stays in ``infra/views.py``.
 """
 
 from __future__ import annotations
@@ -13,7 +16,6 @@ import hashlib
 import json
 import logging
 import re
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -40,6 +42,7 @@ from unify.task_scheduler.offline_runner_contract import (
     build_offline_run_key as _build_offline_run_key_shared,
     build_offline_runner_env as _build_offline_runner_env_shared,
 )
+from unify.task_scheduler.types.run_source import RunSource
 
 from communication.dependencies import authorize_admin_or_assistant
 from .models import (
@@ -61,9 +64,6 @@ TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
 TASK_ACTIVATION_REPAIR_PATH = "/infra/task-activation/repair"
 OFFLINE_TASK_DISPATCH_PATH = "/infra/task-activation/offline-dispatch"
 TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
-# Synthetic job_name values written when offline runs on an AssistantSession
-# pod (warm CM / headless) rather than a dedicated Kubernetes Job.
-_IN_POD_JOB_NAME_PREFIXES = ("in-pod-", "assistant-session")
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH = "/admin/task-activation/current"
 ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH = "/admin/task-activation/reproject"
@@ -504,6 +504,7 @@ def _activation_snapshot_from_explicit_dispatch_request(
         "execution_mode": request.execution_mode,
         "destination": request.destination,
         "entrypoint": request.entrypoint,
+        "max_runtime_seconds": request.max_runtime_seconds,
         "task_name": request.task_name,
         "task_description": request.task_description,
     }
@@ -703,10 +704,9 @@ def _classify_offline_job_status(
     succeeded = int(getattr(status, "succeeded", None) or 0)
     failed = int(getattr(status, "failed", None) or 0)
     started_at = _job_start_time(job)
-    deadline_seconds = (
-        int(getattr(spec, "active_deadline_seconds", None) or 0)
-        or SETTINGS.offline_task_job_active_deadline_seconds
-    )
+    # The Job's own activeDeadlineSeconds is the task's max_runtime_seconds;
+    # unbounded tasks (no deadline on the Job) are never stale by age.
+    deadline_seconds = int(getattr(spec, "active_deadline_seconds", None) or 0)
     if active > 0:
         current_time = now or datetime.now(timezone.utc)
         if started_at is not None and deadline_seconds > 0:
@@ -725,7 +725,7 @@ def _classify_offline_job_status(
             "job_name": job_name,
             "active": active,
             "started_at": started_at.isoformat() if started_at else None,
-            "deadline_seconds": deadline_seconds,
+            "deadline_seconds": deadline_seconds or None,
         }
     if succeeded > 0 or _job_condition_status(job, "Complete"):
         return {
@@ -758,7 +758,7 @@ def _offline_job_lifecycle_safeguards() -> dict[str, Any]:
     """Return the Kubernetes safeguards required for offline task jobs."""
 
     return {
-        "active_deadline_seconds": SETTINGS.offline_task_job_active_deadline_seconds,
+        "active_deadline_seconds": "per-task max_runtime_seconds (None = unbounded)",
         "ttl_seconds_after_finished": SETTINGS.offline_task_job_ttl_seconds,
         "backoff_limit": OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         "durable_terminal_state": "Tasks/Runs and Tasks rows",
@@ -825,13 +825,11 @@ def _validate_current_offline_activation(
 
     if activation is None:
         return "activation_missing"
-    # Explicit REST triggers may fire any offline activation (scheduled or
-    # triggered). Scheduled/triggered dispatches still require kind match.
-    if request.source_type != "explicit":
-        expected_kind = (
-            "scheduled" if request.source_type == "scheduled" else "triggered"
-        )
-        if activation.get("activation_kind") != expected_kind:
+    # Manual REST triggers may fire any offline activation (scheduled or
+    # communication-triggered). Other dispatches still require kind match.
+    source_type = RunSource.normalize(request.source_type)
+    if source_type.requires_activation_kind_match:
+        if activation.get("activation_kind") != source_type.activation_kind:
             return "activation_kind_changed"
     if activation.get("execution_mode") != "offline":
         return "execution_mode_changed"
@@ -850,7 +848,7 @@ def _validate_current_offline_activation(
         and int(activation_entrypoint) != int(request.entrypoint)
     ):
         return "entrypoint_mismatch"
-    if request.source_type == "scheduled" and _normalize_datetime_string(
+    if source_type is RunSource.scheduled and _normalize_datetime_string(
         activation.get("next_due_at"),
     ) != _normalize_datetime_string(_request_scheduled_for_iso(request)):
         return "scheduled_for_mismatch"
@@ -899,13 +897,150 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     return run_key
 
 
-def _is_in_pod_offline_job_name(job_name: str | None) -> bool:
-    """Return True when job_name refers to an in-pod runner, not a K8s Job."""
+def _build_offline_task_job_name(
+    run_key: str,
+    *,
+    retry_count: int | None = None,
+) -> str:
+    """Return the deterministic Kubernetes Job name for one offline run attempt.
 
-    name = str(job_name or "").strip()
-    if not name:
-        return False
-    return name.startswith(_IN_POD_JOB_NAME_PREFIXES) or name == "assistant-session"
+    The name is a stable function of the run key, so concurrent deliveries of
+    the same attempt collapse into one Job via Kubernetes name uniqueness.
+    Retries salt the digest with the retry count because the failed Job object
+    may still exist (TTL pending) under the previous name.
+    """
+
+    seed = run_key if not retry_count else f"{run_key}:retry:{retry_count}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+    base_name = f"unity-task-run-{digest}"
+    suffix = SETTINGS.env_suffix.lstrip("-")
+    return f"{base_name}-{suffix}" if suffix else base_name
+
+
+def _create_or_replace_offline_env_secret(
+    core_api: Any,
+    *,
+    job_name: str,
+    run_key: str,
+    offline_env: dict[str, str],
+) -> None:
+    """Write the per-run env Secret consumed by the task-run Job via envFrom.
+
+    The Secret shares the Job's name; after the Job is created it becomes the
+    Secret's owner so both garbage-collect together. Keeping the runner env
+    (including the assistant's UNIFY_KEY) in a Secret rather than inline pod
+    spec env keeps credentials out of Job/pod describe output.
+    """
+
+    from kubernetes import client as k8s_client
+
+    body = k8s_client.V1Secret(
+        metadata=k8s_client.V1ObjectMeta(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+            labels={"app": "unity-task-run"},
+            annotations={"unify.ai/task-run-key": run_key},
+        ),
+        type="Opaque",
+        string_data={key: str(value) for key, value in offline_env.items()},
+    )
+    try:
+        core_api.create_namespaced_secret(
+            namespace=SETTINGS.default_namespace,
+            body=body,
+        )
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+        core_api.replace_namespaced_secret(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+            body=body,
+        )
+
+
+def _adopt_offline_env_secret(
+    core_api: Any,
+    *,
+    job_name: str,
+    job: Any,
+) -> None:
+    """Make the created Job own the env Secret so both garbage-collect together."""
+
+    core_api.patch_namespaced_secret(
+        name=job_name,
+        namespace=SETTINGS.default_namespace,
+        body={
+            "metadata": {
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1",
+                        "kind": "Job",
+                        "name": job.metadata.name,
+                        "uid": job.metadata.uid,
+                    },
+                ],
+            },
+        },
+    )
+
+
+def _launch_offline_task_job(
+    *,
+    batch_api: Any,
+    core_api: Any,
+    request: OfflineTaskDispatchRequest,
+    run_key: str,
+    job_name: str,
+    offline_env: dict[str, str],
+    max_runtime_seconds: int | None,
+) -> bool:
+    """Create the one-shot Kubernetes Job for one offline run attempt.
+
+    ``max_runtime_seconds`` is the task's own execution bound; ``None`` leaves
+    the Job unbounded (long-running scrapes legitimately run for days).
+    Returns True when this call created the Job, False when a Job with the
+    same name already exists (another delivery of the same attempt won the
+    race). Any other Kubernetes failure raises.
+    """
+
+    from .helpers import build_unity_job_manifest
+
+    _create_or_replace_offline_env_secret(
+        core_api,
+        job_name=job_name,
+        run_key=run_key,
+        offline_env=offline_env,
+    )
+    manifest = build_unity_job_manifest(
+        job_name=job_name,
+        namespace=SETTINGS.default_namespace,
+        ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
+        active_deadline_seconds=max_runtime_seconds,
+        unity_status="offline",
+        priority_class_name="unity-idle",
+        app_label="unity-task-run",
+        extra_labels={
+            "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
+            "task-id": str(request.task_id),
+        },
+        extra_annotations={
+            "unify.ai/task-run-key": run_key,
+        },
+    )
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    container["envFrom"] = [{"secretRef": {"name": job_name}}]
+    try:
+        job = batch_api.create_namespaced_job(
+            namespace=SETTINGS.default_namespace,
+            body=manifest,
+        )
+    except ApiException as exc:
+        if exc.status == 409:
+            return False
+        raise
+    _adopt_offline_env_secret(core_api, job_name=job_name, job=job)
+    return True
 
 
 def _build_offline_runner_env(
@@ -1022,6 +1157,15 @@ def _build_offline_runner_env(
             "ORG_ID": (
                 str(assistant_data.get("org_id"))
                 if assistant_data.get("org_id") is not None
+                else ""
+            ),
+            # Team-owned assistants have no personal root: shared-scoped tables
+            # (Data, Tasks, Contacts, …) must resolve to Teams/{owner}/… . The
+            # runtime reads this via SESSION_DETAILS.owner_team_id; omitting it
+            # silently routes the offline tick to the personal root.
+            "OWNER_TEAM_ID": (
+                str(assistant_data.get("owner_team_id"))
+                if assistant_data.get("owner_team_id") is not None
                 else ""
             ),
         },
@@ -1368,7 +1512,7 @@ def _offline_dispatch_request_from_activation(
             if activation.get("entrypoint") is not None
             else None
         ),
-        source_type="scheduled",
+        source_type=RunSource.scheduled,
         scheduled_for=datetime.fromisoformat(
             str(activation.get("next_due_at")).replace("Z", "+00:00"),
         ),
@@ -1599,216 +1743,6 @@ async def delete_scheduled_task_activation(
     }
 
 
-def _build_offline_wake_reason(
-    request: OfflineTaskDispatchRequest,
-    *,
-    activation: dict[str, Any],
-    run_key: str,
-) -> dict[str, Any]:
-    """Build the Pub/Sub / wake_reason payload for an offline due activation."""
-
-    return {
-        "type": "task_due",
-        "task_id": request.task_id,
-        "source_task_log_id": request.source_task_log_id,
-        "activation_revision": request.activation_revision,
-        "scheduled_for": (
-            request.scheduled_for.isoformat()
-            if request.scheduled_for is not None
-            else ""
-        ),
-        "destination": request.destination,
-        "execution_mode": "offline",
-        "source_type": request.source_type,
-        "task_label": str(activation.get("task_name") or ""),
-        "task_summary": str(activation.get("task_description") or ""),
-        "run_key": run_key,
-        "visibility_policy": "silent_by_default",
-    }
-
-
-def _publish_offline_task_due_event(
-    *,
-    assistant_id: str,
-    wake_reason: dict[str, Any],
-) -> None:
-    """Publish offline task_due to the assistant Pub/Sub topic for a warm CM."""
-
-    from .runtime_clients import get_pubsub_clients
-
-    publisher, _ = get_pubsub_clients()
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
-    event_payload = {
-        "contacts": [],
-        "assistant_id": str(assistant_id),
-        "event_type": "task_due",
-        "message": (
-            f"Offline task due: task_id={wake_reason.get('task_id')} "
-            f"run_key={wake_reason.get('run_key')}"
-        ),
-        **wake_reason,
-    }
-    publisher.publish(
-        topic_path,
-        json.dumps(
-            {
-                "thread": "unity_system_event",
-                "publish_timestamp": time.time(),
-                "event": event_payload,
-            },
-        ).encode("utf-8"),
-        thread="inbound",
-    )
-
-
-def _signal_session_offline_or_promote(
-    *,
-    custom_api: Any,
-    assistant_id: str,
-    signal_name: str,
-    payload: dict[str, Any],
-) -> None:
-    from .assistant_sessions import record_assistant_session_signal
-
-    record_assistant_session_signal(
-        custom_api,
-        SETTINGS.default_namespace,
-        str(assistant_id),
-        signal_name=signal_name,
-        payload=payload,
-        source="offline-dispatch",
-    )
-
-
-def _start_job_for_offline_cold(
-    *,
-    request: OfflineTaskDispatchRequest,
-    activation: dict[str, Any],
-    assistant_data: dict[str, Any],
-    run_key: str,
-    offline_env: dict[str, str],
-) -> dict[str, Any]:
-    """Wake a full AssistantSession pod in headless-offline mode."""
-
-    from common.team_summaries_codec import encode_team_summaries_for_form
-    from common.assistant_lookup import managed_desktop_entitled
-
-    wake_reason = _build_offline_wake_reason(
-        request,
-        activation=activation,
-        run_key=run_key,
-    )
-    wake_reason["headless_offline"] = True
-    wake_reason["offline_task_env"] = offline_env
-
-    desktop_mode = (
-        str(assistant_data.get("desktop_mode") or "ubuntu")
-        if managed_desktop_entitled(assistant_data)
-        else "none"
-    )
-    data = {
-        "api_key": str(assistant_data.get("api_key") or ""),
-        "medium": "api_message",
-        "assistant_id": str(
-            assistant_data.get("assistant_id")
-            or assistant_data.get("agent_id")
-            or request.assistant_id,
-        ),
-        "user_id": str(assistant_data.get("user_id") or ""),
-        "user_first_name": str(assistant_data.get("user_first_name") or ""),
-        "user_surname": str(assistant_data.get("user_surname") or ""),
-        "user_email": str(assistant_data.get("user_email") or ""),
-        "assistant_first_name": str(assistant_data.get("assistant_first_name") or ""),
-        "assistant_surname": str(assistant_data.get("assistant_surname") or ""),
-        "assistant_age": str(assistant_data.get("assistant_age") or ""),
-        "assistant_nationality": str(assistant_data.get("assistant_nationality") or ""),
-        "assistant_about": str(assistant_data.get("assistant_about") or ""),
-        "assistant_job_title": str(assistant_data.get("assistant_job_title") or ""),
-        "assistant_timezone": str(assistant_data.get("assistant_timezone") or "UTC"),
-        "user_number": str(assistant_data.get("user_number") or ""),
-        "assistant_number": str(assistant_data.get("assistant_number") or ""),
-        "assistant_email": str(assistant_data.get("assistant_email") or ""),
-        "assistant_email_provider": str(
-            assistant_data.get("assistant_email_provider") or "google_workspace",
-        ),
-        "user_whatsapp_number": str(assistant_data.get("user_whatsapp_number") or ""),
-        "assistant_whatsapp_number": str(
-            assistant_data.get("assistant_whatsapp_number") or "",
-        ),
-        "assistant_discord_bot_id": str(
-            assistant_data.get("assistant_discord_bot_id") or "",
-        ),
-        "assistant_slack_bot_user_id": str(
-            assistant_data.get("assistant_slack_bot_user_id") or "",
-        ),
-        "assistant_slack_team_id": str(
-            assistant_data.get("assistant_slack_team_id") or "",
-        ),
-        "voice_provider": str(assistant_data.get("voice_provider") or "cartesia"),
-        "voice_id": str(assistant_data.get("voice_id") or ""),
-        "default_model": str(assistant_data.get("default_model") or ""),
-        "default_reasoning_effort": str(
-            assistant_data.get("default_reasoning_effort") or "",
-        ),
-        "slow_brain_model": str(assistant_data.get("slow_brain_model") or ""),
-        "slow_brain_reasoning_effort": str(
-            assistant_data.get("slow_brain_reasoning_effort") or "",
-        ),
-        "desktop_mode": desktop_mode,
-        "user_desktops": json.dumps(assistant_data.get("user_desktops") or []),
-        "demo_id": (
-            str(assistant_data["demo_id"])
-            if assistant_data.get("demo_id") is not None
-            else ""
-        ),
-        "is_coordinator": ("true" if assistant_data.get("is_coordinator") else "false"),
-        "team_ids": json.dumps(assistant_data.get("team_ids") or []),
-        "team_summaries": encode_team_summaries_for_form(
-            assistant_data.get("team_summaries") or [],
-            field_name="team_summaries",
-        ),
-        "self_contact_id": str(assistant_data.get("self_contact_id") or "0"),
-        "boss_contact_id": str(assistant_data.get("boss_contact_id") or "1"),
-        "org_id": (
-            str(assistant_data.get("org_id"))
-            if assistant_data.get("org_id") is not None
-            else ""
-        ),
-        "wake_reasons": json.dumps([wake_reason]),
-    }
-    url = f"{SETTINGS.comms_url.rstrip('/')}/infra/job/start"
-    response = requests.post(
-        url,
-        data=data,
-        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-        timeout=60,
-    )
-    try:
-        body = response.json()
-    except Exception:
-        body = {"raw": response.text}
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"start_job failed for offline cold wake: "
-            f"status={response.status_code} body={body}",
-        )
-    return body if isinstance(body, dict) else {"result": body}
-
-
-def _get_assistant_session_for_offline(assistant_id: str) -> dict[str, Any] | None:
-    from .assistant_sessions import get_assistant_session, get_custom_objects_api
-
-    custom_api = get_custom_objects_api()
-    if custom_api is None:
-        raise RuntimeError("Failed to connect to Kubernetes cluster")
-    return get_assistant_session(
-        custom_api,
-        SETTINGS.default_namespace,
-        str(assistant_id),
-    )
-
-
 def _validate_offline_dispatch_request(request: OfflineTaskDispatchRequest) -> None:
     """Reject malformed offline-dispatch requests before touching external systems."""
 
@@ -1817,7 +1751,7 @@ def _validate_offline_dispatch_request(request: OfflineTaskDispatchRequest) -> N
             status_code=400,
             detail="Offline dispatch requires execution_mode=offline",
         )
-    if request.source_type == "scheduled" and request.scheduled_for is None:
+    if request.source_type is RunSource.scheduled and request.scheduled_for is None:
         raise HTTPException(
             status_code=400,
             detail="Scheduled offline dispatch requires scheduled_for",
@@ -1902,8 +1836,7 @@ async def dispatch_offline_task(
         run_state = str(run.get("state") or "pending")
         retry_count: int | None = None
         previous_error: str | None = None
-        job_name_seed: str | None = None
-        batch_api: Any | None = None
+        batch_api, core_api, _, _ = await _get_k8s_clients()
         if not created and run_state == "completed":
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.adopted",
@@ -1924,7 +1857,6 @@ async def dispatch_offline_task(
         if not created and run_state == "failed":
             retry_count = int(run.get("retry_count") or 0) + 1
             previous_error = str(run.get("error") or "")
-            job_name_seed = f"{run_key}:retry:{retry_count}"
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.retrying",
                 **_offline_dispatch_event_fields(
@@ -1935,55 +1867,14 @@ async def dispatch_offline_task(
                     status="retrying_failed_run",
                 ),
             )
-        if not created and run_state != "failed" and run.get("job_name"):
+        if not created and run_state in {"pending", "running"} and run.get("job_name"):
             job_name = str(run.get("job_name"))
-            if _is_in_pod_offline_job_name(job_name):
-                session = await asyncio.to_thread(
-                    _get_assistant_session_for_offline,
-                    request.assistant_id,
-                )
-                from .assistant_sessions import get_phase
-
-                if get_phase(session) == "Active":
-                    _emit_task_activation_event(
-                        "task_activation.offline_dispatch.adopted",
-                        **_offline_dispatch_event_fields(
-                            request,
-                            stage=stage,
-                            run_key=run_key,
-                            job_name=job_name,
-                            run_state=run_state,
-                            status="adopted_inflight_run",
-                        ),
-                    )
-                    return {
-                        "success": True,
-                        "status": "adopted_inflight_run",
-                        "run_key": run_key,
-                        "job_name": job_name,
-                        "run_state": run_state,
-                        "job_status": {"status": "active", "job_name": job_name},
-                    }
-                job_status = {"status": "missing", "job_name": job_name}
-            else:
-                batch_api, _, _, _ = await _get_k8s_clients()
-                job_status = await asyncio.to_thread(
-                    _classify_offline_job_status,
-                    batch_api,
-                    job_name,
-                )
-            if job_status.get("status") in {"unknown"}:
-                _emit_task_activation_event(
-                    "task_activation.offline_dispatch.skipped",
-                    **_offline_dispatch_event_fields(
-                        request,
-                        stage=stage,
-                        run_key=run_key,
-                        job_name=job_name,
-                        run_state=run_state,
-                        status="inflight_job_unknown",
-                    ),
-                )
+            job_status = await asyncio.to_thread(
+                _classify_offline_job_status,
+                batch_api,
+                job_name,
+            )
+            if job_status.get("status") == "unknown":
                 raise HTTPException(
                     status_code=503,
                     detail={
@@ -2014,6 +1905,8 @@ async def dispatch_offline_task(
                     "run_state": run_state,
                     "job_status": job_status,
                 }
+            # The recorded Job is gone or terminal while the run row still
+            # claims to be in flight: fail the stale row and launch a retry.
             retry_count = int(run.get("retry_count") or 0) + 1
             previous_error = str(run.get("error") or "")
             error = _stale_inflight_run_error(
@@ -2032,7 +1925,6 @@ async def dispatch_offline_task(
                     previous_error=previous_error,
                 ),
             )
-            job_name_seed = f"{run_key}:retry:{retry_count}"
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.retrying",
                 **_offline_dispatch_event_fields(
@@ -2045,135 +1937,15 @@ async def dispatch_offline_task(
                 ),
             )
 
-        stage = "session_route"
-        _emit_task_activation_event(
-            "task_activation.offline_dispatch.stage",
-            **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
-        )
+        stage = "launch_job"
+        job_name = _build_offline_task_job_name(run_key, retry_count=retry_count)
         offline_env = _build_offline_runner_env(
             request=request,
             activation=activation or {},
             assistant_data=assistant_data,
             run_key=run_key,
-            job_name=job_name_seed or run_key,
+            job_name=job_name,
         )
-        session = await asyncio.to_thread(
-            _get_assistant_session_for_offline,
-            request.assistant_id,
-        )
-        from .assistant_sessions import (
-            SIGNAL_OFFLINE_TASK_DUE,
-            get_phase,
-            session_cm_attached,
-        )
-
-        phase = get_phase(session)
-        if phase == "Active" and session_cm_attached(session):
-            wake_reason = _build_offline_wake_reason(
-                request,
-                activation=activation or {},
-                run_key=run_key,
-            )
-            await asyncio.to_thread(
-                _publish_offline_task_due_event,
-                assistant_id=str(request.assistant_id),
-                wake_reason=wake_reason,
-            )
-            binding = ((session or {}).get("status") or {}).get("binding") or {}
-            job_ref = binding.get("jobRef") or {}
-            job_name = str(job_ref.get("name") or "") or None
-            await asyncio.to_thread(
-                _update_task_run,
-                assistant_id=request.assistant_id,
-                run_key=run_key,
-                updates=_running_task_run_updates(
-                    job_name or "in-pod-cm",
-                    retry_count=retry_count,
-                    previous_error=previous_error,
-                ),
-            )
-            _emit_task_activation_event(
-                "task_activation.offline_dispatch.launched",
-                **_offline_dispatch_event_fields(
-                    request,
-                    stage=stage,
-                    run_key=run_key,
-                    job_name=job_name,
-                    status="published_to_active_cm",
-                ),
-            )
-            return {
-                "success": True,
-                "status": "published_to_active_cm",
-                "run_key": run_key,
-                "job_name": job_name,
-            }
-
-        if phase == "Active" and not session_cm_attached(session):
-            from .assistant_sessions import get_custom_objects_api
-
-            custom_api = await asyncio.to_thread(get_custom_objects_api)
-            if custom_api is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to connect to Kubernetes cluster",
-                )
-            await asyncio.to_thread(
-                _signal_session_offline_or_promote,
-                custom_api=custom_api,
-                assistant_id=str(request.assistant_id),
-                signal_name=SIGNAL_OFFLINE_TASK_DUE,
-                payload={
-                    "env": offline_env,
-                    "run_key": run_key,
-                    "observedAt": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            binding = ((session or {}).get("status") or {}).get("binding") or {}
-            job_ref = binding.get("jobRef") or {}
-            job_name = str(job_ref.get("name") or "") or None
-            await asyncio.to_thread(
-                _update_task_run,
-                assistant_id=request.assistant_id,
-                run_key=run_key,
-                updates=_running_task_run_updates(
-                    job_name or "in-pod-headless",
-                    retry_count=retry_count,
-                    previous_error=previous_error,
-                ),
-            )
-            _emit_task_activation_event(
-                "task_activation.offline_dispatch.launched",
-                **_offline_dispatch_event_fields(
-                    request,
-                    stage=stage,
-                    run_key=run_key,
-                    job_name=job_name,
-                    status="signaled_headless_session",
-                ),
-            )
-            return {
-                "success": True,
-                "status": "signaled_headless_session",
-                "run_key": run_key,
-                "job_name": job_name,
-            }
-
-        stage = "cold_start_job"
-        _emit_task_activation_event(
-            "task_activation.offline_dispatch.stage",
-            **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
-        )
-        start_result = await asyncio.to_thread(
-            _start_job_for_offline_cold,
-            request=request,
-            activation=activation or {},
-            assistant_data=assistant_data,
-            run_key=run_key,
-            offline_env=offline_env,
-        )
-        job_name = str(start_result.get("job_name") or "") or None
-        stage = "run_mark_running"
         _emit_task_activation_event(
             "task_activation.offline_dispatch.stage",
             **_offline_dispatch_event_fields(
@@ -2183,12 +1955,43 @@ async def dispatch_offline_task(
                 job_name=job_name,
             ),
         )
+        max_runtime_raw = (activation or {}).get(
+            "max_runtime_seconds",
+        ) or request.max_runtime_seconds
+        max_runtime_seconds = int(max_runtime_raw) if max_runtime_raw else None
+        job_created = await asyncio.to_thread(
+            _launch_offline_task_job,
+            batch_api=batch_api,
+            core_api=core_api,
+            request=request,
+            run_key=run_key,
+            job_name=job_name,
+            offline_env=offline_env,
+            max_runtime_seconds=max_runtime_seconds,
+        )
+        if not job_created:
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.adopted",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    job_name=job_name,
+                    status="already_dispatched",
+                ),
+            )
+            return {
+                "success": True,
+                "status": "already_dispatched",
+                "run_key": run_key,
+                "job_name": job_name,
+            }
         await asyncio.to_thread(
             _update_task_run,
             assistant_id=request.assistant_id,
             run_key=run_key,
             updates=_running_task_run_updates(
-                job_name or "assistant-session",
+                job_name,
                 retry_count=retry_count,
                 previous_error=previous_error,
             ),
@@ -2200,15 +2003,14 @@ async def dispatch_offline_task(
                 stage=stage,
                 run_key=run_key,
                 job_name=job_name,
-                status="launched_session",
+                status="launched_job",
             ),
         )
         return {
             "success": True,
-            "status": "launched_session",
+            "status": "launched_job",
             "run_key": run_key,
             "job_name": job_name,
-            "start_result": start_result,
         }
     except requests.RequestException as exc:
         _emit_task_activation_event(

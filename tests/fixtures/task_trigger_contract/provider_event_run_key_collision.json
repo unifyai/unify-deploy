@@ -1,0 +1,10 @@
+{
+  "shared_prefix_hmacs": [
+    "abcdef0123456789aaa111",
+    "abcdef0123456789bbb222"
+  ],
+  "assistant_id": "assistant-1",
+  "task_id": 101,
+  "binding_id": "binding-1",
+  "activation_revision": "rev-shared"
+}

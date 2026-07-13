@@ -10,15 +10,10 @@ export CONTAINER_START_TIME_MS=$(date +%s%3N)
 # Global variables to track processes
 MAIN_PID=""
 OFFLINE_PID=""
-SIGNAL_PID=""
 AGENT_PID=""
 WATCHDOG_PID=""
 DISPLAY_PID=""
 DEVICE_PID=""
-
-PROMOTE_CM_PATH="/tmp/unity-promote-cm"
-SESSION_MODE_PATH="/tmp/unity-session-mode"
-OFFLINE_ENV_PATH="/tmp/unity-offline.env"
 
 uptime_ms() {
     now_ms=$(date +%s%3N)
@@ -98,9 +93,6 @@ on_signal() {
     if [ ! -z "$WATCHDOG_PID" ]; then
         kill $WATCHDOG_PID 2>/dev/null || true
     fi
-    if [ ! -z "$SIGNAL_PID" ]; then
-        kill $SIGNAL_PID 2>/dev/null || true
-    fi
     if [ ! -z "$MAIN_PID" ]; then
         echo "Stopping main application (PID: $MAIN_PID)..."
         kill -TERM $MAIN_PID 2>/dev/null || true
@@ -160,13 +152,6 @@ DEVICE_PID=$!
 
 sleep 3
 
-# Resolve interactive vs headless-offline from AssistantSession bootstrap
-# (or from UNITY_OFFLINE_TASK_* already in the environment for local/tests).
-echo "⬥ Resolving session mode..."
-python3 -m unify.deploy.session_boot
-SESSION_MODE="$(tr -d '[:space:]' < "$SESSION_MODE_PATH" 2>/dev/null || echo interactive)"
-echo "⬥ Session mode: ${SESSION_MODE}"
-
 start_conversation_manager() {
     echo "⬥ Starting convo manager..."
     python3 unify/conversation_manager/main.py &
@@ -176,56 +161,30 @@ start_conversation_manager() {
     WATCHDOG_PID=$!
 }
 
-start_offline_runner() {
-    if [ -f "$OFFLINE_ENV_PATH" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        . "$OFFLINE_ENV_PATH"
-        set +a
-    fi
-    if [ -z "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
-        echo "⬥ Offline env missing UNITY_OFFLINE_TASK_MODE; skipping runner"
-        return 1
-    fi
-    echo "⬥ Fetching client bundle for disconnected offline runner..."
+# One-shot offline task-run pods carry the full runner contract in the
+# container env (UNITY_OFFLINE_TASK_*); everything else is interactive.
+if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
+    echo "⬥ Offline task-run pod (mode=${UNITY_OFFLINE_TASK_MODE})"
+    echo "⬥ Fetching client bundle for offline task runner..."
     python3 -m unify_deploy.client_bundle.bootstrap || python3 -c "from unify_deploy.client_bundle.bootstrap import ensure_offline_client_bundle; ensure_offline_client_bundle()" || true
-    echo "⬥ Starting disconnected offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
+    echo "⬥ Starting offline task runner..."
     python3 -m unify.task_scheduler.offline_runner &
     OFFLINE_PID=$!
-    echo "⬥ Offline runner started with PID: $OFFLINE_PID"
-    return 0
-}
-
-if [ "$SESSION_MODE" = "headless_offline" ]; then
-    start_offline_runner || true
-    echo "⬥ Starting pod signal watcher (promote / additional offline tasks)..."
-    python3 -m unify.deploy.pod_signal_watcher &
-    SIGNAL_PID=$!
-
-    # Wait until offline finishes, or until Communication asks us to attach CM.
-    while true; do
-        if [ -f "$PROMOTE_CM_PATH" ] && [ -z "$MAIN_PID" ]; then
-            echo "⬥ Promote-to-CM signal received; attaching ConversationManager"
-            start_conversation_manager
+    memory_watchdog "$OFFLINE_PID" &
+    WATCHDOG_PID=$!
+    OFFLINE_EXIT_CODE=0
+    wait $OFFLINE_PID || OFFLINE_EXIT_CODE=$?
+    echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') - [ENTRYPOINT] Offline runner exited (code=${OFFLINE_EXIT_CODE}, uptime_ms=$(uptime_ms))"
+    if [ "$OFFLINE_EXIT_CODE" -ne 0 ]; then
+        # Propagate failure so the Job reports Failed instead of Complete.
+        if [ ! -z "$WATCHDOG_PID" ]; then
+            kill $WATCHDOG_PID 2>/dev/null || true
         fi
-        if [ ! -z "$MAIN_PID" ]; then
-            if ! kill -0 "$MAIN_PID" 2>/dev/null; then
-                wait "$MAIN_PID" || true
-                break
-            fi
-        elif [ ! -z "$OFFLINE_PID" ]; then
-            if ! kill -0 "$OFFLINE_PID" 2>/dev/null; then
-                wait "$OFFLINE_PID" || true
-                # No CM attached — headless one-shot complete.
-                if [ -z "$MAIN_PID" ]; then
-                    break
-                fi
-            fi
-        else
-            break
-        fi
-        sleep 1
-    done
+        stop_agent_service
+        kill $DEVICE_PID 2>/dev/null || true
+        kill $DISPLAY_PID 2>/dev/null || true
+        exit "$OFFLINE_EXIT_CODE"
+    fi
 else
     start_conversation_manager
     MAIN_EXIT_CODE=0
@@ -235,9 +194,6 @@ fi
 
 if [ ! -z "$WATCHDOG_PID" ]; then
     kill $WATCHDOG_PID 2>/dev/null || true
-fi
-if [ ! -z "$SIGNAL_PID" ]; then
-    kill $SIGNAL_PID 2>/dev/null || true
 fi
 stop_agent_service
 kill $DEVICE_PID 2>/dev/null || true

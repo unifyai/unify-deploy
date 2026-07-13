@@ -142,6 +142,7 @@ def _scheduled_task_entries(
     task_id: int,
     start_at: str,
     offline: bool = False,
+    max_runtime_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Return one minimal scheduled task row for the given assistant."""
 
@@ -163,6 +164,8 @@ def _scheduled_task_entries(
     if offline:
         entries["offline"] = True
         entries["entrypoint"] = TEST_OFFLINE_FUNCTION_ID
+    if max_runtime_seconds is not None:
+        entries["max_runtime_seconds"] = max_runtime_seconds
     return _with_mutable_explicit_types(entries)
 
 
@@ -744,15 +747,16 @@ class TestTaskActivationFlows:
             _delete_test_assistant(assistant_id, batch_api)
 
     @pytest.mark.merge_gate
-    def test_offline_scheduled_task_runs_headless_without_cm(
+    def test_offline_scheduled_task_runs_as_dedicated_job(
         self,
         batch_api,
         comms,
     ):
-        """Offline scheduled tasks run on headless sessions and never attach CM.
+        """Offline scheduled tasks launch one-shot ``unity-task-run`` Jobs.
 
-        Offline dispatch cold-starts a headless AssistantSession (its
-        ``cmAttached`` signal records ``attached=false``); waking the live
+        Offline execution must never touch the interactive-session machinery:
+        no AssistantSession is created, and the run executes inside a
+        dedicated Kubernetes Job carrying the runner env. Waking the live
         ConversationManager lane for offline work is the regression this
         guards against.
         """
@@ -761,17 +765,12 @@ class TestTaskActivationFlows:
         assistant_id = str(assistant["assistant_id"])
         created_log_ids: list[int] = []
 
-        def _assert_headless(session: dict[str, Any]) -> None:
-            # Only an explicit cmAttached=true proves the live CM lane woke.
-            # A missing signal is ambiguous: the controller writes
-            # status.signals asynchronously and can briefly report an Active
-            # session with empty signals while the headless runner boots.
-            signals = (session.get("status") or {}).get("signals") or {}
-            cm_attached = signals.get("cmAttached") or {}
-            assert not cm_attached.get("attached", False), (
-                f"Offline scheduled task attached the live ConversationManager: "
-                f"{json.dumps(session, indent=2)}"
+        def _find_task_run_jobs() -> list[Any]:
+            jobs = batch_api.list_namespaced_job(
+                namespace=NAMESPACE,
+                label_selector=(f"app=unity-task-run,assistant-id={assistant_id}"),
             )
+            return list(jobs.items or [])
 
         try:
             scheduled_for_dt = (
@@ -786,34 +785,53 @@ class TestTaskActivationFlows:
                         task_id=task_id,
                         start_at=scheduled_for_dt.isoformat(),
                         offline=True,
+                        max_runtime_seconds=1800,
                     ),
                 ),
             )
             activation = _wait_for_activation(assistant, task_id)
             assert activation["execution_mode"] == "offline"
 
-            session = poll_until(
-                lambda: get_assistant_session(comms, assistant_id),
+            task_run_jobs = poll_until(
+                _find_task_run_jobs,
                 timeout=TASK_DUE_LEAD_SECONDS + TASK_FLOW_TIMEOUT_SECONDS,
                 interval=5,
                 description=(
-                    f"headless AssistantSession for offline task {task_id} "
+                    f"unity-task-run Job for offline task {task_id} "
                     f"on assistant {assistant_id}"
                 ),
             )
-            _assert_headless(session)
+            assert task_run_jobs, "Expected a dedicated unity-task-run Job"
+            job = task_run_jobs[0]
+            assert job.metadata.name.startswith("unity-task-run-")
+            assert job.metadata.labels.get("task-id") == str(task_id)
+            assert job.spec.backoff_limit == 0
+            assert job.spec.ttl_seconds_after_finished is not None
+            # Runtime bound is per-task: the seeded task sets
+            # max_runtime_seconds, which maps onto activeDeadlineSeconds.
+            assert job.spec.active_deadline_seconds == 1800
 
-            # The session must stay headless for the observation window; a CM
-            # attach here means the offline task woke the live runtime lane.
+            # Offline work must never create an interactive AssistantSession;
+            # a session here means the live ConversationManager lane woke.
             deadline = time.monotonic() + OFFLINE_NO_WAKE_GRACE_SECONDS
             while time.monotonic() < deadline:
+                session = get_assistant_session(comms, assistant_id)
+                assert session is None, (
+                    f"Offline scheduled task created an AssistantSession: "
+                    f"{json.dumps(session, indent=2)}"
+                )
                 time.sleep(min(5.0, deadline - time.monotonic()))
-                current = get_assistant_session(comms, assistant_id)
-                if current is None:
-                    break
-                _assert_headless(current)
         finally:
             _cleanup_unity_logs(assistant, created_log_ids)
+            for job in _find_task_run_jobs():
+                try:
+                    batch_api.delete_namespaced_job(
+                        name=job.metadata.name,
+                        namespace=NAMESPACE,
+                        propagation_policy="Background",
+                    )
+                except Exception:
+                    pass
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
