@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from communication.infra.provider_event_dispatch_inbox import (
     ProviderEventDispatchInbox,
@@ -16,6 +16,9 @@ from communication.infra.provider_event_dispatch_inbox import (
 class ProviderEventDispatchRequest(BaseModel):
     """Internal dispatch authorization for provider-event offline execution."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["1"] = "1"
     operation_id: str
     run_id: int
     run_key: str

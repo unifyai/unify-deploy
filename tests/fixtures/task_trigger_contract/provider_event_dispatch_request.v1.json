@@ -1,0 +1,16 @@
+{
+  "contract_version": "1",
+  "operation_id": "op-fixture-1",
+  "run_id": 42,
+  "run_key": "live:provider_event:assistant-7:task-3:binding-a:rev1234567890:abcdef0123456789deadbeefcafebabe",
+  "assistant_id": "assistant-7",
+  "task_id": 3,
+  "binding_id": "binding-a",
+  "receipt_id": "receipt-b",
+  "accepted_activation_revision": "rev-fixture-1",
+  "source_type": "provider_event",
+  "dispatch_mode": "live",
+  "event_context_ref": "blob://binding-a/receipt-b",
+  "issued_at": "2026-07-13T12:00:00+00:00",
+  "audience": "unity:provider-event-dispatch"
+}
