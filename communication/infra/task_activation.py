@@ -1797,10 +1797,11 @@ def _start_job_for_offline_cold(
 
 
 def _get_assistant_session_for_offline(assistant_id: str) -> dict[str, Any] | None:
-    from .assistant_sessions import get_assistant_session
-    from .runtime_clients import get_k8s_clients
+    from .assistant_sessions import get_assistant_session, get_custom_objects_api
 
-    _, _, custom_api, _ = get_k8s_clients()
+    custom_api = get_custom_objects_api()
+    if custom_api is None:
+        raise RuntimeError("Failed to connect to Kubernetes cluster")
     return get_assistant_session(
         custom_api,
         SETTINGS.default_namespace,
@@ -2109,7 +2110,14 @@ async def dispatch_offline_task(
             }
 
         if phase == "Active" and not session_cm_attached(session):
-            _, _, custom_api, _ = await _get_k8s_clients()
+            from .assistant_sessions import get_custom_objects_api
+
+            custom_api = await asyncio.to_thread(get_custom_objects_api)
+            if custom_api is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to connect to Kubernetes cluster",
+                )
             await asyncio.to_thread(
                 _signal_session_offline_or_promote,
                 custom_api=custom_api,
