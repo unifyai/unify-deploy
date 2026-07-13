@@ -30,6 +30,8 @@ from communication.infra.assistant_sessions import (
     assistant_session_observability_fields,
     BINDING_ID_ANNOTATION,
     BINDING_ID_LABEL,
+    SIGNAL_CM_ATTACHED,
+    session_signal,
     binding_desktop_url,
     binding_id as binding_id_from_status,
     binding_release_generation,
@@ -2629,6 +2631,34 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 )
                 emit_observability_event(
                     "controller.pending_container_terminal_job_stop_intent",
+                    assistant_id=assistant_id,
+                    activation_id=activation_id,
+                    binding_id=current_binding_id,
+                    job_name=job.metadata.name,
+                    terminal_phase=terminal_phase,
+                )
+                return
+            # A headless offline one-shot ends when its Job ends. The session
+            # records cmAttached.attached=false at dispatch and CM never
+            # attached, so re-binding a fresh pod would replay the same
+            # bootstrap (same run_key) forever: each respawn re-runs the
+            # offline task, fails run adoption, and poisons the next task
+            # instance. Stop the session instead; retries are owned by the
+            # offline dispatch control plane, not the binding loop.
+            cm_signal = session_signal(body, SIGNAL_CM_ATTACHED)
+            if (
+                cm_signal
+                and not cm_signal.get("attached", False)
+                and desired_state != DESIRED_STATE_STOPPED
+            ):
+                patch_assistant_session_spec(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    desired_state=DESIRED_STATE_STOPPED,
+                )
+                emit_observability_event(
+                    "controller.headless_one_shot_complete",
                     assistant_id=assistant_id,
                     activation_id=activation_id,
                     binding_id=current_binding_id,

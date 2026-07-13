@@ -1291,6 +1291,105 @@ def test_reconcile_restarts_after_terminal_job_cleanup(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("terminal_phase", ["Succeeded", "Failed"])
+def test_reconcile_stops_headless_session_after_terminal_job(
+    monkeypatch,
+    terminal_phase,
+):
+    """A never-promoted headless one-shot must stop when its Job ends.
+
+    Re-binding would replay the same headless bootstrap (same run_key)
+    forever: each respawned runner re-runs the offline task, fails run
+    adoption, and poisons the next task instance.
+    """
+
+    body = _base_session()
+    body["status"]["phase"] = "Active"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
+    )
+    body["status"]["signals"] = {
+        "cmAttached": {"attached": False, "source": "job-start-headless"},
+    }
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+    terminal_job = _job(terminal_phase=terminal_phase)
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        MagicMock(side_effect=[terminal_job, terminal_job, None]),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_spec.call_args.kwargs["desired_state"] == "Stopped"
+    # The binding loop must not mint a replacement binding.
+    for call in patch_status.call_args_list:
+        assert call.kwargs.get("phase") != "PendingJob"
+
+
+def test_reconcile_restarts_terminal_job_when_cm_was_attached(monkeypatch):
+    """CM-attached sessions keep the crash-recovery re-bind behavior."""
+
+    body = _base_session()
+    body["status"]["phase"] = "Active"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
+    )
+    body["status"]["signals"] = {
+        "cmAttached": {"attached": True, "source": "cm-attached"},
+    }
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+    terminal_job = _job(terminal_phase="Failed")
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        MagicMock(side_effect=[terminal_job, terminal_job, None]),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    patch_spec.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+
+
 def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
     body = _base_session(desired_state="Stopped")
     body["status"]["phase"] = "Active"
