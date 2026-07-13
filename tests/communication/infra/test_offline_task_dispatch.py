@@ -1200,3 +1200,92 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
     assert create_payload["source_contact_display_name"] == "Alice Owner"
     assert create_payload["task_name"] == "Daily summary"
     assert create_payload["task_description"] == "Send the daily summary email."
+
+
+def test_offline_dispatch_request_accepts_provider_event_source_type():
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="provider_event", scheduled_for=None),
+    )
+    assert request.source_type == "provider_event"
+
+
+def test_offline_dispatch_request_accepts_triggered_and_explicit():
+    from communication.infra import task_activation
+
+    explicit = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="explicit", scheduled_for=None),
+    )
+    triggered = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="triggered", scheduled_for=None),
+    )
+    assert explicit.source_type == "explicit"
+    assert triggered.source_type == "triggered"
+
+
+def test_explicit_offline_dispatch_accepts_scheduled_activation():
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="explicit", scheduled_for=None),
+    )
+    activation = _activation(activation_kind="scheduled")
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_triggered_offline_dispatch_requires_triggered_activation_kind():
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="triggered", scheduled_for=None),
+    )
+    activation = _activation(activation_kind="scheduled")
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        == "activation_kind_changed"
+    )
+
+
+def test_provider_event_offline_dispatch_requires_provider_event_activation_kind():
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="provider_event", scheduled_for=None),
+    )
+    activation = _activation(activation_kind="provider_event", next_due_at=None)
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_legacy_triggered_and_explicit_still_pass_kind_matching():
+    from communication.infra import task_activation
+
+    legacy_triggered = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="triggered", scheduled_for=None),
+    )
+    legacy_explicit = task_activation.OfflineTaskDispatchRequest(
+        **_payload(source_type="explicit", scheduled_for=None),
+    )
+    triggered_activation = _activation(activation_kind="triggered", next_due_at=None)
+    scheduled_activation = _activation(activation_kind="scheduled")
+
+    assert (
+        task_activation._validate_current_offline_activation(
+            legacy_triggered,
+            triggered_activation,
+        )
+        is None
+    )
+    assert (
+        task_activation._validate_current_offline_activation(
+            legacy_explicit,
+            scheduled_activation,
+        )
+        is None
+    )

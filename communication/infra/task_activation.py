@@ -42,6 +42,7 @@ from unify.task_scheduler.offline_runner_contract import (
     build_offline_run_key as _build_offline_run_key_shared,
     build_offline_runner_env as _build_offline_runner_env_shared,
 )
+from unify.task_scheduler.types.run_source import RunSource
 
 from communication.dependencies import authorize_admin_or_assistant
 from .models import (
@@ -824,13 +825,11 @@ def _validate_current_offline_activation(
 
     if activation is None:
         return "activation_missing"
-    # Explicit REST triggers may fire any offline activation (scheduled or
-    # triggered). Scheduled/triggered dispatches still require kind match.
-    if request.source_type != "explicit":
-        expected_kind = (
-            "scheduled" if request.source_type == "scheduled" else "triggered"
-        )
-        if activation.get("activation_kind") != expected_kind:
+    # Manual REST triggers may fire any offline activation (scheduled or
+    # communication-triggered). Other dispatches still require kind match.
+    source_type = RunSource.normalize(request.source_type)
+    if source_type.requires_activation_kind_match:
+        if activation.get("activation_kind") != source_type.activation_kind:
             return "activation_kind_changed"
     if activation.get("execution_mode") != "offline":
         return "execution_mode_changed"
@@ -849,7 +848,7 @@ def _validate_current_offline_activation(
         and int(activation_entrypoint) != int(request.entrypoint)
     ):
         return "entrypoint_mismatch"
-    if request.source_type == "scheduled" and _normalize_datetime_string(
+    if source_type is RunSource.scheduled and _normalize_datetime_string(
         activation.get("next_due_at"),
     ) != _normalize_datetime_string(_request_scheduled_for_iso(request)):
         return "scheduled_for_mismatch"
@@ -1510,7 +1509,7 @@ def _offline_dispatch_request_from_activation(
             if activation.get("entrypoint") is not None
             else None
         ),
-        source_type="scheduled",
+        source_type=RunSource.scheduled,
         scheduled_for=datetime.fromisoformat(
             str(activation.get("next_due_at")).replace("Z", "+00:00"),
         ),
@@ -1749,7 +1748,7 @@ def _validate_offline_dispatch_request(request: OfflineTaskDispatchRequest) -> N
             status_code=400,
             detail="Offline dispatch requires execution_mode=offline",
         )
-    if request.source_type == "scheduled" and request.scheduled_for is None:
+    if request.source_type is RunSource.scheduled and request.scheduled_for is None:
         raise HTTPException(
             status_code=400,
             detail="Scheduled offline dispatch requires scheduled_for",

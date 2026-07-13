@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 
+from unify.task_scheduler.types.run_source import RunSource
+
 
 class VMReadyRequest(BaseModel):
     assistant_id: str
@@ -100,7 +102,7 @@ class OfflineTaskDispatchRequest(BaseModel):
     activation_revision: str
     execution_mode: Literal["offline"] = "offline"
     entrypoint: Optional[int] = None
-    source_type: Literal["scheduled", "triggered", "explicit"] = "scheduled"
+    source_type: RunSource = RunSource.scheduled
     scheduled_for: Optional[datetime] = None
     source_ref: Optional[str] = None
     source_medium: Optional[str] = None
