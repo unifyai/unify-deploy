@@ -141,6 +141,11 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "is_local": assistant.get("is_local", False),
         "team_ids": assistant.get("team_ids", []),
         "team_summaries": assistant.get("team_summaries", []),
+        # Team-owned assistants have no personal root: the runtime routes
+        # shared-scoped tables (Data, Tasks, Contacts, …) to Teams/{owner}/…
+        # via SESSION_DETAILS.owner_team_id. Dropping this field silently
+        # routes offline work to the personal root instead.
+        "owner_team_id": assistant.get("owner_team_id"),
         "self_contact_id": assistant.get("self_contact_id") or 0,
         "boss_contact_id": assistant.get("boss_contact_id") or 1,
         "is_coordinator": assistant.get("is_coordinator", False),
