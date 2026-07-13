@@ -12,7 +12,10 @@ from google.cloud import pubsub_v1
 import pytest
 import requests
 
-from communication.infra.assistant_sessions import read_bootstrap_secret
+from communication.infra.assistant_sessions import (
+    read_bootstrap_secret,
+    session_cm_attached,
+)
 
 from .conftest import (
     ADAPTERS_URL,
@@ -758,9 +761,11 @@ class TestTaskActivationFlows:
         created_log_ids: list[int] = []
 
         def _assert_headless(session: dict[str, Any]) -> None:
-            signals = (session.get("status") or {}).get("signals") or {}
-            cm_attached = signals.get("cmAttached") or {}
-            assert cm_attached and cm_attached.get("attached") is False, (
+            # session_cm_attached is False for booting phases (no signal yet)
+            # and headless Active sessions (signal attached=false); it is True
+            # only when CM actually attached — the live-lane wake this guards
+            # against.
+            assert not session_cm_attached(session), (
                 f"Offline scheduled task attached the live ConversationManager: "
                 f"{json.dumps(session, indent=2)}"
             )
