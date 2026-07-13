@@ -1346,6 +1346,84 @@ def test_reconcile_stops_headless_session_after_terminal_job(
         assert call.kwargs.get("phase") != "PendingJob"
 
 
+def test_failed_recovery_stops_headless_session_instead_of_reminting(monkeypatch):
+    """The failed-running recovery path must not re-mint headless one-shots.
+
+    Terminal headless Jobs commonly reach recovery with the binding already
+    cleared and signals dropped, so the headless check falls back to the
+    bootstrap Secret's ``headless_offline`` flag.
+    """
+
+    body = _base_session()
+    body["status"]["phase"] = "Failed"
+    body["status"]["binding"] = None
+    body["status"]["signals"] = {}
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_assistant_release_state_without_binding",
+        lambda **_kwargs: ("Released", [], ""),
+    )
+    monkeypatch.setattr(
+        controller,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"headless_offline": True},
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_spec.call_args.kwargs["desired_state"] == "Stopped"
+    for call in patch_status.call_args_list:
+        assert call.kwargs.get("phase") != "PendingJob"
+
+
+def test_failed_recovery_remints_interactive_session(monkeypatch):
+    """Interactive sessions keep the recovery re-mint when signals are absent."""
+
+    body = _base_session()
+    body["status"]["phase"] = "Failed"
+    body["status"]["binding"] = None
+    body["status"]["signals"] = {}
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_assistant_release_state_without_binding",
+        lambda **_kwargs: ("Released", [], ""),
+    )
+    monkeypatch.setattr(
+        controller,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"assistant_id": "1207"},
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    patch_spec.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+
+
 def test_reconcile_restarts_terminal_job_when_cm_was_attached(monkeypatch):
     """CM-attached sessions keep the crash-recovery re-bind behavior."""
 

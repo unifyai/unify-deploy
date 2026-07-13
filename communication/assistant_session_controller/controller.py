@@ -30,6 +30,7 @@ from communication.infra.assistant_sessions import (
     assistant_session_observability_fields,
     BINDING_ID_ANNOTATION,
     BINDING_ID_LABEL,
+    read_bootstrap_secret,
     SIGNAL_CM_ATTACHED,
     session_signal,
     binding_desktop_url,
@@ -2009,6 +2010,29 @@ def _assistant_release_state_without_binding(
     return "Releasing", releasing_conditions, last_error
 
 
+def _session_is_headless_one_shot(body: dict) -> bool:
+    """Return whether this session is a headless offline one-shot run.
+
+    The ``cmAttached`` signal is authoritative when present, but signals are
+    binding-scoped and can be dropped across binding transitions, so fall
+    back to the bootstrap Secret: headless dispatches carry
+    ``headless_offline`` in ``startup.json``, and promoting a session to CM
+    rewrites the bootstrap without that flag.
+    """
+
+    cm_signal = session_signal(body, SIGNAL_CM_ATTACHED)
+    if cm_signal:
+        return not cm_signal.get("attached", False)
+    secret_name = str((body.get("spec") or {}).get("startupSecretRef") or "")
+    if not secret_name:
+        return False
+    try:
+        payload = read_bootstrap_secret(_core_api, WATCH_NAMESPACE, secret_name)
+    except Exception:
+        return False
+    return bool(payload.get("headless_offline"))
+
+
 def _recover_failed_running_session_without_binding(
     *,
     body: dict,
@@ -2059,6 +2083,26 @@ def _recover_failed_running_session_without_binding(
             assistant_id=assistant_id,
             activation_id=activation_id,
             suspend_intent=persisted_suspend_intent,
+        )
+        return
+
+    # A headless offline one-shot ends when its runner exits; the terminal
+    # Job commonly reaches this recovery via the release path (binding cleared
+    # first). Re-minting would replay the same headless bootstrap (same
+    # run_key) forever, so stop the session instead. Offline retries are
+    # owned by the dispatch control plane, not the binding loop.
+    if _session_is_headless_one_shot(body):
+        patch_assistant_session_spec(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            desired_state=DESIRED_STATE_STOPPED,
+        )
+        emit_observability_event(
+            "controller.headless_one_shot_complete",
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            source_reason="failed_running_no_binding",
         )
         return
 
@@ -2645,11 +2689,9 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             # offline task, fails run adoption, and poisons the next task
             # instance. Stop the session instead; retries are owned by the
             # offline dispatch control plane, not the binding loop.
-            cm_signal = session_signal(body, SIGNAL_CM_ATTACHED)
             if (
-                cm_signal
-                and not cm_signal.get("attached", False)
-                and desired_state != DESIRED_STATE_STOPPED
+                desired_state != DESIRED_STATE_STOPPED
+                and _session_is_headless_one_shot(body)
             ):
                 patch_assistant_session_spec(
                     _custom_api,
