@@ -177,6 +177,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
             "ASSISTANT_ID": "123",
             "UNIFY_KEY": "secret-key",
         },
+        max_runtime_seconds=None,
     )
 
     assert created is True
@@ -190,7 +191,8 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     )
     assert manifest["spec"]["backoffLimit"] == 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
-    assert "activeDeadlineSeconds" in manifest["spec"]
+    # No per-task bound means the run is unbounded: no activeDeadlineSeconds.
+    assert "activeDeadlineSeconds" not in manifest["spec"]
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [
@@ -231,10 +233,34 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
         run_key="rk",
         job_name="unity-task-run-abc123def456",
         offline_env={},
+        max_runtime_seconds=None,
     )
 
     assert created is False
     core_api.patch_namespaced_secret.assert_not_called()
+
+
+def test_launch_offline_task_job_applies_per_task_runtime_bound():
+    """A task's max_runtime_seconds becomes the Job's activeDeadlineSeconds."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    batch_api = MagicMock()
+    core_api = MagicMock()
+
+    task_activation._launch_offline_task_job(
+        batch_api=batch_api,
+        core_api=core_api,
+        request=request,
+        run_key="rk",
+        job_name="unity-task-run-abc123def456",
+        offline_env={},
+        max_runtime_seconds=7200,
+    )
+
+    manifest = batch_api.create_namespaced_job.call_args.kwargs["body"]
+    assert manifest["spec"]["activeDeadlineSeconds"] == 7200
 
 
 def test_offline_dispatch_launches_job_for_current_activation():
@@ -554,7 +580,9 @@ def test_task_activation_health_summarizes_blocking_conditions():
     assert summary["statuses"] == {"stale_running_run": 1}
     assert summary["blocking_conditions"] == {"stale_running_run": 1}
     assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 0
-    assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] >= 1800
+    assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] == (
+        "per-task max_runtime_seconds (None = unbounded)"
+    )
     assert summary["job_lifecycle_safeguards"]["ttl_seconds_after_finished"] > 0
 
 

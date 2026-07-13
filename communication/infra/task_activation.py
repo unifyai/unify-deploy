@@ -504,6 +504,7 @@ def _activation_snapshot_from_explicit_dispatch_request(
         "execution_mode": request.execution_mode,
         "destination": request.destination,
         "entrypoint": request.entrypoint,
+        "max_runtime_seconds": request.max_runtime_seconds,
         "task_name": request.task_name,
         "task_description": request.task_description,
     }
@@ -703,10 +704,9 @@ def _classify_offline_job_status(
     succeeded = int(getattr(status, "succeeded", None) or 0)
     failed = int(getattr(status, "failed", None) or 0)
     started_at = _job_start_time(job)
-    deadline_seconds = (
-        int(getattr(spec, "active_deadline_seconds", None) or 0)
-        or SETTINGS.offline_task_job_active_deadline_seconds
-    )
+    # The Job's own activeDeadlineSeconds is the task's max_runtime_seconds;
+    # unbounded tasks (no deadline on the Job) are never stale by age.
+    deadline_seconds = int(getattr(spec, "active_deadline_seconds", None) or 0)
     if active > 0:
         current_time = now or datetime.now(timezone.utc)
         if started_at is not None and deadline_seconds > 0:
@@ -725,7 +725,7 @@ def _classify_offline_job_status(
             "job_name": job_name,
             "active": active,
             "started_at": started_at.isoformat() if started_at else None,
-            "deadline_seconds": deadline_seconds,
+            "deadline_seconds": deadline_seconds or None,
         }
     if succeeded > 0 or _job_condition_status(job, "Complete"):
         return {
@@ -758,7 +758,7 @@ def _offline_job_lifecycle_safeguards() -> dict[str, Any]:
     """Return the Kubernetes safeguards required for offline task jobs."""
 
     return {
-        "active_deadline_seconds": SETTINGS.offline_task_job_active_deadline_seconds,
+        "active_deadline_seconds": "per-task max_runtime_seconds (None = unbounded)",
         "ttl_seconds_after_finished": SETTINGS.offline_task_job_ttl_seconds,
         "backoff_limit": OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         "durable_terminal_state": "Tasks/Runs and Tasks rows",
@@ -993,9 +993,12 @@ def _launch_offline_task_job(
     run_key: str,
     job_name: str,
     offline_env: dict[str, str],
+    max_runtime_seconds: int | None,
 ) -> bool:
     """Create the one-shot Kubernetes Job for one offline run attempt.
 
+    ``max_runtime_seconds`` is the task's own execution bound; ``None`` leaves
+    the Job unbounded (long-running scrapes legitimately run for days).
     Returns True when this call created the Job, False when a Job with the
     same name already exists (another delivery of the same attempt won the
     race). Any other Kubernetes failure raises.
@@ -1013,7 +1016,7 @@ def _launch_offline_task_job(
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
         ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
-        active_deadline_seconds=SETTINGS.offline_task_job_active_deadline_seconds,
+        active_deadline_seconds=max_runtime_seconds,
         unity_status="offline",
         priority_class_name="unity-idle",
         app_label="unity-task-run",
@@ -1952,6 +1955,10 @@ async def dispatch_offline_task(
                 job_name=job_name,
             ),
         )
+        max_runtime_raw = (activation or {}).get(
+            "max_runtime_seconds",
+        ) or request.max_runtime_seconds
+        max_runtime_seconds = int(max_runtime_raw) if max_runtime_raw else None
         job_created = await asyncio.to_thread(
             _launch_offline_task_job,
             batch_api=batch_api,
@@ -1960,6 +1967,7 @@ async def dispatch_offline_task(
             run_key=run_key,
             job_name=job_name,
             offline_env=offline_env,
+            max_runtime_seconds=max_runtime_seconds,
         )
         if not job_created:
             _emit_task_activation_event(

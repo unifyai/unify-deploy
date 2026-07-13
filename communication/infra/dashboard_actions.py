@@ -38,6 +38,11 @@ from .task_activation import (
 
 router = APIRouter()
 
+# Dashboard actions are interactive one-shots a person is waiting on, so they
+# keep a fixed bound (unlike tasks, whose max_runtime_seconds is per-task and
+# optional).
+DASHBOARD_ACTION_MAX_RUNTIME_SECONDS = 1800
+
 
 class DashboardActionDispatchRequest(BaseModel):
     """Dispatch one dashboard action execution attempt."""
@@ -219,7 +224,7 @@ def _launch_dashboard_action_job(
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
         ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
-        active_deadline_seconds=SETTINGS.offline_task_job_active_deadline_seconds,
+        active_deadline_seconds=DASHBOARD_ACTION_MAX_RUNTIME_SECONDS,
         unity_status="offline",
         priority_class_name="unity-idle",
         app_label="unity-dashboard-action",

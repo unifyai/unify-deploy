@@ -118,9 +118,6 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
-        self.offline_task_job_active_deadline_seconds: int = int(
-            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "1800"),
-        )
 
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")

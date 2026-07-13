@@ -102,6 +102,7 @@ class OfflineTaskDispatchRequest(BaseModel):
     activation_revision: str
     execution_mode: Literal["offline"] = "offline"
     entrypoint: Optional[int] = None
+    max_runtime_seconds: Optional[int] = None
     source_type: RunSource = RunSource.scheduled
     scheduled_for: Optional[datetime] = None
     source_ref: Optional[str] = None
