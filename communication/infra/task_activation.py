@@ -918,9 +918,78 @@ def _build_offline_task_job_name(
     return f"{base_name}-{suffix}" if suffix else base_name
 
 
+def _create_or_replace_offline_env_secret(
+    core_api: Any,
+    *,
+    job_name: str,
+    run_key: str,
+    offline_env: dict[str, str],
+) -> None:
+    """Write the per-run env Secret consumed by the task-run Job via envFrom.
+
+    The Secret shares the Job's name; after the Job is created it becomes the
+    Secret's owner so both garbage-collect together. Keeping the runner env
+    (including the assistant's UNIFY_KEY) in a Secret rather than inline pod
+    spec env keeps credentials out of Job/pod describe output.
+    """
+
+    from kubernetes import client as k8s_client
+
+    body = k8s_client.V1Secret(
+        metadata=k8s_client.V1ObjectMeta(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+            labels={"app": "unity-task-run"},
+            annotations={"unify.ai/task-run-key": run_key},
+        ),
+        type="Opaque",
+        string_data={key: str(value) for key, value in offline_env.items()},
+    )
+    try:
+        core_api.create_namespaced_secret(
+            namespace=SETTINGS.default_namespace,
+            body=body,
+        )
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+        core_api.replace_namespaced_secret(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+            body=body,
+        )
+
+
+def _adopt_offline_env_secret(
+    core_api: Any,
+    *,
+    job_name: str,
+    job: Any,
+) -> None:
+    """Make the created Job own the env Secret so both garbage-collect together."""
+
+    core_api.patch_namespaced_secret(
+        name=job_name,
+        namespace=SETTINGS.default_namespace,
+        body={
+            "metadata": {
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1",
+                        "kind": "Job",
+                        "name": job.metadata.name,
+                        "uid": job.metadata.uid,
+                    },
+                ],
+            },
+        },
+    )
+
+
 def _launch_offline_task_job(
     *,
     batch_api: Any,
+    core_api: Any,
     request: OfflineTaskDispatchRequest,
     run_key: str,
     job_name: str,
@@ -935,6 +1004,12 @@ def _launch_offline_task_job(
 
     from .helpers import build_unity_job_manifest
 
+    _create_or_replace_offline_env_secret(
+        core_api,
+        job_name=job_name,
+        run_key=run_key,
+        offline_env=offline_env,
+    )
     manifest = build_unity_job_manifest(
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
@@ -950,10 +1025,11 @@ def _launch_offline_task_job(
         extra_annotations={
             "unify.ai/task-run-key": run_key,
         },
-        extra_env=offline_env,
     )
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    container["envFrom"] = [{"secretRef": {"name": job_name}}]
     try:
-        batch_api.create_namespaced_job(
+        job = batch_api.create_namespaced_job(
             namespace=SETTINGS.default_namespace,
             body=manifest,
         )
@@ -961,6 +1037,7 @@ def _launch_offline_task_job(
         if exc.status == 409:
             return False
         raise
+    _adopt_offline_env_secret(core_api, job_name=job_name, job=job)
     return True
 
 
@@ -1757,7 +1834,7 @@ async def dispatch_offline_task(
         run_state = str(run.get("state") or "pending")
         retry_count: int | None = None
         previous_error: str | None = None
-        batch_api, _, _, _ = await _get_k8s_clients()
+        batch_api, core_api, _, _ = await _get_k8s_clients()
         if not created and run_state == "completed":
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.adopted",
@@ -1879,6 +1956,7 @@ async def dispatch_offline_task(
         job_created = await asyncio.to_thread(
             _launch_offline_task_job,
             batch_api=batch_api,
+            core_api=core_api,
             request=request,
             run_key=run_key,
             job_name=job_name,

@@ -107,6 +107,23 @@ def _cached_deployment_spec(
     return spec
 
 
+def _register_live_function_dirs(function_dirs: list[Path]) -> None:
+    """Tell the runtime where the deployment's live function modules are.
+
+    Execution then binds callables from these on-disk modules instead of
+    exec-ing the stored source copies, which are synced caches that can lag
+    the deployed tree between reconciles.
+    """
+
+    if not function_dirs:
+        return
+    from unify.function_manager.custom_functions import (
+        register_live_function_source_dirs,
+    )
+
+    register_live_function_source_dirs(list(function_dirs))
+
+
 def _resolve_layer_path(client_root: Path, relative: str | None) -> Path | None:
     if not relative:
         return None
@@ -300,7 +317,7 @@ def resolve_from_bundle(
         user_id=user_id,
         assistant_id=assistant_id,
     )
-    return _apply_manifest_layers(
+    resolved = _apply_manifest_layers(
         resolved,
         client_root=root,
         client_name=client_name,
@@ -309,3 +326,5 @@ def resolve_from_bundle(
         user_id=user_id,
         assistant_id=assistant_id,
     )
+    _register_live_function_dirs(resolved.function_dirs)
+    return resolved

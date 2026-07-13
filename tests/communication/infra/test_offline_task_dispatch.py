@@ -158,19 +158,25 @@ def test_offline_task_job_name_is_deterministic_and_retry_salted():
 
 
 def test_launch_offline_task_job_builds_one_shot_manifest():
-    """The launched Job must be a self-contained one-shot with the runner env."""
+    """The Job is a self-contained one-shot; runner env rides a per-run Secret."""
 
     from communication.infra import task_activation
 
     request = task_activation.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
+    core_api = MagicMock()
 
     created = task_activation._launch_offline_task_job(
         batch_api=batch_api,
+        core_api=core_api,
         request=request,
         run_key="offline:scheduled:assistant-123:101:abc123def456:once",
         job_name="unity-task-run-abc123def456",
-        offline_env={"UNITY_OFFLINE_TASK_MODE": "actor", "ASSISTANT_ID": "123"},
+        offline_env={
+            "UNITY_OFFLINE_TASK_MODE": "actor",
+            "ASSISTANT_ID": "123",
+            "UNIFY_KEY": "secret-key",
+        },
     )
 
     assert created is True
@@ -185,13 +191,25 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert manifest["spec"]["backoffLimit"] == 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
     assert "activeDeadlineSeconds" in manifest["spec"]
-    env = {
-        var["name"]: var.get("value")
-        for var in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
-        if "value" in var
-    }
-    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
-    assert env["ASSISTANT_ID"] == "123"
+
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["envFrom"] == [
+        {"secretRef": {"name": "unity-task-run-abc123def456"}},
+    ]
+    # Credentials must never appear inline in the pod spec.
+    inline_env_names = {var["name"] for var in container["env"]}
+    assert "UNIFY_KEY" not in inline_env_names
+    assert "UNITY_OFFLINE_TASK_MODE" not in inline_env_names
+
+    secret_body = core_api.create_namespaced_secret.call_args.kwargs["body"]
+    assert secret_body.metadata.name == "unity-task-run-abc123def456"
+    assert secret_body.string_data["UNIFY_KEY"] == "secret-key"
+    assert secret_body.string_data["UNITY_OFFLINE_TASK_MODE"] == "actor"
+
+    # The Job adopts the Secret so both garbage-collect together.
+    owner_patch = core_api.patch_namespaced_secret.call_args.kwargs["body"]
+    owner_refs = owner_patch["metadata"]["ownerReferences"]
+    assert owner_refs[0]["kind"] == "Job"
 
 
 def test_launch_offline_task_job_returns_false_on_name_conflict():
@@ -203,10 +221,12 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
 
     request = task_activation.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
+    core_api = MagicMock()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
 
     created = task_activation._launch_offline_task_job(
         batch_api=batch_api,
+        core_api=core_api,
         request=request,
         run_key="rk",
         job_name="unity-task-run-abc123def456",
@@ -214,6 +234,7 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
     )
 
     assert created is False
+    core_api.patch_namespaced_secret.assert_not_called()
 
 
 def test_offline_dispatch_launches_job_for_current_activation():
