@@ -141,6 +141,48 @@ def test_scheduled_offline_dispatch_still_looks_up_current_activation():
     assert activation is current
 
 
+def test_get_assistant_session_for_offline_uses_sync_custom_objects_api():
+    """The session lookup helper runs inside a worker thread, so it must use
+    the synchronous ``get_custom_objects_api`` factory (never the async
+    ``get_k8s_clients`` coroutine, which cannot be unpacked from sync code).
+    """
+
+    from unittest.mock import MagicMock
+
+    from communication.infra import task_activation
+
+    fake_api = MagicMock()
+    fake_session = {"status": {"phase": "Active"}}
+
+    with (
+        patch(
+            "communication.infra.assistant_sessions.get_custom_objects_api",
+            return_value=fake_api,
+        ),
+        patch(
+            "communication.infra.assistant_sessions.get_assistant_session",
+            return_value=fake_session,
+        ) as mock_get,
+    ):
+        session = task_activation._get_assistant_session_for_offline("1406")
+
+    assert session is fake_session
+    args, _ = mock_get.call_args
+    assert args[0] is fake_api
+    assert args[2] == "1406"
+
+
+def test_get_assistant_session_for_offline_raises_when_k8s_unavailable():
+    from communication.infra import task_activation
+
+    with patch(
+        "communication.infra.assistant_sessions.get_custom_objects_api",
+        return_value=None,
+    ):
+        with pytest.raises(RuntimeError, match="Kubernetes"):
+            task_activation._get_assistant_session_for_offline("1406")
+
+
 def test_offline_dispatch_launches_job_for_current_activation():
     """Valid offline deliveries should create/adopt a run and launch a headless job."""
 
@@ -283,9 +325,8 @@ def test_offline_dispatch_signals_headless_active_session():
             return_value=session,
         ),
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
-            new_callable=AsyncMock,
-            return_value=(None, None, "custom-api", None),
+            "communication.infra.assistant_sessions.get_custom_objects_api",
+            return_value="custom-api",
         ),
         patch(
             "communication.infra.task_activation._signal_session_offline_or_promote",

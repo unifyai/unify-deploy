@@ -1108,23 +1108,39 @@ def _recent_controller_logs(
 def _recent_unity_container_logs(
     pod_names: list[str],
     job_names: list[str] | None = None,
+    contains: str | None = None,
 ) -> list[str]:
-    if not pod_names and not job_names:
+    # Scope the query to the target pods server-side. A namespace-wide
+    # newest-N sample gets flooded once many assistant pods stream verbose
+    # actor logs concurrently, silently dropping the lines being polled for.
+    # ``contains`` additionally pushes the substring match into the query so
+    # a single sought line cannot be displaced by a burst of newer entries.
+    terms = [str(name) for name in pod_names if name]
+    if job_names:
+        terms.extend(str(name) for name in job_names if name)
+    terms = sorted(set(terms))
+    if not terms:
         return []
+    pod_clause = " OR ".join(f'resource.labels.pod_name:"{term}"' for term in terms)
+    query = (
+        'resource.type="k8s_container" AND '
+        f'resource.labels.namespace_name="{NAMESPACE}" AND '
+        f"({pod_clause})"
+    )
+    if contains:
+        escaped = contains.replace("\\", "\\\\").replace('"', '\\"')
+        query += f' AND textPayload:"{escaped}"'
     since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query += f' AND timestamp >= "{since}"'
     try:
         output = subprocess.check_output(
             [
                 "gcloud",
                 "logging",
                 "read",
-                (
-                    'resource.type="k8s_container" AND '
-                    f'resource.labels.namespace_name="{NAMESPACE}" AND '
-                    f'timestamp >= "{since}"'
-                ),
+                query,
                 "--project=gcp-project-runtime",
-                "--limit=200",
+                "--limit=500",
                 "--format=value(timestamp,resource.labels.pod_name,textPayload)",
             ],
             text=True,
@@ -1133,17 +1149,12 @@ def _recent_unity_container_logs(
     except Exception as exc:
         return [f"unity log collection failed: {exc}"]
 
-    terms = [str(name) for name in pod_names if name]
-    if job_names:
-        terms.extend(str(name) for name in job_names if name)
     lines = []
     for line in output.splitlines():
-        if not any(term in line for term in terms):
-            continue
         if len(line) > 2000:
             line = line[:2000] + "... [truncated]"
         lines.append(line)
-    return lines[-80:]
+    return lines[-400:]
 
 
 def _recent_k8s_pod_events(
@@ -3119,6 +3130,7 @@ def _assistant_readiness_snapshot(
     batch_api,
     core_api=None,
     gce_client=None,
+    unity_log_contains: str | None = None,
 ) -> dict[str, Any]:
     try:
         runtime = describe_runtime_state(
@@ -3172,6 +3184,7 @@ def _assistant_readiness_snapshot(
             "unity": _recent_unity_container_logs(
                 pod_names,
                 tracked_job_names,
+                contains=unity_log_contains,
             ),
             "pod_events": _recent_k8s_pod_events(
                 pod_names,

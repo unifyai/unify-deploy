@@ -12,7 +12,10 @@ from google.cloud import pubsub_v1
 import pytest
 import requests
 
-from communication.infra.assistant_sessions import read_bootstrap_secret
+from communication.infra.assistant_sessions import (
+    read_bootstrap_secret,
+    session_cm_attached,
+)
 
 from .conftest import (
     ADAPTERS_URL,
@@ -25,9 +28,7 @@ from .conftest import (
     _delete_test_assistant,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
-    get_assistant_jobs_records,
     get_assistant_session,
-    list_jobs_with_assistant_id,
     poll_until,
     pull_outbound_messages,
     replenish_pool,
@@ -359,6 +360,10 @@ def _wait_for_unity_log_substring(
                             batch_api=batch_api,
                             core_api=core_api,
                             gce_client=gce_client,
+                            # Push the substring into the log query itself;
+                            # a newest-N sample of busy pods can otherwise
+                            # displace the sought line indefinitely.
+                            unity_log_contains=substring,
                         )
                         .get("recent_logs", {})
                         .get("unity", [])
@@ -742,16 +747,32 @@ class TestTaskActivationFlows:
             _delete_test_assistant(assistant_id, batch_api)
 
     @pytest.mark.merge_gate
-    def test_offline_scheduled_task_does_not_wake_runtime(
+    def test_offline_scheduled_task_runs_headless_without_cm(
         self,
         batch_api,
         comms,
     ):
-        """Offline scheduled tasks should stay invisible to the live runtime lane."""
+        """Offline scheduled tasks run on headless sessions and never attach CM.
+
+        Offline dispatch cold-starts a headless AssistantSession (its
+        ``cmAttached`` signal records ``attached=false``); waking the live
+        ConversationManager lane for offline work is the regression this
+        guards against.
+        """
 
         assistant = _create_remote_task_assistant(batch_api)
         assistant_id = str(assistant["assistant_id"])
         created_log_ids: list[int] = []
+
+        def _assert_headless(session: dict[str, Any]) -> None:
+            # session_cm_attached is False for booting phases (no signal yet)
+            # and headless Active sessions (signal attached=false); it is True
+            # only when CM actually attached — the live-lane wake this guards
+            # against.
+            assert not session_cm_attached(session), (
+                f"Offline scheduled task attached the live ConversationManager: "
+                f"{json.dumps(session, indent=2)}"
+            )
 
         try:
             scheduled_for_dt = (
@@ -772,25 +793,26 @@ class TestTaskActivationFlows:
             activation = _wait_for_activation(assistant, task_id)
             assert activation["execution_mode"] == "offline"
 
-            deadline = (
-                time.monotonic() + TASK_DUE_LEAD_SECONDS + OFFLINE_NO_WAKE_GRACE_SECONDS
+            session = poll_until(
+                lambda: get_assistant_session(comms, assistant_id),
+                timeout=TASK_DUE_LEAD_SECONDS + TASK_FLOW_TIMEOUT_SECONDS,
+                interval=5,
+                description=(
+                    f"headless AssistantSession for offline task {task_id} "
+                    f"on assistant {assistant_id}"
+                ),
             )
+            _assert_headless(session)
+
+            # The session must stay headless for the observation window; a CM
+            # attach here means the offline task woke the live runtime lane.
+            deadline = time.monotonic() + OFFLINE_NO_WAKE_GRACE_SECONDS
             while time.monotonic() < deadline:
                 time.sleep(min(5.0, deadline - time.monotonic()))
-
-            session = get_assistant_session(comms, assistant_id)
-            assert session is None, (
-                f"Offline scheduled task unexpectedly created an AssistantSession: "
-                f"{json.dumps(session, indent=2) if session else session}"
-            )
-            assert not list_jobs_with_assistant_id(batch_api, assistant_id), (
-                f"Offline scheduled task unexpectedly started runtime jobs for "
-                f"assistant {assistant_id}"
-            )
-            assert not get_assistant_jobs_records(assistant_id, running_only=True), (
-                f"Offline scheduled task unexpectedly left running startup records "
-                f"for assistant {assistant_id}"
-            )
+                current = get_assistant_session(comms, assistant_id)
+                if current is None:
+                    break
+                _assert_headless(current)
         finally:
             _cleanup_unity_logs(assistant, created_log_ids)
             cleanup_assistant_jobs(
