@@ -1291,105 +1291,8 @@ def test_reconcile_restarts_after_terminal_job_cleanup(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("terminal_phase", ["Succeeded", "Failed"])
-def test_reconcile_stops_headless_session_after_terminal_job(
-    monkeypatch,
-    terminal_phase,
-):
-    """A never-promoted headless one-shot must stop when its Job ends.
-
-    Re-binding would replay the same headless bootstrap (same run_key)
-    forever: each respawned runner re-runs the offline task, fails run
-    adoption, and poisons the next task instance.
-    """
-
-    body = _base_session()
-    body["status"]["phase"] = "Active"
-    body["status"]["binding"] = _binding(
-        "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "staging"},
-    )
-    body["status"]["signals"] = {
-        "cmAttached": {"attached": False, "source": "job-start-headless"},
-    }
-    patch_status = MagicMock()
-    patch_spec = MagicMock()
-    terminal_job = _job(terminal_phase=terminal_phase)
-
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "get_assistant_session",
-        lambda *_args, **_kwargs: deepcopy(body),
-    )
-    monkeypatch.setattr(
-        controller,
-        "_job_for_binding",
-        MagicMock(side_effect=[terminal_job, terminal_job, None]),
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        controller,
-        "split_binding_runtime_vms",
-        lambda *_args, **_kwargs: ([], []),
-    )
-    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
-    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
-
-    controller._update_status_for_session(deepcopy(body))
-
-    assert patch_spec.call_args.kwargs["desired_state"] == "Stopped"
-    # The binding loop must not mint a replacement binding.
-    for call in patch_status.call_args_list:
-        assert call.kwargs.get("phase") != "PendingJob"
-
-
-def test_failed_recovery_stops_headless_session_instead_of_reminting(monkeypatch):
-    """The failed-running recovery path must not re-mint headless one-shots.
-
-    Terminal headless Jobs commonly reach recovery with the binding already
-    cleared and signals dropped, so the headless check falls back to the
-    bootstrap Secret's ``headless_offline`` flag.
-    """
-
-    body = _base_session()
-    body["status"]["phase"] = "Failed"
-    body["status"]["binding"] = None
-    body["status"]["signals"] = {}
-    patch_status = MagicMock()
-    patch_spec = MagicMock()
-
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "get_assistant_session",
-        lambda *_args, **_kwargs: deepcopy(body),
-    )
-    monkeypatch.setattr(
-        controller,
-        "_assistant_release_state_without_binding",
-        lambda **_kwargs: ("Released", [], ""),
-    )
-    monkeypatch.setattr(
-        controller,
-        "read_bootstrap_secret",
-        lambda *_args, **_kwargs: {"headless_offline": True},
-    )
-    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
-    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
-
-    controller._update_status_for_session(deepcopy(body))
-
-    assert patch_spec.call_args.kwargs["desired_state"] == "Stopped"
-    for call in patch_status.call_args_list:
-        assert call.kwargs.get("phase") != "PendingJob"
-
-
 def test_failed_recovery_remints_interactive_session(monkeypatch):
-    """Interactive sessions keep the recovery re-mint when signals are absent."""
+    """Failed running sessions without a binding recover via a fresh re-mint."""
 
     body = _base_session()
     body["status"]["phase"] = "Failed"
@@ -1409,11 +1312,6 @@ def test_failed_recovery_remints_interactive_session(monkeypatch):
         controller,
         "_assistant_release_state_without_binding",
         lambda **_kwargs: ("Released", [], ""),
-    )
-    monkeypatch.setattr(
-        controller,
-        "read_bootstrap_secret",
-        lambda *_args, **_kwargs: {"assistant_id": "1207"},
     )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
     monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
@@ -1424,8 +1322,8 @@ def test_failed_recovery_remints_interactive_session(monkeypatch):
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
 
 
-def test_reconcile_restarts_terminal_job_when_cm_was_attached(monkeypatch):
-    """CM-attached sessions keep the crash-recovery re-bind behavior."""
+def test_reconcile_restarts_terminal_job(monkeypatch):
+    """Interactive sessions keep the crash-recovery re-bind on terminal Jobs."""
 
     body = _base_session()
     body["status"]["phase"] = "Active"
@@ -1433,9 +1331,6 @@ def test_reconcile_restarts_terminal_job_when_cm_was_attached(monkeypatch):
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
-    body["status"]["signals"] = {
-        "cmAttached": {"attached": True, "source": "cm-attached"},
-    }
     patch_status = MagicMock()
     patch_spec = MagicMock()
     terminal_job = _job(terminal_phase="Failed")

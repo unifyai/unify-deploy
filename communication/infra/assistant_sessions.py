@@ -361,26 +361,6 @@ def session_signal(
     return value if isinstance(value, dict) else {}
 
 
-SIGNAL_CM_ATTACHED = "cmAttached"
-SIGNAL_PROMOTE_TO_CM = "promoteToCm"
-SIGNAL_OFFLINE_TASK_DUE = "offlineTaskDue"
-
-
-def session_cm_attached(session: dict[str, Any] | None) -> bool:
-    """Return whether ConversationManager has attached to this Active session.
-
-    Headless offline boots record ``cmAttached.attached=false``. CM sets
-    ``attached=true`` after StartupEvent init. Missing signal defaults to
-    True for legacy live sessions that predate the signal (safe warm path).
-    """
-
-    payload = session_signal(session, SIGNAL_CM_ATTACHED)
-    if not payload:
-        # Legacy live sessions have no signal; treat as CM-attached when Active.
-        return get_phase(session) == "Active"
-    return bool(payload.get("attached", False))
-
-
 def session_released_bindings(session: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Return the binding-scoped release-completion ledger from status."""
 

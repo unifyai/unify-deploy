@@ -1093,6 +1093,15 @@ def test_offline_dispatch_failure_logs_failing_stage(client, caplog):
             return_value=activation,
         ),
         patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value={
+                "assistant_id": "assistant-123",
+                "team_ids": [],
+                "self_contact_id": 42,
+                "boss_contact_id": 43,
+            },
+        ),
+        patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
             side_effect=requests.Timeout("orchestra timed out"),
         ),

@@ -1,4 +1,4 @@
-"""Unit tests for offline task dispatch onto AssistantSession pods."""
+"""Unit tests for offline task dispatch as dedicated one-shot Kubernetes Jobs."""
 
 import hashlib
 import json
@@ -6,7 +6,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _payload(**overrides):
@@ -141,50 +141,83 @@ def test_scheduled_offline_dispatch_still_looks_up_current_activation():
     assert activation is current
 
 
-def test_get_assistant_session_for_offline_uses_sync_custom_objects_api():
-    """The session lookup helper runs inside a worker thread, so it must use
-    the synchronous ``get_custom_objects_api`` factory (never the async
-    ``get_k8s_clients`` coroutine, which cannot be unpacked from sync code).
-    """
-
-    from unittest.mock import MagicMock
+def test_offline_task_job_name_is_deterministic_and_retry_salted():
+    """Job names must be a stable function of run_key, salted per retry."""
 
     from communication.infra import task_activation
 
-    fake_api = MagicMock()
-    fake_session = {"status": {"phase": "Active"}}
+    run_key = "offline:scheduled:assistant-123:101:abc123def456:once"
+    first = task_activation._build_offline_task_job_name(run_key)
+    second = task_activation._build_offline_task_job_name(run_key)
+    retry = task_activation._build_offline_task_job_name(run_key, retry_count=1)
 
-    with (
-        patch(
-            "communication.infra.assistant_sessions.get_custom_objects_api",
-            return_value=fake_api,
-        ),
-        patch(
-            "communication.infra.assistant_sessions.get_assistant_session",
-            return_value=fake_session,
-        ) as mock_get,
-    ):
-        session = task_activation._get_assistant_session_for_offline("1406")
-
-    assert session is fake_session
-    args, _ = mock_get.call_args
-    assert args[0] is fake_api
-    assert args[2] == "1406"
+    assert first == second
+    assert first.startswith("unity-task-run-")
+    assert retry != first
+    assert retry.startswith("unity-task-run-")
 
 
-def test_get_assistant_session_for_offline_raises_when_k8s_unavailable():
+def test_launch_offline_task_job_builds_one_shot_manifest():
+    """The launched Job must be a self-contained one-shot with the runner env."""
+
     from communication.infra import task_activation
 
-    with patch(
-        "communication.infra.assistant_sessions.get_custom_objects_api",
-        return_value=None,
-    ):
-        with pytest.raises(RuntimeError, match="Kubernetes"):
-            task_activation._get_assistant_session_for_offline("1406")
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    batch_api = MagicMock()
+
+    created = task_activation._launch_offline_task_job(
+        batch_api=batch_api,
+        request=request,
+        run_key="offline:scheduled:assistant-123:101:abc123def456:once",
+        job_name="unity-task-run-abc123def456",
+        offline_env={"UNITY_OFFLINE_TASK_MODE": "actor", "ASSISTANT_ID": "123"},
+    )
+
+    assert created is True
+    manifest = batch_api.create_namespaced_job.call_args.kwargs["body"]
+    assert manifest["metadata"]["name"] == "unity-task-run-abc123def456"
+    assert manifest["metadata"]["labels"]["app"] == "unity-task-run"
+    assert manifest["metadata"]["labels"]["unity-status"] == "offline"
+    assert manifest["metadata"]["labels"]["task-id"] == "101"
+    assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
+        "offline:scheduled:assistant-123:101:abc123def456:once"
+    )
+    assert manifest["spec"]["backoffLimit"] == 0
+    assert "ttlSecondsAfterFinished" in manifest["spec"]
+    assert "activeDeadlineSeconds" in manifest["spec"]
+    env = {
+        var["name"]: var.get("value")
+        for var in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+        if "value" in var
+    }
+    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
+    assert env["ASSISTANT_ID"] == "123"
+
+
+def test_launch_offline_task_job_returns_false_on_name_conflict():
+    """A 409 means another delivery of the same attempt already created the Job."""
+
+    from kubernetes.client.rest import ApiException
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    batch_api = MagicMock()
+    batch_api.create_namespaced_job.side_effect = ApiException(status=409)
+
+    created = task_activation._launch_offline_task_job(
+        batch_api=batch_api,
+        request=request,
+        run_key="rk",
+        job_name="unity-task-run-abc123def456",
+        offline_env={},
+    )
+
+    assert created is False
 
 
 def test_offline_dispatch_launches_job_for_current_activation():
-    """Valid offline deliveries should create/adopt a run and launch a headless job."""
+    """Valid offline deliveries should create/adopt a run and launch a one-shot Job."""
 
     client = _client()
 
@@ -202,12 +235,12 @@ def test_offline_dispatch_launches_job_for_current_activation():
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=None,
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-            return_value={"job_name": "unity-assistant-abc", "success": True},
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
         ) as mock_launch,
         patch(
             "communication.infra.task_activation._update_task_run",
@@ -221,14 +254,16 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["status"] == "launched_session"
-    assert body["run_key"] == mock_create_run.call_args.args[0]["run_key"]
-    assert body["job_name"] == "unity-assistant-abc"
-    assert mock_launch.called
-    assert (
-        mock_launch.call_args.kwargs["assistant_data"]["assistant_id"]
-        == "assistant-123"
-    )
+    assert body["status"] == "launched_job"
+    run_key = mock_create_run.call_args.args[0]["run_key"]
+    assert body["run_key"] == run_key
+    from communication.infra.task_activation import _build_offline_task_job_name
+
+    assert body["job_name"] == _build_offline_task_job_name(run_key)
+    assert mock_launch.call_args.kwargs["run_key"] == run_key
+    offline_env = mock_launch.call_args.kwargs["offline_env"]
+    assert offline_env["UNITY_OFFLINE_TASK_RUN_KEY"] == run_key
+    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == body["job_name"]
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
     assert create_payload["task_name"] == "Daily summary"
@@ -237,75 +272,13 @@ def test_offline_dispatch_launches_job_for_current_activation():
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["assistant_id"] == "assistant-123"
     assert update_kwargs["updates"]["state"] == "running"
-    assert update_kwargs["updates"]["job_name"] == "unity-assistant-abc"
+    assert update_kwargs["updates"]["job_name"] == body["job_name"]
 
 
-def test_offline_dispatch_publishes_to_active_cm_session():
-    """Warm Active+CM sessions get Pub/Sub offline task_due, not a second Job."""
-
-    client = _client()
-    session = {
-        "status": {
-            "phase": "Active",
-            "signals": {"cmAttached": {"attached": True}},
-            "binding": {"jobRef": {"name": "unity-assistant-warm"}},
-        },
-    }
-
-    with (
-        patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
-            return_value=_activation(),
-        ),
-        patch(
-            "communication.infra.task_activation._get_assistant_data",
-            return_value=_assistant_data(),
-        ),
-        patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
-            return_value={"run": {"state": "pending"}, "created": True},
-        ) as mock_create_run,
-        patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=session,
-        ),
-        patch(
-            "communication.infra.task_activation._publish_offline_task_due_event",
-        ) as mock_publish,
-        patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-        ) as mock_cold,
-        patch(
-            "communication.infra.task_activation._update_task_run",
-        ) as mock_update_run,
-    ):
-        response = client.post(
-            "/infra/task-activation/offline-dispatch",
-            json=_payload(),
-        )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "published_to_active_cm"
-    assert response.json()["job_name"] == "unity-assistant-warm"
-    assert mock_publish.called
-    assert not mock_cold.called
-    assert mock_update_run.call_args.kwargs["updates"]["job_name"] == (
-        "unity-assistant-warm"
-    )
-    assert mock_create_run.called
-
-
-def test_offline_dispatch_signals_headless_active_session():
-    """Active headless sessions get offlineTaskDue; no cold start_job."""
+def test_offline_dispatch_reports_already_dispatched_on_job_conflict():
+    """A concurrent delivery that lost the Job-name race must not double-run."""
 
     client = _client()
-    session = {
-        "status": {
-            "phase": "Active",
-            "signals": {"cmAttached": {"attached": False}},
-            "binding": {"jobRef": {"name": "unity-assistant-headless"}},
-        },
-    }
 
     with (
         patch(
@@ -321,19 +294,13 @@ def test_offline_dispatch_signals_headless_active_session():
             return_value={"run": {"state": "pending"}, "created": True},
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=session,
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.assistant_sessions.get_custom_objects_api",
-            return_value="custom-api",
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=False,
         ),
-        patch(
-            "communication.infra.task_activation._signal_session_offline_or_promote",
-        ) as mock_signal,
-        patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-        ) as mock_cold,
         patch(
             "communication.infra.task_activation._update_task_run",
         ) as mock_update_run,
@@ -344,15 +311,8 @@ def test_offline_dispatch_signals_headless_active_session():
         )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "signaled_headless_session"
-    assert response.json()["job_name"] == "unity-assistant-headless"
-    assert mock_signal.called
-    assert mock_signal.call_args.kwargs["signal_name"] == "offlineTaskDue"
-    assert "UNITY_OFFLINE_TASK_MODE" in mock_signal.call_args.kwargs["payload"]["env"]
-    assert not mock_cold.called
-    assert mock_update_run.call_args.kwargs["updates"]["job_name"] == (
-        "unity-assistant-headless"
-    )
+    assert response.json()["status"] == "already_dispatched"
+    mock_update_run.assert_not_called()
 
 
 def test_offline_dispatch_retries_failed_terminal_run():
@@ -374,7 +334,7 @@ def test_offline_dispatch_retries_failed_terminal_run():
             return_value={
                 "run": {
                     "state": "failed",
-                    "job_name": "unity-offline-old",
+                    "job_name": "unity-task-run-old",
                     "error": "boom",
                     "retry_count": 1,
                 },
@@ -383,15 +343,11 @@ def test_offline_dispatch_retries_failed_terminal_run():
         ) as mock_create_run,
         patch(
             "communication.infra.task_activation._get_k8s_clients",
-            return_value=("batch-api", None, None, None),
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=None,
-        ),
-        patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-            return_value={"job_name": "unity-assistant-retry", "success": True},
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
         ) as mock_launch,
         patch(
             "communication.infra.task_activation._update_task_run",
@@ -403,13 +359,18 @@ def test_offline_dispatch_retries_failed_terminal_run():
         )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "launched_session"
-    assert response.json()["run_key"] == mock_create_run.call_args.args[0]["run_key"]
+    assert response.json()["status"] == "launched_job"
+    run_key = mock_create_run.call_args.args[0]["run_key"]
+    assert response.json()["run_key"] == run_key
+    from communication.infra.task_activation import _build_offline_task_job_name
+
+    expected_job_name = _build_offline_task_job_name(run_key, retry_count=2)
+    assert response.json()["job_name"] == expected_job_name
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"].endswith(":retry:2")
+    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["updates"]["state"] == "running"
-    assert update_kwargs["updates"]["job_name"] == "unity-assistant-retry"
+    assert update_kwargs["updates"]["job_name"] == expected_job_name
     assert update_kwargs["updates"]["retry_count"] == 2
     assert update_kwargs["updates"]["previous_error"] == "boom"
     assert update_kwargs["updates"]["error"] is None
@@ -435,26 +396,22 @@ def test_offline_dispatch_retries_stale_inflight_run():
                 "run": {
                     "state": "running",
                     "run_key": "offline:scheduled:assistant-123:101:rev-123",
-                    "job_name": "unity-offline-missing",
+                    "job_name": "unity-task-run-missing",
                 },
                 "created": False,
             },
         ) as mock_create_run,
         patch(
             "communication.infra.task_activation._get_k8s_clients",
-            return_value=("batch-api", None, None, None),
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
             "communication.infra.task_activation._classify_offline_job_status",
-            return_value={"status": "missing", "job_name": "unity-offline-missing"},
+            return_value={"status": "missing", "job_name": "unity-task-run-missing"},
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=None,
-        ),
-        patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-            return_value={"job_name": "unity-assistant-retry", "success": True},
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
         ) as mock_launch,
         patch(
             "communication.infra.task_activation._update_task_run",
@@ -466,18 +423,21 @@ def test_offline_dispatch_retries_stale_inflight_run():
         )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "launched_session"
+    assert response.json()["status"] == "launched_job"
     run_key = mock_create_run.call_args.args[0]["run_key"]
     assert response.json()["run_key"] == run_key
+    from communication.infra.task_activation import _build_offline_task_job_name
+
+    expected_job_name = _build_offline_task_job_name(run_key, retry_count=1)
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"].endswith(":retry:1")
+    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
     assert mock_update_run.call_count == 2
     failed_update = mock_update_run.call_args_list[0].kwargs["updates"]
     assert failed_update["state"] == "failed"
     assert "lost live execution evidence" in failed_update["error"]
     running_update = mock_update_run.call_args_list[1].kwargs["updates"]
     assert running_update["state"] == "running"
-    assert running_update["job_name"] == "unity-assistant-retry"
+    assert running_update["job_name"] == expected_job_name
     assert running_update["retry_count"] == 1
 
 
@@ -666,12 +626,16 @@ def test_offline_dispatch_adopts_completed_terminal_run():
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
             return_value={
-                "run": {"state": "completed", "job_name": "unity-offline-old"},
+                "run": {"state": "completed", "job_name": "unity-task-run-old"},
                 "created": False,
             },
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
         ) as mock_launch,
     ):
         response = client.post(
@@ -713,7 +677,7 @@ def test_repair_current_retries_fired_failed_activation():
         ),
         patch(
             "communication.infra.task_activation.dispatch_offline_task",
-            new=AsyncMock(return_value={"success": True, "status": "launched_session"}),
+            new=AsyncMock(return_value={"success": True, "status": "launched_job"}),
         ) as mock_dispatch,
     ):
         response = client.post(
@@ -756,7 +720,7 @@ def test_repair_current_reprojects_completed_activation():
         ) as mock_reproject,
         patch(
             "communication.infra.task_activation.dispatch_offline_task",
-            new=AsyncMock(return_value={"success": True, "status": "launched_session"}),
+            new=AsyncMock(return_value={"success": True, "status": "launched_job"}),
         ) as mock_dispatch,
     ):
         response = client.post(
@@ -917,12 +881,12 @@ def test_offline_dispatch_persists_authorized_destination_on_run_create():
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=None,
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-            return_value={"job_name": "unity-assistant-abc", "success": True},
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
         ),
         patch("communication.infra.task_activation._update_task_run"),
     ):
@@ -958,7 +922,7 @@ def test_offline_dispatch_skips_revoked_team_destination():
             "communication.infra.task_activation._create_or_adopt_task_run",
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
+            "communication.infra.task_activation._launch_offline_task_job",
         ) as mock_launch,
     ):
         response = client.post(
@@ -1186,12 +1150,12 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_assistant_session_for_offline",
-            return_value=None,
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._start_job_for_offline_cold",
-            return_value={"job_name": "unity-assistant-abc", "success": True},
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
         ),
         patch("communication.infra.task_activation._update_task_run"),
     ):
