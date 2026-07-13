@@ -6,13 +6,17 @@ clients:
     bundle_key: client_alpha
     environments:
       staging:
+        # Staging demo assistants churn (test-record expiry recreates them);
+        # missing_ok keeps reconcile green while an id is absent.
         targets:
         - scope: assistant
           scope_id: "2242"
           deployment: v2
+          missing_ok: true
         - scope: assistant
           scope_id: "2243"
           deployment: v1
+          missing_ok: true
         layers:
         - scope: assistant
           scope_id: "2242"
@@ -31,6 +35,7 @@ clients:
         - scope: assistant
           scope_id: "2244"
           deployment: demo
+          missing_ok: true
       production:
         targets: []
 
@@ -42,6 +47,7 @@ clients:
         - scope: assistant
           scope_id: "2245"
           deployment: v0
+          missing_ok: true
       production:
         targets: []
 
