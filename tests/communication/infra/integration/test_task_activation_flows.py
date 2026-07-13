@@ -360,6 +360,10 @@ def _wait_for_unity_log_substring(
                             batch_api=batch_api,
                             core_api=core_api,
                             gce_client=gce_client,
+                            # Push the substring into the log query itself;
+                            # a newest-N sample of busy pods can otherwise
+                            # displace the sought line indefinitely.
+                            unity_log_contains=substring,
                         )
                         .get("recent_logs", {})
                         .get("unity", [])
