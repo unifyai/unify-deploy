@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Publish *enterprise* client deployment trees to GCS.
+#
+# ``unify_company`` is owned by the brain repo: pushes to brain/staging and
+# brain/main publish that bundle directly. This script must not upload it.
 set -euo pipefail
 
 ENVIRONMENT="${1:-staging}"
@@ -7,45 +11,11 @@ SHA="${2:-$(git rev-parse HEAD)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
-# unify_company is a symlink into the brain submodule (third_party/brain/unify_deploy).
-# Cloud Build does not recurse private submodules by default; init with the
-# same DEVBOT token used for other private GitHub clones.
-_ensure_brain_submodule() {
-  if [ -f third_party/brain/unify_deploy/__init__.py ]; then
-    return 0
-  fi
-  if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo "GITHUB_TOKEN is required to init private submodule third_party/brain" >&2
-    exit 1
-  fi
-  local pin
-  pin="$(git ls-tree HEAD third_party/brain | awk '{print $3}')"
-  if [ -z "$pin" ]; then
-    echo "Could not resolve pinned SHA for third_party/brain" >&2
-    exit 1
-  fi
-  git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-  rm -rf third_party/brain
-  mkdir -p third_party
-  # Fetch the exact pinned commit (not a shallow tip-of-main clone).
-  git clone "https://${GITHUB_TOKEN}@github.com/unifyai/brain.git" third_party/brain
-  git -C third_party/brain checkout --detach "$pin"
-}
-
-if [ -f .gitmodules ] && grep -q 'third_party/brain' .gitmodules; then
-  _ensure_brain_submodule
-  if [ ! -f unify_deploy/assistant_deployments/clients/unify_company/__init__.py ]; then
-    echo "unify_company symlink does not resolve after submodule init" >&2
-    exit 1
-  fi
-fi
-
 CLIENTS=(
   client_alpha
   clientepsilon_homes
   clientzeta
   client_beta
-  unify_company
 )
 
 for client in "${CLIENTS[@]}"; do
@@ -55,7 +25,7 @@ for client in "${CLIENTS[@]}"; do
     continue
   fi
   archive="/tmp/${client}-${SHA}.tar.gz"
-  # -h follows symlinks so the tarball contains real files (H1).
+  # -h follows symlinks so the tarball contains real files.
   tar -h \
     --exclude='__pycache__' \
     --exclude='*.pyc' \

@@ -30,3 +30,7 @@ __pypackages__/
 # Cursor local scratch files
 /.cursor/projects/
 /.cursor/plans/
+
+# Optional brain checkout for local clients/unify_company symlink only.
+# Not a submodule — runtime loads unify_company from GCS (brain CI publish).
+/third_party/brain/
