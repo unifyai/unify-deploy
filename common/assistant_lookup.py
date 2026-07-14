@@ -21,7 +21,7 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
-    "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,demo_id,is_local,"
+    "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
     "about,job_title,timezone,default_model,default_reasoning_effort,"
@@ -137,7 +137,6 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "desktop_mode": _resolve_desktop_mode(assistant),
         "managed_desktop_status": assistant.get("managed_desktop_status"),
         "user_desktops": assistant.get("user_desktops", []),
-        "demo_id": assistant.get("demo_id"),
         "is_local": assistant.get("is_local", False),
         "team_ids": assistant.get("team_ids", []),
         "team_summaries": assistant.get("team_summaries", []),

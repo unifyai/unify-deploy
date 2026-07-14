@@ -216,6 +216,7 @@ from .helpers import (
     resolve_ms_teams_bot_inbound,
     ensure_ms_teams_bot_pending_install,
     send_ms_teams_bot_install_welcome,
+    send_ms_teams_bot_pending_reply,
     revoke_ms_teams_bot_install,
     verify_ms_teams_bot_token,
     _strip_ms_teams_bot_mention,
@@ -1805,31 +1806,45 @@ async def ms_teams_bot_messages_webhook(request: Request):
         if any(m.get("id") == recipient_id for m in members_added):
             # Personal-scope add: this fires with a live 1:1 conversation
             # reference, so record the install and DM the installer a
-            # one-click connect link (no code to copy).
+            # one-click connect link (no code to copy). The welcome is gated
+            # on ``created`` so it fires exactly once even though the add also
+            # emits an ``installationUpdate`` below.
             install = await asyncio.to_thread(
                 ensure_ms_teams_bot_pending_install,
                 activity,
             )
-            await asyncio.to_thread(
-                send_ms_teams_bot_install_welcome,
-                activity,
-                install,
-            )
+            if install and install.get("created"):
+                await asyncio.to_thread(
+                    send_ms_teams_bot_install_welcome,
+                    activity,
+                    install,
+                )
         elif any(m.get("id") == recipient_id for m in members_removed):
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}
 
     # ``installationUpdate`` fires for app install/uninstall across scopes.
-    # ``add`` for an org-wide/admin-center install registers the tenant so the
-    # owner can bind it; we do NOT DM here because a personal add already
-    # emits the ``conversationUpdate`` above (double-DM) and an org install may
-    # have no personal 1:1 to message. ``remove`` tears the install down;
-    # ``remove-upgrade`` is a transient app-upgrade step, not a real
-    # disconnect, so it is ignored.
+    # ``add`` registers the tenant so the owner can bind it. We also welcome
+    # here (gated on ``created``) so an org-wide / admin-center install — which
+    # may never emit the personal ``conversationUpdate`` above — still gets the
+    # one welcome DM. ``created`` dedups against the ``conversationUpdate`` add
+    # (whichever event lands first creates the row and welcomes; the other sees
+    # ``created=False`` and stays silent). ``remove`` tears the install down;
+    # ``remove-upgrade`` is a transient app-upgrade step, not a real disconnect,
+    # so it is ignored.
     if activity_type == "installationUpdate":
         action = activity.get("action") or ""
         if action == "add":
-            await asyncio.to_thread(ensure_ms_teams_bot_pending_install, activity)
+            install = await asyncio.to_thread(
+                ensure_ms_teams_bot_pending_install,
+                activity,
+            )
+            if install and install.get("created"):
+                await asyncio.to_thread(
+                    send_ms_teams_bot_install_welcome,
+                    activity,
+                    install,
+                )
         elif action == "remove":
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}
@@ -1838,7 +1853,18 @@ async def ms_teams_bot_messages_webhook(request: Request):
         return {"status": 200}
 
     data = await asyncio.to_thread(resolve_ms_teams_bot_inbound, activity)
-    if data is None or not data.get("handled"):
+    if data is None:
+        return {"status": 200}
+    if not data.get("handled"):
+        # A message that lands on a still-pending (unbound) install must not be
+        # dropped silently — Store certification requires the bot to reply. Nudge
+        # the sender to connect instead of going dark.
+        if data.get("install_state") == "pending":
+            await asyncio.to_thread(
+                send_ms_teams_bot_pending_reply,
+                activity,
+                data.get("connect_url"),
+            )
         return {"status": 200}
 
     assistant_id = data.get("assistant_id")

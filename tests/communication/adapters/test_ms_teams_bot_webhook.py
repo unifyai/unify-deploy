@@ -66,6 +66,18 @@ def _added_conversation_update(tenant_id="tenant-1"):
     }
 
 
+def _message_activity(tenant_id="tenant-1"):
+    return {
+        "type": "message",
+        "text": "hi",
+        "recipient": {"id": BOT_ID},
+        "from": {"aadObjectId": "sender-aad", "name": "Reviewer"},
+        "conversation": {"id": "conv-1", "conversationType": "personal"},
+        "serviceUrl": "https://smba.example/",
+        "channelData": {"tenant": {"id": tenant_id}},
+    }
+
+
 class TestMsTeamsBotDisconnect:
     def test_team_removal_revokes_install(self, app_module, client):
         with (
@@ -109,7 +121,12 @@ class TestMsTeamsBotDisconnect:
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
             patch.object(app_module, "revoke_ms_teams_bot_install") as revoke,
-            patch.object(app_module, "ensure_ms_teams_bot_pending_install"),
+            patch.object(
+                app_module,
+                "ensure_ms_teams_bot_pending_install",
+                return_value={"id": 1, "created": False},
+            ),
+            patch.object(app_module, "send_ms_teams_bot_install_welcome"),
         ):
             resp = client.post(
                 "/ms-teams-bot/messages",
@@ -120,8 +137,8 @@ class TestMsTeamsBotDisconnect:
 
 
 class TestMsTeamsBotInstallWelcome:
-    def test_personal_add_records_install_and_dms_welcome(self, app_module, client):
-        install = {"id": 7, "connect_url": "https://console/x"}
+    def test_personal_add_welcomes_once_when_created(self, app_module, client):
+        install = {"id": 7, "created": True, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
             patch.object(
@@ -143,13 +160,65 @@ class TestMsTeamsBotInstallWelcome:
         assert welcome.call_args.args[1] == install
         revoke.assert_not_called()
 
-    def test_org_install_add_registers_but_does_not_dm(self, app_module, client):
-        # ``installationUpdate`` add registers the tenant so the owner can bind
-        # it, but must not DM (avoids double-DM with the personal add and org
-        # installs may have no 1:1 to message).
+    def test_personal_add_does_not_welcome_when_not_created(
+        self,
+        app_module,
+        client,
+    ):
+        # A repeat add-event refreshes the existing row (``created`` false); the
+        # welcome must not fire again so the installer isn't spammed.
+        install = {"id": 7, "created": False, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
-            patch.object(app_module, "ensure_ms_teams_bot_pending_install") as ensure,
+            patch.object(
+                app_module,
+                "ensure_ms_teams_bot_pending_install",
+                return_value=install,
+            ) as ensure,
+            patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
+        ):
+            resp = client.post(
+                "/ms-teams-bot/messages",
+                json=_added_conversation_update(),
+            )
+        assert resp.status_code == 200
+        ensure.assert_called_once()
+        welcome.assert_not_called()
+
+    def test_org_install_add_welcomes_once_when_created(self, app_module, client):
+        # An org-wide install may only emit ``installationUpdate`` (no personal
+        # 1:1 conversationUpdate), so it must welcome here — gated on ``created``
+        # so it stays a single DM.
+        install = {"id": 8, "created": True, "connect_url": "https://console/y"}
+        with (
+            patch.object(app_module, "verify_ms_teams_bot_token"),
+            patch.object(
+                app_module,
+                "ensure_ms_teams_bot_pending_install",
+                return_value=install,
+            ) as ensure,
+            patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
+        ):
+            resp = client.post(
+                "/ms-teams-bot/messages",
+                json=_installation_update("add"),
+            )
+        assert resp.status_code == 200
+        ensure.assert_called_once()
+        welcome.assert_called_once()
+        assert welcome.call_args.args[1] == install
+
+    def test_install_add_does_not_welcome_when_not_created(self, app_module, client):
+        # ``created`` false means the row already existed (dedup against the
+        # sibling conversationUpdate add) — no second DM.
+        install = {"id": 8, "created": False, "connect_url": "https://console/y"}
+        with (
+            patch.object(app_module, "verify_ms_teams_bot_token"),
+            patch.object(
+                app_module,
+                "ensure_ms_teams_bot_pending_install",
+                return_value=install,
+            ) as ensure,
             patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
         ):
             resp = client.post(
@@ -159,3 +228,44 @@ class TestMsTeamsBotInstallWelcome:
         assert resp.status_code == 200
         ensure.assert_called_once()
         welcome.assert_not_called()
+
+
+class TestMsTeamsBotPendingReply:
+    def test_message_on_pending_install_replies_with_connect(
+        self,
+        app_module,
+        client,
+    ):
+        data = {
+            "handled": False,
+            "install_state": "pending",
+            "connect_url": "https://console/z",
+        }
+        with (
+            patch.object(app_module, "verify_ms_teams_bot_token"),
+            patch.object(
+                app_module,
+                "resolve_ms_teams_bot_inbound",
+                return_value=data,
+            ),
+            patch.object(app_module, "send_ms_teams_bot_pending_reply") as reply,
+        ):
+            resp = client.post("/ms-teams-bot/messages", json=_message_activity())
+        assert resp.status_code == 200
+        reply.assert_called_once()
+        assert reply.call_args.args[1] == "https://console/z"
+
+    def test_message_on_no_install_does_not_reply(self, app_module, client):
+        data = {"handled": False, "install_state": "none", "connect_url": None}
+        with (
+            patch.object(app_module, "verify_ms_teams_bot_token"),
+            patch.object(
+                app_module,
+                "resolve_ms_teams_bot_inbound",
+                return_value=data,
+            ),
+            patch.object(app_module, "send_ms_teams_bot_pending_reply") as reply,
+        ):
+            resp = client.post("/ms-teams-bot/messages", json=_message_activity())
+        assert resp.status_code == 200
+        reply.assert_not_called()

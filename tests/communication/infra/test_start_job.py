@@ -85,7 +85,6 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "desktop_url": "",
         "user_desktops": "[]",
         "is_coordinator": "false",
-        "demo_id": "",
         "team_ids": "[]",
         "team_ids": "[]",
         "team_summaries": "[]",

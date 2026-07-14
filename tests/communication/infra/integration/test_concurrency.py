@@ -93,7 +93,6 @@ def _fetch_user_assistants(max_count: int = 5) -> list[dict]:
                 "voice_id": a["voice_id"],
                 "desktop_mode": a.get("desktop_mode", "ubuntu"),
                 "user_desktops": json.dumps(a.get("user_desktops", [])),
-                "demo_id": "",
                 "team_ids": "[]",
                 "org_id": (
                     str(a.get("organization_id", ""))

@@ -33,7 +33,6 @@ def test_assistant_payload_coerces_nullable_runtime_strings():
         "secrets": {},
         "desktop_mode": None,
         "user_desktops": [],
-        "demo_id": None,
         "is_local": False,
         "team_ids": [],
         "team_summaries": [],

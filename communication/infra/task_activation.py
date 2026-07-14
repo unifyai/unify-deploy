@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -45,6 +46,18 @@ from unify.task_scheduler.offline_runner_contract import (
 from unify.task_scheduler.types.run_source import RunSource
 
 from communication.dependencies import authorize_admin_or_assistant
+from communication.infra.provider_event_dispatch import (
+    ProviderEventDispatchOutcome,
+    ProviderEventDispatchRequest,
+    ProviderEventDispatchValidationError,
+    dispatch_provider_event_offline,
+    public_status_for_inbox_state,
+    validate_provider_event_dispatch_request,
+)
+from communication.infra.provider_event_dispatch_inbox import (
+    ProviderEventDispatchInbox,
+    ProviderEventInboxMismatchError,
+)
 from .models import (
     OfflineTaskDispatchRequest,
     ScheduledTaskActivationDeleteRequest,
@@ -63,16 +76,131 @@ logger = logging.getLogger(__name__)
 TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
 TASK_ACTIVATION_REPAIR_PATH = "/infra/task-activation/repair"
 OFFLINE_TASK_DISPATCH_PATH = "/infra/task-activation/offline-dispatch"
+PROVIDER_EVENT_DISPATCH_PATH = "/task-activation/provider-event-dispatch"
 TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH = "/admin/task-activation/current"
 ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH = "/admin/task-activation/reproject"
 ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
+ORCHESTRA_TASK_RUN_GET_PATH = "/admin/task-run/get"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 OFFLINE_TASK_JOB_BACKOFF_LIMIT = 0
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
+_provider_event_dispatch_inbox: ProviderEventDispatchInbox | None = None
+
+
+def _get_provider_event_dispatch_inbox() -> ProviderEventDispatchInbox:
+    """Return the local provider-event dispatch inbox.
+
+    # TODO: Remove once downstream adoption is persisted through Orchestra
+    instead of this container-local SQLite file.
+    """
+
+    global _provider_event_dispatch_inbox
+    if _provider_event_dispatch_inbox is None:
+        _provider_event_dispatch_inbox = ProviderEventDispatchInbox(
+            Path(SETTINGS.provider_event_dispatch_inbox_path),
+        )
+    return _provider_event_dispatch_inbox
+
+
+def _get_precreated_task_run(
+    *,
+    assistant_id: str,
+    run_key: str,
+    source_task_log_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Fetch one pre-created Orchestra task run without creating or adopting."""
+
+    payload: dict[str, Any] = {
+        "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+        "assistant_id": assistant_id,
+        "run_key": run_key,
+    }
+    if source_task_log_id is not None:
+        payload["source_task_log_id"] = source_task_log_id
+    body = _orchestra_admin_post(ORCHESTRA_TASK_RUN_GET_PATH, payload)
+    run = body.get("run")
+    return run if isinstance(run, dict) else None
+
+
+def _verify_precreated_provider_event_run(
+    request: ProviderEventDispatchRequest,
+) -> dict[str, Any]:
+    """Require the Orchestra run referenced by one provider-event dispatch."""
+
+    run = _get_precreated_task_run(
+        assistant_id=request.assistant_id,
+        run_key=request.run_key,
+    )
+    if run is None:
+        raise ProviderEventDispatchValidationError("run_not_found")
+    run_row_id = run.get("run_id")
+    if run_row_id is None or int(run_row_id) != request.run_id:
+        raise ProviderEventDispatchValidationError("run_id_mismatch")
+    if str(run.get("run_key") or "") != request.run_key:
+        raise ProviderEventDispatchValidationError("run_key_mismatch")
+    run_task_id = run.get("task_id")
+    if run_task_id is not None and int(run_task_id) != request.task_id:
+        raise ProviderEventDispatchValidationError("run_task_id_mismatch")
+    source_type = run.get("source_type")
+    if source_type is not None and str(source_type) != request.source_type:
+        raise ProviderEventDispatchValidationError("run_source_type_mismatch")
+    execution_mode = run.get("execution_mode")
+    if execution_mode is not None and str(execution_mode) != request.dispatch_mode:
+        raise ProviderEventDispatchValidationError("run_execution_mode_mismatch")
+    return run
+
+
+def _provider_event_activation_metadata(
+    request: ProviderEventDispatchRequest,
+) -> dict[str, Any]:
+    """Load execution metadata without rejecting stale lifecycle revisions."""
+
+    activation = _lookup_current_task_activation(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        destination=None,
+    )
+    return activation or {}
+
+
+def _offline_dispatch_request_from_provider_event(
+    request: ProviderEventDispatchRequest,
+    *,
+    activation: dict[str, Any],
+) -> OfflineTaskDispatchRequest:
+    """Adapt one provider-event dispatch request for offline job launch."""
+
+    source_task_log_id = activation.get("source_task_log_id")
+    return OfflineTaskDispatchRequest(
+        assistant_id=request.assistant_id,
+        destination=activation.get("destination"),
+        task_id=request.task_id,
+        source_task_log_id=int(source_task_log_id or request.task_id),
+        activation_revision=request.accepted_activation_revision,
+        execution_mode="offline",
+        entrypoint=activation.get("entrypoint"),
+        source_type=RunSource.provider_event,
+        task_name=activation.get("task_name"),
+        task_description=activation.get("task_description"),
+    )
+
+
+def _execute_provider_event_offline_dispatch(
+    request: ProviderEventDispatchRequest,
+    *,
+    launch_job,
+) -> ProviderEventDispatchOutcome:
+    """Run the durable inbox adoption and owner-only launch sequence."""
+
+    return dispatch_provider_event_offline(
+        inbox=_get_provider_event_dispatch_inbox(),
+        request=request,
+        launch_job=launch_job,
+    )
 
 
 def _emit_task_activation_event(event: str, **fields: Any) -> None:
@@ -2044,3 +2172,137 @@ async def dispatch_offline_task(
             status_code=500,
             detail=f"Failed to dispatch offline task: {exc}",
         ) from exc
+
+
+@router.post(PROVIDER_EVENT_DISPATCH_PATH)
+async def dispatch_provider_event_offline_route(
+    request: ProviderEventDispatchRequest,
+):
+    """Adopt one pre-created provider-event run and launch at most one offline job.
+
+    Auth: platform admin key (Orchestra trigger worker and control-plane callers).
+
+    TODO: Drive delivery from Orchestra dispatch operations and drop the local
+    inbox/status path once downstream adoption convergence is wired.
+    """
+
+    try:
+        validate_provider_event_dispatch_request(
+            request,
+            ttl_seconds=SETTINGS.provider_event_dispatch_request_ttl_seconds,
+        )
+    except ProviderEventDispatchValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason_code},
+        ) from exc
+
+    try:
+        await asyncio.to_thread(_verify_precreated_provider_event_run, request)
+    except ProviderEventDispatchValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason_code},
+        ) from exc
+
+    batch_api, core_api, _, _ = await _get_k8s_clients()
+    activation = await asyncio.to_thread(_provider_event_activation_metadata, request)
+    assistant_data = await asyncio.to_thread(_get_assistant_data, request.assistant_id)
+
+    def launch_job(provider_request: ProviderEventDispatchRequest) -> str:
+        offline_request = _offline_dispatch_request_from_provider_event(
+            provider_request,
+            activation=activation,
+        )
+        if not assistant_has_task_destination(
+            assistant_data,
+            offline_request.destination,
+        ):
+            raise ProviderEventDispatchValidationError(
+                "destination_membership_revoked",
+            )
+        run_key = provider_request.run_key
+        job_name = _build_offline_task_job_name(run_key)
+        offline_env = _build_offline_runner_env(
+            request=offline_request,
+            activation=activation,
+            assistant_data=assistant_data,
+            run_key=run_key,
+            job_name=job_name,
+        )
+        _launch_offline_task_job(
+            batch_api=batch_api,
+            core_api=core_api,
+            request=offline_request,
+            run_key=run_key,
+            job_name=job_name,
+            offline_env=offline_env,
+        )
+        _update_task_run(
+            assistant_id=provider_request.assistant_id,
+            run_key=run_key,
+            updates=_running_task_run_updates(job_name),
+        )
+        return job_name
+
+    try:
+        outcome = await asyncio.to_thread(
+            _execute_provider_event_offline_dispatch,
+            request,
+            launch_job=launch_job,
+        )
+    except ProviderEventDispatchValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason_code},
+        ) from exc
+    except ProviderEventInboxMismatchError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": str(exc)},
+        ) from exc
+    except requests.RequestException as exc:
+        logger.exception(
+            "Provider-event dispatch failed while talking to Orchestra",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Provider-event dispatch failed while talking to Orchestra: {exc}",
+        ) from exc
+
+    return {
+        "success": True,
+        "operation_id": outcome.operation_id,
+        "run_id": outcome.run_id,
+        "run_key": outcome.run_key,
+        "status": outcome.status,
+        "job_name": outcome.job_name,
+        "adopted_only": outcome.adopted_only,
+    }
+
+
+@router.get(f"{PROVIDER_EVENT_DISPATCH_PATH}/{{operation_id}}")
+async def get_provider_event_dispatch_status(operation_id: str):
+    """Return the recorded Communication inbox state for one dispatch operation.
+
+    TODO: Remove once dispatch status is read from Orchestra downstream adoption.
+    """
+
+    record = await asyncio.to_thread(
+        _get_provider_event_dispatch_inbox().get,
+        operation_id=operation_id,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "provider_event_dispatch_not_found"},
+        )
+    return {
+        "operation_id": record.operation_id,
+        "run_id": record.run_id,
+        "run_key": record.run_key,
+        "status": public_status_for_inbox_state(record.state),
+        "job_name": record.job_name,
+        "launch_count": record.launch_count,
+        "terminal_reason": record.terminal_reason,
+    }

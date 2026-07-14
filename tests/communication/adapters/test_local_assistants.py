@@ -128,7 +128,6 @@ def _assistant_data(*, is_local: bool) -> dict:
         "voice_id": "voice-123",
         "desktop_mode": "ubuntu",
         "user_desktops": [],
-        "demo_id": "",
         "team_ids": [],
         "org_id": "",
         "deploy_env": "staging",
