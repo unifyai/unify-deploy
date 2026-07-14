@@ -217,8 +217,15 @@ def get_assistant(
             status=status,
         ).observe(time.perf_counter() - start)
 
-    logger.info("get_assistant params: %s", params)
-    logger.info("get_assistant response: %s", response)
+    # The assistant record includes bearer credentials and SSH material. Log
+    # only query/result metadata; never serialize the request selectors or
+    # response payload into Cloud Logging.
+    logger.info(
+        "get_assistant completed lookup_type=%s status=%s result_count=%d",
+        lookup_type,
+        status,
+        len(response.get("info", [])) if isinstance(response, dict) else 0,
+    )
 
     if "detail" in response:
         return {**local_assistant_data, "assistant_id": None}
