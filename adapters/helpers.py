@@ -801,8 +801,29 @@ def _mint_ms_teams_bot_connector_token() -> str | None:
     return token
 
 
-def _ms_teams_bot_welcome_card(connect_url: str) -> dict:
-    """Adaptive Card attachment: a one-tap "Connect to Unify" button.
+# Plain-text welcome sent alongside the connect card. Teams Store certification
+# requires a visible welcome on add, and some surfaces render only the top-level
+# text (not the card), so the greeting must live in ``text`` too — the card is a
+# progressive enhancement, not the sole carrier of the message.
+_MS_TEAMS_BOT_WELCOME_TEXT = (
+    "Hi! Thanks for adding Unify. I'm your AI teammate here in Teams. "
+    "One quick step to finish setup: connect this workspace to your Unify "
+    "account or organization using the button below. You only do this once. "
+    "You can also say **Hi**, **Hello**, or **Help** anytime."
+)
+
+# Canned reply when a message lands on an install that isn't bound to a Unify
+# owner yet. Keeps the bot responsive (Store certification: the bot must reply
+# to commands) instead of silently dropping the activity.
+_MS_TEAMS_BOT_PENDING_REPLY_TEXT = (
+    "Thanks for the message! This Teams workspace isn't connected to a Unify "
+    "account yet, so I can't act on requests here just yet. Tap **Connect to "
+    "Unify** below to finish setup, then I'll be able to help."
+)
+
+
+def _ms_teams_bot_connect_card(text: str, connect_url: str) -> dict:
+    """Adaptive Card attachment: a message plus a one-tap "Connect to Unify".
 
     Tapping ``Connect`` opens Console with the pending install's nonce, which
     binds the tenant to the signed-in owner — no code to copy.
@@ -816,16 +837,12 @@ def _ms_teams_bot_welcome_card(connect_url: str) -> dict:
                 "type": "TextBlock",
                 "size": "Medium",
                 "weight": "Bolder",
-                "text": "Thanks for adding Unify to Teams",
+                "text": "Connect Unify to Teams",
             },
             {
                 "type": "TextBlock",
                 "wrap": True,
-                "text": (
-                    "One more step: connect this Teams tenant to your Unify "
-                    "account or organization. Tap Connect below and finish in "
-                    "Console — you only do this once."
-                ),
+                "text": text,
             },
         ],
         "actions": [
@@ -842,44 +859,32 @@ def _ms_teams_bot_welcome_card(connect_url: str) -> dict:
     }
 
 
-def send_ms_teams_bot_install_welcome(
+def _send_ms_teams_bot_message(
     activity: dict,
     install: dict | None,
+    message: dict,
 ) -> None:
-    """Proactively DM the installer a one-click connect link.
+    """POST a proactive activity into the inbound conversation.
 
-    Best-effort: any missing piece (no ``connect_url`` because the install was
-    already bound, no ``service_url``, no connector token, or a send failure)
-    is logged and swallowed so it never breaks the webhook. The connect link
-    itself comes from Orchestra (single source of the Console URL + nonce).
+    Best-effort: any missing piece (``service_url``, ``conversation_id``, no
+    connector token, or a send failure) is logged and swallowed so it never
+    breaks the webhook. ``service_url`` falls back to the stored install so a
+    reply still lands when the triggering activity omits it.
     """
-    if not install:
-        return
-    connect_url = install.get("connect_url") or ""
-    # A refreshed already-bound install returns no nonce/connect_url; nothing
-    # to invite in that case.
-    if not connect_url:
-        return
     conversation = activity.get("conversation") or {}
     conversation_id = conversation.get("id") or ""
     service_url = (
-        activity.get("serviceUrl") or install.get("service_url") or ""
-    ).rstrip(
-        "/",
-    )
+        activity.get("serviceUrl") or (install or {}).get("service_url") or ""
+    ).rstrip("/")
     if not conversation_id or not service_url:
         logger.warning(
-            "ms_teams_bot: welcome DM skipped — missing conversation_id or "
+            "ms_teams_bot: proactive send skipped — missing conversation_id or "
             "service_url",
         )
         return
     token = _mint_ms_teams_bot_connector_token()
     if not token:
         return
-    message = {
-        "type": "message",
-        "attachments": [_ms_teams_bot_welcome_card(connect_url)],
-    }
     try:
         resp = requests.post(
             f"{service_url}/v3/conversations/{conversation_id}/activities",
@@ -891,12 +896,54 @@ def send_ms_teams_bot_install_welcome(
             timeout=15,
         )
     except Exception:
-        logger.exception("ms_teams_bot: welcome DM send transport error")
+        logger.exception("ms_teams_bot: proactive send transport error")
         return
     if resp.status_code >= 400:
         logger.error(
-            f"ms_teams_bot: welcome DM send failed: {resp.status_code} {resp.text}",
+            f"ms_teams_bot: proactive send failed: {resp.status_code} {resp.text}",
         )
+
+
+def send_ms_teams_bot_install_welcome(
+    activity: dict,
+    install: dict | None,
+) -> None:
+    """Proactively DM the installer a welcome + one-click connect link.
+
+    The caller gates this on the install's ``created`` flag so it fires exactly
+    once per install (a Teams add emits both an ``installationUpdate`` and a
+    ``conversationUpdate``). The plain-text greeting is always sent; the connect
+    card is attached when Orchestra returned a ``connect_url`` (i.e. the install
+    is still pending). The connect link itself comes from Orchestra (single
+    source of the Console URL + nonce).
+    """
+    if not install:
+        return
+    connect_url = install.get("connect_url") or ""
+    message: dict = {"type": "message", "text": _MS_TEAMS_BOT_WELCOME_TEXT}
+    if connect_url:
+        message["attachments"] = [
+            _ms_teams_bot_connect_card(_MS_TEAMS_BOT_WELCOME_TEXT, connect_url),
+        ]
+    _send_ms_teams_bot_message(activity, install, message)
+
+
+def send_ms_teams_bot_pending_reply(
+    activity: dict,
+    connect_url: str | None,
+) -> None:
+    """Reply to an inbound message that landed on an unbound (pending) install.
+
+    Keeps the bot responsive rather than silent when someone messages it before
+    the tenant is connected — a common Store-review path. Includes the connect
+    card when a ``connect_url`` is available.
+    """
+    message: dict = {"type": "message", "text": _MS_TEAMS_BOT_PENDING_REPLY_TEXT}
+    if connect_url:
+        message["attachments"] = [
+            _ms_teams_bot_connect_card(_MS_TEAMS_BOT_PENDING_REPLY_TEXT, connect_url),
+        ]
+    _send_ms_teams_bot_message(activity, None, message)
 
 
 def revoke_ms_teams_bot_install(activity: dict) -> None:

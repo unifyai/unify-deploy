@@ -30,6 +30,7 @@ from adapters.helpers import (
     replenish_idle_pool,
     revoke_ms_teams_bot_install,
     send_ms_teams_bot_install_welcome,
+    send_ms_teams_bot_pending_reply,
     start_unity_job,
 )
 from common.settings import SETTINGS
@@ -1436,6 +1437,8 @@ def test_send_welcome_posts_connect_card(mock_mint, mock_post):
     url = mock_post.call_args.args[0]
     assert url == "https://smba.example/v3/conversations/conv-1/activities"
     body = mock_post.call_args.kwargs["json"]
+    # The plain-text greeting is always present; the card is the enhancement.
+    assert body["text"]
     card = body["attachments"][0]["content"]
     action_url = card["actions"][0]["url"]
     assert action_url == "https://console/assistants?ms_teams_bind=abc"
@@ -1452,13 +1455,19 @@ def test_send_welcome_noop_without_install(mock_mint, mock_post):
 
 
 @patch("adapters.helpers.requests.post")
-@patch("adapters.helpers._mint_ms_teams_bot_connector_token")
-def test_send_welcome_noop_when_already_bound(mock_mint, mock_post):
-    """An already-bound install returns no connect_url → no DM."""
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token", return_value="tok-1")
+def test_send_welcome_text_only_without_connect_url(mock_mint, mock_post):
+    """No connect_url (already bound) still sends a plain-text welcome, but
+    without the connect card — the greeting is not hard-gated on the link."""
+    mock_post.return_value = MagicMock(status_code=201)
+
     send_ms_teams_bot_install_welcome(_ms_teams_added_activity(), {"id": 5})
 
-    mock_mint.assert_not_called()
-    mock_post.assert_not_called()
+    mock_mint.assert_called_once()
+    mock_post.assert_called_once()
+    body = mock_post.call_args.kwargs["json"]
+    assert body["text"]
+    assert "attachments" not in body
 
 
 @patch("adapters.helpers.requests.post")
@@ -1485,4 +1494,65 @@ def test_send_welcome_noop_without_token(mock_mint, mock_post):
     )
 
     mock_mint.assert_called_once()
+    mock_post.assert_not_called()
+
+
+# --- send_ms_teams_bot_pending_reply tests ---
+
+
+def _ms_teams_message_activity(tenant_id="tenant-1"):
+    return {
+        "type": "message",
+        "text": "hi",
+        "recipient": {"id": "28:bot-app-id"},
+        "from": {"aadObjectId": "sender-aad", "name": "Reviewer"},
+        "conversation": {"id": "conv-1", "conversationType": "personal"},
+        "serviceUrl": "https://smba.example/",
+        "channelData": {"tenant": {"id": tenant_id}},
+    }
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token", return_value="tok-1")
+def test_send_pending_reply_posts_text_and_card(mock_mint, mock_post):
+    """A message on an unbound install replies with text + a connect card."""
+    mock_post.return_value = MagicMock(status_code=201)
+
+    send_ms_teams_bot_pending_reply(
+        _ms_teams_message_activity(),
+        "https://console/assistants?ms_teams_bind=xyz",
+    )
+
+    mock_mint.assert_called_once()
+    mock_post.assert_called_once()
+    url = mock_post.call_args.args[0]
+    assert url == "https://smba.example/v3/conversations/conv-1/activities"
+    body = mock_post.call_args.kwargs["json"]
+    assert body["text"]
+    card = body["attachments"][0]["content"]
+    assert card["actions"][0]["url"] == "https://console/assistants?ms_teams_bind=xyz"
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token", return_value="tok-1")
+def test_send_pending_reply_text_only_without_connect_url(mock_mint, mock_post):
+    """No connect_url → text-only reply, still keeps the bot responsive."""
+    mock_post.return_value = MagicMock(status_code=201)
+
+    send_ms_teams_bot_pending_reply(_ms_teams_message_activity(), None)
+
+    mock_post.assert_called_once()
+    body = mock_post.call_args.kwargs["json"]
+    assert body["text"]
+    assert "attachments" not in body
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers._mint_ms_teams_bot_connector_token")
+def test_send_pending_reply_noop_without_conversation(mock_mint, mock_post):
+    """Missing conversation/service_url → skip before minting a token."""
+    activity = {"type": "message", "channelData": {"tenant": {"id": "t"}}}
+    send_ms_teams_bot_pending_reply(activity, "https://console/x")
+
+    mock_mint.assert_not_called()
     mock_post.assert_not_called()
