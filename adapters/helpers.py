@@ -1636,7 +1636,6 @@ def _build_start_job_request_data(
     desktop_mode = _resolve_desktop_mode(assistant)
     user_desktops = assistant.get("user_desktops", [])
     is_coordinator = assistant.get("is_coordinator", False)
-    demo_id = assistant.get("demo_id", None)
     voice_provider, voice_id = resolve_runtime_voice(
         is_coordinator=is_coordinator,
         voice_provider=assistant.get("voice_provider"),
@@ -1688,8 +1687,6 @@ def _build_start_job_request_data(
         ),
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
-        # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
-        "demo_id": str(demo_id) if demo_id else "",
         "is_coordinator": ("true" if is_coordinator else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
         "team_summaries": encode_team_summaries_for_form(

@@ -50,7 +50,6 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "desktop_mode": "ubuntu",
         "desktop_url": "",
         "user_desktops": "[]",
-        "demo_id": "",
         "team_ids": "",
         "team_summaries": "",
         "self_contact_id": "42",

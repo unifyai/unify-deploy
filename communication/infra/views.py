@@ -573,7 +573,6 @@ def _build_startup_payload(
     desktop_url: str,
     user_desktops: str,
     is_coordinator: str,
-    demo_id: str,
     team_ids: str,
     team_summaries: str,
     self_contact_id: int,
@@ -623,7 +622,6 @@ def _build_startup_payload(
         "desktop_url": desktop_url if desktop_url else None,
         "user_desktops": json.loads(user_desktops) if user_desktops else [],
         "is_coordinator": is_coordinator.lower() == "true",
-        "demo_id": int(demo_id) if demo_id else None,
         "team_ids": _decode_team_ids_form(team_ids),
         "team_summaries": _decode_team_summaries_form(team_summaries),
         "self_contact_id": self_contact_id,
@@ -1144,7 +1142,6 @@ async def start_job(
     desktop_required: str = Form(""),
     user_desktops: str = Form(""),
     is_coordinator: str = Form("false"),
-    demo_id: str = Form(""),
     team_ids: str = Form(""),
     team_summaries: str = Form(""),
     self_contact_id: int = Form(...),
@@ -1186,7 +1183,6 @@ async def start_job(
         user_desktops: JSON-encoded list of per-user desktop links, each
             {owner_user_id, url, os, filesys_sync} (optional, defaults to empty)
         is_coordinator: Whether this assistant is the Coordinator (optional, defaults to "false")
-        demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of shared team IDs the assistant belongs to (optional, defaults to empty)
         team_summaries: JSON-encoded list of shared team metadata (optional, defaults to empty)
         self_contact_id: Resolved assistant-self contact ID
@@ -1258,7 +1254,6 @@ async def start_job(
             desktop_url=desktop_url,
             user_desktops=user_desktops,
             is_coordinator=is_coordinator,
-            demo_id=demo_id,
             team_ids=team_ids,
             team_summaries=team_summaries,
             self_contact_id=self_contact_id,

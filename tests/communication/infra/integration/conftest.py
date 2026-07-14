@@ -2492,7 +2492,6 @@ def _admin_record_to_data(a: dict) -> dict:
         "desktop_mode": a.get("desktop_mode", "ubuntu"),
         "user_desktops": json.dumps(a.get("user_desktops", [])),
         "is_coordinator": str(a.get("is_coordinator", False)).lower(),
-        "demo_id": "",
         "team_ids": json.dumps(a.get("team_ids", [])),
         "team_summaries": json.dumps(a.get("team_summaries", [])),
         "self_contact_id": str(a["self_contact_id"]),

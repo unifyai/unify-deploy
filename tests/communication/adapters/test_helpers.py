@@ -4,7 +4,6 @@ Unit tests for the adapters helper functions.
 These tests verify:
 - Contact handling logic (WhatsApp is validated via Orchestra's resolve endpoint,
   not through check_contact_details)
-- Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
 from datetime import datetime, timedelta, timezone
@@ -244,14 +243,13 @@ def test_check_valid_contact_uses_resolved_boss_contact_id(mock_get_contacts):
     assert [contact["contact_id"] for contact in contacts] == [42, 43]
 
 
-# --- start_unity_job demo mode tests ---
+# --- start_unity_job tests ---
 
 
-def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
+def _create_mock_assistant_data(desktop_mode="none"):
     """Create mock assistant data for testing.
 
     Args:
-        demo_id: Optional demo ID (None for regular assistants)
         desktop_mode: Desktop mode - use "none" to skip VM start call in tests
     """
     data = {
@@ -277,7 +275,6 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "desktop_mode": desktop_mode,  # Use "none" to skip VM start
         "user_desktops": [],
         "is_coordinator": False,
-        "demo_id": demo_id,
         "is_local": False,
         "team_ids": [11, 22],
         "team_summaries": [
@@ -323,7 +320,6 @@ def _orchestra_assistant_record(**overrides):
         "secrets": {},
         "desktop_mode": "none",
         "user_desktops": [],
-        "demo_id": None,
         "is_local": False,
         "is_coordinator": True,
         "team_ids": [],
@@ -368,109 +364,13 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_demo_id_for_demo_assistant(mock_post):
-    """Verify demo_id is passed as string when assistant has demo_id."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
-
-    assistant_data = _create_mock_assistant_data(demo_id=42)
-
-    start_unity_job(assistant_data, "phone")
-
-    # Check that requests.post was called
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args
-
-    # Get the data parameter
-    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
-
-    # Verify demo_id is passed as string "42"
-    assert (
-        data["demo_id"] == "42"
-    ), f"Expected demo_id='42' for demo assistant, got '{data.get('demo_id')}'"
-
-
-@patch("adapters.helpers.requests.post")
-@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_empty_demo_id_for_regular_assistant(mock_post):
-    """Verify demo_id is empty string when assistant has no demo_id."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
-
-    assistant_data = _create_mock_assistant_data(demo_id=None)
-
-    start_unity_job(assistant_data, "phone")
-
-    # Check that requests.post was called
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args
-
-    # Get the data parameter
-    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
-
-    # Verify demo_id is empty string
-    assert (
-        data["demo_id"] == ""
-    ), f"Expected demo_id='' for regular assistant, got '{data.get('demo_id')}'"
-
-
-@patch("adapters.helpers.requests.post")
-@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_empty_demo_id_when_key_missing(mock_post):
-    """Verify demo_id is empty string when demo_id key is missing from assistant data."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
-
-    # Create assistant data without demo_id key
-    assistant_data = _create_mock_assistant_data(demo_id=None)
-    del assistant_data["demo_id"]
-
-    start_unity_job(assistant_data, "phone")
-
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args
-    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
-
-    # Verify demo_id is empty string
-    assert (
-        data["demo_id"] == ""
-    ), f"Expected demo_id='' when key missing, got '{data.get('demo_id')}'"
-
-
-@patch("adapters.helpers.requests.post")
-@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_demo_id_with_different_mediums(mock_post):
-    """Verify demo_id is passed correctly for different communication mediums."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
-
-    assistant_data = _create_mock_assistant_data(demo_id=99)
-
-    for medium in ["phone", "email", "whatsapp", "msg"]:
-        mock_post.reset_mock()
-        start_unity_job(assistant_data, medium)
-
-        mock_post.assert_called_once()
-        call_kwargs = mock_post.call_args
-        data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
-
-        assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
-        assert data["medium"] == medium, f"Expected medium={medium}"
-
-
-@patch("adapters.helpers.requests.post")
-@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
 def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     """Wake reasons should be serialized onto the start-intent form payload."""
 
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post.return_value = mock_response
-    assistant_data = _create_mock_assistant_data(demo_id=7)
+    assistant_data = _create_mock_assistant_data()
     assistant_data["desktop_mode"] = None
     assistant_data["is_coordinator"] = True
     wake_reasons = [{"type": "task_due", "task_id": 101}]
@@ -599,7 +499,6 @@ def test_get_assistant_preserves_team_ids(mock_get):
                         "secrets": {},
                         "desktop_mode": "none",
                         "user_desktops": [],
-                        "demo_id": None,
                         "is_local": False,
                         "team_ids": [3, 4],
                         "team_summaries": [
