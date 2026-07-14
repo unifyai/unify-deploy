@@ -183,6 +183,9 @@ steps:
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  # The base image does the heaviest work in the cascade (system deps, torch,
+  # magnitude build, full uv install); match the overlay's machine class.
+  machineType: 'E2_HIGHCPU_32'
 
 substitutions:
   _REGION: 'us-central1'
