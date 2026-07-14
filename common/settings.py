@@ -118,6 +118,15 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
+        # Interim container-local inbox for provider-event launch claims.
+        # Remove once Orchestra-backed downstream adoption replaces SQLite.
+        self.provider_event_dispatch_inbox_path: str = os.environ.get(
+            "UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH",
+            "/var/lib/unity/provider-event-dispatch-inbox.sqlite3",
+        )
+        self.provider_event_dispatch_request_ttl_seconds: int = int(
+            os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
+        )
 
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
