@@ -106,6 +106,18 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
 
+    - name: Checkout brain tip for clients/unify_company symlink
+      run: |
+        chmod +x deploy/scripts/ensure_brain_checkout.sh
+        if [ "${{ github.ref_name }}" = "main" ]; then
+          export BRAIN_REF=main
+        else
+          export BRAIN_REF=staging
+        fi
+        deploy/scripts/ensure_brain_checkout.sh
+      env:
+        BRAIN_REPO_URL: https://github.com/unifyai/brain.git
+
     - name: Set up Environment
       run: |
         sudo apt-get update

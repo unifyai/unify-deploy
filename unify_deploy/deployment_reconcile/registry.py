@@ -2,9 +2,9 @@
 
 Embedded mode (local / full install) imports client subpackages so they
 self-register. Bundled mode (runtime images) has no client trees in
-site-packages — especially ``unify_company``, which is a brain-submodule
-symlink excluded from the runtime wheel — so the registry is built from
-``routing_manifest.yaml`` plus the published GCS client bundles.
+site-packages — especially ``unify_company``, which is published by the
+brain repo into GCS and is never pip-installed — so the registry is built
+from ``routing_manifest.yaml`` plus the published GCS client bundles.
 """
 
 from __future__ import annotations

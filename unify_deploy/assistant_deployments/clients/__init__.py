@@ -523,10 +523,10 @@ _EMBEDDED_CLIENT_MODULES = (
 def _ensure_embedded_clients_registered() -> None:
     """Import client subpackages so they self-register into ``_CLIENT_DEPLOYMENTS``.
 
-    Runtime images exclude client trees (and ``unify_company`` is a brain
-    submodule symlink that is never pip-installed). Missing modules are
-    skipped so bundled-mode callers can fall back to GCS bundle loading
-    instead of crashing on ``ImportError``.
+    Runtime images exclude client trees (and ``unify_company`` is a
+    brain-published GCS bundle that is never pip-installed). Missing
+    modules are skipped so bundled-mode callers can fall back to GCS
+    bundle loading instead of crashing on ``ImportError``.
     """
 
     global _EMBEDDED_CLIENTS_REGISTERED
