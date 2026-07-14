@@ -1,7 +1,7 @@
-"""Offline provider-event dispatch handler for Communication.
+"""Offline provider-event dispatch helpers for Communication.
 
-Uses the interim container-local inbox for launch ownership. Remove the inbox
-dependency once Orchestra-backed downstream adoption is wired.
+# TODO: Remove the inbox dependency from ``dispatch_provider_event_offline`` once
+Orchestra-backed downstream adoption is wired; keep request validation / audience.
 """
 
 from __future__ import annotations
@@ -110,7 +110,11 @@ def dispatch_provider_event_offline(
     request: ProviderEventDispatchRequest,
     launch_job: Callable[[ProviderEventDispatchRequest], str | None],
 ) -> ProviderEventDispatchOutcome:
-    """Adopt one dispatch operation, then launch at most one offline job."""
+    """Adopt one dispatch operation, then launch at most one offline job.
+
+    # TODO: Stop requiring a container-local inbox once adoption is recorded
+    only through Orchestra downstream adoption.
+    """
 
     snapshot = dispatch_snapshot(request)
     adopted = inbox.adopt_or_get(

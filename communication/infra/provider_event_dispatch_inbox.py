@@ -1,10 +1,10 @@
 """Provider-event dispatch inbox for Communication offline execution.
 
-Temporary SQLite-backed launch-claim store for the initial offline provider-event
-slice. It is container-local and not shared across Communication instances.
-Replace it with Orchestra-backed downstream adoption once dispatch convergence
-is wired, then remove this module, its settings, and the status-by-operation_id
-route that reads from local storage.
+# TODO: Purge this module once Orchestra ``provider_event_dispatches.downstream_adoption_*``
+is the cross-instance source of truth. Also remove
+``UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH`` and
+``GET /infra/task-activation/provider-event-dispatch/{operation_id}``, which read
+this container-local SQLite launch-claim store.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ class ProviderEventInboxMismatchError(ValueError):
 class ProviderEventDispatchInbox:
     """Container-local SQLite inbox for owner-only offline job launch.
 
-    Interim implementation only. Delete once Orchestra owns cross-instance
-    adoption state for provider-event dispatch operations.
+    # TODO: Delete this class once Orchestra owns cross-instance adoption state
+    for provider-event dispatch operations (downstream adoption convergence).
     """
 
     def __init__(self, db_path: Path) -> None:

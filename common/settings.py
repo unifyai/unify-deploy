@@ -118,8 +118,8 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
-        # Interim container-local inbox for provider-event launch claims.
-        # Remove once Orchestra-backed downstream adoption replaces SQLite.
+        # TODO: Remove UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH once Orchestra
+        # owns downstream adoption for provider-event operations (no local SQLite).
         self.provider_event_dispatch_inbox_path: str = os.environ.get(
             "UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH",
             "/var/lib/unity/provider-event-dispatch-inbox.sqlite3",

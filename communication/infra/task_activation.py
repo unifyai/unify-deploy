@@ -92,10 +92,10 @@ _provider_event_dispatch_inbox: ProviderEventDispatchInbox | None = None
 
 
 def _get_provider_event_dispatch_inbox() -> ProviderEventDispatchInbox:
-    """Return the interim local provider-event dispatch inbox.
+    """Return the local provider-event dispatch inbox.
 
-    Remove once downstream adoption is persisted through Orchestra instead of
-    this container-local SQLite file.
+    # TODO: Remove once downstream adoption is persisted through Orchestra
+    instead of this container-local SQLite file.
     """
 
     global _provider_event_dispatch_inbox
