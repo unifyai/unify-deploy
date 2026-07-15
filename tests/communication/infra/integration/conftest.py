@@ -2547,6 +2547,8 @@ def _create_test_assistant(
     assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
+    _ensure_credits(ASSISTANT_CREATION_COST + 5)
+
     payload = {
         "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
         "surname": _factory_assistant_surname(index),
