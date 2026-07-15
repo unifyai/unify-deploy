@@ -112,10 +112,11 @@ services:
   volumes-init:
     <<: *orchestra_image
     user: "0"
-    command: ["chmod", "0777", "/data/local-bucket", "/data/runtime"]
+    command: ["chmod", "0777", "/data/local-bucket", "/data/runtime", "/data/provider-event-blobs"]
     volumes:
     - local-bucket:/data/local-bucket
     - runtime:/data/runtime
+    - provider-event-blobs:/data/provider-event-blobs
     restart: "no"
 
   orchestra:
