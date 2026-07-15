@@ -20,7 +20,11 @@ def _address(assistant_id: str, *, ip: str = "34.1.2.3") -> MagicMock:
 def test_reserve_assistant_static_ip_creates_unattached_address():
     assistant_id = "assistant-123"
     client = MagicMock()
-    client.get.side_effect = [NotFound("missing"), _address(assistant_id)]
+    client.get.side_effect = [
+        NotFound("missing"),
+        _address(assistant_id),
+        _address(assistant_id),
+    ]
 
     with patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client):
         result = vm_helpers.reserve_assistant_static_ip(assistant_id)
@@ -30,6 +34,31 @@ def test_reserve_assistant_static_ip_creates_unattached_address():
     resource = client.insert.call_args.kwargs["address_resource"]
     assert resource.name == vm_helpers.assistant_static_ip_name(assistant_id)
     assert resource.labels == vm_helpers.assistant_static_ip_labels(assistant_id)
+
+
+def test_reserve_assistant_static_ip_repairs_missing_labels_after_create():
+    assistant_id = "assistant-123"
+    created_address = _address(assistant_id)
+    created_address.labels = {}
+    created_address.label_fingerprint = "address-label-fingerprint"
+    client = MagicMock()
+    client.get.side_effect = [
+        NotFound("missing"),
+        created_address,
+        _address(assistant_id),
+    ]
+
+    with patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client):
+        vm_helpers.reserve_assistant_static_ip(assistant_id)
+
+    request = client.set_labels.call_args.kwargs[
+        "region_set_labels_request_resource"
+    ]
+    assert client.set_labels.call_args.kwargs["resource"] == (
+        vm_helpers.assistant_static_ip_name(assistant_id)
+    )
+    assert request.labels == vm_helpers.assistant_static_ip_labels(assistant_id)
+    assert request.label_fingerprint == "address-label-fingerprint"
 
 
 def test_reserve_assistant_static_ip_reuses_only_owned_address():

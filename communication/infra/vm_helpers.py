@@ -217,7 +217,9 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
     """Idempotently reserve the assistant's regional external address.
 
     This deliberately reserves an address only. Attaching it to an instance is
-    owned by a separate VM lifecycle operation.
+    owned by a separate VM lifecycle operation. GCP can accept labels on an
+    insert request yet return the new address without them, so a successful
+    create explicitly repairs its labels before ownership validation.
     """
 
     existing = get_assistant_static_ip(assistant_id)
@@ -243,6 +245,27 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
     except Conflict:
         # Another reconciler won the create race. Re-read and validate owner.
         pass
+
+    if created:
+        created_address = client.get(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=address_name,
+        )
+        expected_labels = assistant_static_ip_labels(assistant_id)
+        actual_labels = dict(getattr(created_address, "labels", None) or {})
+        if actual_labels != expected_labels:
+            client.set_labels(
+                project=SETTINGS.vm_project_id,
+                region=SETTINGS.vm_region,
+                resource=address_name,
+                region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
+                    labels=expected_labels,
+                    label_fingerprint=getattr(
+                        created_address, "label_fingerprint", None
+                    ),
+                ),
+            ).result()
 
     reserved = get_assistant_static_ip(assistant_id)
     if reserved is None:
