@@ -66,6 +66,17 @@ def _added_conversation_update(tenant_id="tenant-1"):
     }
 
 
+def _added_team_conversation_update(tenant_id="tenant-1"):
+    return {
+        "type": "conversationUpdate",
+        "recipient": {"id": BOT_ID},
+        "membersAdded": [{"id": BOT_ID}],
+        "conversation": {"id": "channel-1", "conversationType": "channel"},
+        "serviceUrl": "https://smba.example/",
+        "channelData": {"tenant": {"id": tenant_id}, "team": {"id": "team-1"}},
+    }
+
+
 def _message_activity(tenant_id="tenant-1"):
     return {
         "type": "message",
@@ -137,8 +148,9 @@ class TestMsTeamsBotDisconnect:
 
 
 class TestMsTeamsBotInstallWelcome:
-    def test_personal_add_welcomes_once_when_created(self, app_module, client):
-        install = {"id": 7, "created": True, "connect_url": "https://console/x"}
+    def test_personal_add_welcomes(self, app_module, client):
+        # A personal-scope bot-add greets in the 1:1 conversation.
+        install = {"id": 7, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
             patch.object(
@@ -160,13 +172,11 @@ class TestMsTeamsBotInstallWelcome:
         assert welcome.call_args.args[1] == install
         revoke.assert_not_called()
 
-    def test_personal_add_does_not_welcome_when_not_created(
-        self,
-        app_module,
-        client,
-    ):
-        # A repeat add-event refreshes the existing row (``created`` false); the
-        # welcome must not fire again so the installer isn't spammed.
+    def test_team_add_welcomes_even_when_not_created(self, app_module, client):
+        # Regression for the Teams Store failure "welcome not triggered in team
+        # scope": a team-channel bot-add lands on an already-registered tenant
+        # (``created`` false), yet must still welcome — the welcome is keyed on
+        # the per-conversation bot-add, not on the per-tenant install row.
         install = {"id": 7, "created": False, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
@@ -179,45 +189,23 @@ class TestMsTeamsBotInstallWelcome:
         ):
             resp = client.post(
                 "/ms-teams-bot/messages",
-                json=_added_conversation_update(),
-            )
-        assert resp.status_code == 200
-        ensure.assert_called_once()
-        welcome.assert_not_called()
-
-    def test_org_install_add_welcomes_once_when_created(self, app_module, client):
-        # An org-wide install may only emit ``installationUpdate`` (no personal
-        # 1:1 conversationUpdate), so it must welcome here — gated on ``created``
-        # so it stays a single DM.
-        install = {"id": 8, "created": True, "connect_url": "https://console/y"}
-        with (
-            patch.object(app_module, "verify_ms_teams_bot_token"),
-            patch.object(
-                app_module,
-                "ensure_ms_teams_bot_pending_install",
-                return_value=install,
-            ) as ensure,
-            patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
-        ):
-            resp = client.post(
-                "/ms-teams-bot/messages",
-                json=_installation_update("add"),
+                json=_added_team_conversation_update(),
             )
         assert resp.status_code == 200
         ensure.assert_called_once()
         welcome.assert_called_once()
         assert welcome.call_args.args[1] == install
 
-    def test_install_add_does_not_welcome_when_not_created(self, app_module, client):
-        # ``created`` false means the row already existed (dedup against the
-        # sibling conversationUpdate add) — no second DM.
-        install = {"id": 8, "created": False, "connect_url": "https://console/y"}
+    def test_install_add_registers_without_welcome(self, app_module, client):
+        # ``installationUpdate`` add only registers the tenant; the welcome flows
+        # through the sibling ``conversationUpdate`` bot-add, so welcoming here
+        # too would double-send.
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
             patch.object(
                 app_module,
                 "ensure_ms_teams_bot_pending_install",
-                return_value=install,
+                return_value={"id": 8, "created": True},
             ) as ensure,
             patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
         ):
