@@ -314,6 +314,109 @@ self_host_stop_tunnel() {
   fi
 }
 
+# --- Provider-event trigger worker -------------------------------------------
+# Reconciliation and dispatch run in a dedicated Orchestra worker process.
+# Unlike phone calls, Unify does not provide a managed callback tunnel: operators
+# point their own HTTPS reverse proxy at Orchestra's webhook route.
+
+self_host_provider_trigger_worker_port() {
+  printf '%s' "${SELF_HOST_PROVIDER_TRIGGER_WORKER_PORT:-8081}"
+}
+
+self_host_provider_trigger_worker_pidfile() {
+  printf '%s/provider-trigger-worker.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+}
+
+self_host_provider_trigger_worker_log_file() {
+  printf '%s/provider-trigger-worker.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+}
+
+self_host_provider_trigger_worker_is_running() {
+  local pidfile pid
+  pidfile="$(self_host_provider_trigger_worker_pidfile)"
+  [[ -f "$pidfile" ]] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+self_host_provider_trigger_worker_is_healthy() {
+  self_host_provider_trigger_worker_is_running || return 1
+  local port
+  port="$(self_host_provider_trigger_worker_port)"
+  curl -fsS --max-time 5 "http://127.0.0.1:${port}/ready" >/dev/null 2>&1
+}
+
+self_host_ensure_provider_trigger_worker() {
+  if ! declare -F self_host_provider_triggers_enabled &>/dev/null \
+    || ! self_host_provider_triggers_enabled; then
+    return 0
+  fi
+  if ! declare -F self_host_validate_provider_trigger_config &>/dev/null \
+    || ! self_host_validate_provider_trigger_config; then
+    return 1
+  fi
+  if declare -F self_host_export_provider_trigger_env &>/dev/null; then
+    self_host_export_provider_trigger_env
+  fi
+  if self_host_provider_trigger_worker_is_healthy; then
+    return 0
+  fi
+  if self_host_provider_trigger_worker_is_running; then
+    self_host_stop_provider_trigger_worker
+  fi
+
+  local orchestra_repo py log_file port db_port gateway_port
+  orchestra_repo="${ORCHESTRA_REPO_PATH:-}"
+  [[ -n "$orchestra_repo" && -d "$orchestra_repo" ]] || {
+    echo "[provider-trigger-worker] ORCHESTRA_REPO_PATH is not set" >&2
+    return 1
+  }
+  py="${orchestra_repo}/.venv/bin/python"
+  [[ -x "$py" ]] || py="python3"
+  log_file="$(self_host_provider_trigger_worker_log_file)"
+  port="$(self_host_provider_trigger_worker_port)"
+  db_port="${ORCHESTRA_DB_PORT:-55432}"
+  gateway_port="${UNITY_GATEWAY_PORT:-8001}"
+  self_host_ensure_state_dir
+
+  PORT="$port" \
+    ORCHESTRA_DB_HOST=localhost \
+    ORCHESTRA_DB_PORT="$db_port" \
+    ORCHESTRA_DB_USER=orchestra \
+    ORCHESTRA_DB_PASS=orchestra \
+    ORCHESTRA_DB_BASE=orchestra \
+    SELF_HOST=1 \
+    UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://127.0.0.1:${gateway_port}}" \
+    UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://127.0.0.1:${gateway_port}}" \
+    nohup "$py" -m orchestra.workers.provider_trigger_worker >>"$log_file" 2>&1 &
+  local pid=$!
+  disown "$pid" 2>/dev/null || true
+  echo "$pid" >"$(self_host_provider_trigger_worker_pidfile)"
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if self_host_provider_trigger_worker_is_healthy; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[provider-trigger-worker] worker did not become ready — see $log_file" >&2
+  return 1
+}
+
+self_host_stop_provider_trigger_worker() {
+  local pidfile pid
+  pidfile="$(self_host_provider_trigger_worker_pidfile)"
+  [[ -f "$pidfile" ]] || return 0
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+}
+
 # Re-point the localhost number's Twilio voice webhook at the current tunnel when
 # the tunnel URL changed (e.g. cloudflared restarted with a fresh quick-tunnel
 # host). Called from the runtime supervisor loop. No-op only when explicitly
@@ -697,6 +800,19 @@ self_host_runtime_doctor_line() {
     printf 'call-tunnel: running (%s)\n' "$(self_host_tunnel_url 2>/dev/null || echo '?')"
   else
     printf 'call-tunnel: stopped\n'
+  fi
+  if declare -F self_host_provider_triggers_enabled &>/dev/null \
+    && self_host_provider_triggers_enabled; then
+    if self_host_provider_trigger_worker_is_healthy; then
+      printf 'provider-trigger-worker: healthy (port %s)\n' "$(self_host_provider_trigger_worker_port)"
+    elif self_host_provider_trigger_worker_is_running; then
+      printf 'provider-trigger-worker: running (not ready, port %s)\n' "$(self_host_provider_trigger_worker_port)"
+    else
+      printf 'provider-trigger-worker: stopped\n'
+    fi
+    if [[ -n "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]]; then
+      printf 'provider-callback: %s\n' "$ORCHESTRA_TRIGGER_CALLBACK_BASE_URL"
+    fi
   fi
 }
 

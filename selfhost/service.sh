@@ -80,7 +80,13 @@ load_self_host_context() {
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    if declare -F self_host_load_state_env_overlay &>/dev/null; then
+      self_host_load_state_env_overlay
+    fi
+    if declare -F self_host_export_provider_trigger_env &>/dev/null; then
+      self_host_export_provider_trigger_env
+    fi
     # Hosted Coordinator comms (internal dev): load the comms SA (Gmail) and
     # Twilio creds/numbers so the gateway this supervisor launches can send as
     # the Coordinator and the comms bridge can poll inbound. No-op when absent.
@@ -321,6 +327,9 @@ cmd_run() {
         self_host_resync_voice_webhooks_if_changed || true
       fi
     fi
+    if declare -F self_host_ensure_provider_trigger_worker &>/dev/null; then
+      self_host_ensure_provider_trigger_worker || log_warn "Provider-trigger worker failed to start"
+    fi
     sleep 30
     local count
     count="$(unity_cm_instance_count)"
@@ -408,6 +417,9 @@ cmd_stop() {
   if declare -F self_host_stop_tunnel &>/dev/null; then
     self_host_stop_tunnel || true
   fi
+  if declare -F self_host_stop_provider_trigger_worker &>/dev/null; then
+    self_host_stop_provider_trigger_worker || true
+  fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
     export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
@@ -484,6 +496,22 @@ cmd_doctor() {
       log_success "Unity gateway: $(self_host_gateway_base_url)"
     else
       log_warn "Unity gateway not healthy — outbound comms will fail until it restarts"
+      ok=false
+    fi
+  fi
+
+  if declare -F self_host_provider_triggers_enabled &>/dev/null \
+    && self_host_provider_triggers_enabled; then
+    if self_host_validate_provider_trigger_config; then
+      log_success "Provider-trigger prerequisites configured"
+      if self_host_provider_trigger_worker_is_healthy; then
+        log_success "Provider-trigger worker healthy"
+      else
+        log_warn "Provider-trigger worker not healthy"
+        ok=false
+      fi
+    else
+      log_error "Provider-trigger configuration incomplete"
       ok=false
     fi
   fi

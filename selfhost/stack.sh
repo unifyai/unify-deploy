@@ -32,6 +32,11 @@
 #                             in ~/.unity/livekit_cloud.env plus cloudflared.
 #                             Startup brings up a tunnel + SIP trunk and points
 #                             the localhost number's voice webhook at the local CM.
+#   SELF_HOST_PROVIDER_TRIGGERS_ENABLED=1 Enable provider-event triggers on
+#                             the source stack (unity/.env or ~/.unity/.env).
+#                             Requires public HTTPS callback base, Composio keys,
+#                             wrapping master key, and a BYO reverse proxy to
+#                             Orchestra's webhook route. Starts the trigger worker.
 #
 set -euo pipefail
 
@@ -282,6 +287,37 @@ cmd_doctor() {
   fi
   log_info "Live Actions stream via EventBus → Pub/Sub actions-sub"
 
+  if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
+    # shellcheck disable=SC1090
+    source "$SELF_HOST_ENV_SCRIPT"
+    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    if declare -F self_host_load_state_env_overlay &>/dev/null; then
+      self_host_load_state_env_overlay
+    fi
+  fi
+
+  if declare -F self_host_provider_triggers_enabled &>/dev/null \
+    && self_host_provider_triggers_enabled; then
+    echo ""
+    echo "Provider-event triggers"
+    echo "-----------------------"
+    if self_host_validate_provider_trigger_config; then
+      log_success "Provider-trigger prerequisites configured"
+      if self_host_provider_trigger_worker_is_healthy; then
+        log_success "Provider-trigger worker healthy (port $(self_host_provider_trigger_worker_port))"
+      elif self_host_provider_trigger_worker_is_running; then
+        log_warn "Provider-trigger worker running but not ready"
+      else
+        log_warn "Provider-trigger worker not running — starts on stack up"
+      fi
+      log_info "Callback base: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-?}"
+      log_info "Proxy webhooks to http://127.0.0.1:${ORCHESTRA_PORT:-8000}/v0/webhooks/integrations/*"
+    else
+      log_error "Provider-trigger configuration incomplete"
+      ok=false
+    fi
+  fi
+
   echo ""
   if [[ "$ok" == "true" ]]; then
     log_success "Doctor passed — run: unity stack up"
@@ -344,6 +380,32 @@ warn_if_comms_webhooks_drift() {
     log_warn "A localhost Twilio number still has a hosted inbound webhook —"
     log_warn "inbound replies may be answered by staging/prod. Run: $0 sync-comms"
   fi
+}
+
+# Bring up provider-event triggers when the opt-in toggle is enabled. Operators
+# must supply a public HTTPS callback base (BYO reverse proxy); Unify does not
+# run a managed webhook tunnel for provider triggers.
+cmd_up_provider_triggers_setup() {
+  if ! declare -F self_host_provider_triggers_enabled &>/dev/null \
+    || ! self_host_provider_triggers_enabled; then
+    return 0
+  fi
+  log_info "Enabling provider-event triggers (worker + private blob storage)..."
+
+  if ! self_host_validate_provider_trigger_config; then
+    log_error "Provider-trigger configuration is incomplete"
+    return 1
+  fi
+  self_host_export_provider_trigger_env
+
+  if ! self_host_ensure_provider_trigger_worker; then
+    log_error "Provider-trigger worker failed to start"
+    log_info "Logs: $(self_host_provider_trigger_worker_log_file)"
+    return 1
+  fi
+  log_success "Provider-trigger worker ready on port $(self_host_provider_trigger_worker_port)"
+  log_info "Point your HTTPS reverse proxy at http://127.0.0.1:${ORCHESTRA_PORT:-8000}/v0/webhooks/integrations/*"
+  log_info "Composio callback base: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL}"
 }
 
 # Bring up the inbound-call edge: the cloudflared tunnel to the local CM ingress,
@@ -696,6 +758,12 @@ cmd_resume() {
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
     load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    if declare -F self_host_load_state_env_overlay &>/dev/null; then
+      self_host_load_state_env_overlay
+    fi
+    if declare -F self_host_export_provider_trigger_env &>/dev/null; then
+      self_host_export_provider_trigger_env
+    fi
     if declare -F self_host_enable_runtime &>/dev/null; then
       self_host_enable_runtime
     fi
@@ -735,6 +803,8 @@ cmd_resume() {
   # inherits the public tunnel URL and the voice webhook points at it. No-op
   # when calls are disabled.
   cmd_up_calls_setup
+
+  cmd_up_provider_triggers_setup || return 1
 
   if declare -F self_host_ensure_service_supervisor &>/dev/null \
     && [[ -f "$SCRIPT_DIR/service.sh" ]]; then
@@ -949,6 +1019,9 @@ cmd_down() {
     SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop --interactive-only
   else
     bash "$CONSOLE_LOCAL_SCRIPT" stop
+    if declare -F self_host_stop_provider_trigger_worker &>/dev/null; then
+      self_host_stop_provider_trigger_worker || true
+    fi
   fi
   log_success "Self-host stack stopped"
 }
@@ -1039,6 +1112,12 @@ cmd_repair_console() {
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
     load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    if declare -F self_host_load_state_env_overlay &>/dev/null; then
+      self_host_load_state_env_overlay
+    fi
+    if declare -F self_host_export_provider_trigger_env &>/dev/null; then
+      self_host_export_provider_trigger_env
+    fi
   fi
 
   setup_livekit_env || return 1
