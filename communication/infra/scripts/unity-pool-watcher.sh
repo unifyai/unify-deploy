@@ -518,7 +518,9 @@ ensure_unity_workspace_access() {
     chown unityuser:unityuser /Unity /Unity/Local
     chmod 0755 /Unity /Unity/Local
 
-    if ! runuser -u unityuser -- test -rwx /Unity/Local; then
+    if ! runuser -u unityuser -- sh -c \
+        'test -r "$1" && test -w "$1" && test -x "$1"' \
+        sh /Unity/Local; then
         log "ERROR: unityuser cannot access /Unity/Local after permission repair"
         return 1
     fi
