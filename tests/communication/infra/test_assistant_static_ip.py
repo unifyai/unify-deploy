@@ -175,6 +175,38 @@ def test_restore_pool_static_ip_keeps_assistant_reservation():
     assert added.nat_i_p == "34.0.0.1"
 
 
+def test_restore_pool_static_ip_replaces_untracked_legacy_address():
+    vm_name = vm_helpers._pool_vm_name("ubuntu", 1)
+    client = MagicMock()
+    client.get.return_value = _vm_with_external_ip(
+        vm_name,
+        "203.0.113.17",
+    )
+
+    with (
+        patch.object(
+            vm_helpers,
+            "_wait_for_pool_static_ip",
+            return_value="34.0.0.1",
+        ),
+        patch.object(
+            vm_helpers,
+            "get_assistant_static_ip",
+            return_value=None,
+        ),
+        patch.object(vm_helpers.compute_v1, "InstancesClient", return_value=client),
+    ):
+        vm_helpers.restore_pool_static_ip_on_vm(
+            vm_name,
+            "assistant-123",
+            "ubuntu",
+        )
+
+    client.delete_access_config.assert_called_once()
+    added = client.add_access_config.call_args.kwargs["access_config_resource"]
+    assert added.nat_i_p == "34.0.0.1"
+
+
 def test_assistant_static_ip_routes_reconcile_read_and_release():
     from communication.infra import views
 

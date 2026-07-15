@@ -1478,9 +1478,20 @@ def restore_pool_static_ip_on_vm(
     )
     if current_ip != pool_ip:
         assistant_ip = str((assistant_address or {}).get("address") or "")
-        if not assistant_ip or current_ip != assistant_ip:
+        if assistant_ip and current_ip != assistant_ip:
             raise RuntimeError(
                 f"Refusing to replace unexpected external IP on {vm_name}: {current_ip}",
+            )
+        if not assistant_ip:
+            # Pool VMs created before assistant-owned addresses existed can
+            # retain an untracked legacy address.  There is no managed
+            # assistant address to protect in that case, so returning the VM
+            # to its deterministic pool address is the safe migration path.
+            logger.warning(
+                "Restoring legacy external IP %s on %s to pool address %s",
+                current_ip,
+                vm_name,
+                pool_ip,
             )
         _replace_vm_external_ip(
             client,
