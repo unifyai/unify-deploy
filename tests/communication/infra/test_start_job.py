@@ -472,7 +472,13 @@ def test_start_job_strips_wake_reasons_for_running_session(client):
 
     core_api = MagicMock()
     custom_api = MagicMock()
-    existing_session = _existing_session(phase="Active")
+    existing_session = _existing_session(
+        phase="Active",
+        binding={
+            "id": "binding-desktop-123",
+            "desktopUrl": "https://desktop.example.test",
+        },
+    )
 
     def _updated_session(_custom_api, _namespace, _assistant_id, spec):
         return {
@@ -517,6 +523,12 @@ def test_start_job_strips_wake_reasons_for_running_session(client):
     assert "wake_reasons" not in payload
     assert response.json()["active_session_already_running"] is True
     assert response.json()["wake_reasons_attached_to_startup"] is False
+    assert response.json()["binding_id"] == "binding-desktop-123"
+    assert response.json()["desktop_url"] == "https://desktop.example.test"
+    assert (
+        response.json()["liveview_url"]
+        == "https://desktop.example.test/desktop/custom.html"
+    )
 
 
 def test_start_job_cleans_superseded_bootstrap_secret_after_session_repoint(client):

@@ -90,6 +90,7 @@ install_compose_bundle() {
     docker-compose.yml
     Caddyfile
     call-proxy.Caddyfile
+    trigger-ingress.Caddyfile
     coordinator.env
     .env.example
     ensure-pubsub-topics.sh
@@ -330,6 +331,11 @@ compose_cmd() {
   esac
   case "$calls_enabled" in
     1|true|yes|on) profile_args+=(--profile internal-calls) ;;
+  esac
+  local triggers_enabled
+  triggers_enabled="$(grep -E '^SELF_HOST_PROVIDER_TRIGGERS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  case "$triggers_enabled" in
+    1|true|yes|on) profile_args+=(--profile provider-triggers) ;;
   esac
   env -i \
     PATH="$PATH" \

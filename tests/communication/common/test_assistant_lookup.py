@@ -1,3 +1,5 @@
+import logging
+
 from common.assistant_lookup import (
     ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
     _assistant_payload,
@@ -149,3 +151,38 @@ def test_get_assistant_passes_from_fields_for_email_lookup(monkeypatch):
         "email": "byod@example.com",
         "from_fields": ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
     }
+
+
+def test_get_assistant_does_not_log_sensitive_response_fields(monkeypatch, caplog):
+    class Response:
+        def json(self):
+            return {
+                "info": [
+                    {
+                        "agent_id": "assistant-123",
+                        "api_key": "secret-api-key",
+                        "desktop_filesync_sshkey": "secret-ssh-key",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_url", "https://api.test"
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_admin_key", "admin-key"
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup.requests.get", lambda *_args, **_kwargs: Response()
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup._assistant_payload", lambda _assistant: {}
+    )
+    caplog.set_level(logging.INFO, logger="common.assistant_lookup")
+
+    get_assistant(assistant_id="assistant-123")
+
+    logged = caplog.text
+    assert "secret-api-key" not in logged
+    assert "secret-ssh-key" not in logged
+    assert "result_count=1" in logged

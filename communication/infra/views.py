@@ -1514,6 +1514,15 @@ async def start_job(
             "activation_id": activation_id,
             "phase": status.get("phase", "PendingJob"),
             "job_name": binding_job_ref(binding).get("name"),
+            # Expose an already-ready binding to callers that need to attach
+            # after the desktop-ready Pub/Sub event was published.
+            "binding_id": binding_id_from_status(binding),
+            "desktop_url": binding_desktop_url(binding) or None,
+            "liveview_url": (
+                f"{binding_desktop_url(binding).rstrip('/')}/desktop/custom.html"
+                if binding_desktop_url(binding)
+                else None
+            ),
             "reused_active_session": reused_active_session,
             "active_session_already_running": active_session_already_running,
             "wake_reasons_attached_to_startup": bool(

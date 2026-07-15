@@ -204,6 +204,58 @@ self_host_calls_enabled() {
   esac
 }
 
+self_host_provider_triggers_enabled() {
+  case "${SELF_HOST_PROVIDER_TRIGGERS_ENABLED:-0}" in
+    1 | true | TRUE | yes | YES | on | ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+self_host_load_state_env_overlay() {
+  local state_env="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/.env"
+  [[ -f "$state_env" ]] || return 0
+  load_self_host_env_file "$state_env"
+}
+
+self_host_validate_provider_trigger_config() {
+  self_host_provider_triggers_enabled || return 0
+  if [[ -z "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]]; then
+    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires TRIGGER_EVENT_WRAPPING_MASTER_KEY" >&2
+    return 1
+  fi
+  if [[ -z "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]]; then
+    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires ORCHESTRA_TRIGGER_CALLBACK_BASE_URL (public HTTPS)" >&2
+    return 1
+  fi
+  case "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL}" in
+    https://*) ;;
+    *)
+      echo "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL must start with https://" >&2
+      return 1
+      ;;
+  esac
+  if [[ -z "${COMPOSIO_API_KEY:-}" ]]; then
+    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_API_KEY" >&2
+    return 1
+  fi
+  if [[ -z "${COMPOSIO_WEBHOOK_SECRET:-}" ]]; then
+    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_WEBHOOK_SECRET" >&2
+    return 1
+  fi
+  return 0
+}
+
+self_host_export_provider_trigger_env() {
+  self_host_provider_triggers_enabled || return 0
+  export SELF_HOST=1
+  export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/provider-event-blobs}"
+  mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
+  [[ -n "${COMPOSIO_API_KEY:-}" ]] && export COMPOSIO_API_KEY
+  [[ -n "${COMPOSIO_WEBHOOK_SECRET:-}" ]] && export COMPOSIO_WEBHOOK_SECRET
+  [[ -n "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]] && export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL
+  [[ -n "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]] && export TRIGGER_EVENT_WRAPPING_MASTER_KEY
+}
+
 self_host_livekit_cloud_file() {
   printf '%s' \
     "${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
@@ -346,7 +398,12 @@ append_self_host_unity_runtime_env() {
     CARTESIA_API_KEY \
     ELEVEN_API_KEY \
     VOICE_PROVIDER \
-    VOICE_ID; do
+    VOICE_ID \
+    COMPOSIO_API_KEY \
+    COMPOSIO_WEBHOOK_SECRET \
+    ORCHESTRA_TRIGGER_CALLBACK_BASE_URL \
+    TRIGGER_EVENT_WRAPPING_MASTER_KEY \
+    TRIGGER_EVENT_PRIVATE_ROOT; do
     val="${!key:-}"
     if [[ -n "$val" ]]; then
       _target_array+=("$key=$val")

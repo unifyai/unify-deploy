@@ -509,6 +509,22 @@ do_update() {
 
 # ─── Assignment: configure VM for an assistant ───────────────────────────
 
+ensure_unity_workspace_access() {
+    # agent-service runs as unityuser and defaults command/file work to
+    # /Unity/Local. Both the parent and mountpoint must be traversable by that
+    # user; ownership on the mounted filesystem alone is insufficient when the
+    # pool image or a prior assignment left /Unity root-owned/restricted.
+    install -d -o unityuser -g unityuser -m 0755 /Unity /Unity/Local
+    chown unityuser:unityuser /Unity /Unity/Local
+    chmod 0755 /Unity /Unity/Local
+
+    if ! runuser -u unityuser -- test -rwx /Unity/Local; then
+        log "ERROR: unityuser cannot access /Unity/Local after permission repair"
+        return 1
+    fi
+    log "Verified unityuser workspace access at /Unity/Local"
+}
+
 do_assign() {
     local unify_key=$1
     log "ASSIGN: configuring VM for assistant"
@@ -524,6 +540,10 @@ do_assign() {
 
     # Update code before configuring (skips quickly if already up-to-date)
     do_update
+
+    # Establish a usable mountpoint before the disk arrives. Re-run this after
+    # mount/restore below because either operation can replace its ownership.
+    ensure_unity_workspace_access || return 1
 
     # Ensure desktop session dirs exist (may have been wiped by scrub_filesystem)
     for dir in .config .local .cache; do
@@ -563,10 +583,9 @@ do_assign() {
                 log "Formatting new disk: $dev_path"
                 mkfs.ext4 -q "$dev_path"
             fi
-            mkdir -p /Unity/Local
+            install -d -o unityuser -g unityuser -m 0755 /Unity/Local
             mount "$dev_path" /Unity/Local
-            chown unityuser:unityuser /Unity/Local
-            chmod 755 /Unity/Local
+            ensure_unity_workspace_access || return 1
             log "Mounted $dev_path at /Unity/Local"
         else
             log "WARNING: disk device $dev_path not found after 30s"
@@ -596,6 +615,11 @@ do_assign() {
             fi
         fi
     fi
+
+    # A restored archive may carry root-owned paths, and /Unity itself can be
+    # reset by a pool image update. Validate the exact account that will run
+    # agent-service before starting it.
+    ensure_unity_workspace_access || return 1
 
     # Restore browser/GUI profile into home (always when companion blob exists).
     # Independent of Local/ emptiness — profile is not on the PD.

@@ -1804,16 +1804,19 @@ async def ms_teams_bot_messages_webhook(request: Request):
         members_removed = activity.get("membersRemoved") or []
         recipient_id = (activity.get("recipient") or {}).get("id") or ""
         if any(m.get("id") == recipient_id for m in members_added):
-            # Personal-scope add: this fires with a live 1:1 conversation
-            # reference, so record the install and DM the installer a
-            # one-click connect link (no code to copy). The welcome is gated
-            # on ``created`` so it fires exactly once even though the add also
-            # emits an ``installationUpdate`` below.
+            # Bot added to a conversation (personal 1:1 or a team channel).
+            # This fires once per conversation, so it is the right place to
+            # welcome: the personal chat and each team channel are distinct
+            # conversations and each must get its own welcome (Teams Store
+            # certification checks personal *and* team scope). ``ensure_*``
+            # still records the tenant and returns the connect link the card
+            # uses. Welcome is keyed on the bot-add event, not the tenant, so
+            # a second-scope add on an already-registered tenant still greets.
             install = await asyncio.to_thread(
                 ensure_ms_teams_bot_pending_install,
                 activity,
             )
-            if install and install.get("created"):
+            if install:
                 await asyncio.to_thread(
                     send_ms_teams_bot_install_welcome,
                     activity,
@@ -1824,27 +1827,20 @@ async def ms_teams_bot_messages_webhook(request: Request):
         return {"status": 200}
 
     # ``installationUpdate`` fires for app install/uninstall across scopes.
-    # ``add`` registers the tenant so the owner can bind it. We also welcome
-    # here (gated on ``created``) so an org-wide / admin-center install — which
-    # may never emit the personal ``conversationUpdate`` above — still gets the
-    # one welcome DM. ``created`` dedups against the ``conversationUpdate`` add
-    # (whichever event lands first creates the row and welcomes; the other sees
-    # ``created=False`` and stays silent). ``remove`` tears the install down;
-    # ``remove-upgrade`` is a transient app-upgrade step, not a real disconnect,
-    # so it is ignored.
+    # ``add`` only registers the tenant so the owner can bind it — the welcome
+    # is NOT sent here. Any scope that can receive a proactive welcome
+    # (personal, team) also emits a ``conversationUpdate`` bot-add, which is the
+    # single place we greet; welcoming here too would double-send and trip the
+    # "does not spam users with repeating welcome messages" check. ``remove``
+    # tears the install down; ``remove-upgrade`` is a transient app-upgrade
+    # step, not a real disconnect, so it is ignored.
     if activity_type == "installationUpdate":
         action = activity.get("action") or ""
         if action == "add":
-            install = await asyncio.to_thread(
+            await asyncio.to_thread(
                 ensure_ms_teams_bot_pending_install,
                 activity,
             )
-            if install and install.get("created"):
-                await asyncio.to_thread(
-                    send_ms_teams_bot_install_welcome,
-                    activity,
-                    install,
-                )
         elif action == "remove":
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}

@@ -356,6 +356,83 @@ Caveats:
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio
   account.
 
+## Provider-event triggers (opt-in)
+
+Third-party provider triggers (for example Composio GitHub issue-created) are
+disabled by default. Enable them only when you can expose a **public HTTPS**
+callback to Orchestra and run the dedicated trigger worker.
+
+### Docker Compose install
+
+In `~/.unity/.env`:
+
+```bash
+SELF_HOST_PROVIDER_TRIGGERS_ENABLED=true
+ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://triggers.example.com
+TRIGGER_EVENT_WRAPPING_MASTER_KEY=<long-random-secret>
+COMPOSIO_API_KEY=<composio-api-key>
+COMPOSIO_WEBHOOK_SECRET=<composio-project-webhook-secret>
+```
+
+Then restart the stack:
+
+```bash
+unity stack up
+```
+
+What the `provider-triggers` profile adds:
+
+- `trigger-ingress` (Caddy) exposes **only**
+  `POST /v0/webhooks/integrations/*` and returns 404 for every other path.
+  Local test URL: `http://127.0.0.1:8088`.
+- `orchestra-trigger-worker` runs subscription reconciliation, dispatch
+  delivery, and private blob maintenance.
+- `provider-event-blobs` volume stores encrypted matched event payloads separately
+  from the public `local-bucket` media namespace.
+
+Point your own HTTPS reverse proxy (or TLS-terminated load balancer) at
+`trigger-ingress:8080` on the Docker network, or publish that service on a host
+port. Unify does **not** provide a managed relay, Cloudflare tunnel, or automatic
+tunnel for provider callbacks, and paused or unhealthy intervals have no event
+backfill guarantee.
+
+### Source install (`stack.sh`)
+
+Use the same variables in `unity/.env` or `~/.unity/.env` (the latter overlays
+the former when both exist):
+
+```bash
+SELF_HOST_PROVIDER_TRIGGERS_ENABLED=true
+ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://triggers.example.com
+TRIGGER_EVENT_WRAPPING_MASTER_KEY=<long-random-secret>
+COMPOSIO_API_KEY=<composio-api-key>
+COMPOSIO_WEBHOOK_SECRET=<composio-project-webhook-secret>
+```
+
+Then start or restart the source stack:
+
+```bash
+bash selfhost/stack.sh up
+```
+
+The stack starts a local `orchestra.workers.provider_trigger_worker` process
+(readiness on port `8081` by default) and stores private event blobs under
+`~/.unity/provider-event-blobs`. Point your HTTPS reverse proxy at Orchestra's
+webhook route on the host:
+
+`http://127.0.0.1:8000/v0/webhooks/integrations/*`
+
+Unify does not run a managed callback tunnel for provider triggers on the source
+path (unlike phone-call voice webhooks). The background runtime supervisor
+keeps the worker alive while headless scheduling is enabled.
+
+Verify prerequisites with:
+
+```bash
+unity stack doctor    # Compose install
+bash selfhost/stack.sh doctor   # Source install
+```
+
 ## Builtins Artifacts
 
 The bootstrap creates a system-owned `Builtins` project and seeds the core Unity

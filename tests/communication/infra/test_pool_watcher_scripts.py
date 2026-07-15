@@ -160,6 +160,19 @@ def test_bash_watcher_defines_desktop_profile_helpers():
     assert "rm -rf /Unity/.magnitude" in text
 
 
+def test_bash_watcher_repairs_unityuser_workspace_access_before_agent_start():
+    text = BASH_WATCHER.read_text()
+
+    assert "ensure_unity_workspace_access()" in text
+    assert "install -d -o unityuser -g unityuser -m 0755 /Unity /Unity/Local" in text
+    assert "runuser -u unityuser -- test -rwx /Unity/Local" in text
+    # The check must happen after a mount/restore can replace filesystem
+    # ownership and before agent-service starts with UNITY_LOCAL_ROOT there.
+    assert text.index("ensure_unity_workspace_access || return 1") < text.index(
+        "# Agent Service .env"
+    )
+
+
 def test_powershell_watcher_scrubs_magnitude_and_archives_profile():
     text = POWERSHELL_WATCHER.read_text()
     assert "function Archive-DesktopProfile" in text
