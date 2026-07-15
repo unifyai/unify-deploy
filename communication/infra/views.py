@@ -217,6 +217,7 @@ router.include_router(dashboard_actions_router)
 # (control-plane callers) or the assistant's own UNIFY_KEY verified against its
 # AssistantSession (self-scoped).
 from communication.infra.self_router import assistant_self_router
+import communication.infra.assistant_jobs_routes  # noqa: F401  # register routes
 
 
 async def _assert_job_owned_by_assistant(

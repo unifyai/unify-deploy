@@ -15,7 +15,7 @@
 #
 # Requires:
 #   - gcloud CLI authenticated with access to the gcp-project-runtime project
-#   - When auto-detecting: UNIFY_KEY and SHARED_UNIFY_KEY env vars (or in .env)
+#   - When auto-detecting: UNIFY_KEY and ORCHESTRA_ADMIN_KEY env vars (or in .env)
 
 set -euo pipefail
 

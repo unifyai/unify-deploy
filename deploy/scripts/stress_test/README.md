@@ -48,7 +48,7 @@ Lists all currently-running assistant jobs by querying the `AssistantJobs` conte
 
 | Variable | Source | Description |
 |---|---|---|
-| `SHARED_UNIFY_KEY` | env | Shared Unify API key |
+| `ORCHESTRA_ADMIN_KEY` | env | Admin key for AssistantJobs system project |
 
 ```bash
 python assistant_jobs_track.py
@@ -62,7 +62,7 @@ Marks stale assistant jobs as done and releases their pool VMs (with disk-detach
 
 | Variable | Source | Description |
 |---|---|---|
-| `SHARED_UNIFY_KEY` | env | Shared Unify API key |
+| `ORCHESTRA_ADMIN_KEY` | env | Admin key for AssistantJobs system project |
 | `UNITY_COMMS_URL` | env | Communication service base URL |
 | `ORCHESTRA_ADMIN_KEY` | env | Admin key for VM release endpoints |
 | `ASSISTANT_IDS` | in-script | List of assistant IDs to clean up (empty = all running jobs) |

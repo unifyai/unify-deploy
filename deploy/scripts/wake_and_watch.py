@@ -17,7 +17,7 @@ Usage:
 
 Environment:
     UNIFY_KEY          Required. Resolves caller identity and assistant.
-    SHARED_UNIFY_KEY   Required. Queries the AssistantJobs project.
+    ORCHESTRA_ADMIN_KEY Required. Queries the AssistantJobs system project.
 """
 
 import argparse
@@ -58,7 +58,7 @@ os.environ["ORCHESTRA_URL"] = ORCHESTRA_URLS[ENV]
 import requests
 import unisdk
 
-SHARED_UNIFY_KEY = os.environ["SHARED_UNIFY_KEY"]
+ORCHESTRA_ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ def get_existing_job_names(user_email: str) -> set[str]:
             project="AssistantJobs",
             context="startup_events",
             filter=f"user_email == '{user_email}'",
-            api_key=SHARED_UNIFY_KEY,
+            api_key=ORCHESTRA_ADMIN_KEY,
             limit=20,
         )
         for log in logs:
@@ -222,7 +222,7 @@ def wait_for_new_job(
                 project="AssistantJobs",
                 context="startup_events",
                 filter=f"user_email == '{user_email}'",
-                api_key=SHARED_UNIFY_KEY,
+                api_key=ORCHESTRA_ADMIN_KEY,
                 limit=10,
             )
             for log in logs:

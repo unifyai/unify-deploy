@@ -131,9 +131,9 @@ def _find_latest_job_entry(
     """Return the log entry for the latest matching job, or exit."""
     import unisdk
 
-    shared_key = os.environ.get("SHARED_UNIFY_KEY")
+    shared_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
     if not shared_key:
-        error("SHARED_UNIFY_KEY environment variable is not set.")
+        error("ORCHESTRA_ADMIN_KEY environment variable is not set.")
         sys.exit(1)
 
     if email:

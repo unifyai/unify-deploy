@@ -119,7 +119,7 @@ ADAPTERS_URL = os.getenv(
 )
 
 ADMIN_KEY = os.getenv("ORCHESTRA_ADMIN_KEY", "")
-SHARED_KEY = os.getenv("SHARED_UNIFY_KEY", "")
+SHARED_KEY = os.getenv("ORCHESTRA_ADMIN_KEY", "")
 UNIFY_KEY = os.getenv("UNIFY_KEY", "")
 
 ORCHESTRA_URL = os.getenv(
@@ -594,7 +594,7 @@ def admin_headers():
 
 @pytest.fixture
 def shared_headers():
-    assert SHARED_KEY, "SHARED_UNIFY_KEY must be set"
+    assert SHARED_KEY, "ORCHESTRA_ADMIN_KEY must be set"
     return {"Authorization": f"Bearer {SHARED_KEY}"}
 
 

@@ -75,6 +75,81 @@ def create_assistant_log(api_key: str, **entries) -> "unisdk.Log":
 
 
 # ---------------------------------------------------------------------------
+# Infra write proxies (pod path — no shared/admin key on the container)
+# ---------------------------------------------------------------------------
+
+
+def post_startup_via_infra(
+    comms_url: str,
+    unify_key: str,
+    *,
+    assistant_id: str,
+    user_id: str,
+    job_name: str,
+    timeout: float = 30,
+    **extra_entries,
+) -> bool:
+    """Create a startup_events row via ``/infra/assistant-jobs/startup``."""
+    payload = {
+        "assistant_id": str(assistant_id),
+        "user_id": str(user_id),
+        "job_name": job_name,
+        **extra_entries,
+    }
+    try:
+        resp = requests.post(
+            f"{comms_url.rstrip('/')}/infra/assistant-jobs/startup",
+            json=payload,
+            headers={"Authorization": f"Bearer {unify_key}"},
+            timeout=timeout,
+        )
+        if resp.ok:
+            return True
+        log.warning(
+            "AssistantJobs startup infra write returned %s: %s",
+            resp.status_code,
+            resp.text[:300],
+        )
+    except Exception:
+        log.exception("Error writing AssistantJobs startup via infra")
+    return False
+
+
+def patch_liveview_via_infra(
+    comms_url: str,
+    unify_key: str,
+    *,
+    assistant_id: str,
+    job_name: str,
+    liveview_url: str,
+    timeout: float = 30,
+) -> bool:
+    """Set liveview_url via ``/infra/assistant-jobs/liveview``."""
+    payload = {
+        "assistant_id": str(assistant_id),
+        "job_name": job_name,
+        "liveview_url": liveview_url,
+    }
+    try:
+        resp = requests.patch(
+            f"{comms_url.rstrip('/')}/infra/assistant-jobs/liveview",
+            json=payload,
+            headers={"Authorization": f"Bearer {unify_key}"},
+            timeout=timeout,
+        )
+        if resp.ok:
+            return True
+        log.warning(
+            "AssistantJobs liveview infra write returned %s: %s",
+            resp.status_code,
+            resp.text[:300],
+        )
+    except Exception:
+        log.exception("Error writing AssistantJobs liveview via infra")
+    return False
+
+
+# ---------------------------------------------------------------------------
 # K8s label operations (via comms service)
 # ---------------------------------------------------------------------------
 
