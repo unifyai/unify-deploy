@@ -30,7 +30,7 @@ from google.api_core.exceptions import (
 from google.protobuf import duration_pb2, timestamp_pb2
 from kubernetes.client.rest import ApiException
 
-from common.assistant_lookup import get_assistant
+from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.int_list_codec import encode_int_list_for_env
 from common.team_summaries_codec import encode_team_summaries_for_env
 from common.settings import SETTINGS
@@ -1180,23 +1180,22 @@ def _launch_offline_task_job(
     return True
 
 
-async def _assistant_desktop_browser_env(assistant_id: str) -> dict[str, str]:
+async def _assistant_desktop_browser_env(
+    assistant_id: str,
+    *,
+    assistant_data: dict[str, Any],
+) -> dict[str, str]:
     """Resolve a ready assistant desktop into browser-target runner variables.
 
-    Scheduler workers remain the execution surface.  This binding only makes
-    website-facing browser work use the assistant's current desktop VM.  A
-    missing or draining VM is retryable; callers must never silently fall back
-    to a pod-local browser.
+    Scheduler workers remain the execution surface. This binding only makes
+    website-facing browser work use the assistant's current desktop VM. When
+    Computer Use is disabled, callers receive no desktop variables and retain
+    normal worker-local browser behavior. Once entitled, a missing or draining
+    VM is retryable; callers must never silently fall back.
     """
 
-    if assistant_id not in SETTINGS.desktop_browser_task_assistant_ids:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Assistant desktop browser tasks are not enabled for this assistant; "
-                "desktop-targeted task will retry"
-            ),
-        )
+    if not managed_desktop_entitled(assistant_data):
+        return {}
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     if custom_api is None:
         raise HTTPException(
@@ -2159,7 +2158,8 @@ async def dispatch_offline_task(
         if request.browser_target == "assistant_desktop":
             stage = "desktop_target_resolve"
             desktop_browser_env = await _assistant_desktop_browser_env(
-                request.assistant_id
+                request.assistant_id,
+                assistant_data=assistant_data,
             )
         offline_env = _build_offline_runner_env(
             request=request,

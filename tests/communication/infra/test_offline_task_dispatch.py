@@ -1320,16 +1320,10 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
     )
 
 
-def test_desktop_browser_target_resolves_ready_binding(monkeypatch):
+def test_desktop_browser_target_resolves_ready_binding():
     """Desktop-targeted workers receive only the current ready binding URL."""
-    from common.settings import SETTINGS
     from communication.infra import task_activation
 
-    monkeypatch.setattr(
-        SETTINGS,
-        "desktop_browser_task_assistant_ids",
-        frozenset({"assistant-123"}),
-    )
     session = {
         "spec": {"desiredState": "Running"},
         "status": {
@@ -1348,7 +1342,13 @@ def test_desktop_browser_target_resolves_ready_binding(monkeypatch):
         ),
     ):
         env = asyncio.run(
-            task_activation._assistant_desktop_browser_env("assistant-123")
+            task_activation._assistant_desktop_browser_env(
+                "assistant-123",
+                assistant_data=_assistant_data(
+                    desktop_mode="ubuntu",
+                    managed_desktop_status="active",
+                ),
+            )
         )
 
     assert env == {
@@ -1358,12 +1358,16 @@ def test_desktop_browser_target_resolves_ready_binding(monkeypatch):
     }
 
 
-def test_desktop_browser_target_requires_assistant_flag(monkeypatch):
-    """An opted-in task must defer rather than use a pod-local browser."""
-    from common.settings import SETTINGS
+def test_desktop_browser_target_uses_local_worker_without_computer_use():
+    """Desktop-eligible tasks retain the normal worker browser when disabled."""
     from communication.infra import task_activation
 
-    monkeypatch.setattr(SETTINGS, "desktop_browser_task_assistant_ids", frozenset())
-
-    with pytest.raises(Exception, match="not enabled"):
-        asyncio.run(task_activation._assistant_desktop_browser_env("assistant-123"))
+    assert asyncio.run(
+        task_activation._assistant_desktop_browser_env(
+            "assistant-123",
+            assistant_data=_assistant_data(
+                desktop_mode="none",
+                managed_desktop_status="disabled",
+            ),
+        )
+    ) == {}
