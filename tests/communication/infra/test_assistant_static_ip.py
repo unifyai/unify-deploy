@@ -52,9 +52,7 @@ def test_reserve_assistant_static_ip_repairs_missing_labels_after_create():
     with patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client):
         vm_helpers.reserve_assistant_static_ip(assistant_id)
 
-    request = client.set_labels.call_args.kwargs[
-        "region_set_labels_request_resource"
-    ]
+    request = client.set_labels.call_args.kwargs["region_set_labels_request_resource"]
     assert client.set_labels.call_args.kwargs["resource"] == (
         vm_helpers.assistant_static_ip_name(assistant_id)
     )
@@ -114,9 +112,13 @@ def test_attach_assistant_static_ip_replaces_pool_ip_and_updates_stable_dns():
     dns_upsert = MagicMock()
 
     with (
-        patch.object(vm_helpers, "reserve_assistant_static_ip", return_value={
-            "address": "34.0.0.9",
-        }),
+        patch.object(
+            vm_helpers,
+            "reserve_assistant_static_ip",
+            return_value={
+                "address": "34.0.0.9",
+            },
+        ),
         patch.object(
             vm_helpers,
             "_wait_for_pool_static_ip",

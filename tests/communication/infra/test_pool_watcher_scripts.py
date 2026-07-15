@@ -165,17 +165,21 @@ def test_bash_watcher_repairs_unityuser_workspace_access_before_agent_start():
 
     assert "ensure_unity_workspace_access()" in text
     assert "/Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache" in text
-    assert 'for path; do test -r "$path" && test -w "$path" && test -x "$path" || exit 1; done' in text
-    profile_restore = text.index('restore_desktop_profile "$assistant_id" "$profile_bucket"')
+    assert (
+        'for path; do test -r "$path" && test -w "$path" && test -x "$path" || exit 1; done'
+        in text
+    )
+    profile_restore = text.index(
+        'restore_desktop_profile "$assistant_id" "$profile_bucket"',
+    )
     repair_after_profile_restore = text.index(
-        "ensure_unity_workspace_access || return 1", profile_restore
+        "ensure_unity_workspace_access || return 1",
+        profile_restore,
     )
     # Extracting the root-owned profile archive can reset /Unity to mode 0700.
     # Repair after that extraction and before agent-service starts with
     # UNITY_LOCAL_ROOT there.
-    assert repair_after_profile_restore < text.index(
-        "# Agent Service .env"
-    )
+    assert repair_after_profile_restore < text.index("# Agent Service .env")
 
 
 def test_powershell_watcher_scrubs_magnitude_and_archives_profile():

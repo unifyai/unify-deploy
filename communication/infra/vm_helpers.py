@@ -262,7 +262,9 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
                 region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
                     labels=expected_labels,
                     label_fingerprint=getattr(
-                        created_address, "label_fingerprint", None
+                        created_address,
+                        "label_fingerprint",
+                        None,
                     ),
                 ),
             ).result()
@@ -1419,7 +1421,9 @@ def attach_assistant_static_ip_to_pool_vm(
         zone=SETTINGS.vm_zone,
         instance=vm_name,
     )
-    network_interface, access_config_name, current_ip = _external_access_config(instance)
+    network_interface, access_config_name, current_ip = _external_access_config(
+        instance,
+    )
     pool_ip_name = _pool_ip_name_for_vm(vm_name, vm_type)
     if not pool_ip_name:
         raise RuntimeError(f"Cannot determine pool static IP for {vm_name}")
@@ -1469,7 +1473,9 @@ def restore_pool_static_ip_on_vm(
         zone=SETTINGS.vm_zone,
         instance=vm_name,
     )
-    network_interface, access_config_name, current_ip = _external_access_config(instance)
+    network_interface, access_config_name, current_ip = _external_access_config(
+        instance,
+    )
     if current_ip != pool_ip:
         assistant_ip = str((assistant_address or {}).get("address") or "")
         if not assistant_ip or current_ip != assistant_ip:
