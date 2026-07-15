@@ -169,7 +169,9 @@ def assistant_static_ip_labels(assistant_id: str) -> dict[str, str]:
     }
 
 
-def _assistant_static_ip_details(address: Any) -> dict[str, Any]:
+def _assistant_static_ip_details(
+    address: Any, *, assistant_id: str | None = None
+) -> dict[str, Any]:
     """Serialize the stable public details of a GCP regional address."""
 
     return {
@@ -177,6 +179,7 @@ def _assistant_static_ip_details(address: Any) -> dict[str, Any]:
         "address": str(getattr(address, "address", "") or "") or None,
         "status": str(getattr(address, "status", "") or "") or None,
         "region": str(getattr(address, "region", "") or "") or None,
+        "hostname": get_dns_hostname(assistant_id) if assistant_id else None,
         "labels": dict(getattr(address, "labels", None) or {}),
     }
 
@@ -211,7 +214,7 @@ def get_assistant_static_ip(assistant_id: str) -> dict[str, Any] | None:
         return None
 
     _assert_assistant_static_ip_ownership(address, assistant_id)
-    return _assistant_static_ip_details(address)
+    return _assistant_static_ip_details(address, assistant_id=assistant_id)
 
 
 def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:

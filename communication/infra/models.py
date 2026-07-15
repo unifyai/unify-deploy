@@ -32,6 +32,7 @@ class AssistantStaticIPResponse(BaseModel):
     address: Optional[str] = None
     status: Optional[str] = None
     region: Optional[str] = None
+    hostname: Optional[str] = None
     labels: dict[str, str]
     created: bool = False
 
