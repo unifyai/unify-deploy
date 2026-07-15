@@ -200,15 +200,16 @@ class TestOrgChat:
         response = client.post(
             "/unify/org-chat",
             json={
-                "kind": "dm_call",
+                "kind": "org_call",
                 "action": "incoming",
                 "organization_id": 11,
                 "call": {
                     "call_id": "call-123",
-                    "room_name": "unity_org_11_dm_5",
+                    "room_name": "unity_org_11_call_call-123",
                     "status": "ringing",
                     "caller_user_id": "user-a",
                     "callee_user_id": "user-b",
+                    "user_ids": ["user-a", "user-b", "user-c"],
                 },
             },
         )
@@ -220,12 +221,14 @@ class TestOrgChat:
         dm_call = publish_calls[0]
         assert dm_call[0][0].endswith("/topics/unity-org-11")
         org_frame = json.loads(dm_call[0][1].decode("utf-8"))
-        assert org_frame["thread"] == "dm_call_incoming"
+        assert org_frame["thread"] == "org_call_incoming"
         assert org_frame["event"]["call_id"] == "call-123"
-        assert dm_call[1]["thread"] == "dm_call_incoming"
+        assert org_frame["event"]["user_ids"] == ["user-a", "user-b", "user-c"]
+        assert dm_call[1]["thread"] == "org_call_incoming"
         assert dm_call[1]["dm_user_a"] == "user-a"
         assert dm_call[1]["dm_user_b"] == "user-b"
         assert dm_call[1]["call_id"] == "call-123"
+        assert dm_call[1]["user_ids"] == "user-a,user-b,user-c"
 
     def test_rejects_bad_payloads(self, client):
         assert (
@@ -264,7 +267,7 @@ class TestOrgChat:
             client.post(
                 "/unify/org-chat",
                 json={
-                    "kind": "dm_call",
+                    "kind": "org_call",
                     "organization_id": 1,
                     "call": {"call_id": "call-1", "room_name": "room-1"},
                 },

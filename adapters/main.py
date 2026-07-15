@@ -2312,7 +2312,7 @@ def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
 
 @app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
 async def unify_org_chat_webhook(request: Request):
-    """Deliver one org-chat message or DM call lifecycle event.
+    """Deliver one org-chat message or org-call lifecycle event.
 
     Orchestra has already persisted the message; this endpoint owns hosted
     delivery:
@@ -2325,10 +2325,9 @@ async def unify_org_chat_webhook(request: Request):
        assistant, like a large email CC chain. Assistant replies arrive with
        no ``fanout_assistant_ids`` — they are Console-publish only, which
        prevents AI reply loops.
-    3. For human DM call lifecycle events (``kind="dm_call"``), publish one
-       Console-only frame on ``dm_call_incoming`` / ``dm_call_answered`` /
-       ``dm_call_ended`` / ``dm_call_declined`` so the browser can drive the
-       ringing and teardown UI.
+    3. For org call lifecycle events (``kind="org_call"`` or legacy
+       ``kind="dm_call"``), publish one Console-only frame on
+       ``org_call_*`` so the browser can drive ringing and teardown UI.
     """
     payload = await request.json()
     kind = payload.get("kind")
@@ -2336,19 +2335,30 @@ async def unify_org_chat_webhook(request: Request):
     message = payload.get("message") or {}
     call = payload.get("call") or {}
 
-    if kind not in ("team", "dm", "dm_call"):
+    if kind not in ("team", "dm", "dm_call", "org_call"):
         return Response(
             status_code=400,
-            content="kind must be 'team', 'dm', or 'dm_call'",
+            content="kind must be 'team', 'dm', 'dm_call', or 'org_call'",
         )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
-    if kind == "dm_call":
+    if kind in ("dm_call", "org_call"):
         action = payload.get("action")
-        if action not in {"incoming", "answered", "ended", "declined"}:
+        allowed_actions = {
+            "incoming",
+            "answered",
+            "ended",
+            "declined",
+            "participant_joined",
+            "participant_left",
+        }
+        if action not in allowed_actions:
             return Response(
                 status_code=400,
-                content="dm_call action must be incoming, answered, ended, or declined",
+                content=(
+                    "org_call action must be incoming, answered, ended, "
+                    "declined, participant_joined, or participant_left"
+                ),
             )
         if not call:
             return Response(status_code=400, content="call is required")
@@ -2361,20 +2371,35 @@ async def unify_org_chat_webhook(request: Request):
             call.get("callee_user_id"),
         ]
         participants = [str(user_id) for user_id in user_ids if user_id]
-        if len(participants) != 2:
+        # Deduplicate while preserving order.
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for user_id in participants:
+            if user_id in seen:
+                continue
+            seen.add(user_id)
+            ordered.append(user_id)
+        participants = ordered
+        if len(participants) < 1:
             return Response(
                 status_code=400,
-                content="call user_ids must resolve to exactly two participants",
+                content="call user_ids must resolve to at least one participant",
             )
-        thread = f"dm_call_{action}"
+        call = {**call, "user_ids": participants}
+        thread = f"org_call_{action}"
         event = call
         attributes = {
             "thread": thread,
             "organization_id": str(organization_id),
-            "dm_user_a": participants[0],
-            "dm_user_b": participants[1],
             "call_id": str(call["call_id"]),
+            "user_ids": ",".join(participants),
         }
+        if len(participants) >= 1:
+            attributes["dm_user_a"] = participants[0]
+        if len(participants) >= 2:
+            attributes["dm_user_b"] = participants[1]
+        if call.get("team_id") is not None:
+            attributes["team_id"] = str(call["team_id"])
     else:
         if not message:
             return Response(status_code=400, content="message is required")
