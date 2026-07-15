@@ -210,6 +210,12 @@ self_host_provider_triggers_enabled() {
   esac
 }
 
+self_host_pipedream_connect_configured() {
+  [[ -n "${PIPEDREAM_CLIENT_ID:-}" \
+    && -n "${PIPEDREAM_CLIENT_SECRET:-}" \
+    && -n "${PIPEDREAM_PROJECT_ID:-}" ]]
+}
+
 self_host_load_state_env_overlay() {
   local state_env="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/.env"
   [[ -f "$state_env" ]] || return 0
@@ -233,10 +239,6 @@ self_host_validate_provider_trigger_config() {
       return 1
       ;;
   esac
-  if [[ -z "${COMPOSIO_WEBHOOK_SECRET:-}" ]]; then
-    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_WEBHOOK_SECRET" >&2
-    return 1
-  fi
   return 0
 }
 
@@ -247,6 +249,10 @@ self_host_export_provider_trigger_env() {
   mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
   [[ -n "${COMPOSIO_API_KEY:-}" ]] && export COMPOSIO_API_KEY
   [[ -n "${COMPOSIO_WEBHOOK_SECRET:-}" ]] && export COMPOSIO_WEBHOOK_SECRET
+  [[ -n "${PIPEDREAM_CLIENT_ID:-}" ]] && export PIPEDREAM_CLIENT_ID
+  [[ -n "${PIPEDREAM_CLIENT_SECRET:-}" ]] && export PIPEDREAM_CLIENT_SECRET
+  [[ -n "${PIPEDREAM_PROJECT_ID:-}" ]] && export PIPEDREAM_PROJECT_ID
+  [[ -n "${PIPEDREAM_ENVIRONMENT:-}" ]] && export PIPEDREAM_ENVIRONMENT
   [[ -n "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]] && export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL
   [[ -n "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]] && export TRIGGER_EVENT_WRAPPING_MASTER_KEY
 }
@@ -396,6 +402,10 @@ append_self_host_unity_runtime_env() {
     VOICE_ID \
     COMPOSIO_API_KEY \
     COMPOSIO_WEBHOOK_SECRET \
+    PIPEDREAM_CLIENT_ID \
+    PIPEDREAM_CLIENT_SECRET \
+    PIPEDREAM_PROJECT_ID \
+    PIPEDREAM_ENVIRONMENT \
     ORCHESTRA_TRIGGER_CALLBACK_BASE_URL \
     TRIGGER_EVENT_WRAPPING_MASTER_KEY \
     TRIGGER_EVENT_PRIVATE_ROOT; do
