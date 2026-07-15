@@ -361,8 +361,18 @@ def test_delete_assistant_runtime_cleanup_completes(
         print(f"[Cleanup] Assistant runtime released ✓")
 
         if has_session_crd:
+
+            def _session_deleted() -> bool:
+                if get_assistant_session(comms, agent_id) is None:
+                    return True
+                # First cleanup pass may have timed out waiting for VM release
+                # and deferred session delete. Redrive so we do not sit on the
+                # 5-minute retry backoff while the CR is already Released.
+                _redrive_cleanup_tasks(agent_id)
+                return get_assistant_session(comms, agent_id) is None
+
             poll(
-                lambda: get_assistant_session(comms, agent_id) is None,
+                _session_deleted,
                 timeout=CLEANUP_TIMEOUT_SECONDS,
                 interval=5,
                 description=f"AssistantSession for {agent_id} to be deleted",
