@@ -322,6 +322,62 @@ def test_unify_meet_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
+def test_unify_meet_webhook_org_call_participants(test_client):
+    """Org call meet wakes publish participants and omit shared-room agent_name."""
+    endpoint = "/unify/meet"
+    room_name = "unity_org_11_call_abc"
+    participants = [
+        {
+            "kind": "human",
+            "user_id": "user-1",
+            "assistant_id": None,
+            "display_name": "Ada Owner",
+            "contact_id": 2,
+            "email": "ada@example.com",
+        },
+        {
+            "kind": "assistant",
+            "user_id": None,
+            "assistant_id": 42,
+            "display_name": "Peer Bot",
+            "contact_id": 3,
+            "email": None,
+        },
+    ]
+    json_payload = {
+        "room_name": room_name,
+        "assistant_id": "default-test-assistant",
+        "call_session_id": "abc",
+        "participants": participants,
+    }
+
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = test_client.make_request(
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+
+    message = subscriber.pull(
+        subscription=subscription_path,
+        max_messages=1,
+    ).received_messages[0]
+    ack_id = message.ack_id
+    data = json.loads(message.message.data.decode("utf-8"))
+    try:
+        assert data["thread"] == "unify_meet"
+        event = data["event"]
+        assert event["livekit_room"] == room_name
+        assert event["call_session_id"] == "abc"
+        assert "livekit_agent_name" not in event
+        assert event["participants"] == participants
+    finally:
+        subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+
+
 def test_unity_system_event_webhook(test_client):
     """Test successful unity system event webhook processing."""
     endpoint = "/unity/system-event"

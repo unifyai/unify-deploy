@@ -2616,8 +2616,9 @@ async def unify_meet_webhook(request: Request):
         payload = dict(form_data)
 
     room_name = payload.get("room_name", "")
-    livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    livekit_agent_name = payload.get("livekit_agent_name", "") or ""
     call_session_id = str(payload.get("call_session_id") or "").strip()
+    raw_participants = payload.get("participants") or []
     if not room_name:
         logger.info("room_name is required")
         return Response(status_code=400)
@@ -2647,8 +2648,15 @@ async def unify_meet_webhook(request: Request):
             )
         opening_config = raw_opening_config
 
+    # Org multi-party rooms must not force agent_name = room_name (collides
+    # across assistants). Fall back to room only for classic 1:1 Meet.
+    if not livekit_agent_name and not call_session_id:
+        livekit_agent_name = room_name
+
     logger.info(
-        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} "
+        f"livekit_agent_name={livekit_agent_name or '(runtime worker)'} "
+        f"call_session_id={call_session_id or '-'} participants={len(raw_participants)}",
     )
 
     # shared context
@@ -2668,6 +2676,22 @@ async def unify_meet_webhook(request: Request):
         context["is_job_running"],
     )
 
+    participants: list[dict] = []
+    if isinstance(raw_participants, list):
+        for raw in raw_participants:
+            if not isinstance(raw, dict):
+                continue
+            participants.append(
+                {
+                    "kind": raw.get("kind") or "human",
+                    "user_id": raw.get("user_id"),
+                    "assistant_id": raw.get("assistant_id"),
+                    "display_name": raw.get("display_name") or "",
+                    "contact_id": raw.get("contact_id"),
+                    "email": raw.get("email"),
+                },
+            )
+
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -2677,11 +2701,14 @@ async def unify_meet_webhook(request: Request):
         "contacts": contacts,
         "assistant_id": assistant_id,
         "livekit_room": room_name,
-        "livekit_agent_name": livekit_agent_name,
         "timestamp": int(time.time() * 1000),
     }
+    if livekit_agent_name:
+        event_payload["livekit_agent_name"] = livekit_agent_name
     if call_session_id:
         event_payload["call_session_id"] = call_session_id
+    if participants:
+        event_payload["participants"] = participants
     if opening_config is not None:
         event_payload["opening_config"] = opening_config
     try:
