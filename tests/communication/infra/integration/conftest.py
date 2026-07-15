@@ -2332,6 +2332,15 @@ def _get_user_id_from_key() -> str:
     return ""
 
 
+def _min_credits_for_assistant_creation(desktop_mode: str | None) -> float:
+    """Estimate upfront credits for POST /assistant on staging."""
+
+    total = ASSISTANT_CREATION_COST
+    if desktop_mode in {"ubuntu", "windows"}:
+        total += MANAGED_DESKTOP_UPFRONT_COST
+    return total + 5
+
+
 def _ensure_credits(min_credits: float):
     """Top up credits if the current balance is below *min_credits*.
 
@@ -2391,6 +2400,7 @@ def _ensure_credits(min_credits: float):
 # ---------------------------------------------------------------------------
 
 ASSISTANT_CREATION_COST = 10.0
+MANAGED_DESKTOP_UPFRONT_COST = 50.0
 TEST_ASSISTANT_FACTORY_FIRST_NAME = "InfraTest"
 TEST_ASSISTANT_FACTORY_ABOUT = (
     "Stress test assistant (auto-created by integration tests)"
@@ -2547,7 +2557,7 @@ def _create_test_assistant(
     assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
-    _ensure_credits(ASSISTANT_CREATION_COST + 5)
+    _ensure_credits(_min_credits_for_assistant_creation(desktop_mode))
 
     payload = {
         "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
@@ -2567,6 +2577,14 @@ def _create_test_assistant(
         headers={"Authorization": f"Bearer {UNIFY_KEY}"},
         timeout=90,
     )
+    if create_resp.status_code == 402:
+        _ensure_credits(_min_credits_for_assistant_creation(desktop_mode) + 25)
+        create_resp = requests.post(
+            f"{ORCHESTRA_URL}/assistant",
+            json=payload,
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=90,
+        )
     assert create_resp.status_code == 200, (
         f"Failed to create test assistant {index}: "
         f"{create_resp.status_code} {create_resp.text}"
@@ -2730,7 +2748,7 @@ def test_assistants(k8s_clients):
         "(set TEST_CREATE_ASSISTANT_COUNT=0 to skip)"
     )
 
-    _ensure_credits(min_credits=count * (ASSISTANT_CREATION_COST + 5))
+    _ensure_credits(min_credits=count * _min_credits_for_assistant_creation("ubuntu"))
 
     batch_api = k8s_clients[0]
     stale_assistant_ids = _stale_factory_test_assistant_ids()
