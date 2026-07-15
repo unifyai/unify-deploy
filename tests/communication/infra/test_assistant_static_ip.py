@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -87,6 +88,89 @@ def test_release_assistant_static_ip_is_idempotent_and_checks_ownership():
         region=vm_helpers.SETTINGS.vm_region,
         address=vm_helpers.assistant_static_ip_name(assistant_id),
     )
+
+
+def _vm_with_external_ip(name: str, ip: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        network_interfaces=[
+            SimpleNamespace(
+                name="nic0",
+                access_configs=[
+                    SimpleNamespace(name="External NAT", nat_i_p=ip),
+                ],
+            ),
+        ],
+    )
+
+
+def test_attach_assistant_static_ip_replaces_pool_ip_and_updates_stable_dns():
+    vm_name = vm_helpers._pool_vm_name("ubuntu", 1)
+    client = MagicMock()
+    client.get.return_value = _vm_with_external_ip(
+        vm_name,
+        "34.0.0.1",
+    )
+    dns_upsert = MagicMock()
+
+    with (
+        patch.object(vm_helpers, "reserve_assistant_static_ip", return_value={
+            "address": "34.0.0.9",
+        }),
+        patch.object(
+            vm_helpers,
+            "_wait_for_pool_static_ip",
+            return_value="34.0.0.1",
+        ),
+        patch.object(vm_helpers.compute_v1, "InstancesClient", return_value=client),
+        patch.object(vm_helpers, "_upsert_dns_a_record", dns_upsert),
+    ):
+        result = vm_helpers.attach_assistant_static_ip_to_pool_vm(
+            vm_name,
+            "assistant-123",
+            "ubuntu",
+        )
+
+    client.delete_access_config.assert_called_once()
+    added = client.add_access_config.call_args.kwargs["access_config_resource"]
+    assert added.nat_i_p == "34.0.0.9"
+    assert result == {
+        "hostname": vm_helpers.get_dns_hostname("assistant-123"),
+        "ip_address": "34.0.0.9",
+    }
+    dns_upsert.assert_called_once_with(result["hostname"], "34.0.0.9")
+
+
+def test_restore_pool_static_ip_keeps_assistant_reservation():
+    vm_name = vm_helpers._pool_vm_name("ubuntu", 1)
+    client = MagicMock()
+    client.get.return_value = _vm_with_external_ip(
+        vm_name,
+        "34.0.0.9",
+    )
+
+    with (
+        patch.object(
+            vm_helpers,
+            "_wait_for_pool_static_ip",
+            return_value="34.0.0.1",
+        ),
+        patch.object(
+            vm_helpers,
+            "get_assistant_static_ip",
+            return_value={"address": "34.0.0.9"},
+        ),
+        patch.object(vm_helpers.compute_v1, "InstancesClient", return_value=client),
+    ):
+        vm_helpers.restore_pool_static_ip_on_vm(
+            vm_name,
+            "assistant-123",
+            "ubuntu",
+        )
+
+    client.delete_access_config.assert_called_once()
+    added = client.add_access_config.call_args.kwargs["access_config_resource"]
+    assert added.nat_i_p == "34.0.0.1"
 
 
 def test_assistant_static_ip_routes_reconcile_read_and_release():

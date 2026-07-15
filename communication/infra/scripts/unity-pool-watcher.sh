@@ -46,6 +46,18 @@ log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
 
+configure_caddy_hostname() {
+    local hostname=$1
+    local caddyfile=/etc/caddy/Caddyfile
+    [[ -n "$hostname" && -f "$caddyfile" ]] || return 0
+
+    # Pool images boot with their pool hostname. The binding's assistant
+    # hostname is stable across VM reassignment, so make Caddy accept it
+    # before the readiness callback asks Comms to probe it.
+    sed -i "1s|^[^{]*{|$hostname {|" "$caddyfile"
+    caddy reload --config "$caddyfile" 2>/dev/null || true
+}
+
 ensure_release_state_dir() {
     mkdir -p "$RELEASE_STATE_DIR"
     chmod 700 "$RELEASE_STATE_DIR" 2>/dev/null || true
@@ -572,6 +584,7 @@ do_assign() {
     hostname=$(get_metadata "hostname")
     orchestra_url=$(get_metadata "orchestra-url")
     comms_url=$(get_metadata "comms-url")
+    configure_caddy_hostname "$hostname"
 
     # Mount persistent disk
     if [[ -n "$disk_device" ]]; then
