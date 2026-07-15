@@ -2319,12 +2319,12 @@ async def unify_org_chat_webhook(request: Request):
 
     1. Publish the Console frame to the per-organization topic
        (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
-    2. For human-sent team messages, publish one standard ``unify_message``
-       envelope per listed assistant (ensuring each runtime job is started) —
-       team chat is ordinary unify_message traffic fanned out to every team
-       assistant, like a large email CC chain. Assistant replies arrive with
-       no ``fanout_assistant_ids`` — they are Console-publish only, which
-       prevents AI reply loops.
+    2. For human-sent team/group messages, publish one standard
+       ``unify_message`` envelope per listed assistant (ensuring each runtime
+       job is started) — team/group chat is ordinary unify_message traffic
+       fanned out to every listed assistant, like a large email CC chain.
+       Assistant replies arrive with no ``fanout_assistant_ids`` — they are
+       Console-publish only, which prevents AI reply loops.
     3. For org call lifecycle events (``kind="org_call"`` or legacy
        ``kind="dm_call"``), publish one Console-only frame on
        ``org_call_*`` so the browser can drive ringing and teardown UI.
@@ -2335,10 +2335,10 @@ async def unify_org_chat_webhook(request: Request):
     message = payload.get("message") or {}
     call = payload.get("call") or {}
 
-    if kind not in ("team", "dm", "dm_call", "org_call"):
+    if kind not in ("team", "dm", "dm_call", "org_call", "group"):
         return Response(
             status_code=400,
-            content="kind must be 'team', 'dm', 'dm_call', or 'org_call'",
+            content="kind must be 'team', 'dm', 'dm_call', 'org_call', or 'group'",
         )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
@@ -2400,10 +2400,17 @@ async def unify_org_chat_webhook(request: Request):
             attributes["dm_user_b"] = participants[1]
         if call.get("team_id") is not None:
             attributes["team_id"] = str(call["team_id"])
+        if call.get("group_id") is not None:
+            attributes["group_id"] = str(call["group_id"])
     else:
         if not message:
             return Response(status_code=400, content="message is required")
-        thread = "team_message" if kind == "team" else "dm_message"
+        if kind == "team":
+            thread = "team_message"
+        elif kind == "group":
+            thread = "group_message"
+        else:
+            thread = "dm_message"
         event = message
         attributes = {"thread": thread, "organization_id": str(organization_id)}
         if kind == "team":
@@ -2411,6 +2418,11 @@ async def unify_org_chat_webhook(request: Request):
             if not team_id:
                 return Response(status_code=400, content="team_id is required")
             attributes["team_id"] = str(team_id)
+        elif kind == "group":
+            group_id = payload.get("group_id") or message.get("group_id")
+            if not group_id:
+                return Response(status_code=400, content="group_id is required")
+            attributes["group_id"] = str(group_id)
         else:
             user_ids = message.get("user_ids") or []
             if len(user_ids) != 2:
@@ -2443,14 +2455,19 @@ async def unify_org_chat_webhook(request: Request):
         logger.error(f"Error publishing {thread} to org topic: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    # Team chat fan-out rides the standard unify_message thread — every team
-    # assistant receives a copy, like a large email CC chain. When the sender
-    # is this assistant's owner we can resolve contact_id here; otherwise the
-    # runtime resolves the sender by email against its Contacts table.
+    # Team/group chat fan-out rides the standard unify_message thread — every
+    # listed assistant receives a copy, like a large email CC chain. When the
+    # sender is this assistant's owner we can resolve contact_id here;
+    # otherwise the runtime resolves the sender by email against its Contacts
+    # table. assistant_event may include team_id/team_name or
+    # group_id/group_name depending on kind.
+    fanout_kinds = ("team", "group")
     fanout_assistant_ids = (
-        (payload.get("fanout_assistant_ids") or []) if kind == "team" else []
+        (payload.get("fanout_assistant_ids") or []) if kind in fanout_kinds else []
     )
-    assistant_event = (payload.get("assistant_event") or {}) if kind == "team" else {}
+    assistant_event = (
+        (payload.get("assistant_event") or {}) if kind in fanout_kinds else {}
+    )
     fanout_errors: list[str] = []
     for raw_assistant_id in fanout_assistant_ids:
         try:
@@ -2492,7 +2509,7 @@ async def unify_org_chat_webhook(request: Request):
             )
         except Exception as e:
             logger.error(
-                f"Error fanning out team chat message to assistant "
+                f"Error fanning out org chat message to assistant "
                 f"{raw_assistant_id}: {e}",
             )
             fanout_errors.append(str(raw_assistant_id))
