@@ -683,7 +683,7 @@ def main():
     args = parser.parse_args()
 
     admin_key = _env("ORCHESTRA_ADMIN_KEY")
-    shared_key = _env("SHARED_UNIFY_KEY")
+    shared_key = _env("ORCHESTRA_ADMIN_KEY")
 
     out, display_name = _resolve_output_dir(args, admin_key)
     mode = (

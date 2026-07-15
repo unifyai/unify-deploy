@@ -38,7 +38,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
    Required keys:
    - `UNIFY_KEY` -- your personal API key (from console.unify.ai or your unity `.env`)
    - `ORCHESTRA_ADMIN_KEY` -- admin key for the Comms App (shared team key)
-   - `SHARED_UNIFY_KEY` -- shared key for AssistantJobs project (shared team key)
+   - `ORCHESTRA_ADMIN_KEY` -- admin key for AssistantJobs system project
 
    Optional:
    - `TEST_ASSISTANT_ID` -- staging assistant ID to use. If not set, the first assistant found for your user is used automatically.

@@ -59,7 +59,6 @@ build_cm_env() {
 
   export ASSISTANT_ID="$agent_id"
   export UNIFY_KEY="$unify_key"
-  export SHARED_UNIFY_KEY="$unify_key"
   export SELF_HOST=1
   export DEPLOY_ENV="${DEPLOY_ENV:-staging}"
   export ASSISTANT_IS_COORDINATOR=True

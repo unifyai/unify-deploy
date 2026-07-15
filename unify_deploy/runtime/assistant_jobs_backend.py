@@ -8,12 +8,15 @@ which is shared with the job-watcher operator.
 ``log_job_startup`` creates the AssistantJobs audit record with all
 assistant/user info from ``SESSION_DETAILS`` plus the container-specific
 ``job_name``.  ``update_liveview_url`` may later add the desktop URL.
+Both write through ownership-scoped ``/infra/assistant-jobs/*`` using the
+assistant's own ``UNIFY_KEY`` — pods never hold a shared or admin key.
 The job-watcher operator handles crash-safe VM release independently.
 """
 
 from dotenv import load_dotenv
 
 load_dotenv()
+import os
 import threading
 import time
 import traceback
@@ -22,10 +25,9 @@ from datetime import datetime, timezone
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from unify_deploy.runtime.assistant_jobs_api import (
-    create_assistant_log,
-    ensure_project_exists,
-    get_assistant_logs,
     patch_job_label,
+    patch_liveview_via_infra,
+    post_startup_via_infra,
     release_pool_vm,
     stop_assistant_session,
 )
@@ -35,9 +37,6 @@ from unify.conversation_manager.metrics import (
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
-# Track whether AssistantJobs project has been verified/created
-_project_verified = False
-
 # Session start time (perf_counter), set by log_job_startup, read by mark_job_done
 _session_start_perf: float | None = None
 
@@ -46,17 +45,12 @@ _session_start_perf: float | None = None
 _log_created = threading.Event()
 
 
-def _ensure_project_exists(api_key: str) -> None:
-    """Lazily ensure the AssistantJobs project exists."""
-    global _project_verified
-    if _project_verified or not api_key:
-        return
-    try:
-        ensure_project_exists(api_key)
-        _project_verified = True
-    except Exception as e:
-        LOGGER.error(
-            f"{ICONS['assistant_jobs']} [assistant_jobs] Could not verify/create AssistantJobs project: {e}",
+def _warn_legacy_shared_key() -> None:
+    """Warn if a stale deploy still mounts SHARED_UNIFY_KEY on the pod."""
+    if os.environ.get("SHARED_UNIFY_KEY"):
+        LOGGER.warning(
+            f"{ICONS['assistant_jobs']} [assistant_jobs] SHARED_UNIFY_KEY is set but ignored; "
+            f"AssistantJobs writes use /infra/assistant-jobs/* with UNIFY_KEY.",
         )
 
 
@@ -120,21 +114,25 @@ def log_job_startup(
     the container-specific ``job_name``.  ``update_liveview_url`` may
     later add the desktop URL.
     """
-    api_key = SESSION_DETAILS.shared_unify_key or None
-    if not api_key:
-        LOGGER.debug(
-            f"{ICONS['assistant_jobs']} [assistant_jobs] Skipping log_job_startup: no shared API key available",
-        )
-        return
+    _warn_legacy_shared_key()
 
-    _ensure_project_exists(api_key)
+    comms_url = SETTINGS.conversation.COMMS_URL.rstrip("/")
+    unify_key = SESSION_DETAILS.unify_key
+    if not comms_url or not unify_key:
+        LOGGER.debug(
+            f"{ICONS['assistant_jobs']} [assistant_jobs] Skipping log_job_startup: "
+            f"COMMS_URL or UNIFY_KEY not configured",
+        )
+        _log_created.set()
+        return
 
     try:
         sd = SESSION_DETAILS
-        create_assistant_log(
-            api_key,
-            user_id=user_id,
+        ok = post_startup_via_infra(
+            comms_url,
+            unify_key,
             assistant_id=str(assistant_id),
+            user_id=user_id,
             job_name=job_name,
             timestamp=datetime.now(tz=timezone.utc).isoformat(),
             medium=medium,
@@ -145,13 +143,18 @@ def log_job_startup(
             user_email=sd.user.email,
             assistant_email=sd.assistant.email,
         )
-        LOGGER.debug(
-            f"{ICONS['assistant_jobs']} [assistant_jobs] Created audit record: "
-            f"job_name={job_name}, assistant_id={assistant_id}",
-        )
-
-        global _session_start_perf
-        _session_start_perf = time.perf_counter()
+        if ok:
+            LOGGER.debug(
+                f"{ICONS['assistant_jobs']} [assistant_jobs] Created audit record: "
+                f"job_name={job_name}, assistant_id={assistant_id}",
+            )
+            global _session_start_perf
+            _session_start_perf = time.perf_counter()
+        else:
+            LOGGER.error(
+                f"{ICONS['assistant_jobs']} [assistant_jobs] Failed creating job record "
+                f"via infra for assistant_id={assistant_id}",
+            )
     except Exception as e:
         LOGGER.error(
             f"{ICONS['assistant_jobs']} [assistant_jobs] Error creating job record: {e}",
@@ -168,15 +171,13 @@ def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> N
     confirmed ready.  Finds the record by ``assistant_id`` + ``job_name``
     (unique to this container session).
     """
-    api_key = SESSION_DETAILS.shared_unify_key or None
-    if not api_key:
-        return
+    _warn_legacy_shared_key()
 
+    comms_url = SETTINGS.conversation.COMMS_URL.rstrip("/")
+    unify_key = SESSION_DETAILS.unify_key
     job_name = SETTINGS.conversation.JOB_NAME
-    if not job_name:
+    if not comms_url or not unify_key or not job_name:
         return
-
-    _ensure_project_exists(api_key)
 
     if not _log_created.wait(timeout=60):
         LOGGER.warning(
@@ -186,18 +187,20 @@ def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> N
         return
 
     try:
-        existing_logs = get_assistant_logs(
-            api_key,
-            f"assistant_id == '{assistant_id}' and " f"job_name == '{job_name}'",
+        ok = patch_liveview_via_infra(
+            comms_url,
+            unify_key,
+            assistant_id=str(assistant_id),
+            job_name=job_name,
+            liveview_url=liveview_url,
         )
-        if existing_logs:
-            existing_logs[0].update_entries(liveview_url=liveview_url)
+        if ok:
             LOGGER.debug(
                 f"{ICONS['assistant_jobs']} [assistant_jobs] Updated record with liveview_url={liveview_url}",
             )
         else:
             LOGGER.warning(
-                f"{ICONS['assistant_jobs']} [assistant_jobs] No audit record found for "
+                f"{ICONS['assistant_jobs']} [assistant_jobs] No audit record updated for "
                 f"assistant_id={assistant_id}, job_name={job_name}; liveview_url not persisted",
             )
     except Exception as e:

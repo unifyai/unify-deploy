@@ -46,6 +46,18 @@ log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
 
+configure_caddy_hostname() {
+    local hostname=$1
+    local caddyfile=/etc/caddy/Caddyfile
+    [[ -n "$hostname" && -f "$caddyfile" ]] || return 0
+
+    # Pool images boot with their pool hostname. The binding's assistant
+    # hostname is stable across VM reassignment, so make Caddy accept it
+    # before the readiness callback asks Comms to probe it.
+    sed -i "1s|^[^{]*{|$hostname {|" "$caddyfile"
+    caddy reload --config "$caddyfile" 2>/dev/null || true
+}
+
 ensure_release_state_dir() {
     mkdir -p "$RELEASE_STATE_DIR"
     chmod 700 "$RELEASE_STATE_DIR" 2>/dev/null || true
@@ -514,15 +526,18 @@ ensure_unity_workspace_access() {
     # /Unity/Local. Both the parent and mountpoint must be traversable by that
     # user; ownership on the mounted filesystem alone is insufficient when the
     # pool image or a prior assignment left /Unity root-owned/restricted.
-    install -d -o unityuser -g unityuser -m 0755 /Unity /Unity/Local
-    chown unityuser:unityuser /Unity /Unity/Local
-    chmod 0755 /Unity /Unity/Local
+    install -d -o unityuser -g unityuser -m 0755 \
+        /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
+    chown unityuser:unityuser /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
+    chmod 0755 /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
 
-    if ! runuser -u unityuser -- test -rwx /Unity/Local; then
-        log "ERROR: unityuser cannot access /Unity/Local after permission repair"
+    if ! runuser -u unityuser -- sh -c \
+        'for path; do test -r "$path" && test -w "$path" && test -x "$path" || exit 1; done' \
+        sh /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache; then
+        log "ERROR: unityuser cannot access desktop workspace paths after permission repair"
         return 1
     fi
-    log "Verified unityuser workspace access at /Unity/Local"
+    log "Verified unityuser access to desktop workspace paths"
 }
 
 do_assign() {
@@ -569,6 +584,7 @@ do_assign() {
     hostname=$(get_metadata "hostname")
     orchestra_url=$(get_metadata "orchestra-url")
     comms_url=$(get_metadata "comms-url")
+    configure_caddy_hostname "$hostname"
 
     # Mount persistent disk
     if [[ -n "$disk_device" ]]; then
@@ -616,9 +632,9 @@ do_assign() {
         fi
     fi
 
-    # A restored archive may carry root-owned paths, and /Unity itself can be
-    # reset by a pool image update. Validate the exact account that will run
-    # agent-service before starting it.
+    # A restored archive may carry root-owned paths, and mounting the persistent
+    # disk may replace Local's ownership. Validate before restoring the desktop
+    # profile so its files are written into a usable home directory.
     ensure_unity_workspace_access || return 1
 
     # Restore browser/GUI profile into home (always when companion blob exists).
@@ -630,6 +646,12 @@ do_assign() {
             restore_desktop_profile "$assistant_id" "$profile_bucket"
         fi
     fi
+
+    # The profile archive is built from a root-owned mktemp directory and
+    # contains its top-level `./` entry. GNU tar applies that directory mode to
+    # its extraction target, which can silently reset /Unity to root:0700.
+    # Repair it again before the unprivileged agent starts.
+    ensure_unity_workspace_access || return 1
 
     # SSH authorized_keys
     if [[ -n "$ssh_public_key" ]]; then

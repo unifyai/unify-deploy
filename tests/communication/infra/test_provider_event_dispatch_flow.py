@@ -200,6 +200,33 @@ def test_concurrent_provider_event_dispatch_requests_create_one_job(
     assert len(adopted) == 3
 
 
+def test_build_offline_runner_env_includes_provider_event_dispatch_identity():
+    from communication.infra.provider_event_dispatch import ProviderEventDispatchRequest
+
+    offline_request = task_activation._offline_dispatch_request_from_provider_event(
+        ProviderEventDispatchRequest.model_validate(_dispatch_payload()),
+        activation=_activation(),
+    )
+    env = task_activation._build_offline_runner_env(
+        request=offline_request,
+        activation=_activation(),
+        assistant_data=_assistant_data(),
+        run_key=_dispatch_payload()["run_key"],
+        job_name="unity-task-run-test",
+        provider_event_dispatch=ProviderEventDispatchRequest.model_validate(
+            _dispatch_payload(),
+        ),
+    )
+    assert env["UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"] == "op-flow-1"
+    assert env["UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID"] == "4242"
+    assert env["UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"] == "binding-1"
+    assert env["UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"] == "receipt-1"
+    assert (
+        env["UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"] == "blob://binding-1/receipt-1"
+    )
+    assert env["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "provider_event"
+
+
 @pytest.mark.parametrize(
     ("override", "expected_status", "expected_reason"),
     [

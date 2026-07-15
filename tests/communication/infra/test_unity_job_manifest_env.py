@@ -78,13 +78,10 @@ def test_orchestra_admin_key_not_mounted_on_assistant_pods() -> None:
     assert "ORCHESTRA_ADMIN_KEY" not in _env_names(manifest)
 
 
-def test_shared_unify_key_still_sourced_from_unity_secrets() -> None:
+def test_shared_unify_key_not_mounted_on_assistant_pods() -> None:
+    """Fleet audit auth is system-project + admin key on comms, not a pod env key."""
     manifest = build_unity_job_manifest(job_name="shared-key-staging")
-    entry = _env_by_name(manifest)["SHARED_UNIFY_KEY"]
-    assert entry["valueFrom"]["secretKeyRef"] == {
-        "name": "unity-secrets",
-        "key": "SHARED_UNIFY_KEY",
-    }
+    assert "SHARED_UNIFY_KEY" not in _env_names(manifest)
 
 
 def test_gcp_project_id_sourced_from_unity_config() -> None:

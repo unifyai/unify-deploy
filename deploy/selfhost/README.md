@@ -358,7 +358,7 @@ Caveats:
 
 ## Provider-event triggers (opt-in)
 
-Third-party provider triggers (for example Composio GitHub issue-created) are
+Third-party provider triggers (Composio or Pipedream `github.issue_created`) are
 disabled by default. Enable them only when you can expose a **public HTTPS**
 callback to Orchestra and run the dedicated trigger worker.
 
@@ -370,9 +370,27 @@ In `~/.unity/.env`:
 SELF_HOST_PROVIDER_TRIGGERS_ENABLED=true
 ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://triggers.example.com
 TRIGGER_EVENT_WRAPPING_MASTER_KEY=<long-random-secret>
+```
+
+Configure credentials for the backends you use:
+
+```bash
+# Composio triggers (live provision + project webhook signing)
 COMPOSIO_API_KEY=<composio-api-key>
 COMPOSIO_WEBHOOK_SECRET=<composio-project-webhook-secret>
+
+# Pipedream triggers (live Connect provision; signing keys are per-trigger)
+PIPEDREAM_CLIENT_ID=<pipedream-client-id>
+PIPEDREAM_CLIENT_SECRET=<pipedream-client-secret>
+PIPEDREAM_PROJECT_ID=<pipedream-project-id>
+PIPEDREAM_ENVIRONMENT=development
 ```
+
+Pipedream-only self-host can omit `COMPOSIO_*` and use the local stub when
+Connect credentials are unset. Composio-only stacks still need
+`COMPOSIO_WEBHOOK_SECRET` for ingress verification. With provider triggers
+enabled, the Pipedream integration backend is enabled automatically for
+connection flows even without live Connect credentials.
 
 Then restart the stack:
 
@@ -405,8 +423,12 @@ the former when both exist):
 SELF_HOST_PROVIDER_TRIGGERS_ENABLED=true
 ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://triggers.example.com
 TRIGGER_EVENT_WRAPPING_MASTER_KEY=<long-random-secret>
+# Optional per backend — see Docker Compose section above
 COMPOSIO_API_KEY=<composio-api-key>
 COMPOSIO_WEBHOOK_SECRET=<composio-project-webhook-secret>
+PIPEDREAM_CLIENT_ID=<pipedream-client-id>
+PIPEDREAM_CLIENT_SECRET=<pipedream-client-secret>
+PIPEDREAM_PROJECT_ID=<pipedream-project-id>
 ```
 
 Then start or restart the source stack:

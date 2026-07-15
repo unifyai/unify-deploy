@@ -130,7 +130,6 @@ class Settings:
 
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
-        self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 
         # Slack Events API signing secret. App-level (one value shared across
         # all workspace installs of the Slack app), set in the Slack-app

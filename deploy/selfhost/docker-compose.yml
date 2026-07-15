@@ -74,6 +74,7 @@ services:
       PIPEDREAM_CLIENT_SECRET: ${PIPEDREAM_CLIENT_SECRET:-}
       PIPEDREAM_PROJECT_ID: ${PIPEDREAM_PROJECT_ID:-}
       PIPEDREAM_ENVIRONMENT: ${PIPEDREAM_ENVIRONMENT:-development}
+      SELF_HOST_PROVIDER_TRIGGERS_ENABLED: ${SELF_HOST_PROVIDER_TRIGGERS_ENABLED:-0}
     depends_on:
       orchestra-migrate:
         condition: service_completed_successfully
@@ -97,6 +98,7 @@ services:
       PIPEDREAM_CLIENT_SECRET: ${PIPEDREAM_CLIENT_SECRET:-}
       PIPEDREAM_PROJECT_ID: ${PIPEDREAM_PROJECT_ID:-}
       PIPEDREAM_ENVIRONMENT: ${PIPEDREAM_ENVIRONMENT:-development}
+      SELF_HOST_PROVIDER_TRIGGERS_ENABLED: ${SELF_HOST_PROVIDER_TRIGGERS_ENABLED:-0}
     volumes:
     - runtime:/runtime
     depends_on:
@@ -112,10 +114,11 @@ services:
   volumes-init:
     <<: *orchestra_image
     user: "0"
-    command: ["chmod", "0777", "/data/local-bucket", "/data/runtime"]
+    command: ["chmod", "0777", "/data/local-bucket", "/data/runtime", "/data/provider-event-blobs"]
     volumes:
     - local-bucket:/data/local-bucket
     - runtime:/data/runtime
+    - provider-event-blobs:/data/provider-event-blobs
     restart: "no"
 
   orchestra:
@@ -569,6 +572,10 @@ services:
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
       COMPOSIO_WEBHOOK_SECRET: ${COMPOSIO_WEBHOOK_SECRET:-}
+      PIPEDREAM_CLIENT_ID: ${PIPEDREAM_CLIENT_ID:-}
+      PIPEDREAM_CLIENT_SECRET: ${PIPEDREAM_CLIENT_SECRET:-}
+      PIPEDREAM_PROJECT_ID: ${PIPEDREAM_PROJECT_ID:-}
+      PIPEDREAM_ENVIRONMENT: ${PIPEDREAM_ENVIRONMENT:-development}
       SELF_HOST: "1"
       TRIGGER_EVENT_PRIVATE_ROOT: /data/provider-event-blobs
       TRIGGER_EVENT_WRAPPING_MASTER_KEY: ${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}

@@ -2312,45 +2312,126 @@ def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
 
 @app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
 async def unify_org_chat_webhook(request: Request):
-    """Deliver one org-chat message (team group chat or human DM).
+    """Deliver one org-chat message or org-call lifecycle event.
 
     Orchestra has already persisted the message; this endpoint owns hosted
     delivery:
 
     1. Publish the Console frame to the per-organization topic
        (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
-    2. For human-sent team messages, publish one standard ``unify_message``
-       envelope per listed assistant (ensuring each runtime job is started) —
-       team chat is ordinary unify_message traffic fanned out to every team
-       assistant, like a large email CC chain. Assistant replies arrive with
-       no ``fanout_assistant_ids`` — they are Console-publish only, which
-       prevents AI reply loops.
+    2. For human-sent team/group messages, publish one standard
+       ``unify_message`` envelope per listed assistant (ensuring each runtime
+       job is started) — team/group chat is ordinary unify_message traffic
+       fanned out to every listed assistant, like a large email CC chain.
+       Assistant replies arrive with no ``fanout_assistant_ids`` — they are
+       Console-publish only, which prevents AI reply loops.
+    3. For org call lifecycle events (``kind="org_call"`` or legacy
+       ``kind="dm_call"``), publish one Console-only frame on
+       ``org_call_*`` so the browser can drive ringing and teardown UI.
     """
     payload = await request.json()
     kind = payload.get("kind")
     organization_id = payload.get("organization_id")
     message = payload.get("message") or {}
+    call = payload.get("call") or {}
 
-    if kind not in ("team", "dm"):
-        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if kind not in ("team", "dm", "dm_call", "org_call", "group"):
+        return Response(
+            status_code=400,
+            content="kind must be 'team', 'dm', 'dm_call', 'org_call', or 'group'",
+        )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
-    if not message:
-        return Response(status_code=400, content="message is required")
-
-    thread = "team_message" if kind == "team" else "dm_message"
-    attributes = {"thread": thread, "organization_id": str(organization_id)}
-    if kind == "team":
-        team_id = payload.get("team_id") or message.get("team_id")
-        if not team_id:
-            return Response(status_code=400, content="team_id is required")
-        attributes["team_id"] = str(team_id)
+    if kind in ("dm_call", "org_call"):
+        action = payload.get("action")
+        allowed_actions = {
+            "incoming",
+            "answered",
+            "ended",
+            "declined",
+            "participant_joined",
+            "participant_left",
+        }
+        if action not in allowed_actions:
+            return Response(
+                status_code=400,
+                content=(
+                    "org_call action must be incoming, answered, ended, "
+                    "declined, participant_joined, or participant_left"
+                ),
+            )
+        if not call:
+            return Response(status_code=400, content="call is required")
+        if not call.get("call_id"):
+            return Response(status_code=400, content="call.call_id is required")
+        if not call.get("room_name"):
+            return Response(status_code=400, content="call.room_name is required")
+        user_ids = call.get("user_ids") or [
+            call.get("caller_user_id"),
+            call.get("callee_user_id"),
+        ]
+        participants = [str(user_id) for user_id in user_ids if user_id]
+        # Deduplicate while preserving order.
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for user_id in participants:
+            if user_id in seen:
+                continue
+            seen.add(user_id)
+            ordered.append(user_id)
+        participants = ordered
+        if len(participants) < 1:
+            return Response(
+                status_code=400,
+                content="call user_ids must resolve to at least one participant",
+            )
+        call = {**call, "user_ids": participants}
+        thread = f"org_call_{action}"
+        event = call
+        attributes = {
+            "thread": thread,
+            "organization_id": str(organization_id),
+            "call_id": str(call["call_id"]),
+            "user_ids": ",".join(participants),
+        }
+        if len(participants) >= 1:
+            attributes["dm_user_a"] = participants[0]
+        if len(participants) >= 2:
+            attributes["dm_user_b"] = participants[1]
+        if call.get("team_id") is not None:
+            attributes["team_id"] = str(call["team_id"])
+        if call.get("group_id") is not None:
+            attributes["group_id"] = str(call["group_id"])
     else:
-        user_ids = message.get("user_ids") or []
-        if len(user_ids) != 2:
-            return Response(status_code=400, content="message.user_ids must be a pair")
-        attributes["dm_user_a"] = str(user_ids[0])
-        attributes["dm_user_b"] = str(user_ids[1])
+        if not message:
+            return Response(status_code=400, content="message is required")
+        if kind == "team":
+            thread = "team_message"
+        elif kind == "group":
+            thread = "group_message"
+        else:
+            thread = "dm_message"
+        event = message
+        attributes = {"thread": thread, "organization_id": str(organization_id)}
+        if kind == "team":
+            team_id = payload.get("team_id") or message.get("team_id")
+            if not team_id:
+                return Response(status_code=400, content="team_id is required")
+            attributes["team_id"] = str(team_id)
+        elif kind == "group":
+            group_id = payload.get("group_id") or message.get("group_id")
+            if not group_id:
+                return Response(status_code=400, content="group_id is required")
+            attributes["group_id"] = str(group_id)
+        else:
+            user_ids = message.get("user_ids") or []
+            if len(user_ids) != 2:
+                return Response(
+                    status_code=400,
+                    content="message.user_ids must be a pair",
+                )
+            attributes["dm_user_a"] = str(user_ids[0])
+            attributes["dm_user_b"] = str(user_ids[1])
 
     pubsub_client = get_pubsub_client()
     org_topic_path = pubsub_client.topic_path(
@@ -2365,7 +2446,7 @@ async def unify_org_chat_webhook(request: Request):
                 {
                     "thread": thread,
                     "publish_timestamp": time.time(),
-                    "event": message,
+                    "event": event,
                 },
             ).encode("utf-8"),
             **attributes,
@@ -2374,12 +2455,19 @@ async def unify_org_chat_webhook(request: Request):
         logger.error(f"Error publishing {thread} to org topic: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    # Team chat fan-out rides the standard unify_message thread — every team
-    # assistant receives a copy, like a large email CC chain. When the sender
-    # is this assistant's owner we can resolve contact_id here; otherwise the
-    # runtime resolves the sender by email against its Contacts table.
-    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
-    assistant_event = payload.get("assistant_event") or {}
+    # Team/group chat fan-out rides the standard unify_message thread — every
+    # listed assistant receives a copy, like a large email CC chain. When the
+    # sender is this assistant's owner we can resolve contact_id here;
+    # otherwise the runtime resolves the sender by email against its Contacts
+    # table. assistant_event may include team_id/team_name or
+    # group_id/group_name depending on kind.
+    fanout_kinds = ("team", "group")
+    fanout_assistant_ids = (
+        (payload.get("fanout_assistant_ids") or []) if kind in fanout_kinds else []
+    )
+    assistant_event = (
+        (payload.get("assistant_event") or {}) if kind in fanout_kinds else {}
+    )
     fanout_errors: list[str] = []
     for raw_assistant_id in fanout_assistant_ids:
         try:
@@ -2421,7 +2509,7 @@ async def unify_org_chat_webhook(request: Request):
             )
         except Exception as e:
             logger.error(
-                f"Error fanning out team chat message to assistant "
+                f"Error fanning out org chat message to assistant "
                 f"{raw_assistant_id}: {e}",
             )
             fanout_errors.append(str(raw_assistant_id))
@@ -2545,8 +2633,9 @@ async def unify_meet_webhook(request: Request):
         payload = dict(form_data)
 
     room_name = payload.get("room_name", "")
-    livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    livekit_agent_name = payload.get("livekit_agent_name", "") or ""
     call_session_id = str(payload.get("call_session_id") or "").strip()
+    raw_participants = payload.get("participants") or []
     if not room_name:
         logger.info("room_name is required")
         return Response(status_code=400)
@@ -2576,8 +2665,15 @@ async def unify_meet_webhook(request: Request):
             )
         opening_config = raw_opening_config
 
+    # Org multi-party rooms must not force agent_name = room_name (collides
+    # across assistants). Fall back to room only for classic 1:1 Meet.
+    if not livekit_agent_name and not call_session_id:
+        livekit_agent_name = room_name
+
     logger.info(
-        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} "
+        f"livekit_agent_name={livekit_agent_name or '(runtime worker)'} "
+        f"call_session_id={call_session_id or '-'} participants={len(raw_participants)}",
     )
 
     # shared context
@@ -2597,6 +2693,22 @@ async def unify_meet_webhook(request: Request):
         context["is_job_running"],
     )
 
+    participants: list[dict] = []
+    if isinstance(raw_participants, list):
+        for raw in raw_participants:
+            if not isinstance(raw, dict):
+                continue
+            participants.append(
+                {
+                    "kind": raw.get("kind") or "human",
+                    "user_id": raw.get("user_id"),
+                    "assistant_id": raw.get("assistant_id"),
+                    "display_name": raw.get("display_name") or "",
+                    "contact_id": raw.get("contact_id"),
+                    "email": raw.get("email"),
+                },
+            )
+
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -2606,11 +2718,14 @@ async def unify_meet_webhook(request: Request):
         "contacts": contacts,
         "assistant_id": assistant_id,
         "livekit_room": room_name,
-        "livekit_agent_name": livekit_agent_name,
         "timestamp": int(time.time() * 1000),
     }
+    if livekit_agent_name:
+        event_payload["livekit_agent_name"] = livekit_agent_name
     if call_session_id:
         event_payload["call_session_id"] = call_session_id
+    if participants:
+        event_payload["participants"] = participants
     if opening_config is not None:
         event_payload["opening_config"] = opening_config
     try:

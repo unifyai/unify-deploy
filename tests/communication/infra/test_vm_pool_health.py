@@ -548,6 +548,40 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     assert release_calls == [True]
 
 
+def test_recycle_pool_vm_restores_assistant_ip_before_deleting(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-staging",
+        labels={
+            "vm-type": "ubuntu",
+            "assistant-id": "assistant-123",
+        },
+    )
+    actions = []
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "restore_pool_static_ip_on_vm",
+        lambda vm_name, assistant_id, vm_type: actions.append(
+            ("restore", vm_name, assistant_id, vm_type),
+        ),
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_vm_instance",
+        lambda _client, vm_name, **_kwargs: actions.append(("delete", vm_name)),
+    )
+
+    vm_helpers_module._recycle_pool_vm_instance(
+        MagicMock(),
+        vm,
+        reason="test",
+    )
+
+    assert actions == [
+        ("restore", "unity-pool-ubuntu-3-staging", "assistant-123", "ubuntu"),
+        ("delete", "unity-pool-ubuntu-3-staging"),
+    ]
+
+
 def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
     vm = SimpleNamespace(
         name="unity-pool-ubuntu-3-staging",
@@ -722,6 +756,10 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
         lambda vm_name: (True, "unity-disk-assistant-123"),
     )
     monkeypatch.setattr(
+        "communication.infra.vm_helpers.restore_pool_static_ip_on_vm",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
         lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
@@ -745,6 +783,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
                 "vnc-password": "",
                 "ssh-public-key": "",
                 vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "",
+                "hostname": "unity-pool-ubuntu-3-staging.vm.unify.ai",
             },
         ),
     ]
@@ -848,6 +887,13 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     )
     monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
     monkeypatch.setattr(
+        "communication.infra.vm_helpers.attach_assistant_static_ip_to_pool_vm",
+        lambda *_args, **_kwargs: {
+            "hostname": "unity-assistant-assistant-123-staging.vm.unify.ai",
+            "ip_address": "34.0.0.123",
+        },
+    )
+    monkeypatch.setattr(
         "communication.infra.vm_helpers.create_assistant_disk",
         lambda *_args, **_kwargs: "disk-self-link",
     )
@@ -889,6 +935,8 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
         vm_number=None,
     )
     assert result["vm_name"] == "unity-pool-ubuntu-4-staging"
+    assert result["hostname"] == "unity-assistant-assistant-123-staging.vm.unify.ai"
+    assert result["ip_address"] == "34.0.0.123"
 
 
 def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypatch):

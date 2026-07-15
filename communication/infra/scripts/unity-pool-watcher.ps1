@@ -46,6 +46,21 @@ function Write-Log($message) {
     Write-Host "[$ts] $message"
 }
 
+function Set-CaddyHostname($hostname) {
+    $caddyExe = "C:\caddy\caddy.exe"
+    $caddyfile = "C:\caddy\Caddyfile"
+    if (-not $hostname -or -not (Test-Path $caddyfile)) { return }
+
+    # Pool images boot with a pool hostname. Switch Caddy to the assistant's
+    # stable hostname before the readiness callback causes Comms to probe it.
+    $content = Get-Content -Path $caddyfile -Raw
+    $content = [regex]::Replace($content, '^[^{]*\{', "$hostname {")
+    Set-Content -Path $caddyfile -Value $content -Encoding UTF8
+    if (Test-Path $caddyExe) {
+        & $caddyExe reload --config $caddyfile 2>$null
+    }
+}
+
 function Ensure-ReleaseStateDir {
     New-Item -ItemType Directory -Force -Path $ReleaseStateDir -ErrorAction SilentlyContinue | Out-Null
 }
@@ -742,6 +757,7 @@ function Invoke-Assign($unifyKey) {
     $hostname = Get-Metadata "hostname"
     $orchestraUrl = Get-Metadata "orchestra-url"
     $commsUrl = Get-Metadata "comms-url"
+    Set-CaddyHostname $hostname
 
     # Mount persistent disk
     if ($diskDevice) {

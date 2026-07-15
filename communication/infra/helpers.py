@@ -394,7 +394,8 @@ def build_unity_job_manifest(
             # per-assistant UNIFY_KEY against ownership-scoped routes, so a
             # compromised pod can only act as itself. The platform admin key
             # stays on controllers / Cloud Run / reconcile jobs only.
-            "SHARED_UNIFY_KEY",
+            # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
+            # writes go through /infra/assistant-jobs/* (admin key on comms).
             "TAVILY_API_KEY",
             "VERTEXAI_CREDENTIALS",
             "_UNITY_STARTUP_HOOK_GROUP",

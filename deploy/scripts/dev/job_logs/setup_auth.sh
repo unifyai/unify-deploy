@@ -195,26 +195,25 @@ setup_gke_credentials() {
     fi
 }
 
-# ─── Step 5: SHARED_UNIFY_KEY ────────────────────────────────────────────────
+# ─── Step 5: ORCHESTRA_ADMIN_KEY (AssistantJobs) ─────────────────────────────
 check_unify_key() {
-    step 5 "Unify API Key (SHARED_UNIFY_KEY)"
+    step 5 "Orchestra admin key (ORCHESTRA_ADMIN_KEY)"
 
-    if [[ -n "${SHARED_UNIFY_KEY:-}" ]]; then
-        success "SHARED_UNIFY_KEY is set."
+    if [[ -n "${ORCHESTRA_ADMIN_KEY:-}" ]]; then
+        success "ORCHESTRA_ADMIN_KEY is set."
     else
-        warn "SHARED_UNIFY_KEY is not set."
+        warn "ORCHESTRA_ADMIN_KEY is not set."
         echo ""
-        echo "  This key is needed to query the AssistantJobs project to"
-        echo "  determine whether a job is currently running."
+        echo "  This key is needed to query the AssistantJobs system project"
+        echo "  (fleet audit / liveview discovery) as the platform writer."
         echo ""
-        echo "  Ask a team member for the shared Unify API key, then add"
-        echo "  it to the project .env file:"
+        echo "  Fetch from GCP Secret Manager and add to the project .env:"
         echo ""
-        echo "    # unity/.env"
-        echo "    SHARED_UNIFY_KEY='your_key_here'"
+        echo "    # unify-deploy/.env"
+        echo "    ORCHESTRA_ADMIN_KEY='your_key_here'"
         echo ""
         echo "  Both stream_logs.py and this script load from .env automatically."
-        ISSUES+=("Set SHARED_UNIFY_KEY in the project .env file")
+        ISSUES+=("Set ORCHESTRA_ADMIN_KEY in the project .env file")
     fi
 }
 
@@ -236,7 +235,7 @@ print_summary() {
         && echo -e "    ${GREEN}✓${NC} GKE cluster access" \
         || echo -e "    ${RED}✗${NC} GKE cluster access"
 
-    [[ -n "${SHARED_UNIFY_KEY:-}" ]]   && echo -e "    ${GREEN}✓${NC} SHARED_UNIFY_KEY" || echo -e "    ${RED}✗${NC} SHARED_UNIFY_KEY"
+    [[ -n "${ORCHESTRA_ADMIN_KEY:-}" ]]   && echo -e "    ${GREEN}✓${NC} ORCHESTRA_ADMIN_KEY" || echo -e "    ${RED}✗${NC} ORCHESTRA_ADMIN_KEY"
 
     echo ""
     if [[ ${#ISSUES[@]} -eq 0 ]]; then

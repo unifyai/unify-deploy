@@ -105,7 +105,7 @@ class CommunicationInfraRuntimeActivator:
         )
 
         payload = {
-            "api_key": assistant.get("api_key") or SETTINGS.shared_unify_key,
+            "api_key": assistant.get("api_key") or "",
             "medium": medium or reason,
             "assistant_id": assistant_id,
             "user_id": str(assistant.get("user_id") or ""),

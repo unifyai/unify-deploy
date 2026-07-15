@@ -16,7 +16,7 @@ Behaviour:
 
 Environment:
     UNIFY_KEY          Required for auto-detection (resolves caller identity).
-    SHARED_UNIFY_KEY   Required. Shared API key for the AssistantJobs project.
+    ORCHESTRA_ADMIN_KEY Required. Admin key for the AssistantJobs system project.
 """
 
 import os
@@ -75,7 +75,7 @@ from unify.syntax_highlight import highlight_code_blocks
 GCP_PROJECT = "gcp-project-runtime"
 GKE_CLUSTER = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
 GKE_REGION = "us-central1"
-SHARED_UNIFY_KEY = os.environ["SHARED_UNIFY_KEY"]
+ORCHESTRA_ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 
 # Resolve full paths for CLI tools (handles .cmd on Windows)
 GCLOUD = shutil.which("gcloud") or "gcloud"
@@ -144,13 +144,13 @@ def check_prerequisites():
         print("  Run the auth setup script first:  ./setup_auth.sh")
         sys.exit(1)
 
-    if not os.environ.get("SHARED_UNIFY_KEY"):
-        error("SHARED_UNIFY_KEY environment variable is not set.")
+    if not os.environ.get("ORCHESTRA_ADMIN_KEY"):
+        error("ORCHESTRA_ADMIN_KEY environment variable is not set.")
         print()
         print("  This key is needed to query the AssistantJobs project.")
         print("  Ask a team member for the shared Unify API key, then:")
         print()
-        print("    export SHARED_UNIFY_KEY='your_key_here'")
+        print("    export ORCHESTRA_ADMIN_KEY='your_key_here'")
         print()
         print("  (Add to ~/.zshrc or ~/.bashrc to persist across sessions.)")
         sys.exit(1)
@@ -193,7 +193,7 @@ def query_assistant_jobs(job_name: str) -> dict | None:
             project="AssistantJobs",
             context="startup_events",
             filter=f"job_name == '{job_name}'",
-            api_key=SHARED_UNIFY_KEY,
+            api_key=ORCHESTRA_ADMIN_KEY,
         )
         if logs:
             return logs[0].entries

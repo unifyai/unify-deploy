@@ -155,7 +155,6 @@ def _print_env(assistant: dict, user: dict, api_key: str, deploy_env: str):
         f"USER_EMAIL={_v(user.get('email'))}",
         "ORCHESTRA_ADMIN_KEY=",
         f"DEPLOY_ENV={deploy_env}",
-        "SHARED_UNIFY_KEY=",
         f"VOICE_PROVIDER={_v(assistant.get('voice_provider'))}",
         f"VOICE_ID={_v(assistant.get('voice_id'))}",
         "TAVILY_API_KEY=",

@@ -1178,6 +1178,7 @@ def _build_offline_runner_env(
     assistant_data: dict[str, Any],
     run_key: str,
     job_name: str,
+    provider_event_dispatch: ProviderEventDispatchRequest | None = None,
 ) -> dict[str, str]:
     """Build environment variables for the disconnected Unity offline runner.
 
@@ -1200,6 +1201,19 @@ def _build_offline_runner_env(
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     # Layer 1 — shared task-specific env (single source of truth in Unity).
+    provider_event_kwargs: dict[str, Any] = {}
+    if provider_event_dispatch is not None:
+        issued_at = provider_event_dispatch.issued_at
+        if issued_at.tzinfo is None:
+            issued_at = issued_at.replace(tzinfo=timezone.utc)
+        provider_event_kwargs = {
+            "provider_event_operation_id": provider_event_dispatch.operation_id,
+            "provider_event_run_id": provider_event_dispatch.run_id,
+            "provider_event_binding_id": provider_event_dispatch.binding_id,
+            "provider_event_receipt_id": provider_event_dispatch.receipt_id,
+            "provider_event_context_ref": provider_event_dispatch.event_context_ref,
+            "provider_event_issued_at": issued_at.astimezone(timezone.utc).isoformat(),
+        }
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
         task_id=request.task_id,
@@ -1217,6 +1231,7 @@ def _build_offline_runner_env(
         source_contact_id=request.source_contact_id,
         entrypoint=entrypoint,
         job_name=job_name,
+        **provider_event_kwargs,
     )
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
@@ -2229,6 +2244,7 @@ async def dispatch_provider_event_offline_route(
             assistant_data=assistant_data,
             run_key=run_key,
             job_name=job_name,
+            provider_event_dispatch=provider_request,
         )
         _launch_offline_task_job(
             batch_api=batch_api,

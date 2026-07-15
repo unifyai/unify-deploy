@@ -81,6 +81,18 @@ TEAM_MESSAGE = {
     "timestamp": "2026-07-07T12:00:00+00:00",
 }
 
+GROUP_MESSAGE = {
+    "message_id": 9,
+    "group_id": 42,
+    "organization_id": 11,
+    "sender_kind": "user",
+    "sender_user_id": "user-1",
+    "sender_name": "Dana",
+    "content": "Group hello",
+    "mentions": [],
+    "timestamp": "2026-07-07T12:00:00+00:00",
+}
+
 
 class TestOrgChat:
 
@@ -133,6 +145,58 @@ class TestOrgChat:
         assert fanout_frame["event"]["assistant_id"] == "777"
         assert fanout_frame["event"]["team_id"] == 3
         assert fanout_frame["event"]["body"] == "Morning everyone"
+        assert fanout_frame["event"]["sender_email"] == "dana@example.com"
+        assert "contact_id" not in fanout_frame["event"]
+        assert fanout_call[1]["thread"] == "inbound"
+
+    def test_group_message_publishes_and_fans_out(self, client):
+        response = client.post(
+            "/unify/org-chat",
+            json={
+                "kind": "group",
+                "organization_id": 11,
+                "group_id": 42,
+                "message": GROUP_MESSAGE,
+                "fanout_assistant_ids": [777],
+                "assistant_event": {
+                    "group_id": 42,
+                    "group_name": "Ops",
+                    "organization_id": 11,
+                    "body": "Group hello",
+                    "group_message_id": 9,
+                    "sender_user_id": "user-1",
+                    "sender_email": "dana@example.com",
+                    "sender_name": "Dana",
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["published"] is True
+        assert body["fanned_out"] == 1
+        assert body["fanout_errors"] == []
+
+        publish_calls = client._mock_pubsub.publish.call_args_list
+        assert len(publish_calls) == 2
+
+        org_call = publish_calls[0]
+        assert org_call[0][0].endswith("/topics/unity-org-11")
+        org_frame = json.loads(org_call[0][1].decode("utf-8"))
+        assert org_frame["thread"] == "group_message"
+        assert org_frame["event"]["content"] == "Group hello"
+        assert org_call[1]["thread"] == "group_message"
+        assert org_call[1]["group_id"] == "42"
+        assert org_call[1]["organization_id"] == "11"
+        assert "team_id" not in org_call[1]
+
+        fanout_call = publish_calls[1]
+        assert fanout_call[0][0].endswith("/topics/unity-777")
+        fanout_frame = json.loads(fanout_call[0][1].decode("utf-8"))
+        assert fanout_frame["thread"] == "unify_message"
+        assert fanout_frame["event"]["assistant_id"] == "777"
+        assert fanout_frame["event"]["group_id"] == 42
+        assert fanout_frame["event"]["group_name"] == "Ops"
+        assert fanout_frame["event"]["body"] == "Group hello"
         assert fanout_frame["event"]["sender_email"] == "dana@example.com"
         assert "contact_id" not in fanout_frame["event"]
         assert fanout_call[1]["thread"] == "inbound"
@@ -196,6 +260,68 @@ class TestOrgChat:
         assert dm_call[1]["dm_user_a"] == "user-a"
         assert dm_call[1]["dm_user_b"] == "user-b"
 
+    def test_dm_call_publishes_frame_only(self, client):
+        response = client.post(
+            "/unify/org-chat",
+            json={
+                "kind": "org_call",
+                "action": "incoming",
+                "organization_id": 11,
+                "call": {
+                    "call_id": "call-123",
+                    "room_name": "unity_org_11_call_call-123",
+                    "status": "ringing",
+                    "caller_user_id": "user-a",
+                    "callee_user_id": "user-b",
+                    "user_ids": ["user-a", "user-b", "user-c"],
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["fanned_out"] == 0
+
+        publish_calls = client._mock_pubsub.publish.call_args_list
+        assert len(publish_calls) == 1
+        dm_call = publish_calls[0]
+        assert dm_call[0][0].endswith("/topics/unity-org-11")
+        org_frame = json.loads(dm_call[0][1].decode("utf-8"))
+        assert org_frame["thread"] == "org_call_incoming"
+        assert org_frame["event"]["call_id"] == "call-123"
+        assert org_frame["event"]["user_ids"] == ["user-a", "user-b", "user-c"]
+        assert dm_call[1]["thread"] == "org_call_incoming"
+        assert dm_call[1]["dm_user_a"] == "user-a"
+        assert dm_call[1]["dm_user_b"] == "user-b"
+        assert dm_call[1]["call_id"] == "call-123"
+        assert dm_call[1]["user_ids"] == "user-a,user-b,user-c"
+        assert "group_id" not in dm_call[1]
+
+    def test_org_call_passes_through_group_id(self, client):
+        response = client.post(
+            "/unify/org-chat",
+            json={
+                "kind": "org_call",
+                "action": "incoming",
+                "organization_id": 11,
+                "call": {
+                    "call_id": "call-group-1",
+                    "room_name": "unity_org_11_call_call-group-1",
+                    "status": "ringing",
+                    "caller_user_id": "user-a",
+                    "user_ids": ["user-a", "user-b"],
+                    "group_id": 42,
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        publish_calls = client._mock_pubsub.publish.call_args_list
+        assert len(publish_calls) == 1
+        call_attrs = publish_calls[0][1]
+        assert call_attrs["group_id"] == "42"
+        assert "team_id" not in call_attrs
+        org_frame = json.loads(publish_calls[0][0][1].decode("utf-8"))
+        assert org_frame["event"]["group_id"] == 42
+
     def test_rejects_bad_payloads(self, client):
         assert (
             client.post(
@@ -221,10 +347,28 @@ class TestOrgChat:
         assert (
             client.post(
                 "/unify/org-chat",
+                json={"kind": "group", "organization_id": 1, "message": {"a": 1}},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/unify/org-chat",
                 json={
                     "kind": "dm",
                     "organization_id": 1,
                     "message": {"user_ids": ["only-one"]},
+                },
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/unify/org-chat",
+                json={
+                    "kind": "org_call",
+                    "organization_id": 1,
+                    "call": {"call_id": "call-1", "room_name": "room-1"},
                 },
             ).status_code
             == 400

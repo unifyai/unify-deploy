@@ -37,7 +37,7 @@ That's it. The script figures out whether to stream or fetch based on the job's 
 
 ```bash
 # Add to ~/.zshrc or ~/.bashrc
-export SHARED_UNIFY_KEY='your_key_here'
+export ORCHESTRA_ADMIN_KEY='your_key_here'
 ```
 
 Ask a team member for the shared Unify API key. This is the same key used by `debug_logger.py` and the communication adapters to access the `AssistantJobs` project.
@@ -57,7 +57,7 @@ This walks you through:
 3. Setting the active GCP project (`gcp-project-runtime`)
 4. Fetching GKE cluster credentials for the `unity` cluster
 5. Verifying cluster connectivity
-6. Checking that `SHARED_UNIFY_KEY` is set
+6. Checking that `ORCHESTRA_ADMIN_KEY` is set
 
 ### GCP Permissions
 
@@ -97,12 +97,12 @@ Run `./setup_auth.sh` or install manually: `brew install --cask google-cloud-sdk
 
 `gcloud components install kubectl` or `brew install kubectl`
 
-### "SHARED_UNIFY_KEY is not set"
+### "ORCHESTRA_ADMIN_KEY is not set"
 
 Ask a team member for the key and add to your shell profile:
 
 ```bash
-echo 'export SHARED_UNIFY_KEY="your_key"' >> ~/.zshrc && source ~/.zshrc
+echo 'export ORCHESTRA_ADMIN_KEY="your_key"' >> ~/.zshrc && source ~/.zshrc
 ```
 
 ### "Failed to get cluster credentials"

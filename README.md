@@ -224,7 +224,13 @@ The hosted system spans three code areas: **Orchestra** (API + DB), **unity-depl
 
 - **Adapters** (`adapters/`, Cloud Run `unity-adapters`): unauthenticated webhook handlers for inbound Twilio/Gmail/Microsoft, plus `/scheduled/*` cron endpoints and `/assistant/wakeup`.
 - **Comms app** (`communication/`, Cloud Run `unity-comms-app`): admin-key-protected JSON API for outbound phone/SMS/email and the **infra control plane** (`/infra/pubsub/topic`, `/infra/gke/job`, `/infra/tunnel/register`, VM/session management). The same image also runs the GKE `assistant-session-controller` / `assistant-session-pool-controller`.
-- **Unity container** (GKE job, image `unity/unity`): the assistant runtime. `CommsManager` subscribes to Pub/Sub; `ConversationManager` orchestrates; `EventBroker` is the in-memory bus; `debug_logger.py` (a job tracker, despite the name) records liveness to the `AssistantJobs` Unify project.
+- **Unity container** (GKE job, image `unity/unity`): the assistant runtime. `CommsManager` subscribes to Pub/Sub; `ConversationManager` orchestrates; `EventBroker` is the in-memory bus. Pods write fleet audit rows (`AssistantJobs/startup_events`, including `liveview_url`) via ownership-scoped `/infra/assistant-jobs/*` using their own `UNIFY_KEY` — never a shared user key or `ORCHESTRA_ADMIN_KEY` on the pod.
+
+### Fleet audit auth (`AssistantJobs`)
+
+`AssistantJobs` is an Orchestra **system project** (`Project.is_system`, no `user_id`). Writes and Console hosted liveview reads use `ORCHESTRA_ADMIN_KEY` as the `__system__` principal on the data plane. Live job control remains K8s labels / AssistantSession / `/infra/*`.
+
+**Never** back fleet auth with a Workspace/Console `User` row or user API key (`shared@…`, personal keys, etc.). Account-purge scripts and staging cleanups must not invent “service users” in the `user` table for infra — if a key lives on a `User`, deleting that user CASCADE-breaks the fleet.
 
 ### Pub/Sub & container lifecycle
 
