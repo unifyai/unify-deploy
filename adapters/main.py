@@ -2312,7 +2312,7 @@ def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
 
 @app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
 async def unify_org_chat_webhook(request: Request):
-    """Deliver one org-chat message (team group chat or human DM).
+    """Deliver one org-chat message or DM call lifecycle event.
 
     Orchestra has already persisted the message; this endpoint owns hosted
     delivery:
@@ -2325,32 +2325,76 @@ async def unify_org_chat_webhook(request: Request):
        assistant, like a large email CC chain. Assistant replies arrive with
        no ``fanout_assistant_ids`` — they are Console-publish only, which
        prevents AI reply loops.
+    3. For human DM call lifecycle events (``kind="dm_call"``), publish one
+       Console-only frame on ``dm_call_incoming`` / ``dm_call_answered`` /
+       ``dm_call_ended`` / ``dm_call_declined`` so the browser can drive the
+       ringing and teardown UI.
     """
     payload = await request.json()
     kind = payload.get("kind")
     organization_id = payload.get("organization_id")
     message = payload.get("message") or {}
+    call = payload.get("call") or {}
 
-    if kind not in ("team", "dm"):
-        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if kind not in ("team", "dm", "dm_call"):
+        return Response(
+            status_code=400,
+            content="kind must be 'team', 'dm', or 'dm_call'",
+        )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
-    if not message:
-        return Response(status_code=400, content="message is required")
-
-    thread = "team_message" if kind == "team" else "dm_message"
-    attributes = {"thread": thread, "organization_id": str(organization_id)}
-    if kind == "team":
-        team_id = payload.get("team_id") or message.get("team_id")
-        if not team_id:
-            return Response(status_code=400, content="team_id is required")
-        attributes["team_id"] = str(team_id)
+    if kind == "dm_call":
+        action = payload.get("action")
+        if action not in {"incoming", "answered", "ended", "declined"}:
+            return Response(
+                status_code=400,
+                content="dm_call action must be incoming, answered, ended, or declined",
+            )
+        if not call:
+            return Response(status_code=400, content="call is required")
+        if not call.get("call_id"):
+            return Response(status_code=400, content="call.call_id is required")
+        if not call.get("room_name"):
+            return Response(status_code=400, content="call.room_name is required")
+        user_ids = call.get("user_ids") or [
+            call.get("caller_user_id"),
+            call.get("callee_user_id"),
+        ]
+        participants = [str(user_id) for user_id in user_ids if user_id]
+        if len(participants) != 2:
+            return Response(
+                status_code=400,
+                content="call user_ids must resolve to exactly two participants",
+            )
+        thread = f"dm_call_{action}"
+        event = call
+        attributes = {
+            "thread": thread,
+            "organization_id": str(organization_id),
+            "dm_user_a": participants[0],
+            "dm_user_b": participants[1],
+            "call_id": str(call["call_id"]),
+        }
     else:
-        user_ids = message.get("user_ids") or []
-        if len(user_ids) != 2:
-            return Response(status_code=400, content="message.user_ids must be a pair")
-        attributes["dm_user_a"] = str(user_ids[0])
-        attributes["dm_user_b"] = str(user_ids[1])
+        if not message:
+            return Response(status_code=400, content="message is required")
+        thread = "team_message" if kind == "team" else "dm_message"
+        event = message
+        attributes = {"thread": thread, "organization_id": str(organization_id)}
+        if kind == "team":
+            team_id = payload.get("team_id") or message.get("team_id")
+            if not team_id:
+                return Response(status_code=400, content="team_id is required")
+            attributes["team_id"] = str(team_id)
+        else:
+            user_ids = message.get("user_ids") or []
+            if len(user_ids) != 2:
+                return Response(
+                    status_code=400,
+                    content="message.user_ids must be a pair",
+                )
+            attributes["dm_user_a"] = str(user_ids[0])
+            attributes["dm_user_b"] = str(user_ids[1])
 
     pubsub_client = get_pubsub_client()
     org_topic_path = pubsub_client.topic_path(
@@ -2365,7 +2409,7 @@ async def unify_org_chat_webhook(request: Request):
                 {
                     "thread": thread,
                     "publish_timestamp": time.time(),
-                    "event": message,
+                    "event": event,
                 },
             ).encode("utf-8"),
             **attributes,
@@ -2378,8 +2422,10 @@ async def unify_org_chat_webhook(request: Request):
     # assistant receives a copy, like a large email CC chain. When the sender
     # is this assistant's owner we can resolve contact_id here; otherwise the
     # runtime resolves the sender by email against its Contacts table.
-    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
-    assistant_event = payload.get("assistant_event") or {}
+    fanout_assistant_ids = (
+        (payload.get("fanout_assistant_ids") or []) if kind == "team" else []
+    )
+    assistant_event = (payload.get("assistant_event") or {}) if kind == "team" else {}
     fanout_errors: list[str] = []
     for raw_assistant_id in fanout_assistant_ids:
         try:
