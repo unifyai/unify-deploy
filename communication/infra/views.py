@@ -87,9 +87,13 @@ from .observability import (
 )
 from .vm_helpers import (
     AssistantDiskInUseError,
+    assistant_static_ip_name,
     complete_pool_vm_release,
     get_dns_hostname,
+    get_assistant_static_ip,
     probe_vm_agent_service_authenticated,
+    release_assistant_static_ip,
+    reserve_assistant_static_ip,
     verify_vm_assignment,
     _set_pool_labels,
     _update_instance_metadata,
@@ -114,6 +118,9 @@ from .tunnel_helpers import (
     list_user_tunnels,
 )
 from .models import (
+    AssistantStaticIPReconcileRequest,
+    AssistantStaticIPReleaseResponse,
+    AssistantStaticIPResponse,
     VMReadyRequest,
     VMReleaseCompleteRequest,
     VMWipeMetadataKeyRequest,
@@ -2618,6 +2625,62 @@ async def vm_ready_endpoint(
 # =============================================================================
 # VM Pool Endpoints
 # =============================================================================
+
+
+@router.post(
+    "/vm/assistant-static-ip/reconcile",
+    response_model=AssistantStaticIPResponse,
+)
+async def reconcile_assistant_static_ip_endpoint(
+    request: AssistantStaticIPReconcileRequest,
+):
+    """Idempotently reserve an assistant-owned regional GCP address.
+
+    This control-plane operation only reserves the address; it never attaches
+    it to a VM or other network interface.
+    """
+
+    try:
+        result = await asyncio.to_thread(
+            reserve_assistant_static_ip, request.assistant_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return AssistantStaticIPResponse(assistant_id=request.assistant_id, **result)
+
+
+@router.get(
+    "/vm/assistant-static-ip/{assistant_id}",
+    response_model=AssistantStaticIPResponse,
+)
+async def get_assistant_static_ip_endpoint(assistant_id: str):
+    """Read the requested assistant's owned regional GCP address."""
+
+    try:
+        result = await asyncio.to_thread(get_assistant_static_ip, assistant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Assistant static IP not found")
+    return AssistantStaticIPResponse(assistant_id=assistant_id, **result)
+
+
+@router.delete(
+    "/vm/assistant-static-ip/{assistant_id}",
+    response_model=AssistantStaticIPReleaseResponse,
+)
+async def release_assistant_static_ip_endpoint(assistant_id: str):
+    """Idempotently release an assistant-owned regional GCP address."""
+
+    try:
+        released = await asyncio.to_thread(release_assistant_static_ip, assistant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return AssistantStaticIPReleaseResponse(
+        assistant_id=assistant_id,
+        name=assistant_static_ip_name(assistant_id),
+        released=released,
+    )
 
 
 @router.post("/vm/pool/provision")

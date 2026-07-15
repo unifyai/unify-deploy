@@ -10,9 +10,11 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 """
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import random
+import re
 import threading
 import time
 import uuid
@@ -115,10 +117,163 @@ INFLIGHT_ROLE_TIMEOUT_SECONDS = {
 VM_BINDING_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
 VM_BINDING_RELEASE_LEASE_WAIT_SECONDS = 30.0
 VM_BINDING_LEASE_POLL_INTERVAL_SECONDS = 1.0
+ASSISTANT_STATIC_IP_MANAGED_BY_LABEL = "managed-by"
+ASSISTANT_STATIC_IP_OWNER_LABEL = "resource-owner"
+ASSISTANT_STATIC_IP_ASSISTANT_LABEL = "assistant-id"
+ASSISTANT_STATIC_IP_MANAGED_BY_VALUE = "communication"
+ASSISTANT_STATIC_IP_OWNER_VALUE = "assistant"
 
 
 class AssistantDiskInUseError(RuntimeError):
     """Permanent disk deletion was requested before the disk finished detaching."""
+
+
+def _assistant_static_ip_id_component(assistant_id: str, *, max_length: int) -> str:
+    """Return a stable GCP-resource-safe component for an assistant ID."""
+
+    normalized = re.sub(r"[^a-z0-9-]+", "-", str(assistant_id).lower())
+    normalized = re.sub(r"-+", "-", normalized).strip("-") or "unknown"
+    if len(normalized) <= max_length:
+        return normalized
+
+    digest = hashlib.sha256(str(assistant_id).encode()).hexdigest()[:8]
+    return f"{normalized[: max_length - len(digest) - 1].rstrip('-')}-{digest}"
+
+
+def assistant_static_ip_name(assistant_id: str) -> str:
+    """Return the deterministic regional static-IP name for an assistant."""
+
+    prefix = "unity-assistant-ip-"
+    suffix = SETTINGS.env_suffix
+    component = _assistant_static_ip_id_component(
+        assistant_id,
+        max_length=63 - len(prefix) - len(suffix),
+    )
+    return f"{prefix}{component}{suffix}"
+
+
+def assistant_static_ip_labels(assistant_id: str) -> dict[str, str]:
+    """Return ownership labels for an assistant-managed regional address."""
+
+    return {
+        ASSISTANT_STATIC_IP_MANAGED_BY_LABEL: ASSISTANT_STATIC_IP_MANAGED_BY_VALUE,
+        ASSISTANT_STATIC_IP_OWNER_LABEL: ASSISTANT_STATIC_IP_OWNER_VALUE,
+        ASSISTANT_STATIC_IP_ASSISTANT_LABEL: _assistant_static_ip_id_component(
+            assistant_id,
+            max_length=63,
+        ),
+        "environment": (
+            "staging" if SETTINGS.deploy_env == "staging" else "production"
+        ),
+    }
+
+
+def _assistant_static_ip_details(address: Any) -> dict[str, Any]:
+    """Serialize the stable public details of a GCP regional address."""
+
+    return {
+        "name": str(getattr(address, "name", "") or ""),
+        "address": str(getattr(address, "address", "") or "") or None,
+        "status": str(getattr(address, "status", "") or "") or None,
+        "region": str(getattr(address, "region", "") or "") or None,
+        "labels": dict(getattr(address, "labels", None) or {}),
+    }
+
+
+def _assert_assistant_static_ip_ownership(address: Any, assistant_id: str) -> None:
+    expected_labels = assistant_static_ip_labels(assistant_id)
+    actual_labels = dict(getattr(address, "labels", None) or {})
+    ownership_keys = (
+        ASSISTANT_STATIC_IP_MANAGED_BY_LABEL,
+        ASSISTANT_STATIC_IP_OWNER_LABEL,
+        ASSISTANT_STATIC_IP_ASSISTANT_LABEL,
+    )
+    if any(actual_labels.get(key) != expected_labels[key] for key in ownership_keys):
+        raise ValueError(
+            f"Regional address {assistant_static_ip_name(assistant_id)} exists but "
+            "is not owned by the requested assistant",
+        )
+
+
+def get_assistant_static_ip(assistant_id: str) -> dict[str, Any] | None:
+    """Read an assistant-owned regional external address, if it exists."""
+
+    address_name = assistant_static_ip_name(assistant_id)
+    client = compute_v1.AddressesClient()
+    try:
+        address = client.get(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=address_name,
+        )
+    except NotFound:
+        return None
+
+    _assert_assistant_static_ip_ownership(address, assistant_id)
+    return _assistant_static_ip_details(address)
+
+
+def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
+    """Idempotently reserve the assistant's regional external address.
+
+    This deliberately reserves an address only. Attaching it to an instance is
+    owned by a separate VM lifecycle operation.
+    """
+
+    existing = get_assistant_static_ip(assistant_id)
+    if existing is not None:
+        return {**existing, "created": False}
+
+    address_name = assistant_static_ip_name(assistant_id)
+    client = compute_v1.AddressesClient()
+    created = False
+    try:
+        client.insert(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address_resource=compute_v1.Address(
+                name=address_name,
+                address_type="EXTERNAL",
+                network_tier="PREMIUM",
+                description=f"Assistant-owned static IP for {assistant_id}",
+                labels=assistant_static_ip_labels(assistant_id),
+            ),
+        ).result()
+        created = True
+    except Conflict:
+        # Another reconciler won the create race. Re-read and validate owner.
+        pass
+
+    reserved = get_assistant_static_ip(assistant_id)
+    if reserved is None:
+        raise RuntimeError(f"Reserved address {address_name} could not be read")
+    return {**reserved, "created": created}
+
+
+def release_assistant_static_ip(assistant_id: str) -> bool:
+    """Idempotently release an assistant-owned regional external address."""
+
+    address_name = assistant_static_ip_name(assistant_id)
+    client = compute_v1.AddressesClient()
+    try:
+        address = client.get(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=address_name,
+        )
+    except NotFound:
+        return False
+
+    _assert_assistant_static_ip_ownership(address, assistant_id)
+    try:
+        client.delete(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=address_name,
+        ).result()
+    except NotFound:
+        return False
+    return True
 
 
 def _compact_vm_log_fields(fields: Dict[str, Any]) -> Dict[str, Any]:

@@ -18,6 +18,30 @@ class VMReadyRequest(BaseModel):
     hostname: Optional[str] = None
 
 
+class AssistantStaticIPReconcileRequest(BaseModel):
+    """Ensure the requested assistant has its owned regional GCP address."""
+
+    assistant_id: str
+
+
+class AssistantStaticIPResponse(BaseModel):
+    """Public state of an assistant-owned regional GCP address."""
+
+    assistant_id: str
+    name: str
+    address: Optional[str] = None
+    status: Optional[str] = None
+    region: Optional[str] = None
+    labels: dict[str, str]
+    created: bool = False
+
+
+class AssistantStaticIPReleaseResponse(BaseModel):
+    assistant_id: str
+    name: str
+    released: bool
+
+
 # =============================================================================
 # VM Pool Models
 # =============================================================================
