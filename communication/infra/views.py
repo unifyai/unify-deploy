@@ -89,10 +89,13 @@ from .vm_helpers import (
     AssistantDiskInUseError,
     assistant_static_ip_name,
     complete_pool_vm_release,
+    finalize_assistant_static_ip_rotation,
     get_dns_hostname,
     get_assistant_static_ip,
     probe_vm_agent_service_authenticated,
     release_assistant_static_ip,
+    rollback_assistant_static_ip_rotation,
+    rotate_assistant_static_ip,
     reserve_assistant_static_ip,
     verify_vm_assignment,
     _set_pool_labels,
@@ -121,6 +124,8 @@ from .models import (
     AssistantStaticIPReconcileRequest,
     AssistantStaticIPReleaseResponse,
     AssistantStaticIPResponse,
+    AssistantStaticIPRotationRequest,
+    AssistantStaticIPRotationResponse,
     VMReadyRequest,
     VMReleaseCompleteRequest,
     VMWipeMetadataKeyRequest,
@@ -2681,6 +2686,146 @@ async def release_assistant_static_ip_endpoint(assistant_id: str):
         name=assistant_static_ip_name(assistant_id),
         released=released,
     )
+
+
+async def _validate_static_ip_rotation_binding(
+    request: AssistantStaticIPRotationRequest,
+) -> None:
+    """Require both controller state and a strong GCE read to match the request."""
+
+    batch_api, _, _, _ = await _get_k8s_clients()
+    custom_api = k8s_client.CustomObjectsApi(batch_api.api_client)
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        request.assistant_id,
+    )
+    binding = session_binding(session)
+    if binding_id_from_status(binding) != request.binding_id:
+        raise HTTPException(
+            status_code=409,
+            detail="AssistantSession does not have the requested current binding",
+        )
+    persisted_vm_ref = binding_vm_ref(binding)
+    if str(persisted_vm_ref.get("name", "") or "") != request.vm_name:
+        raise HTTPException(
+            status_code=409,
+            detail="AssistantSession binding does not reference the requested VM",
+        )
+    observed_vm_ref = await asyncio.to_thread(
+        verify_vm_assignment,
+        request.vm_name,
+        request.binding_id,
+        request.assistant_id,
+    )
+    if not observed_vm_ref or not vm_refs_match(persisted_vm_ref, observed_vm_ref):
+        raise HTTPException(
+            status_code=409,
+            detail="Requested VM is not the current assigned VM for this binding",
+        )
+
+
+def _static_ip_rotation_response(
+    request: AssistantStaticIPRotationRequest,
+    result: dict[str, Any],
+    *,
+    state: str,
+) -> AssistantStaticIPRotationResponse:
+    return AssistantStaticIPRotationResponse(
+        assistant_id=request.assistant_id,
+        operation_id=request.operation_id,
+        vm_name=request.vm_name,
+        binding_id=request.binding_id,
+        state=state,
+        hostname=str(result["hostname"]),
+        old=dict(result["old"]),
+        candidate=dict(result["candidate"]),
+        idempotent=bool(result.get("idempotent")),
+        deleted=bool(result.get("deleted")),
+    )
+
+
+@router.post(
+    "/vm/assistant-static-ip/rotate",
+    response_model=AssistantStaticIPRotationResponse,
+)
+async def rotate_assistant_static_ip_endpoint(
+    request: AssistantStaticIPRotationRequest,
+):
+    """Create/reuse an operation candidate, swap NAT, verify, then update DNS."""
+
+    await _validate_static_ip_rotation_binding(request)
+    try:
+        result = await asyncio.to_thread(
+            rotate_assistant_static_ip,
+            assistant_id=request.assistant_id,
+            operation_id=request.operation_id,
+            vm_name=request.vm_name,
+            binding_id=request.binding_id,
+            expected_old_ip=request.expected_old_ip,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _static_ip_rotation_response(request, result, state="rotated")
+
+
+@router.post(
+    "/vm/assistant-static-ip/rollback",
+    response_model=AssistantStaticIPRotationResponse,
+)
+async def rollback_assistant_static_ip_endpoint(
+    request: AssistantStaticIPRotationRequest,
+):
+    """Restore the retained old NAT address and stable assistant DNS."""
+
+    await _validate_static_ip_rotation_binding(request)
+    try:
+        result = await asyncio.to_thread(
+            rollback_assistant_static_ip_rotation,
+            assistant_id=request.assistant_id,
+            operation_id=request.operation_id,
+            vm_name=request.vm_name,
+            binding_id=request.binding_id,
+            expected_old_ip=request.expected_old_ip,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _static_ip_rotation_response(request, result, state="rolled_back")
+
+
+@router.post(
+    "/vm/assistant-static-ip/finalize",
+    response_model=AssistantStaticIPRotationResponse,
+)
+async def finalize_assistant_static_ip_endpoint(
+    request: AssistantStaticIPRotationRequest,
+):
+    """Delete an old operation candidate only after it is inactive and detached.
+
+    For finalization, ``expected_old_ip`` is the address of the candidate from
+    ``operation_id`` which has become old after a later successful rotation.
+    """
+
+    await _validate_static_ip_rotation_binding(request)
+    try:
+        result = await asyncio.to_thread(
+            finalize_assistant_static_ip_rotation,
+            assistant_id=request.assistant_id,
+            operation_id=request.operation_id,
+            vm_name=request.vm_name,
+            binding_id=request.binding_id,
+            expected_old_ip=request.expected_old_ip,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _static_ip_rotation_response(request, result, state="finalized")
 
 
 @router.post("/vm/pool/provision")

@@ -4,7 +4,7 @@ VM Management - Request/Response Models
 Supports both Windows and Ubuntu VMs via vm_type parameter.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -40,6 +40,31 @@ class AssistantStaticIPReleaseResponse(BaseModel):
     assistant_id: str
     name: str
     released: bool
+
+
+class AssistantStaticIPRotationRequest(BaseModel):
+    """A binding-scoped, idempotent assistant external-IP rotation request."""
+
+    assistant_id: str = Field(min_length=1)
+    operation_id: str = Field(min_length=1)
+    vm_name: str = Field(min_length=1)
+    binding_id: str = Field(min_length=1)
+    expected_old_ip: str = Field(min_length=1)
+
+
+class AssistantStaticIPRotationResponse(BaseModel):
+    """Observed state after a rotation, rollback, or safe finalization."""
+
+    assistant_id: str
+    operation_id: str
+    vm_name: str
+    binding_id: str
+    state: Literal["rotated", "rolled_back", "finalized"]
+    hostname: str
+    old: dict[str, object]
+    candidate: dict[str, object]
+    idempotent: bool = False
+    deleted: bool = False
 
 
 # =============================================================================

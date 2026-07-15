@@ -122,6 +122,7 @@ ASSISTANT_STATIC_IP_OWNER_LABEL = "resource-owner"
 ASSISTANT_STATIC_IP_ASSISTANT_LABEL = "assistant-id"
 ASSISTANT_STATIC_IP_MANAGED_BY_VALUE = "communication"
 ASSISTANT_STATIC_IP_OWNER_VALUE = "assistant"
+ASSISTANT_STATIC_IP_ROTATION_OPERATION_LABEL = "rotation-operation"
 
 
 class AssistantDiskInUseError(RuntimeError):
@@ -299,6 +300,354 @@ def release_assistant_static_ip(assistant_id: str) -> bool:
     except NotFound:
         return False
     return True
+
+
+def assistant_static_ip_rotation_name(assistant_id: str, operation_id: str) -> str:
+    """Return a deterministic, operation-unique address name for a rotation."""
+
+    prefix = "unity-assistant-ip-"
+    suffix = SETTINGS.env_suffix
+    operation_normalized = _assistant_static_ip_id_component(
+        operation_id, max_length=63,
+    )
+    operation_digest = hashlib.sha256(str(operation_id).encode()).hexdigest()[:8]
+    operation_component = (
+        f"{operation_normalized[:7].rstrip('-') or 'op'}-{operation_digest}"
+    )
+    assistant_component = _assistant_static_ip_id_component(
+        assistant_id,
+        max_length=63 - len(prefix) - len(suffix) - len(operation_component) - 1,
+    )
+    return f"{prefix}{assistant_component}-{operation_component}{suffix}"
+
+
+def _assistant_rotation_labels(
+    assistant_id: str,
+    operation_id: str,
+) -> dict[str, str]:
+    return {
+        **assistant_static_ip_labels(assistant_id),
+        ASSISTANT_STATIC_IP_ROTATION_OPERATION_LABEL: _assistant_static_ip_id_component(
+            operation_id,
+            max_length=63,
+        ),
+    }
+
+
+def _get_assistant_rotation_address(
+    assistant_id: str,
+    operation_id: str,
+) -> dict[str, Any] | None:
+    name = assistant_static_ip_rotation_name(assistant_id, operation_id)
+    client = compute_v1.AddressesClient()
+    try:
+        address = client.get(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=name,
+        )
+    except NotFound:
+        return None
+    _assert_assistant_static_ip_ownership(address, assistant_id)
+    labels = dict(getattr(address, "labels", None) or {})
+    expected_operation = _assistant_rotation_labels(assistant_id, operation_id)[
+        ASSISTANT_STATIC_IP_ROTATION_OPERATION_LABEL
+    ]
+    if labels.get(ASSISTANT_STATIC_IP_ROTATION_OPERATION_LABEL) != expected_operation:
+        raise ValueError(f"Regional address {name} is not owned by this operation")
+    return {
+        **_assistant_static_ip_details(address),
+        "users": list(getattr(address, "users", None) or []),
+    }
+
+
+def reserve_assistant_static_ip_rotation_candidate(
+    assistant_id: str,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Idempotently reserve the operation-specific candidate address."""
+
+    existing = _get_assistant_rotation_address(assistant_id, operation_id)
+    if existing is not None:
+        return {**existing, "created": False}
+
+    name = assistant_static_ip_rotation_name(assistant_id, operation_id)
+    client = compute_v1.AddressesClient()
+    created = False
+    try:
+        client.insert(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address_resource=compute_v1.Address(
+                name=name,
+                address_type="EXTERNAL",
+                network_tier="PREMIUM",
+                description=(
+                    f"Rotation candidate for assistant {assistant_id}, "
+                    f"operation {operation_id}"
+                ),
+                labels=_assistant_rotation_labels(assistant_id, operation_id),
+            ),
+        ).result()
+        created = True
+    except Conflict:
+        pass
+
+    if created:
+        created_address = client.get(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=name,
+        )
+        expected_labels = _assistant_rotation_labels(assistant_id, operation_id)
+        if dict(getattr(created_address, "labels", None) or {}) != expected_labels:
+            client.set_labels(
+                project=SETTINGS.vm_project_id,
+                region=SETTINGS.vm_region,
+                resource=name,
+                region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
+                    labels=expected_labels,
+                    label_fingerprint=getattr(
+                        created_address, "label_fingerprint", None,
+                    ),
+                ),
+            ).result()
+    candidate = _get_assistant_rotation_address(assistant_id, operation_id)
+    if candidate is None or not candidate.get("address"):
+        raise RuntimeError(f"Rotation candidate {name} could not be read")
+    return {**candidate, "created": created}
+
+
+def _rotation_vm_state(
+    vm_name: str,
+    binding_id: str,
+    assistant_id: str,
+) -> tuple[Any, str, str, str]:
+    """Read and validate the exact assigned VM before a network mutation."""
+
+    client = compute_v1.InstancesClient()
+    instance = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    labels = dict(getattr(instance, "labels", None) or {})
+    if labels.get(POOL_ROLE_LABEL) != "assigned":
+        raise ValueError(f"VM {vm_name} is not currently assigned")
+    if labels.get(BINDING_ID_LABEL) != binding_id.lower().replace("_", "-"):
+        raise ValueError(f"VM {vm_name} is not assigned to binding {binding_id}")
+    if labels.get(ASSISTANT_ID_LABEL) != assistant_id.lower().replace("_", "-"):
+        raise ValueError(f"VM {vm_name} is not assigned to assistant {assistant_id}")
+    network_interface, access_config_name, current_ip = _external_access_config(instance)
+    return client, network_interface, access_config_name, current_ip
+
+
+def _verify_rotation_nat(
+    client: Any,
+    vm_name: str,
+    expected_ip: str,
+) -> None:
+    instance = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    _, _, actual_ip = _external_access_config(instance)
+    if actual_ip != expected_ip:
+        raise RuntimeError(
+            f"GCE did not confirm {expected_ip} on {vm_name}; observed {actual_ip}",
+        )
+
+
+def _rotation_response_address(details: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: details.get(key)
+        for key in ("name", "address", "status", "region", "labels")
+    }
+
+
+def rotate_assistant_static_ip(
+    *,
+    assistant_id: str,
+    operation_id: str,
+    vm_name: str,
+    binding_id: str,
+    expected_old_ip: str,
+) -> dict[str, Any]:
+    """Atomically swap an assigned binding from its old address to a candidate."""
+
+    coord_api, namespace, holder_id = _acquire_binding_vm_lease(
+        binding_id,
+        holder_prefix="ip-rotate",
+        wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
+    )
+    if coord_api is None:
+        raise RuntimeError(f"VM lifecycle lease is busy for binding {binding_id}")
+    hostname = get_dns_hostname(assistant_id)
+    try:
+        candidate = reserve_assistant_static_ip_rotation_candidate(
+            assistant_id,
+            operation_id,
+        )
+        candidate_ip = str(candidate["address"])
+        client, nic, access_config, current_ip = _rotation_vm_state(
+            vm_name, binding_id, assistant_id,
+        )
+        if current_ip == candidate_ip:
+            _verify_rotation_nat(client, vm_name, candidate_ip)
+            _upsert_dns_a_record(hostname, candidate_ip)
+            return {
+                "hostname": hostname,
+                "old": {"address": expected_old_ip},
+                "candidate": _rotation_response_address(candidate),
+                "idempotent": True,
+            }
+        if current_ip != expected_old_ip:
+            raise ValueError(
+                f"VM {vm_name} has {current_ip}, not expected old IP {expected_old_ip}",
+            )
+        try:
+            _replace_vm_external_ip(
+                client, vm_name, network_interface=nic,
+                access_config_name=access_config, current_ip=current_ip,
+                replacement_ip=candidate_ip,
+            )
+            _verify_rotation_nat(client, vm_name, candidate_ip)
+            _upsert_dns_a_record(hostname, candidate_ip)
+        except Exception:
+            # A DNS failure happens after NAT replacement. Restore both public
+            # observations before surfacing the original operation failure.
+            try:
+                _, _, _, observed_ip = _rotation_vm_state(
+                    vm_name, binding_id, assistant_id,
+                )
+                if observed_ip != expected_old_ip:
+                    _replace_vm_external_ip(
+                        client, vm_name, network_interface=nic,
+                        access_config_name=access_config, current_ip=observed_ip,
+                        replacement_ip=expected_old_ip,
+                    )
+                _upsert_dns_a_record(hostname, expected_old_ip)
+            except Exception:
+                logger.exception("Failed restoring NAT/DNS after rotation failure")
+            raise
+        return {
+            "hostname": hostname,
+            "old": {"address": expected_old_ip},
+            "candidate": _rotation_response_address(candidate),
+            "idempotent": False,
+        }
+    finally:
+        _release_binding_vm_lease(coord_api, binding_id, namespace, holder_id)
+
+
+def rollback_assistant_static_ip_rotation(
+    *,
+    assistant_id: str,
+    operation_id: str,
+    vm_name: str,
+    binding_id: str,
+    expected_old_ip: str,
+) -> dict[str, Any]:
+    """Swap an operation candidate back to the retained old address and DNS."""
+
+    coord_api, namespace, holder_id = _acquire_binding_vm_lease(
+        binding_id,
+        holder_prefix="ip-rollback",
+        wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
+    )
+    if coord_api is None:
+        raise RuntimeError(f"VM lifecycle lease is busy for binding {binding_id}")
+    hostname = get_dns_hostname(assistant_id)
+    try:
+        candidate = _get_assistant_rotation_address(assistant_id, operation_id)
+        if candidate is None or not candidate.get("address"):
+            raise ValueError("Rotation candidate does not exist")
+        candidate_ip = str(candidate["address"])
+        client, nic, access_config, current_ip = _rotation_vm_state(
+            vm_name, binding_id, assistant_id,
+        )
+        if current_ip not in (candidate_ip, expected_old_ip):
+            raise ValueError(f"VM {vm_name} has unexpected external IP {current_ip}")
+        if current_ip == expected_old_ip:
+            _upsert_dns_a_record(hostname, expected_old_ip)
+            return {
+                "hostname": hostname,
+                "old": {"address": expected_old_ip},
+                "candidate": _rotation_response_address(candidate),
+                "idempotent": True,
+            }
+        try:
+            _replace_vm_external_ip(
+                client, vm_name, network_interface=nic,
+                access_config_name=access_config, current_ip=candidate_ip,
+                replacement_ip=expected_old_ip,
+            )
+            _verify_rotation_nat(client, vm_name, expected_old_ip)
+            _upsert_dns_a_record(hostname, expected_old_ip)
+        except Exception:
+            try:
+                _upsert_dns_a_record(hostname, candidate_ip)
+            except Exception:
+                logger.exception("Failed restoring candidate DNS after rollback failure")
+            raise
+        return {
+            "hostname": hostname,
+            "old": {"address": expected_old_ip},
+            "candidate": _rotation_response_address(candidate),
+            "idempotent": False,
+        }
+    finally:
+        _release_binding_vm_lease(coord_api, binding_id, namespace, holder_id)
+
+
+def finalize_assistant_static_ip_rotation(
+    *,
+    assistant_id: str,
+    operation_id: str,
+    vm_name: str,
+    binding_id: str,
+    expected_old_ip: str,
+) -> dict[str, Any]:
+    """Delete only an unattached operation candidate that is no longer active."""
+
+    # The binding fields are deliberately validated even though finalization
+    # only deletes an address: they prevent an old operation from deleting an
+    # address while its binding has been reassigned.
+    coord_api, namespace, holder_id = _acquire_binding_vm_lease(
+        binding_id,
+        holder_prefix="ip-finalize",
+        wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
+    )
+    if coord_api is None:
+        raise RuntimeError(f"VM lifecycle lease is busy for binding {binding_id}")
+    hostname = get_dns_hostname(assistant_id)
+    try:
+        candidate = _get_assistant_rotation_address(assistant_id, operation_id)
+        if candidate is None:
+            return {
+                "hostname": hostname, "old": {"address": expected_old_ip},
+                "candidate": {"name": assistant_static_ip_rotation_name(assistant_id, operation_id)},
+                "idempotent": True, "deleted": False,
+            }
+        candidate_ip = str(candidate.get("address") or "")
+        if candidate_ip != expected_old_ip:
+            raise ValueError("Candidate address does not match expected old IP")
+        _, _, _, active_ip = _rotation_vm_state(vm_name, binding_id, assistant_id)
+        if active_ip == candidate_ip or candidate.get("users"):
+            raise ValueError("Refusing to finalize an active or attached candidate")
+        compute_v1.AddressesClient().delete(
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
+            address=str(candidate["name"]),
+        ).result()
+        return {
+            "hostname": hostname, "old": {"address": expected_old_ip},
+            "candidate": _rotation_response_address(candidate),
+            "idempotent": False, "deleted": True,
+        }
+    finally:
+        _release_binding_vm_lease(coord_api, binding_id, namespace, holder_id)
 
 
 def _compact_vm_log_fields(fields: Dict[str, Any]) -> Dict[str, Any]:

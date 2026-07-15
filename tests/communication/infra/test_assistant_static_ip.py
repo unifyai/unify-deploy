@@ -245,3 +245,131 @@ def test_assistant_static_ip_routes_reconcile_read_and_release():
         "name": vm_helpers.assistant_static_ip_name("assistant-123"),
         "released": True,
     }
+
+
+def test_rotate_assistant_static_ip_uses_operation_candidate_and_verifies_nat():
+    candidate = {
+        "name": vm_helpers.assistant_static_ip_rotation_name("assistant-123", "op-1"),
+        "address": "34.1.2.4",
+        "status": "RESERVED",
+        "region": "regions/us-central1",
+        "labels": vm_helpers._assistant_rotation_labels("assistant-123", "op-1"),
+    }
+    instance_client = MagicMock()
+    replacement = MagicMock()
+    dns_upsert = MagicMock()
+
+    with (
+        patch.object(
+            vm_helpers,
+            "_acquire_binding_vm_lease",
+            return_value=(MagicMock(), "default", "holder"),
+        ),
+        patch.object(vm_helpers, "_release_binding_vm_lease"),
+        patch.object(
+            vm_helpers,
+            "reserve_assistant_static_ip_rotation_candidate",
+            return_value=candidate,
+        ),
+        patch.object(
+            vm_helpers,
+            "_rotation_vm_state",
+            return_value=(instance_client, "nic0", "External NAT", "34.1.2.3"),
+        ),
+        patch.object(vm_helpers, "_replace_vm_external_ip", replacement),
+        patch.object(vm_helpers, "_verify_rotation_nat"),
+        patch.object(vm_helpers, "_upsert_dns_a_record", dns_upsert),
+    ):
+        result = vm_helpers.rotate_assistant_static_ip(
+            assistant_id="assistant-123",
+            operation_id="op-1",
+            vm_name="pool-1",
+            binding_id="binding-1",
+            expected_old_ip="34.1.2.3",
+        )
+
+    assert result["candidate"]["name"] == candidate["name"]
+    assert result["idempotent"] is False
+    assert replacement.call_args.kwargs["replacement_ip"] == "34.1.2.4"
+    dns_upsert.assert_called_once_with(
+        vm_helpers.get_dns_hostname("assistant-123"), "34.1.2.4",
+    )
+
+
+def test_rotate_assistant_static_ip_rejects_stale_expected_old_ip():
+    candidate = {"address": "34.1.2.4"}
+    with (
+        patch.object(
+            vm_helpers,
+            "_acquire_binding_vm_lease",
+            return_value=(MagicMock(), "default", "holder"),
+        ),
+        patch.object(vm_helpers, "_release_binding_vm_lease"),
+        patch.object(
+            vm_helpers,
+            "reserve_assistant_static_ip_rotation_candidate",
+            return_value=candidate,
+        ),
+        patch.object(
+            vm_helpers,
+            "_rotation_vm_state",
+            return_value=(MagicMock(), "nic0", "External NAT", "34.1.2.9"),
+        ),
+    ):
+        try:
+            vm_helpers.rotate_assistant_static_ip(
+                assistant_id="assistant-123",
+                operation_id="op-1",
+                vm_name="pool-1",
+                binding_id="binding-1",
+                expected_old_ip="34.1.2.3",
+            )
+        except ValueError as exc:
+            assert "not expected old IP" in str(exc)
+        else:
+            raise AssertionError("stale expected_old_ip was accepted")
+
+
+def test_finalize_rotation_deletes_only_unattached_inactive_candidate():
+    candidate = {
+        "name": vm_helpers.assistant_static_ip_rotation_name("assistant-123", "op-1"),
+        "address": "34.1.2.3",
+        "status": "RESERVED",
+        "region": "regions/us-central1",
+        "labels": {},
+        "users": [],
+    }
+    address_client = MagicMock()
+    with (
+        patch.object(
+            vm_helpers,
+            "_acquire_binding_vm_lease",
+            return_value=(MagicMock(), "default", "holder"),
+        ),
+        patch.object(vm_helpers, "_release_binding_vm_lease"),
+        patch.object(
+            vm_helpers,
+            "_get_assistant_rotation_address",
+            return_value=candidate,
+        ),
+        patch.object(
+            vm_helpers,
+            "_rotation_vm_state",
+            return_value=(MagicMock(), "nic0", "External NAT", "34.1.2.4"),
+        ),
+        patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=address_client),
+    ):
+        result = vm_helpers.finalize_assistant_static_ip_rotation(
+            assistant_id="assistant-123",
+            operation_id="op-1",
+            vm_name="pool-1",
+            binding_id="binding-1",
+            expected_old_ip="34.1.2.3",
+        )
+
+    assert result["deleted"] is True
+    address_client.delete.assert_called_once_with(
+        project=vm_helpers.SETTINGS.vm_project_id,
+        region=vm_helpers.SETTINGS.vm_region,
+        address=candidate["name"],
+    )
