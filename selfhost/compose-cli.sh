@@ -112,10 +112,6 @@ validate_optional_profiles() {
         return 1
         ;;
     esac
-    if ! _has_env COMPOSIO_API_KEY; then
-      log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_API_KEY"
-      return 1
-    fi
     if ! _has_env COMPOSIO_WEBHOOK_SECRET; then
       log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_WEBHOOK_SECRET"
       return 1

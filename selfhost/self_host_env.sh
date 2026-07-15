@@ -234,10 +234,6 @@ self_host_validate_provider_trigger_config() {
       return 1
       ;;
   esac
-  if [[ -z "${COMPOSIO_API_KEY:-}" ]]; then
-    echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_API_KEY" >&2
-    return 1
-  fi
   if [[ -z "${COMPOSIO_WEBHOOK_SECRET:-}" ]]; then
     echo "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_WEBHOOK_SECRET" >&2
     return 1
