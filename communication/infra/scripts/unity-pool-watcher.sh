@@ -514,17 +514,18 @@ ensure_unity_workspace_access() {
     # /Unity/Local. Both the parent and mountpoint must be traversable by that
     # user; ownership on the mounted filesystem alone is insufficient when the
     # pool image or a prior assignment left /Unity root-owned/restricted.
-    install -d -o unityuser -g unityuser -m 0755 /Unity /Unity/Local
-    chown unityuser:unityuser /Unity /Unity/Local
-    chmod 0755 /Unity /Unity/Local
+    install -d -o unityuser -g unityuser -m 0755 \
+        /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
+    chown unityuser:unityuser /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
+    chmod 0755 /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
 
     if ! runuser -u unityuser -- sh -c \
-        'test -r "$1" && test -w "$1" && test -x "$1"' \
-        sh /Unity/Local; then
-        log "ERROR: unityuser cannot access /Unity/Local after permission repair"
+        'for path; do test -r "$path" && test -w "$path" && test -x "$path" || exit 1; done' \
+        sh /Unity /Unity/Local /Unity/.config /Unity/.local /Unity/.cache; then
+        log "ERROR: unityuser cannot access desktop workspace paths after permission repair"
         return 1
     fi
-    log "Verified unityuser workspace access at /Unity/Local"
+    log "Verified unityuser access to desktop workspace paths"
 }
 
 do_assign() {
@@ -618,9 +619,9 @@ do_assign() {
         fi
     fi
 
-    # A restored archive may carry root-owned paths, and /Unity itself can be
-    # reset by a pool image update. Validate the exact account that will run
-    # agent-service before starting it.
+    # A restored archive may carry root-owned paths, and mounting the persistent
+    # disk may replace Local's ownership. Validate before restoring the desktop
+    # profile so its files are written into a usable home directory.
     ensure_unity_workspace_access || return 1
 
     # Restore browser/GUI profile into home (always when companion blob exists).
@@ -632,6 +633,12 @@ do_assign() {
             restore_desktop_profile "$assistant_id" "$profile_bucket"
         fi
     fi
+
+    # The profile archive is built from a root-owned mktemp directory and
+    # contains its top-level `./` entry. GNU tar applies that directory mode to
+    # its extraction target, which can silently reset /Unity to root:0700.
+    # Repair it again before the unprivileged agent starts.
+    ensure_unity_workspace_access || return 1
 
     # SSH authorized_keys
     if [[ -n "$ssh_public_key" ]]; then
