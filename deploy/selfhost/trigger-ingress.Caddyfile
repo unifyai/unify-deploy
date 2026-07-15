@@ -1,0 +1,14 @@
+:8080 {
+	@provider_triggers {
+		method POST
+		path /v0/webhooks/integrations/*
+	}
+
+	handle @provider_triggers {
+		reverse_proxy orchestra:8000
+	}
+
+	handle {
+		respond 404
+	}
+}

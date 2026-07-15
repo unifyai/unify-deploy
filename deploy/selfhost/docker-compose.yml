@@ -143,6 +143,10 @@ services:
       SELF_HOST: "1"
       SELF_HOST_LOCAL_BUCKET_DIR: /data/local-bucket
       ORCHESTRA_PUBLIC_URL: http://orchestra:8000
+      TRIGGER_EVENT_PRIVATE_ROOT: /data/provider-event-blobs
+      TRIGGER_EVENT_WRAPPING_MASTER_KEY: ${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}
+      ORCHESTRA_TRIGGER_CALLBACK_BASE_URL: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}
+      COMPOSIO_WEBHOOK_SECRET: ${COMPOSIO_WEBHOOK_SECRET:-}
       ORCHESTRA_WORKERS_COUNT: "2"
       # Comms gateway Orchestra probes for capability flags (/v0/features) and
       # admin comms ops. Defaults to the bundled local gateway; point
@@ -153,6 +157,7 @@ services:
       UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - local-bucket:/data/local-bucket
+    - provider-event-blobs:/data/provider-event-blobs
     depends_on:
       orchestra-seed:
         condition: service_completed_successfully
@@ -534,9 +539,58 @@ services:
       retries: 40
     restart: unless-stopped
 
+  trigger-ingress:
+    image: caddy:2-alpine
+    profiles: ["provider-triggers"]
+    volumes:
+    - ./trigger-ingress.Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+    - "127.0.0.1:8088:8080"
+    depends_on:
+      orchestra:
+        condition: service_healthy
+    restart: unless-stopped
+
+  orchestra-trigger-worker:
+    <<: *orchestra_image
+    profiles: ["provider-triggers"]
+    command: ["python", "-m", "orchestra.workers.provider_trigger_worker"]
+    env_file:
+    - ./coordinator.env
+    environment:
+      ORCHESTRA_HOST: 0.0.0.0
+      ORCHESTRA_PORT: 8080
+      PORT: "8080"
+      ORCHESTRA_DB_HOST: postgres
+      ORCHESTRA_DB_PORT: 5432
+      ORCHESTRA_DB_USER: orchestra
+      ORCHESTRA_DB_PASS: ${POSTGRES_PASSWORD:-orchestra}
+      ORCHESTRA_DB_BASE: orchestra
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      COMPOSIO_WEBHOOK_SECRET: ${COMPOSIO_WEBHOOK_SECRET:-}
+      SELF_HOST: "1"
+      TRIGGER_EVENT_PRIVATE_ROOT: /data/provider-event-blobs
+      TRIGGER_EVENT_WRAPPING_MASTER_KEY: ${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}
+      ORCHESTRA_TRIGGER_CALLBACK_BASE_URL: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}
+      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+    volumes:
+    - provider-event-blobs:/data/provider-event-blobs
+    depends_on:
+      orchestra:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=5)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   local-bucket:
+  provider-event-blobs:
   runtime:
 
 secrets:
