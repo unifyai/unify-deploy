@@ -51,6 +51,9 @@ compose_profile_args() {
   if _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
     printf '%s\n' --profile internal-calls
   fi
+  if _enabled SELF_HOST_PROVIDER_TRIGGERS_ENABLED; then
+    printf '%s\n' --profile provider-triggers
+  fi
 }
 
 # Compose gives the caller's shell environment precedence over --env-file
@@ -93,6 +96,32 @@ require_compose() {
 }
 
 validate_optional_profiles() {
+  if _enabled SELF_HOST_PROVIDER_TRIGGERS_ENABLED; then
+    if ! _has_env TRIGGER_EVENT_WRAPPING_MASTER_KEY; then
+      log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires TRIGGER_EVENT_WRAPPING_MASTER_KEY"
+      return 1
+    fi
+    if ! _has_env ORCHESTRA_TRIGGER_CALLBACK_BASE_URL; then
+      log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires ORCHESTRA_TRIGGER_CALLBACK_BASE_URL (public HTTPS)"
+      return 1
+    fi
+    case "$(_env_value ORCHESTRA_TRIGGER_CALLBACK_BASE_URL)" in
+      https://*) ;;
+      *)
+        log_err "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL must start with https://"
+        return 1
+        ;;
+    esac
+    if ! _has_env COMPOSIO_API_KEY; then
+      log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_API_KEY"
+      return 1
+    fi
+    if ! _has_env COMPOSIO_WEBHOOK_SECRET; then
+      log_err "SELF_HOST_PROVIDER_TRIGGERS_ENABLED requires COMPOSIO_WEBHOOK_SECRET"
+      return 1
+    fi
+  fi
+
   if ! _enabled SELF_HOST_INTERNAL_COMMS_ENABLED \
     && ! _enabled SELF_HOST_INTERNAL_CALLS_ENABLED; then
     return 0
@@ -200,6 +229,10 @@ stop_disabled_profile_services() {
     fi
     compose stop comms-bridge >/dev/null 2>&1 || true
     compose rm -f comms-bridge comms-runtime-init >/dev/null 2>&1 || true
+  fi
+  if ! _enabled SELF_HOST_PROVIDER_TRIGGERS_ENABLED; then
+    compose stop orchestra-trigger-worker trigger-ingress >/dev/null 2>&1 || true
+    compose rm -f orchestra-trigger-worker trigger-ingress >/dev/null 2>&1 || true
   fi
 }
 
@@ -420,6 +453,33 @@ cmd_doctor() {
       fi
     else
       log_info "Internal communications profiles disabled (default)"
+    fi
+    if _enabled SELF_HOST_PROVIDER_TRIGGERS_ENABLED; then
+      if validate_optional_profiles; then
+        log_ok "Provider-trigger profile prerequisites configured"
+      else
+        log_err "Provider-trigger profile configuration invalid"
+        doctor_ok=false
+      fi
+      local worker_id worker_health ingress_id
+      worker_id="$(compose ps -q orchestra-trigger-worker 2>/dev/null || true)"
+      worker_health=""
+      if [[ -n "$worker_id" ]]; then
+        worker_health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_id" 2>/dev/null || true)"
+      fi
+      if [[ "$worker_health" == "healthy" ]]; then
+        log_ok "Provider-trigger worker healthy"
+      else
+        log_warn "Provider-trigger worker is not healthy (${worker_health:-not started})"
+      fi
+      ingress_id="$(compose ps -q trigger-ingress 2>/dev/null || true)"
+      if [[ -n "$ingress_id" ]]; then
+        log_ok "Provider-trigger ingress running (local test URL: http://127.0.0.1:8088)"
+      else
+        log_warn "Provider-trigger ingress not started"
+      fi
+    else
+      log_info "Provider-trigger profile disabled (default)"
     fi
   else
     log_err ".env missing at $ENV_FILE"
