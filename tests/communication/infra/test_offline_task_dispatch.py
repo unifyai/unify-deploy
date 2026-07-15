@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -1317,3 +1318,52 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
         )
         is None
     )
+
+
+def test_desktop_browser_target_resolves_ready_binding(monkeypatch):
+    """Desktop-targeted workers receive only the current ready binding URL."""
+    from common.settings import SETTINGS
+    from communication.infra import task_activation
+
+    monkeypatch.setattr(
+        SETTINGS,
+        "desktop_browser_task_assistant_ids",
+        frozenset({"assistant-123"}),
+    )
+    session = {
+        "spec": {"desiredState": "Running"},
+        "status": {
+            "conditions": [{"type": "DesktopReady", "status": "True"}],
+            "binding": {"desktopUrl": "https://assistant-123.vm.unify.ai"},
+        },
+    }
+    with (
+        patch(
+            "communication.infra.task_activation.get_custom_objects_api",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "communication.infra.task_activation.get_assistant_session",
+            return_value=session,
+        ),
+    ):
+        env = asyncio.run(
+            task_activation._assistant_desktop_browser_env("assistant-123")
+        )
+
+    assert env == {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": "https://assistant-123.vm.unify.ai",
+        "ASSISTANT_ID": "assistant-123",
+    }
+
+
+def test_desktop_browser_target_requires_assistant_flag(monkeypatch):
+    """An opted-in task must defer rather than use a pod-local browser."""
+    from common.settings import SETTINGS
+    from communication.infra import task_activation
+
+    monkeypatch.setattr(SETTINGS, "desktop_browser_task_assistant_ids", frozenset())
+
+    with pytest.raises(Exception, match="not enabled"):
+        asyncio.run(task_activation._assistant_desktop_browser_env("assistant-123"))

@@ -120,6 +120,7 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     activation_revision: str
     scheduled_for: datetime
     execution_mode: Literal["live", "offline"] = "live"
+    browser_target: Optional[Literal["assistant_desktop"]] = None
     entrypoint: Optional[int] = None
     source_type: Literal["scheduled"] = "scheduled"
     task_label: Optional[str] = None
@@ -151,6 +152,7 @@ class OfflineTaskDispatchRequest(BaseModel):
     source_task_log_id: int
     activation_revision: str
     execution_mode: Literal["offline"] = "offline"
+    browser_target: Optional[Literal["assistant_desktop"]] = None
     entrypoint: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
     source_type: RunSource = RunSource.scheduled

@@ -118,6 +118,14 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
+        self.desktop_browser_task_assistant_ids: frozenset[str] = frozenset(
+            assistant_id.strip()
+            for assistant_id in os.environ.get(
+                "UNITY_DESKTOP_BROWSER_TASK_ASSISTANT_IDS",
+                "",
+            ).split(",")
+            if assistant_id.strip()
+        )
         # TODO: Remove UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH once Orchestra
         # owns downstream adoption for provider-event operations (no local SQLite).
         self.provider_event_dispatch_inbox_path: str = os.environ.get(

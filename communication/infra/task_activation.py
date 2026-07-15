@@ -64,6 +64,14 @@ from .models import (
     ScheduledTaskActivationUpsertRequest,
     TaskActivationDiagnosticRequest,
 )
+from .assistant_sessions import (
+    DESIRED_STATE_RUNNING,
+    assistant_session_desired_state,
+    binding_desktop_url,
+    get_assistant_session,
+    get_custom_objects_api,
+    session_binding,
+)
 from .runtime_clients import (
     get_cloud_tasks_client as _get_cloud_tasks_client,
     get_k8s_clients as _get_k8s_clients,
@@ -395,6 +403,7 @@ def _scheduled_activation_http_body(
         "activation_revision": request.activation_revision,
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
+        "browser_target": request.browser_target,
         "entrypoint": request.entrypoint,
         "source_type": request.source_type,
         "task_label": request.task_label or "",
@@ -1171,6 +1180,60 @@ def _launch_offline_task_job(
     return True
 
 
+async def _assistant_desktop_browser_env(assistant_id: str) -> dict[str, str]:
+    """Resolve a ready assistant desktop into browser-target runner variables.
+
+    Scheduler workers remain the execution surface.  This binding only makes
+    website-facing browser work use the assistant's current desktop VM.  A
+    missing or draining VM is retryable; callers must never silently fall back
+    to a pod-local browser.
+    """
+
+    if assistant_id not in SETTINGS.desktop_browser_task_assistant_ids:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Assistant desktop browser tasks are not enabled for this assistant; "
+                "desktop-targeted task will retry"
+            ),
+        )
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop browser target is temporarily unavailable",
+        )
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if session is None or assistant_session_desired_state(session) != DESIRED_STATE_RUNNING:
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop is not running; desktop-targeted task will retry",
+        )
+    conditions = ((session.get("status") or {}).get("conditions") or [])
+    desktop_ready = any(
+        condition.get("type") == "DesktopReady" and condition.get("status") == "True"
+        for condition in conditions
+        if isinstance(condition, dict)
+    )
+    binding = session_binding(session)
+    desktop_url = binding_desktop_url(binding).strip()
+    if not desktop_ready or not desktop_url.startswith("https://"):
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop is not ready; desktop-targeted task will retry",
+        )
+    return {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": desktop_url,
+        "ASSISTANT_ID": assistant_id,
+    }
+
+
 def _build_offline_runner_env(
     *,
     request: OfflineTaskDispatchRequest,
@@ -1630,6 +1693,11 @@ def _scheduled_activation_upsert_request_from_activation(
         execution_mode=(
             "offline" if activation.get("execution_mode") == "offline" else "live"
         ),
+        browser_target=(
+            "assistant_desktop"
+            if activation.get("browser_target") == "assistant_desktop"
+            else None
+        ),
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -1650,6 +1718,11 @@ def _offline_dispatch_request_from_activation(
         source_task_log_id=int(activation.get("source_task_log_id") or 0),
         activation_revision=str(activation.get("activation_revision") or ""),
         execution_mode="offline",
+        browser_target=(
+            "assistant_desktop"
+            if activation.get("browser_target") == "assistant_desktop"
+            else None
+        ),
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -2082,6 +2155,12 @@ async def dispatch_offline_task(
 
         stage = "launch_job"
         job_name = _build_offline_task_job_name(run_key, retry_count=retry_count)
+        desktop_browser_env: dict[str, str] = {}
+        if request.browser_target == "assistant_desktop":
+            stage = "desktop_target_resolve"
+            desktop_browser_env = await _assistant_desktop_browser_env(
+                request.assistant_id
+            )
         offline_env = _build_offline_runner_env(
             request=request,
             activation=activation or {},
@@ -2089,6 +2168,7 @@ async def dispatch_offline_task(
             run_key=run_key,
             job_name=job_name,
         )
+        offline_env.update(desktop_browser_env)
         _emit_task_activation_event(
             "task_activation.offline_dispatch.stage",
             **_offline_dispatch_event_fields(
@@ -2155,6 +2235,18 @@ async def dispatch_offline_task(
             "run_key": run_key,
             "job_name": job_name,
         }
+    except HTTPException as exc:
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.deferred",
+            **_offline_dispatch_event_fields(
+                request,
+                stage=stage,
+                run_key=run_key,
+                job_name=job_name,
+                error=exc,
+            ),
+        )
+        raise
     except requests.RequestException as exc:
         _emit_task_activation_event(
             "task_activation.offline_dispatch.failed",
