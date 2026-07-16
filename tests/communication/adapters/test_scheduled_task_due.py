@@ -99,6 +99,8 @@ def test_scheduled_task_due_attaches_wake_reason_for_cold_start():
             "activation_revision": "rev-123",
             "scheduled_for": "2026-04-10T09:00:00+00:00",
             "execution_mode": "live",
+            "requires_filesystem": False,
+            "requires_computer": False,
             "source_type": "scheduled",
             "task_label": "Morning briefing",
             "task_summary": "Prepare the morning update before the user checks in.",
@@ -240,3 +242,37 @@ def test_scheduled_task_due_carries_authorized_team_destination():
     assert response.status_code == 200
     wake_reasons = mock_dispatch.call_args.kwargs["wake_reasons"]
     assert wake_reasons[0]["destination"] == "team:7"
+
+
+def test_scheduled_task_due_sets_desktop_required_for_resource_flags():
+    """Resource-flagged due wakes should force desktop_required on cold start."""
+
+    client = TestClient(app)
+    start_response = MagicMock(status_code=200)
+    start_response.json.return_value = {
+        "success": True,
+        "activation_id": "activation-1",
+        "active_session_already_running": False,
+    }
+
+    with (
+        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch("adapters.main.get_assistant", return_value=_assistant_data()),
+        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch(
+            "adapters.main.dispatch_unity_start_intent",
+            return_value=start_response,
+        ) as mock_dispatch,
+        patch("adapters.main._publish_unity_system_event"),
+    ):
+        response = client.post(
+            "/scheduled/tasks/due",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={**_task_due_payload(), "requires_computer": True},
+        )
+
+    assert response.status_code == 200
+    assert mock_dispatch.call_args.kwargs["desktop_required"] is True
+    wake_reasons = mock_dispatch.call_args.kwargs["wake_reasons"]
+    assert wake_reasons[0]["requires_computer"] is True
+    assert wake_reasons[0]["requires_filesystem"] is False

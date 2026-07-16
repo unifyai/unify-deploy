@@ -1367,6 +1367,31 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
     )
 
 
+def test_resolve_resource_flags_merges_request_activation_and_legacy_browser():
+    """Request flags, activation flags, and browser_target all imply computer."""
+    from communication.infra import task_activation
+
+    assert task_activation._resolve_resource_flags({}) == (False, False)
+    assert task_activation._resolve_resource_flags(
+        {"requires_filesystem": True},
+    ) == (True, False)
+    assert task_activation._resolve_resource_flags(
+        {"requires_computer": True},
+    ) == (False, True)
+    assert task_activation._resolve_resource_flags(
+        {"browser_target": "assistant_desktop"},
+    ) == (False, True)
+    assert task_activation._resolve_resource_flags(
+        {},
+        request_requires_computer=True,
+    ) == (False, True)
+    assert task_activation._resolve_resource_flags(
+        {"requires_filesystem": False},
+        request_requires_filesystem=True,
+        request_browser_target="assistant_desktop",
+    ) == (True, True)
+
+
 def test_desktop_browser_target_resolves_ready_binding():
     """Desktop-targeted workers receive only the current ready binding URL."""
     from communication.infra import task_activation
@@ -1403,6 +1428,55 @@ def test_desktop_browser_target_resolves_ready_binding():
         "ASSISTANT_DESKTOP_URL": "https://assistant-123.vm.unify.ai",
         "ASSISTANT_ID": "assistant-123",
     }
+
+
+def test_requires_computer_offline_dispatch_resolves_desktop_binding():
+    """requires_computer=True takes the same desktop-ready gate as browser_target."""
+
+    client = _client()
+    desktop_env = {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": "https://assistant-123.vm.unify.ai",
+        "ASSISTANT_ID": "assistant-123",
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(api_key="key"),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={"run": {"state": "pending"}, "created": True},
+        ),
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", "core-api", None, None)),
+        ),
+        patch(
+            "communication.infra.task_activation._assistant_desktop_browser_env",
+            new=AsyncMock(return_value=desktop_env),
+        ) as mock_desktop,
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
+        ) as mock_launch,
+        patch("communication.infra.task_activation._update_task_run"),
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(requires_computer=True),
+        )
+
+    assert response.status_code == 200
+    mock_desktop.assert_awaited_once()
+    offline_env = mock_launch.call_args.kwargs["offline_env"]
+    assert offline_env["ASSISTANT_DESKTOP_URL"] == desktop_env["ASSISTANT_DESKTOP_URL"]
+    assert offline_env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
 
 def test_desktop_browser_target_uses_local_worker_without_computer_use():

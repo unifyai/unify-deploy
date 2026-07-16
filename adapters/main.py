@@ -12,7 +12,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.parse import quote
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from fastapi import (
     Body,
     Depends,
@@ -1541,6 +1541,9 @@ class ScheduledTaskDuePayload(BaseModel):
     activation_revision: str
     scheduled_for: datetime
     execution_mode: str = "live"
+    requires_filesystem: bool = False
+    requires_computer: bool = False
+    browser_target: Optional[Literal["assistant_desktop"]] = None
     source_type: str = "scheduled"
     task_label: str = ""
     task_summary: str = ""
@@ -2766,6 +2769,8 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
         "activation_revision": payload.activation_revision,
         "scheduled_for": payload.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": payload.execution_mode,
+        "requires_filesystem": payload.requires_filesystem,
+        "requires_computer": payload.requires_computer,
         "source_type": payload.source_type,
         "task_label": payload.task_label,
         "task_summary": payload.task_summary,
@@ -2774,6 +2779,8 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
     }
     if payload.destination is not None:
         reason["destination"] = payload.destination
+    if payload.browser_target is not None:
+        reason["browser_target"] = payload.browser_target
     return reason
 
 
@@ -2976,6 +2983,15 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
 
     assistant_id = assistant_data["assistant_id"]
     wake_reason = _build_task_due_reason(payload)
+    desktop_required = (
+        True
+        if (
+            payload.requires_filesystem
+            or payload.requires_computer
+            or payload.browser_target == "assistant_desktop"
+        )
+        else None
+    )
 
     try:
         if uses_local_unity_runtime(assistant_data):
@@ -2997,6 +3013,7 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             "api_message",
             wake_reasons=[wake_reason],
             timeout_seconds=30,
+            desktop_required=desktop_required,
         )
     except requests.RequestException as exc:
         logger.error(

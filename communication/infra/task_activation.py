@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -165,6 +166,7 @@ def _offline_dispatch_request_from_provider_event(
     """Adapt one provider-event dispatch request for offline job launch."""
 
     source_task_log_id = activation.get("source_task_log_id")
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return OfflineTaskDispatchRequest(
         assistant_id=request.assistant_id,
         destination=activation.get("destination"),
@@ -172,6 +174,14 @@ def _offline_dispatch_request_from_provider_event(
         source_task_log_id=int(source_task_log_id or request.task_id),
         activation_revision=request.accepted_activation_revision,
         execution_mode="offline",
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
+        browser_target=(
+            "assistant_desktop"
+            if activation.get("browser_target") == "assistant_desktop"
+            or requires_computer
+            else None
+        ),
         entrypoint=activation.get("entrypoint"),
         source_type=RunSource.provider_event,
         task_name=activation.get("task_name"),
@@ -202,6 +212,26 @@ def _emit_task_activation_event(event: str, **fields: Any) -> None:
             default=str,
         ),
     )
+
+
+def _resolve_resource_flags(
+    data: Mapping[str, Any] | None,
+    *,
+    request_requires_filesystem: bool = False,
+    request_requires_computer: bool = False,
+    request_browser_target: str | None = None,
+) -> tuple[bool, bool]:
+    data = data or {}
+    requires_filesystem = bool(request_requires_filesystem) or bool(
+        data.get("requires_filesystem"),
+    )
+    requires_computer = bool(request_requires_computer) or bool(
+        data.get("requires_computer"),
+    )
+    browser = request_browser_target or data.get("browser_target")
+    if browser == "assistant_desktop":
+        requires_computer = True
+    return requires_filesystem, requires_computer
 
 
 def _offline_dispatch_event_fields(
@@ -385,6 +415,8 @@ def _scheduled_activation_http_body(
         "activation_revision": request.activation_revision,
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
+        "requires_filesystem": request.requires_filesystem,
+        "requires_computer": request.requires_computer,
         "browser_target": request.browser_target,
         "entrypoint": request.entrypoint,
         "source_type": request.source_type,
@@ -1263,6 +1295,12 @@ def _build_offline_runner_env(
     team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
+    requires_filesystem, requires_computer = _resolve_resource_flags(
+        activation,
+        request_requires_filesystem=request.requires_filesystem,
+        request_requires_computer=request.requires_computer,
+        request_browser_target=request.browser_target,
+    )
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     provider_event_kwargs: dict[str, Any] = {}
     if provider_event_dispatch is not None:
@@ -1277,25 +1315,41 @@ def _build_offline_runner_env(
             "provider_event_context_ref": provider_event_dispatch.event_context_ref,
             "provider_event_issued_at": issued_at.astimezone(timezone.utc).isoformat(),
         }
-    env = _build_offline_runner_env_shared(
-        assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
-        task_id=request.task_id,
-        source_task_log_id=request.source_task_log_id,
-        activation_revision=request.activation_revision,
-        source_type=request.source_type,
-        run_key=run_key,
-        task_name=str(activation.get("task_name") or ""),
-        task_description=str(activation.get("task_description") or ""),
-        scheduled_for=request.scheduled_for,
-        source_ref=request.source_ref,
-        source_medium=(
+    shared_kwargs: dict[str, Any] = {
+        "assistant_id": (
+            str(assistant_data.get("assistant_id") or request.assistant_id)
+        ),
+        "task_id": request.task_id,
+        "source_task_log_id": request.source_task_log_id,
+        "activation_revision": request.activation_revision,
+        "source_type": request.source_type,
+        "run_key": run_key,
+        "task_name": str(activation.get("task_name") or ""),
+        "task_description": str(activation.get("task_description") or ""),
+        "scheduled_for": request.scheduled_for,
+        "source_ref": request.source_ref,
+        "source_medium": (
             request.source_medium or str(activation.get("trigger_medium") or "")
         ),
-        source_contact_id=request.source_contact_id,
-        entrypoint=entrypoint,
-        job_name=job_name,
+        "source_contact_id": request.source_contact_id,
+        "entrypoint": entrypoint,
+        "job_name": job_name,
+        "requires_filesystem": requires_filesystem,
+        "requires_computer": requires_computer,
         **provider_event_kwargs,
-    )
+    }
+    try:
+        env = _build_offline_runner_env_shared(**shared_kwargs)
+    except TypeError:
+        # Unity contract may briefly lag the hosted kwargs; still emit the
+        # resource-requirement env vars from this layer.
+        shared_kwargs.pop("requires_filesystem", None)
+        shared_kwargs.pop("requires_computer", None)
+        env = _build_offline_runner_env_shared(**shared_kwargs)
+        env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] = (
+            "1" if requires_filesystem else "0"
+        )
+        env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] = "1" if requires_computer else "0"
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.
@@ -1682,6 +1736,7 @@ def _activation_health(
 def _scheduled_activation_upsert_request_from_activation(
     activation: dict[str, Any],
 ) -> ScheduledTaskActivationUpsertRequest:
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return ScheduledTaskActivationUpsertRequest(
         assistant_id=str(activation.get("assistant_id") or ""),
         task_id=int(activation.get("task_id") or 0),
@@ -1693,9 +1748,12 @@ def _scheduled_activation_upsert_request_from_activation(
         execution_mode=(
             "offline" if activation.get("execution_mode") == "offline" else "live"
         ),
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
         browser_target=(
             "assistant_desktop"
             if activation.get("browser_target") == "assistant_desktop"
+            or requires_computer
             else None
         ),
         entrypoint=(
@@ -1712,15 +1770,19 @@ def _scheduled_activation_upsert_request_from_activation(
 def _offline_dispatch_request_from_activation(
     activation: dict[str, Any],
 ) -> OfflineTaskDispatchRequest:
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return OfflineTaskDispatchRequest(
         assistant_id=str(activation.get("assistant_id") or ""),
         task_id=int(activation.get("task_id") or 0),
         source_task_log_id=int(activation.get("source_task_log_id") or 0),
         activation_revision=str(activation.get("activation_revision") or ""),
         execution_mode="offline",
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
         browser_target=(
             "assistant_desktop"
             if activation.get("browser_target") == "assistant_desktop"
+            or requires_computer
             else None
         ),
         entrypoint=(
@@ -2155,8 +2217,14 @@ async def dispatch_offline_task(
 
         stage = "launch_job"
         job_name = _build_offline_task_job_name(run_key, retry_count=retry_count)
+        requires_filesystem, requires_computer = _resolve_resource_flags(
+            activation or {},
+            request_requires_filesystem=request.requires_filesystem,
+            request_requires_computer=request.requires_computer,
+            request_browser_target=request.browser_target,
+        )
         desktop_browser_env: dict[str, str] = {}
-        if request.browser_target == "assistant_desktop":
+        if requires_computer or requires_filesystem:
             stage = "desktop_target_resolve"
             desktop_browser_env = await _assistant_desktop_browser_env(
                 request.assistant_id,
@@ -2314,6 +2382,13 @@ async def dispatch_provider_event_offline_route(
     batch_api, core_api, _, _ = await _get_k8s_clients()
     activation = await asyncio.to_thread(_provider_event_activation_metadata, request)
     assistant_data = await asyncio.to_thread(_get_assistant_data, request.assistant_id)
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
+    desktop_browser_env: dict[str, str] = {}
+    if requires_computer or requires_filesystem:
+        desktop_browser_env = await _assistant_desktop_browser_env(
+            request.assistant_id,
+            assistant_data=assistant_data,
+        )
 
     def launch_job(provider_request: ProviderEventDispatchRequest) -> str:
         offline_request = _offline_dispatch_request_from_provider_event(
@@ -2337,6 +2412,7 @@ async def dispatch_provider_event_offline_route(
             job_name=job_name,
             provider_event_dispatch=provider_request,
         )
+        offline_env.update(desktop_browser_env)
         _launch_offline_task_job(
             batch_api=batch_api,
             core_api=core_api,
