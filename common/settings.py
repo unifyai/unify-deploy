@@ -118,12 +118,6 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
-        # TODO: Remove UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH once Orchestra
-        # owns downstream adoption for provider-event operations (no local SQLite).
-        self.provider_event_dispatch_inbox_path: str = os.environ.get(
-            "UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH",
-            "/var/lib/unity/provider-event-dispatch-inbox.sqlite3",
-        )
         self.provider_event_dispatch_request_ttl_seconds: int = int(
             os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
         )
