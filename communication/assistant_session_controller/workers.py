@@ -261,6 +261,11 @@ def _run_vm_assignment(
     startup_payload = read_bootstrap_secret(core_api, namespace, secret_name)
     api_key = str(startup_payload.get("api_key", "") or "")
     try:
+        if placement is None:
+            raise ValueError(
+                "Desktop assignment requires a complete AssistantSession placement; "
+                "refusing the default pool location"
+            )
         if migration is not None:
             # Preparation is replay-safe and leaves the source disk/IP intact.
             # The target address is attached only after the target VM reports
@@ -279,6 +284,31 @@ def _run_vm_assignment(
             placement=placement,
             attach_static_ip=migration is None,
         )
+        if (
+            result["pool_location"] != placement.location.id
+            or result["region"] != placement.region
+            or result["zone"] != placement.zone
+        ):
+            actual_placement = placement_from_ref(
+                {
+                    "poolLocation": result["pool_location"],
+                    "region": result["region"],
+                    "zone": result["zone"],
+                }
+            )
+            try:
+                release_pool_vm(
+                    assistant_id,
+                    binding_id,
+                    vm_name=result["vm_name"],
+                    placement=actual_placement,
+                )
+            finally:
+                raise ValueError(
+                    "Pool assignment returned a VM outside the requested placement: "
+                    f"expected={placement.location.id}/{placement.zone} "
+                    f"actual={result['pool_location']}/{result['zone']}"
+                )
         persisted = persist_binding_vm_assignment_result(
             custom_api,
             namespace,
@@ -319,8 +349,9 @@ def _run_vm_assignment(
             )
         return
     except ValueError as exc:
-        with vm_placement_scope(placement):
-            replenish_pool(vm_type)
+        if placement is not None:
+            with vm_placement_scope(placement):
+                replenish_pool(vm_type)
         persist_binding_vm_assignment_result(
             custom_api,
             namespace,
