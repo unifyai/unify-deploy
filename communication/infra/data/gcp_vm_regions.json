@@ -1,0 +1,478 @@
+[
+  {
+    "display_name": "Johannesburg, South Africa",
+    "id": "africa-south1",
+    "latitude": -26.2041,
+    "longitude": 28.0473,
+    "zones": [
+      "africa-south1-a",
+      "africa-south1-b",
+      "africa-south1-c"
+    ]
+  },
+  {
+    "display_name": "Changhua County, Taiwan",
+    "id": "asia-east1",
+    "latitude": 24.8138,
+    "longitude": 120.9675,
+    "zones": [
+      "asia-east1-a",
+      "asia-east1-b",
+      "asia-east1-c"
+    ]
+  },
+  {
+    "display_name": "Hong Kong",
+    "id": "asia-east2",
+    "latitude": 22.3193,
+    "longitude": 114.1694,
+    "zones": [
+      "asia-east2-a",
+      "asia-east2-b",
+      "asia-east2-c"
+    ]
+  },
+  {
+    "display_name": "Tokyo, Japan",
+    "id": "asia-northeast1",
+    "latitude": 35.6762,
+    "longitude": 139.6503,
+    "zones": [
+      "asia-northeast1-a",
+      "asia-northeast1-b",
+      "asia-northeast1-c"
+    ]
+  },
+  {
+    "display_name": "Osaka, Japan",
+    "id": "asia-northeast2",
+    "latitude": 34.6937,
+    "longitude": 135.5023,
+    "zones": [
+      "asia-northeast2-a",
+      "asia-northeast2-b",
+      "asia-northeast2-c"
+    ]
+  },
+  {
+    "display_name": "Seoul, South Korea",
+    "id": "asia-northeast3",
+    "latitude": 37.5665,
+    "longitude": 126.978,
+    "zones": [
+      "asia-northeast3-a",
+      "asia-northeast3-b",
+      "asia-northeast3-c"
+    ]
+  },
+  {
+    "display_name": "Mumbai, India",
+    "id": "asia-south1",
+    "latitude": 19.076,
+    "longitude": 72.8777,
+    "zones": [
+      "asia-south1-a",
+      "asia-south1-b",
+      "asia-south1-c"
+    ]
+  },
+  {
+    "display_name": "Delhi, India",
+    "id": "asia-south2",
+    "latitude": 28.6139,
+    "longitude": 77.209,
+    "zones": [
+      "asia-south2-a",
+      "asia-south2-b",
+      "asia-south2-c"
+    ]
+  },
+  {
+    "display_name": "Singapore",
+    "id": "asia-southeast1",
+    "latitude": 1.3521,
+    "longitude": 103.8198,
+    "zones": [
+      "asia-southeast1-a",
+      "asia-southeast1-b",
+      "asia-southeast1-c"
+    ]
+  },
+  {
+    "display_name": "Jakarta, Indonesia",
+    "id": "asia-southeast2",
+    "latitude": -6.2088,
+    "longitude": 106.8456,
+    "zones": [
+      "asia-southeast2-a",
+      "asia-southeast2-b",
+      "asia-southeast2-c"
+    ]
+  },
+  {
+    "display_name": "Bangkok, Thailand",
+    "id": "asia-southeast3",
+    "latitude": 13.7563,
+    "longitude": 100.5018,
+    "zones": [
+      "asia-southeast3-a",
+      "asia-southeast3-b",
+      "asia-southeast3-c"
+    ]
+  },
+  {
+    "display_name": "Sydney, Australia",
+    "id": "australia-southeast1",
+    "latitude": -33.8688,
+    "longitude": 151.2093,
+    "zones": [
+      "australia-southeast1-a",
+      "australia-southeast1-b",
+      "australia-southeast1-c"
+    ]
+  },
+  {
+    "display_name": "Melbourne, Australia",
+    "id": "australia-southeast2",
+    "latitude": -37.8136,
+    "longitude": 144.9631,
+    "zones": [
+      "australia-southeast2-a",
+      "australia-southeast2-b",
+      "australia-southeast2-c"
+    ]
+  },
+  {
+    "display_name": "Warsaw, Poland",
+    "id": "europe-central2",
+    "latitude": 52.2297,
+    "longitude": 21.0122,
+    "zones": [
+      "europe-central2-a",
+      "europe-central2-b",
+      "europe-central2-c"
+    ]
+  },
+  {
+    "display_name": "Hamina, Finland",
+    "id": "europe-north1",
+    "latitude": 60.1699,
+    "longitude": 24.9384,
+    "zones": [
+      "europe-north1-a",
+      "europe-north1-b",
+      "europe-north1-c"
+    ]
+  },
+  {
+    "display_name": "Stockholm, Sweden",
+    "id": "europe-north2",
+    "latitude": 59.3293,
+    "longitude": 18.0686,
+    "zones": [
+      "europe-north2-a",
+      "europe-north2-b",
+      "europe-north2-c"
+    ]
+  },
+  {
+    "display_name": "Madrid, Spain",
+    "id": "europe-southwest1",
+    "latitude": 40.4168,
+    "longitude": -3.7038,
+    "zones": [
+      "europe-southwest1-a",
+      "europe-southwest1-b",
+      "europe-southwest1-c"
+    ]
+  },
+  {
+    "display_name": "St. Ghislain, Belgium",
+    "id": "europe-west1",
+    "latitude": 50.8503,
+    "longitude": 4.3517,
+    "zones": [
+      "europe-west1-b",
+      "europe-west1-c",
+      "europe-west1-d"
+    ]
+  },
+  {
+    "display_name": "Berlin, Germany",
+    "id": "europe-west10",
+    "latitude": 52.3676,
+    "longitude": 4.9041,
+    "zones": [
+      "europe-west10-a",
+      "europe-west10-b",
+      "europe-west10-c"
+    ]
+  },
+  {
+    "display_name": "Turin, Italy",
+    "id": "europe-west12",
+    "latitude": 45.4642,
+    "longitude": 9.19,
+    "zones": [
+      "europe-west12-a",
+      "europe-west12-b",
+      "europe-west12-c"
+    ]
+  },
+  {
+    "display_name": "London, United Kingdom",
+    "id": "europe-west2",
+    "latitude": 51.5074,
+    "longitude": -0.1278,
+    "zones": [
+      "europe-west2-a",
+      "europe-west2-b",
+      "europe-west2-c"
+    ]
+  },
+  {
+    "display_name": "Paris, France",
+    "id": "europe-west3",
+    "latitude": 50.6292,
+    "longitude": 3.0573,
+    "zones": [
+      "europe-west3-a",
+      "europe-west3-b",
+      "europe-west3-c"
+    ]
+  },
+  {
+    "display_name": "Dublin, Ireland",
+    "id": "europe-west4",
+    "latitude": 53.3498,
+    "longitude": -6.2603,
+    "zones": [
+      "europe-west4-a",
+      "europe-west4-ai1a",
+      "europe-west4-b",
+      "europe-west4-c"
+    ]
+  },
+  {
+    "display_name": "Zurich, Switzerland",
+    "id": "europe-west6",
+    "latitude": 47.3769,
+    "longitude": 8.5417,
+    "zones": [
+      "europe-west6-a",
+      "europe-west6-b",
+      "europe-west6-c"
+    ]
+  },
+  {
+    "display_name": "Milan, Italy",
+    "id": "europe-west8",
+    "latitude": 45.764,
+    "longitude": 4.8357,
+    "zones": [
+      "europe-west8-a",
+      "europe-west8-b",
+      "europe-west8-c"
+    ]
+  },
+  {
+    "display_name": "Paris, France",
+    "id": "europe-west9",
+    "latitude": 48.8566,
+    "longitude": 2.3522,
+    "zones": [
+      "europe-west9-a",
+      "europe-west9-b",
+      "europe-west9-c"
+    ]
+  },
+  {
+    "display_name": "Doha, Qatar",
+    "id": "me-central1",
+    "latitude": 25.2048,
+    "longitude": 55.2708,
+    "zones": [
+      "me-central1-a",
+      "me-central1-b",
+      "me-central1-c"
+    ]
+  },
+  {
+    "display_name": "Dammam, Saudi Arabia",
+    "id": "me-central2",
+    "latitude": 32.0853,
+    "longitude": 34.7818,
+    "zones": [
+      "me-central2-a",
+      "me-central2-b",
+      "me-central2-c"
+    ]
+  },
+  {
+    "display_name": "Tel Aviv, Israel",
+    "id": "me-west1",
+    "latitude": 32.0853,
+    "longitude": 34.7818,
+    "zones": [
+      "me-west1-a",
+      "me-west1-b",
+      "me-west1-c"
+    ]
+  },
+  {
+    "display_name": "Montreal, Canada",
+    "id": "northamerica-northeast1",
+    "latitude": 45.5017,
+    "longitude": -73.5673,
+    "zones": [
+      "northamerica-northeast1-a",
+      "northamerica-northeast1-b",
+      "northamerica-northeast1-c"
+    ]
+  },
+  {
+    "display_name": "Toronto, Canada",
+    "id": "northamerica-northeast2",
+    "latitude": 43.6532,
+    "longitude": -79.3832,
+    "zones": [
+      "northamerica-northeast2-a",
+      "northamerica-northeast2-b",
+      "northamerica-northeast2-c"
+    ]
+  },
+  {
+    "display_name": "Queretaro, Mexico",
+    "id": "northamerica-south1",
+    "latitude": 19.4326,
+    "longitude": -99.1332,
+    "zones": [
+      "northamerica-south1-a",
+      "northamerica-south1-b",
+      "northamerica-south1-c"
+    ]
+  },
+  {
+    "display_name": "Sao Paulo, Brazil",
+    "id": "southamerica-east1",
+    "latitude": -23.5505,
+    "longitude": -46.6333,
+    "zones": [
+      "southamerica-east1-a",
+      "southamerica-east1-b",
+      "southamerica-east1-c"
+    ]
+  },
+  {
+    "display_name": "Santiago, Chile",
+    "id": "southamerica-west1",
+    "latitude": -33.4489,
+    "longitude": -70.6693,
+    "zones": [
+      "southamerica-west1-a",
+      "southamerica-west1-b",
+      "southamerica-west1-c"
+    ]
+  },
+  {
+    "display_name": "Iowa, United States",
+    "id": "us-central1",
+    "latitude": 41.2619,
+    "longitude": -95.8608,
+    "zones": [
+      "us-central1-a",
+      "us-central1-b",
+      "us-central1-c",
+      "us-central1-f"
+    ]
+  },
+  {
+    "display_name": "South Carolina, United States",
+    "id": "us-east1",
+    "latitude": 33.749,
+    "longitude": -84.388,
+    "zones": [
+      "us-east1-b",
+      "us-east1-c",
+      "us-east1-d"
+    ]
+  },
+  {
+    "display_name": "Virginia, United States",
+    "id": "us-east4",
+    "latitude": 39.2904,
+    "longitude": -76.6122,
+    "zones": [
+      "us-east4-a",
+      "us-east4-b",
+      "us-east4-c"
+    ]
+  },
+  {
+    "display_name": "Columbus, United States",
+    "id": "us-east5",
+    "latitude": 40.4406,
+    "longitude": -79.9959,
+    "zones": [
+      "us-east5-a",
+      "us-east5-b",
+      "us-east5-c"
+    ]
+  },
+  {
+    "display_name": "Dallas, United States",
+    "id": "us-south1",
+    "latitude": 32.7767,
+    "longitude": -96.797,
+    "zones": [
+      "us-south1-a",
+      "us-south1-ai1b",
+      "us-south1-b",
+      "us-south1-c"
+    ]
+  },
+  {
+    "display_name": "Oregon, United States",
+    "id": "us-west1",
+    "latitude": 45.5152,
+    "longitude": -122.6784,
+    "zones": [
+      "us-west1-a",
+      "us-west1-b",
+      "us-west1-c"
+    ]
+  },
+  {
+    "display_name": "Los Angeles, United States",
+    "id": "us-west2",
+    "latitude": 34.0522,
+    "longitude": -118.2437,
+    "zones": [
+      "us-west2-a",
+      "us-west2-b",
+      "us-west2-c"
+    ]
+  },
+  {
+    "display_name": "Salt Lake City, United States",
+    "id": "us-west3",
+    "latitude": 40.7608,
+    "longitude": -111.891,
+    "zones": [
+      "us-west3-a",
+      "us-west3-b",
+      "us-west3-c"
+    ]
+  },
+  {
+    "display_name": "Las Vegas, United States",
+    "id": "us-west4",
+    "latitude": 36.1699,
+    "longitude": -115.1398,
+    "zones": [
+      "us-west4-a",
+      "us-west4-b",
+      "us-west4-c"
+    ]
+  }
+]

@@ -850,8 +850,11 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
             "status": "RUNNING",
         },
     )
-    complete_release = MagicMock(
-        return_value={"vm_name": "unity-pool-ubuntu-3-staging", "pool_role": "idle"},
+    reclaim_disk = MagicMock(
+        return_value={
+            "vm_name": "unity-pool-ubuntu-3-staging",
+            "detached": True,
+        },
     )
     find_disk_owner = MagicMock(
         side_effect=["unity-pool-ubuntu-3-staging", None],
@@ -882,8 +885,8 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
         },
     )
     monkeypatch.setattr(
-        "communication.infra.vm_helpers.complete_pool_vm_release",
-        complete_release,
+        "communication.infra.vm_helpers.reclaim_orphaned_assistant_disk",
+        reclaim_disk,
     )
     monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
     monkeypatch.setattr(
@@ -924,9 +927,9 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
 
     result = assign_pool_vm("assistant-123", "binding-new", "unify-key")
 
-    complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-3-staging",
-        "binding-old",
+    reclaim_disk.assert_called_once_with(
+        "assistant-123",
+        current_binding_id="binding-new",
     )
     claim_idle.assert_called_once_with(
         "assistant-123",
@@ -1253,14 +1256,15 @@ def test_trim_pool_respects_pending_claims_target(monkeypatch):
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
         lambda: client,
     )
+    pending_key = vm_helpers_module._pool_scope_key("ubuntu")
     with vm_helpers_module._pending_lock:
-        vm_helpers_module._pending_claims["ubuntu"] = 1
+        vm_helpers_module._pending_claims[pending_key] = 1
 
     try:
         result = vm_helpers_module.trim_pool("ubuntu")
     finally:
         with vm_helpers_module._pending_lock:
-            vm_helpers_module._pending_claims.pop("ubuntu", None)
+            vm_helpers_module._pending_claims.pop(pending_key, None)
 
     assert result["actions"] == []
     set_labels.assert_not_called()

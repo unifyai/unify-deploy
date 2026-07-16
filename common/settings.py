@@ -118,12 +118,6 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
-        # TODO: Remove UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH once Orchestra
-        # owns downstream adoption for provider-event operations (no local SQLite).
-        self.provider_event_dispatch_inbox_path: str = os.environ.get(
-            "UNITY_PROVIDER_EVENT_DISPATCH_INBOX_PATH",
-            "/var/lib/unity/provider-event-dispatch-inbox.sqlite3",
-        )
         self.provider_event_dispatch_request_ttl_seconds: int = int(
             os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
         )
@@ -241,6 +235,18 @@ class Settings:
             "staging": "us-central1-a",
         }
         self.vm_zone: str = _zone_map.get(self.deploy_env, "us-central1-f")
+        # Retained for legacy VM discovery paths. New placements are selected
+        # on demand from the GCP capability preflight, not Cloud Run env vars.
+        self.vm_provisioned_locations: dict[str, str] = {
+            self.vm_region: self.vm_zone,
+        }
+        self.vm_location_preflight_cache_ttl_seconds: float = float(
+            os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300")
+        )
+        if self.vm_location_preflight_cache_ttl_seconds <= 0:
+            raise ValueError(
+                "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive"
+            )
 
         # Tunnel relay service
         self.tunnel_subdomain: str = (

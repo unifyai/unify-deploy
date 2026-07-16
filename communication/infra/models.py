@@ -22,6 +22,9 @@ class AssistantStaticIPReconcileRequest(BaseModel):
     """Ensure the requested assistant has its owned regional GCP address."""
 
     assistant_id: str
+    assistant_timezone: Optional[str] = None
+    pool_location: Optional[str] = None
+    region: Optional[str] = None
 
 
 class AssistantStaticIPResponse(BaseModel):
@@ -32,6 +35,9 @@ class AssistantStaticIPResponse(BaseModel):
     address: Optional[str] = None
     status: Optional[str] = None
     region: Optional[str] = None
+    pool_location: Optional[str] = None
+    zone: Optional[str] = None
+    hostname: Optional[str] = None
     labels: dict[str, str]
     created: bool = False
 
@@ -42,6 +48,52 @@ class AssistantStaticIPReleaseResponse(BaseModel):
     released: bool
 
 
+class AssistantPlacementResolveRequest(BaseModel):
+    """Resolve a preflighted pool location without allocating resources."""
+
+    assistant_timezone: Optional[str] = None
+    desktop_mode: Optional[Literal["windows", "ubuntu"]] = None
+
+
+class AssistantPlacementResolveResponse(BaseModel):
+    """A viable target pool location selected for an assistant timezone."""
+
+    pool_location: str
+    region: str
+    zone: str
+    timezone: str
+    resolution: str
+
+
+class AssistantMigrationPlacement(BaseModel):
+    """An explicit zonal placement used for a disk migration."""
+
+    pool_location: str = Field(min_length=1)
+    region: str = Field(min_length=1)
+    zone: str = Field(min_length=1)
+
+
+class AssistantMigrationPrepareRequest(BaseModel):
+    """Prepare target-region resources without changing the source assistant."""
+
+    assistant_id: str = Field(min_length=1)
+    migration_id: str = Field(min_length=1)
+    source: AssistantMigrationPlacement
+    target: AssistantMigrationPlacement
+
+
+class AssistantMigrationPrepareResponse(BaseModel):
+    """Resources prepared for a later, separately authorized cutover."""
+
+    assistant_id: str
+    migration_id: str
+    source: AssistantMigrationPlacement
+    target: AssistantMigrationPlacement
+    snapshot: dict[str, object]
+    target_disk: dict[str, object]
+    target_address: dict[str, object]
+
+
 class AssistantStaticIPRotationRequest(BaseModel):
     """A binding-scoped, idempotent assistant external-IP rotation request."""
 
@@ -50,6 +102,9 @@ class AssistantStaticIPRotationRequest(BaseModel):
     vm_name: str = Field(min_length=1)
     binding_id: str = Field(min_length=1)
     expected_old_ip: str = Field(min_length=1)
+    pool_location: Optional[str] = None
+    region: Optional[str] = None
+    zone: Optional[str] = None
 
 
 class AssistantStaticIPRotationResponse(BaseModel):
@@ -119,6 +174,8 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     activation_revision: str
     scheduled_for: datetime
     execution_mode: Literal["live", "offline"] = "live"
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     entrypoint: Optional[int] = None
     source_type: Literal["scheduled"] = "scheduled"
     task_label: Optional[str] = None
@@ -150,6 +207,8 @@ class OfflineTaskDispatchRequest(BaseModel):
     source_task_log_id: int
     activation_revision: str
     execution_mode: Literal["offline"] = "offline"
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     entrypoint: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
     source_type: RunSource = RunSource.scheduled

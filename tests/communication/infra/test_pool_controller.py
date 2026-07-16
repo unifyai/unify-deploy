@@ -1,4 +1,6 @@
 from communication.assistant_session_controller import pool_controller
+from communication.infra import vm_helpers
+from common.settings import SETTINGS
 
 
 def _session(
@@ -10,17 +12,21 @@ def _session(
     desired_state: str = "Running",
     has_vm: bool = False,
     has_job: bool = False,
+    placement: dict | None = None,
 ) -> dict:
     binding = {"id": f"binding-{assistant_id}"}
     if has_vm:
         binding["vmRef"] = {"name": f"vm-{assistant_id}"}
     if has_job:
         binding["jobRef"] = {"name": f"job-{assistant_id}"}
+    desktop = {"required": desktop_required, "mode": desktop_mode}
+    if placement is not None:
+        desktop["placement"] = placement
     return {
         "spec": {
             "assistantId": assistant_id,
             "desiredState": desired_state,
-            "desktop": {"required": desktop_required, "mode": desktop_mode},
+            "desktop": desktop,
         },
         "status": {
             "phase": phase,
@@ -116,6 +122,7 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     }
     assert result["ubuntu"]["pending_sessions"] == 2
     assert result["windows"]["pending_sessions"] == 0
+    assert result["vm_pools"]["ubuntu:legacy"]["pending_sessions"] == 2
 
 
 def test_reconcile_pool_once_schedules_replenish_for_hash_deficit(monkeypatch):
@@ -159,3 +166,51 @@ def test_reconcile_pool_once_schedules_replenish_for_hash_deficit(monkeypatch):
 
     assert job_replenish_calls == [(3, "controller.pool_reconcile", False)]
     assert result["unity_jobs"]["replenish_extra_demand"] == 3
+
+
+def test_reconcile_pool_once_replenishes_each_regional_pool(monkeypatch):
+    placement = {
+        "poolLocation": "europe-west2",
+        "region": "europe-west2",
+        "zone": "europe-west2-a",
+    }
+    replenished = []
+
+    class FakeCustomApi:
+        def list_namespaced_custom_object(self, **_kwargs):
+            return {
+                "items": [
+                    _session("legacy", phase="PendingVM"),
+                    _session("europe", phase="PendingVM", placement=placement),
+                ],
+            }
+
+    monkeypatch.setattr(
+        pool_controller,
+        "replenish_pool",
+        lambda vm_type, extra_demand=0: replenished.append(
+            (
+                vm_type,
+                extra_demand,
+                vm_helpers._current_vm_placement().region,
+                vm_helpers._current_vm_placement().zone,
+            ),
+        )
+        or {"vm_type": vm_type},
+    )
+    monkeypatch.setattr(pool_controller, "trim_pool", lambda _vm_type: {})
+    monkeypatch.setattr(
+        pool_controller,
+        "emit_observability_event",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(pool_controller, "_get_current_image_hash", lambda: None)
+
+    result = pool_controller.reconcile_pool_once(FakeCustomApi(), "staging")
+
+    assert ("ubuntu", 1, SETTINGS.vm_region, SETTINGS.vm_zone) in replenished
+    assert ("ubuntu", 1, "europe-west2", "europe-west2-a") in replenished
+    assert (
+        result["vm_pools"]["ubuntu:europe-west2:europe-west2-a"]["pending_sessions"]
+        == 1
+    )

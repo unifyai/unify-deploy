@@ -1,24 +1,27 @@
-"""Offline provider-event dispatch helpers for Communication.
-
-# TODO: Remove the inbox dependency from ``dispatch_provider_event_offline`` once
-Orchestra-backed downstream adoption is wired; keep request validation / audience.
-"""
+"""Offline provider-event dispatch helpers for Communication."""
 
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
+import requests
 from pydantic import BaseModel, ConfigDict, Field
 
-from communication.infra.provider_event_dispatch_inbox import (
-    DispatchInboxSnapshot,
-    ProviderEventDispatchInbox,
-)
+from common.settings import SETTINGS
 
 PROVIDER_EVENT_DISPATCH_AUDIENCE = "communication:provider-event-dispatch"
 PublicDispatchStatus = Literal["adopted", "started", "terminal"]
+
+ORCHESTRA_DISPATCH_CLAIM_PATH = "/admin/provider-event-dispatch/claim"
+ORCHESTRA_DISPATCH_REPORT_STARTED_PATH = "/admin/provider-event-dispatch/report-started"
+ORCHESTRA_DISPATCH_REPORT_TERMINAL_PATH = (
+    "/admin/provider-event-dispatch/report-terminal"
+)
+_HTTP_TIMEOUT_SECONDS = 30
 
 
 class ProviderEventDispatchRequest(BaseModel):
@@ -50,6 +53,14 @@ class ProviderEventDispatchValidationError(ValueError):
         super().__init__(reason_code)
 
 
+class ProviderEventDispatchAuthorizationError(ValueError):
+    """Raised when Orchestra rejects a reused operation authorization snapshot."""
+
+    def __init__(self, reason_code: str = "dispatch_authorization_mismatch") -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
 @dataclass(frozen=True)
 class ProviderEventDispatchOutcome:
     """Result of one provider-event dispatch attempt."""
@@ -59,8 +70,9 @@ class ProviderEventDispatchOutcome:
     run_key: str
     status: PublicDispatchStatus
     job_name: str | None
-    launch_count: int
+    fencing_token: int
     adopted_only: bool
+    terminal_reason: str | None = None
 
 
 def validate_provider_event_dispatch_request(
@@ -84,101 +96,194 @@ def validate_provider_event_dispatch_request(
         raise ProviderEventDispatchValidationError("dispatch_request_expired")
 
 
-def public_status_for_inbox_state(state: str) -> PublicDispatchStatus:
-    """Map durable inbox state to the public dispatch status vocabulary."""
+def offline_launch_identity(*, run_key: str, job_name: str) -> str:
+    """Return the deterministic offline sink identity for one operation."""
 
-    if state == "launched":
-        return "started"
-    if state == "terminal":
-        return "terminal"
-    return "adopted"
+    return job_name or f"unity-task-run:{run_key}"
 
 
-def dispatch_snapshot(request: ProviderEventDispatchRequest) -> DispatchInboxSnapshot:
-    """Return the authorization snapshot stored with one inbox adoption."""
+def _orchestra_admin_headers() -> dict[str, str]:
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY") or SETTINGS.orchestra_admin_key
+    if not admin_key:
+        raise RuntimeError("ORCHESTRA_ADMIN_KEY must be configured")
+    return {
+        "Authorization": f"Bearer {admin_key}",
+        "Content-Type": "application/json",
+        "accept": "application/json",
+    }
 
-    return DispatchInboxSnapshot(
-        run_key=request.run_key,
-        receipt_id=request.receipt_id,
-        accepted_activation_revision=request.accepted_activation_revision,
+
+def _orchestra_admin_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not SETTINGS.orchestra_url:
+        raise RuntimeError("ORCHESTRA_URL must be configured")
+    response = requests.post(
+        f"{SETTINGS.orchestra_url}{path}",
+        json=payload,
+        headers=_orchestra_admin_headers(),
+        timeout=_HTTP_TIMEOUT_SECONDS,
+    )
+    if response.status_code == 409:
+        detail = response.json() if response.content else {}
+        reason = "dispatch_authorization_mismatch"
+        if isinstance(detail, dict):
+            nested = detail.get("detail")
+            if isinstance(nested, dict) and nested.get("reason"):
+                reason = str(nested["reason"])
+            elif detail.get("reason"):
+                reason = str(detail["reason"])
+        raise ProviderEventDispatchAuthorizationError(reason)
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise RuntimeError(f"Unexpected Orchestra response for {path}")
+    return body
+
+
+def _claimant_id() -> str:
+    hostname = os.environ.get("HOSTNAME") or uuid.uuid4().hex[:8]
+    return f"communication:{hostname}:{os.getpid()}"
+
+
+def claim_provider_event_dispatch(
+    request: ProviderEventDispatchRequest,
+    *,
+    launch_identity: str,
+    claimant_id: str | None = None,
+) -> ProviderEventDispatchOutcome:
+    """Claim Orchestra launch ownership before offline job I/O."""
+
+    body = _orchestra_admin_post(
+        ORCHESTRA_DISPATCH_CLAIM_PATH,
+        {
+            "operation_id": request.operation_id,
+            "run_id": request.run_id,
+            "run_key": request.run_key,
+            "assistant_id": request.assistant_id,
+            "task_id": request.task_id,
+            "binding_id": request.binding_id,
+            "receipt_id": request.receipt_id,
+            "accepted_activation_revision": request.accepted_activation_revision,
+            "dispatch_mode": request.dispatch_mode,
+            "audience": request.audience,
+            "claimant_id": claimant_id or _claimant_id(),
+            "launch_identity": launch_identity,
+        },
+    )
+    return ProviderEventDispatchOutcome(
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        status=str(body["status"]),  # type: ignore[arg-type]
+        job_name=body.get("launch_identity"),
+        fencing_token=int(body["fencing_token"]),
+        adopted_only=not bool(body.get("owns_launch")),
+        terminal_reason=body.get("terminal_reason"),
+    )
+
+
+def report_provider_event_dispatch_started(
+    *,
+    operation_id: str,
+    fencing_token: int,
+    launch_identity: str | None,
+) -> ProviderEventDispatchOutcome:
+    """Report fenced start after the deterministic offline job is reconciled."""
+
+    body = _orchestra_admin_post(
+        ORCHESTRA_DISPATCH_REPORT_STARTED_PATH,
+        {
+            "operation_id": operation_id,
+            "fencing_token": fencing_token,
+            "launch_identity": launch_identity,
+        },
+    )
+    return ProviderEventDispatchOutcome(
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        status=str(body["status"]),  # type: ignore[arg-type]
+        job_name=body.get("launch_identity"),
+        fencing_token=int(body["fencing_token"]),
+        adopted_only=False,
+        terminal_reason=body.get("terminal_reason"),
+    )
+
+
+def report_provider_event_dispatch_terminal(
+    *,
+    operation_id: str,
+    fencing_token: int,
+    terminal_reason: str,
+    launch_identity: str | None = None,
+) -> ProviderEventDispatchOutcome:
+    """Report fenced terminal failure for one offline dispatch attempt."""
+
+    body = _orchestra_admin_post(
+        ORCHESTRA_DISPATCH_REPORT_TERMINAL_PATH,
+        {
+            "operation_id": operation_id,
+            "fencing_token": fencing_token,
+            "terminal_reason": terminal_reason,
+            "launch_identity": launch_identity,
+        },
+    )
+    return ProviderEventDispatchOutcome(
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        status=str(body["status"]),  # type: ignore[arg-type]
+        job_name=body.get("launch_identity"),
+        fencing_token=int(body["fencing_token"]),
+        adopted_only=False,
+        terminal_reason=body.get("terminal_reason"),
     )
 
 
 def dispatch_provider_event_offline(
     *,
-    inbox: ProviderEventDispatchInbox,
     request: ProviderEventDispatchRequest,
     launch_job: Callable[[ProviderEventDispatchRequest], str | None],
+    resolve_launch_identity: Callable[[ProviderEventDispatchRequest], str],
 ) -> ProviderEventDispatchOutcome:
-    """Adopt one dispatch operation, then launch at most one offline job.
+    """Claim through Orchestra, then launch at most one offline job."""
 
-    # TODO: Stop requiring a container-local inbox once adoption is recorded
-    only through Orchestra downstream adoption.
-    """
-
-    snapshot = dispatch_snapshot(request)
-    adopted = inbox.adopt_or_get(
-        operation_id=request.operation_id,
-        run_id=request.run_id,
-        snapshot=snapshot,
+    launch_identity = resolve_launch_identity(request)
+    claimed = claim_provider_event_dispatch(
+        request,
+        launch_identity=launch_identity,
     )
-    if adopted.state in {"launched", "terminal"}:
-        return ProviderEventDispatchOutcome(
-            operation_id=adopted.operation_id,
-            run_id=adopted.run_id,
-            run_key=adopted.run_key,
-            status=public_status_for_inbox_state(adopted.state),
-            job_name=adopted.job_name,
-            launch_count=adopted.launch_count,
-            adopted_only=True,
-        )
-
-    claimed = inbox.claim_launch(operation_id=request.operation_id)
-    if not claimed.owns_launch:
-        return ProviderEventDispatchOutcome(
-            operation_id=claimed.operation_id,
-            run_id=claimed.run_id,
-            run_key=claimed.run_key,
-            status=public_status_for_inbox_state(claimed.state),
-            job_name=claimed.job_name,
-            launch_count=claimed.launch_count,
-            adopted_only=True,
-        )
+    if claimed.status in {"started", "terminal"} or claimed.adopted_only:
+        return claimed
 
     try:
-        job_name = launch_job(request)
+        job_name = launch_job(request) or launch_identity
     except ProviderEventDispatchValidationError:
-        inbox.mark_terminal(
+        report_provider_event_dispatch_terminal(
             operation_id=request.operation_id,
-            reason="offline_job_launch_failed",
+            fencing_token=claimed.fencing_token,
+            terminal_reason="offline_job_launch_failed",
+            launch_identity=launch_identity,
         )
         raise
-    except Exception:
-        raise
 
-    launched = inbox.launch_if_owner(
+    return report_provider_event_dispatch_started(
         operation_id=request.operation_id,
-        job_name=job_name,
-    )
-    return ProviderEventDispatchOutcome(
-        operation_id=launched.operation_id,
-        run_id=launched.run_id,
-        run_key=launched.run_key,
-        status=public_status_for_inbox_state(launched.state),
-        job_name=launched.job_name,
-        launch_count=launched.launch_count,
-        adopted_only=False,
+        fencing_token=claimed.fencing_token,
+        launch_identity=job_name,
     )
 
 
 __all__ = [
     "PROVIDER_EVENT_DISPATCH_AUDIENCE",
+    "ProviderEventDispatchAuthorizationError",
     "ProviderEventDispatchOutcome",
     "ProviderEventDispatchRequest",
     "ProviderEventDispatchValidationError",
     "PublicDispatchStatus",
+    "claim_provider_event_dispatch",
     "dispatch_provider_event_offline",
-    "dispatch_snapshot",
-    "public_status_for_inbox_state",
+    "offline_launch_identity",
+    "report_provider_event_dispatch_started",
+    "report_provider_event_dispatch_terminal",
     "validate_provider_event_dispatch_request",
 ]

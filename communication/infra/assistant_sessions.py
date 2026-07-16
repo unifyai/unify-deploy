@@ -1135,6 +1135,7 @@ def build_assistant_session_spec(
     image_override: str | None = None,
     service_urls: dict[str, str] | None = None,
     desktop_required: bool | None = None,
+    desktop_placement: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if desktop_required is None:
         desktop_required = desktop_mode in ("windows", "ubuntu")
@@ -1152,6 +1153,8 @@ def build_assistant_session_spec(
         "activationId": activation_id,
         "requestedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if desktop_placement is not None:
+        spec["desktop"]["placement"] = dict(desktop_placement)
     if image_override:
         spec["imageOverride"] = image_override
     if service_urls is not None:

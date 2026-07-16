@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -189,7 +190,11 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
         "offline:scheduled:assistant-123:101:abc123def456:once"
     )
-    assert manifest["spec"]["backoffLimit"] == 0
+    assert (
+        manifest["spec"]["backoffLimit"]
+        == task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT
+    )
+    assert manifest["spec"]["backoffLimit"] > 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
     # No per-task bound means the run is unbounded: no activeDeadlineSeconds.
     assert "activeDeadlineSeconds" not in manifest["spec"]
@@ -214,8 +219,8 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert owner_refs[0]["kind"] == "Job"
 
 
-def test_launch_offline_task_job_returns_false_on_name_conflict():
-    """A 409 means another delivery of the same attempt already created the Job."""
+def test_launch_offline_task_job_adopts_existing_job_with_matching_run_key():
+    """A 409 with the same run-key annotation is treated as adopt-not-create."""
 
     from kubernetes.client.rest import ApiException
 
@@ -225,6 +230,11 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
     batch_api = MagicMock()
     core_api = MagicMock()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
+    batch_api.read_namespaced_job.return_value = {
+        "metadata": {
+            "annotations": {"unify.ai/task-run-key": "rk"},
+        },
+    }
 
     created = task_activation._launch_offline_task_job(
         batch_api=batch_api,
@@ -237,6 +247,44 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
     )
 
     assert created is False
+    batch_api.read_namespaced_job.assert_called_once_with(
+        name="unity-task-run-abc123def456",
+        namespace=task_activation.SETTINGS.default_namespace,
+    )
+    core_api.patch_namespaced_secret.assert_not_called()
+
+
+def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key():
+    """A 409 whose existing Job carries a different run key fails closed."""
+
+    from kubernetes.client.rest import ApiException
+
+    from communication.infra import task_activation
+    from communication.infra.provider_event_dispatch import (
+        ProviderEventDispatchValidationError,
+    )
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    batch_api = MagicMock()
+    core_api = MagicMock()
+    batch_api.create_namespaced_job.side_effect = ApiException(status=409)
+    batch_api.read_namespaced_job.return_value = {
+        "metadata": {
+            "annotations": {"unify.ai/task-run-key": "other-run-key"},
+        },
+    }
+
+    with pytest.raises(ProviderEventDispatchValidationError) as exc:
+        task_activation._launch_offline_task_job(
+            batch_api=batch_api,
+            core_api=core_api,
+            request=request,
+            run_key="rk",
+            job_name="unity-task-run-abc123def456",
+            offline_env={},
+            max_runtime_seconds=None,
+        )
+    assert exc.value.reason_code == "offline_job_run_key_mismatch"
     core_api.patch_namespaced_secret.assert_not_called()
 
 
@@ -1316,4 +1364,131 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
             scheduled_activation,
         )
         is None
+    )
+
+
+def test_resolve_resource_flags_merges_request_and_activation():
+    """Request and activation requires_* flags merge with OR semantics."""
+    from communication.infra import task_activation
+
+    assert task_activation._resolve_resource_flags({}) == (False, False)
+    assert task_activation._resolve_resource_flags(
+        {"requires_filesystem": True},
+    ) == (True, False)
+    assert task_activation._resolve_resource_flags(
+        {"requires_computer": True},
+    ) == (False, True)
+    assert task_activation._resolve_resource_flags(
+        {},
+        request_requires_computer=True,
+    ) == (False, True)
+    assert task_activation._resolve_resource_flags(
+        {"requires_filesystem": False},
+        request_requires_filesystem=True,
+        request_requires_computer=True,
+    ) == (True, True)
+
+
+def test_assistant_desktop_browser_env_resolves_ready_binding():
+    """Desktop-targeted workers receive only the current ready binding URL."""
+    from communication.infra import task_activation
+
+    session = {
+        "spec": {"desiredState": "Running"},
+        "status": {
+            "conditions": [{"type": "DesktopReady", "status": "True"}],
+            "binding": {"desktopUrl": "https://assistant-123.vm.unify.ai"},
+        },
+    }
+    with (
+        patch(
+            "communication.infra.task_activation.get_custom_objects_api",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "communication.infra.task_activation.get_assistant_session",
+            return_value=session,
+        ),
+    ):
+        env = asyncio.run(
+            task_activation._assistant_desktop_browser_env(
+                "assistant-123",
+                assistant_data=_assistant_data(
+                    desktop_mode="ubuntu",
+                    managed_desktop_status="active",
+                ),
+            ),
+        )
+
+    assert env == {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": "https://assistant-123.vm.unify.ai",
+        "ASSISTANT_ID": "assistant-123",
+    }
+
+
+def test_requires_computer_offline_dispatch_resolves_desktop_binding():
+    """requires_computer=True takes the desktop-ready gate before launch."""
+
+    client = _client()
+    desktop_env = {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": "https://assistant-123.vm.unify.ai",
+        "ASSISTANT_ID": "assistant-123",
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(api_key="key"),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={"run": {"state": "pending"}, "created": True},
+        ),
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", "core-api", None, None)),
+        ),
+        patch(
+            "communication.infra.task_activation._assistant_desktop_browser_env",
+            new=AsyncMock(return_value=desktop_env),
+        ) as mock_desktop,
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=True,
+        ) as mock_launch,
+        patch("communication.infra.task_activation._update_task_run"),
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(requires_computer=True),
+        )
+
+    assert response.status_code == 200
+    mock_desktop.assert_awaited_once()
+    offline_env = mock_launch.call_args.kwargs["offline_env"]
+    assert offline_env["ASSISTANT_DESKTOP_URL"] == desktop_env["ASSISTANT_DESKTOP_URL"]
+    assert offline_env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
+
+
+def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():
+    """Desktop-eligible tasks retain the normal worker browser when disabled."""
+    from communication.infra import task_activation
+
+    assert (
+        asyncio.run(
+            task_activation._assistant_desktop_browser_env(
+                "assistant-123",
+                assistant_data=_assistant_data(
+                    desktop_mode="none",
+                    managed_desktop_status="disabled",
+                ),
+            ),
+        )
+        == {}
     )

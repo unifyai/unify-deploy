@@ -20,7 +20,13 @@ from communication.infra.assistant_sessions import (
 )
 from communication.infra.idle_job_pool import schedule_idle_job_pool_replenishment
 from communication.infra.vm_config import SUPPORTED_POOL_VM_TYPES
-from communication.infra.vm_helpers import replenish_pool, trim_pool
+from communication.infra.gcp_region_catalog import VmPlacement, placement_from_ref
+from communication.infra.vm_helpers import (
+    replenish_pool,
+    sync_assistant_static_ip_attachment,
+    trim_pool,
+    vm_placement_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +35,11 @@ POOL_CONTROLLER_INTERVAL_SECONDS = float(
     os.environ.get("POOL_CONTROLLER_INTERVAL_SECONDS", "10"),
 )
 MIN_IDLE_JOBS = int(os.environ.get("UNITY_MIN_IDLE_JOBS", "3"))
+ASSISTANT_IP_SYNC_INTERVAL_SECONDS = float(
+    os.environ.get("UNITY_ASSISTANT_IP_SYNC_INTERVAL_SECONDS", "300"),
+)
 _IMAGE_HASH_LABEL = "unity-image-hash"
+_last_assistant_ip_sync_at = 0.0
 
 
 def _get_current_image_hash() -> str | None:
@@ -120,6 +130,51 @@ def pending_vm_demand(sessions: list[dict[str, Any]]) -> dict[str, int]:
     return demand
 
 
+def pending_vm_demand_by_pool(
+    sessions: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, VmPlacement | None], int], list[dict[str, str]]]:
+    """Return pending desktop demand per VM type and physical pool placement."""
+
+    demand: dict[tuple[str, VmPlacement | None], int] = {}
+    invalid: list[dict[str, str]] = []
+    for session in sessions:
+        if assistant_session_desired_state(session) != "Running":
+            continue
+        if not session_desktop_required(session):
+            continue
+        if binding_vm_ref(session_binding(session)):
+            continue
+        phase = str(((session.get("status") or {}).get("phase")) or "")
+        if phase != "PendingVM":
+            continue
+        vm_type = session_desktop_mode(session) or "ubuntu"
+        if vm_type not in SUPPORTED_POOL_VM_TYPES:
+            vm_type = "ubuntu"
+        spec = session.get("spec") or {}
+        placement_payload = (spec.get("desktop") or {}).get("placement")
+        try:
+            placement = placement_from_ref(
+                placement_payload if isinstance(placement_payload, dict) else None,
+            )
+        except ValueError as exc:
+            invalid.append(
+                {
+                    "assistant_id": str(spec.get("assistantId") or ""),
+                    "error": str(exc),
+                },
+            )
+            continue
+        key = (vm_type, placement)
+        demand[key] = demand.get(key, 0) + 1
+    return demand, invalid
+
+
+def _pool_result_key(vm_type: str, placement: VmPlacement | None) -> str:
+    if placement is None:
+        return f"{vm_type}:legacy"
+    return f"{vm_type}:{placement.location.id}:{placement.zone}"
+
+
 def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
     """Return the number of sessions blocked on idle Unity container capacity."""
 
@@ -136,13 +191,45 @@ def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
     return pending
 
 
+def sync_active_assistant_ip_reports(sessions: list[dict[str, Any]]) -> int:
+    """Backfill Orchestra network identities for active desktop bindings."""
+
+    synced = 0
+    for session in sessions:
+        if not session_desktop_required(session):
+            continue
+        spec = session.get("spec") or {}
+        assistant_id = str(spec.get("assistantId") or "")
+        vm_ref = binding_vm_ref(session_binding(session))
+        if not assistant_id or not isinstance(vm_ref, dict):
+            continue
+        try:
+            placement = placement_from_ref(vm_ref)
+            if sync_assistant_static_ip_attachment(assistant_id, placement):
+                synced += 1
+        except Exception:
+            logger.exception(
+                "Failed syncing assistant network identity for %s",
+                assistant_id,
+            )
+    return synced
+
+
 def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[str, Any]:
     """Run one pool-capacity reconciliation cycle."""
 
     sessions = _list_sessions(custom_api, namespace)
     pending_jobs = pending_job_demand(sessions)
-    demand = pending_vm_demand(sessions)
+    demand, invalid_demand = pending_vm_demand_by_pool(sessions)
     results: dict[str, Any] = {}
+    global _last_assistant_ip_sync_at
+    if (
+        time.monotonic() - _last_assistant_ip_sync_at
+        >= ASSISTANT_IP_SYNC_INTERVAL_SECONDS
+    ):
+        synced = sync_active_assistant_ip_reports(sessions)
+        _last_assistant_ip_sync_at = time.monotonic()
+        results["assistant_ip_sync"] = {"synced": synced}
     try:
         job_extra_demand = _unity_job_replenish_extra_demand(pending_jobs)
         replenish_scheduled = (
@@ -177,27 +264,45 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
             pending_sessions=pending_jobs,
             error=f"{type(exc).__name__}: {exc}",
         )
-    for vm_type in SUPPORTED_POOL_VM_TYPES:
-        pending = demand.get(vm_type, 0)
+    results["vm_pools"] = {}
+    pool_scopes = {
+        *demand,
+        *((vm_type, None) for vm_type in SUPPORTED_POOL_VM_TYPES),
+    }
+    aggregate_demand = pending_vm_demand(sessions)
+    for vm_type, placement in sorted(
+        pool_scopes,
+        key=lambda item: _pool_result_key(*item),
+    ):
+        pending = demand.get((vm_type, placement), 0)
+        pool_key = _pool_result_key(vm_type, placement)
         try:
-            replenish_result = replenish_pool(vm_type, extra_demand=pending)
-            trim_result = trim_pool(vm_type) if pending == 0 else None
-            results[vm_type] = {
+            with vm_placement_scope(placement):
+                replenish_result = replenish_pool(vm_type, extra_demand=pending)
+                trim_result = trim_pool(vm_type) if pending == 0 else None
+            pool_result = {
                 "pending_sessions": pending,
                 "replenish": replenish_result,
                 "trim": trim_result,
+            }
+            results["vm_pools"][pool_key] = pool_result
+            results[vm_type] = {
+                "pending_sessions": aggregate_demand.get(vm_type, 0),
             }
             emit_observability_event(
                 "controller.pool.reconcile",
                 namespace=namespace,
                 vm_type=vm_type,
                 pending_sessions=pending,
+                pool_location=placement.location.id if placement else None,
+                region=placement.region if placement else SETTINGS.vm_region,
+                zone=placement.zone if placement else SETTINGS.vm_zone,
                 replenish_result=replenish_result,
                 trim_result=trim_result,
             )
         except Exception as exc:  # pragma: no cover - safety net for live loop
-            logger.exception("Pool controller reconcile failed for %s", vm_type)
-            results[vm_type] = {
+            logger.exception("Pool controller reconcile failed for %s", pool_key)
+            results["vm_pools"][pool_key] = {
                 "pending_sessions": pending,
                 "error": f"{type(exc).__name__}: {exc}",
             }
@@ -206,8 +311,19 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
                 namespace=namespace,
                 vm_type=vm_type,
                 pending_sessions=pending,
+                pool_location=placement.location.id if placement else None,
+                region=placement.region if placement else SETTINGS.vm_region,
+                zone=placement.zone if placement else SETTINGS.vm_zone,
                 error=f"{type(exc).__name__}: {exc}",
             )
+    for invalid in invalid_demand:
+        emit_observability_event(
+            "controller.pool.reconcile_invalid_placement",
+            namespace=namespace,
+            **invalid,
+        )
+    if invalid_demand:
+        results["invalid_vm_placements"] = invalid_demand
     return results
 
 

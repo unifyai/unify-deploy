@@ -69,6 +69,19 @@ spec:
                     type: boolean
                   mode:
                     type: string
+                  placement:
+                    type: object
+                    properties:
+                      poolLocation:
+                        type: string
+                      region:
+                        type: string
+                      zone:
+                        type: string
+                      timezone:
+                        type: string
+                      resolution:
+                        type: string
               startupSecretRef:
                 type: string
               protocolVersion:
@@ -184,6 +197,12 @@ spec:
                       hostname:
                         type: string
                       vmType:
+                        type: string
+                      poolLocation:
+                        type: string
+                      region:
+                        type: string
+                      zone:
                         type: string
                   desktopUrl:
                     type: string

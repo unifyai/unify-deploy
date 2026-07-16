@@ -19,6 +19,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Callable, Optional, Dict, Any, Tuple
 
 import requests
@@ -26,11 +28,14 @@ from google.cloud import compute_v1
 from google.cloud import dns
 from google.cloud import secretmanager
 from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
+from kubernetes import client as k8s_client
+from kubernetes.client.rest import ApiException
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from common.settings import SETTINGS
 from .observability import causal_log_fields
+from .gcp_region_catalog import VmPlacement, get_pool_location, list_pool_locations
 
 
 from .vm_config import (
@@ -77,6 +82,76 @@ from .vm_config import (
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_VM_PLACEMENT: ContextVar[VmPlacement | None] = ContextVar(
+    "active_vm_placement",
+    default=None,
+)
+
+
+def _legacy_vm_placement() -> VmPlacement:
+    """Return the existing pool as a placement for old callers and bindings."""
+    location = get_pool_location(SETTINGS.vm_region)
+    return VmPlacement(
+        location=location,
+        zone=SETTINGS.vm_zone,
+        source_timezone="",
+        resolution="legacy_default",
+    )
+
+
+def _current_vm_placement() -> VmPlacement:
+    return _ACTIVE_VM_PLACEMENT.get() or _legacy_vm_placement()
+
+
+@contextmanager
+def vm_placement_scope(placement: VmPlacement | None):
+    """Route a synchronous VM lifecycle operation to one explicit location."""
+    token = _ACTIVE_VM_PLACEMENT.set(placement)
+    try:
+        yield
+    finally:
+        _ACTIVE_VM_PLACEMENT.reset(token)
+
+
+def _run_in_vm_placement(
+    placement: VmPlacement,
+    fn: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run a worker-thread callback with its caller's placement context.
+
+    ``ContextVar`` values do not propagate into ``ThreadPoolExecutor`` worker
+    threads. Pool replenish uses those workers for VM creation, so carrying
+    this scope explicitly prevents a regional demand from provisioning into
+    the legacy Iowa pool.
+    """
+    with vm_placement_scope(placement):
+        return fn(*args, **kwargs)
+
+
+def _placement_for_vm_name(vm_name: str) -> VmPlacement | None:
+    """Find a VM's configured pool location for callback-only lifecycle paths."""
+    client = compute_v1.InstancesClient()
+    for location_id, zone in SETTINGS.vm_provisioned_locations.items():
+        location = get_pool_location(location_id)
+        try:
+            client.get(
+                project=SETTINGS.vm_project_id,
+                zone=zone,
+                instance=vm_name,
+            )
+        except NotFound:
+            continue
+        return VmPlacement(
+            location=location,
+            zone=zone,
+            source_timezone="",
+            resolution="discovered",
+        )
+    return None
+
+
 POOL_ROLE_LABEL = "pool-role"
 ASSISTANT_ID_LABEL = "assistant-id"
 BINDING_ID_LABEL = "binding-id"
@@ -93,6 +168,9 @@ POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS = 0.5
 POOL_STATIC_IP_DELETE_MAX_ATTEMPTS = 5
 POOL_STATIC_IP_DELETE_RETRY_SECONDS = 1.0
 POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS = 600.0
+REGIONAL_POOL_REAPER_CONFIG_MAP = "unity-regional-pool-reaper"
+REGIONAL_POOL_REAPER_GRACE_SECONDS = 60 * 60
+REGIONAL_POOL_REAPER_REAPABLE_ROLES = frozenset({"idle", "stopped", "quarantined"})
 # Keep freshly-idle VMs claimable across process boundaries. With
 # POOL_TARGET_IDLE=0, replenish boots a VM for demand in one process while
 # trim in another (pool controller) would otherwise stop it the moment it
@@ -169,7 +247,11 @@ def assistant_static_ip_labels(assistant_id: str) -> dict[str, str]:
     }
 
 
-def _assistant_static_ip_details(address: Any) -> dict[str, Any]:
+def _assistant_static_ip_details(
+    address: Any,
+    *,
+    assistant_id: str | None = None,
+) -> dict[str, Any]:
     """Serialize the stable public details of a GCP regional address."""
 
     return {
@@ -177,7 +259,9 @@ def _assistant_static_ip_details(address: Any) -> dict[str, Any]:
         "address": str(getattr(address, "address", "") or "") or None,
         "status": str(getattr(address, "status", "") or "") or None,
         "region": str(getattr(address, "region", "") or "") or None,
+        "hostname": get_dns_hostname(assistant_id) if assistant_id else None,
         "labels": dict(getattr(address, "labels", None) or {}),
+        "users": list(getattr(address, "users", None) or []),
     }
 
 
@@ -196,25 +280,63 @@ def _assert_assistant_static_ip_ownership(address: Any, assistant_id: str) -> No
         )
 
 
-def get_assistant_static_ip(assistant_id: str) -> dict[str, Any] | None:
+def get_assistant_static_ip(
+    assistant_id: str,
+    *,
+    region: str | None = None,
+) -> dict[str, Any] | None:
     """Read an assistant-owned regional external address, if it exists."""
 
     address_name = assistant_static_ip_name(assistant_id)
+    region = region or _current_vm_placement().region
     client = compute_v1.AddressesClient()
     try:
         address = client.get(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=region,
             address=address_name,
         )
     except NotFound:
         return None
 
     _assert_assistant_static_ip_ownership(address, assistant_id)
-    return _assistant_static_ip_details(address)
+    return _assistant_static_ip_details(address, assistant_id=assistant_id)
 
 
-def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
+def reclaim_stale_assistant_ip_owners(assistant_id: str) -> list[str]:
+    """Retire quarantined VMs that still hold an assistant-owned address."""
+
+    allocation = get_assistant_static_ip(assistant_id)
+    retired: list[str] = []
+    client = compute_v1.InstancesClient()
+    for user in allocation.get("users", []) if allocation else []:
+        if "/instances/" not in user:
+            continue
+        vm_name = user.rsplit("/", 1)[-1]
+        vm = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=_current_vm_placement().zone,
+            instance=vm_name,
+        )
+        role = str((vm.labels or {}).get(POOL_ROLE_LABEL, "") or "")
+        if role != "quarantined":
+            raise AssistantDiskInUseError(
+                f"Assistant address is still attached to {vm_name} pool_role={role}",
+            )
+        _delete_pool_vm_instance(
+            client,
+            vm_name,
+            vm_type=str((vm.labels or {}).get("vm-type", "ubuntu")),
+        )
+        retired.append(vm_name)
+    return retired
+
+
+def reserve_assistant_static_ip(
+    assistant_id: str,
+    *,
+    region: str | None = None,
+) -> dict[str, Any]:
     """Idempotently reserve the assistant's regional external address.
 
     This deliberately reserves an address only. Attaching it to an instance is
@@ -223,7 +345,8 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
     create explicitly repairs its labels before ownership validation.
     """
 
-    existing = get_assistant_static_ip(assistant_id)
+    region = region or _current_vm_placement().region
+    existing = get_assistant_static_ip(assistant_id, region=region)
     if existing is not None:
         return {**existing, "created": False}
 
@@ -233,7 +356,7 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
     try:
         client.insert(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=region,
             address_resource=compute_v1.Address(
                 name=address_name,
                 address_type="EXTERNAL",
@@ -250,7 +373,7 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
     if created:
         created_address = client.get(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=region,
             address=address_name,
         )
         expected_labels = assistant_static_ip_labels(assistant_id)
@@ -258,7 +381,7 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
         if actual_labels != expected_labels:
             client.set_labels(
                 project=SETTINGS.vm_project_id,
-                region=SETTINGS.vm_region,
+                region=region,
                 resource=address_name,
                 region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
                     labels=expected_labels,
@@ -270,21 +393,26 @@ def reserve_assistant_static_ip(assistant_id: str) -> dict[str, Any]:
                 ),
             ).result()
 
-    reserved = get_assistant_static_ip(assistant_id)
+    reserved = get_assistant_static_ip(assistant_id, region=region)
     if reserved is None:
         raise RuntimeError(f"Reserved address {address_name} could not be read")
     return {**reserved, "created": created}
 
 
-def release_assistant_static_ip(assistant_id: str) -> bool:
+def release_assistant_static_ip(
+    assistant_id: str,
+    *,
+    region: str | None = None,
+) -> bool:
     """Idempotently release an assistant-owned regional external address."""
 
     address_name = assistant_static_ip_name(assistant_id)
+    region = region or _current_vm_placement().region
     client = compute_v1.AddressesClient()
     try:
         address = client.get(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=region,
             address=address_name,
         )
     except NotFound:
@@ -294,12 +422,224 @@ def release_assistant_static_ip(assistant_id: str) -> bool:
     try:
         client.delete(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=region,
             address=address_name,
         ).result()
     except NotFound:
         return False
     return True
+
+
+def assistant_migration_snapshot_name(
+    assistant_id: str,
+    migration_id: str,
+) -> str:
+    """Return an operation-scoped global snapshot name safe for GCE."""
+
+    prefix = "unity-migration-"
+    suffix = SETTINGS.env_suffix
+    assistant = _assistant_static_ip_id_component(assistant_id, max_length=63)
+    migration = _assistant_static_ip_id_component(migration_id, max_length=63)
+    digest = hashlib.sha256(
+        f"{assistant_id}:{migration_id}".encode(),
+    ).hexdigest()[:8]
+    available = 63 - len(prefix) - len(suffix) - len(digest) - 2
+    assistant_length = max(1, available // 2)
+    migration_length = max(1, available - assistant_length)
+    return (
+        f"{prefix}{assistant[:assistant_length].rstrip('-')}-"
+        f"{migration[:migration_length].rstrip('-')}-{digest}{suffix}"
+    )
+
+
+def _assistant_disk_name_at_placement(
+    assistant_id: str,
+    placement: VmPlacement,
+) -> str:
+    with vm_placement_scope(placement):
+        return _assistant_disk_name(assistant_id)
+
+
+def _migration_snapshot_details(snapshot: Any) -> dict[str, Any]:
+    return {
+        "name": str(getattr(snapshot, "name", "") or ""),
+        "self_link": str(getattr(snapshot, "self_link", "") or "") or None,
+        "status": str(getattr(snapshot, "status", "") or "") or None,
+        "source_disk": str(getattr(snapshot, "source_disk", "") or "") or None,
+    }
+
+
+def _assistant_migration_labels(
+    assistant_id: str,
+    migration_id: str,
+) -> dict[str, str]:
+    return {
+        "managed-by": ASSISTANT_STATIC_IP_MANAGED_BY_VALUE,
+        "resource-owner": ASSISTANT_STATIC_IP_OWNER_VALUE,
+        "assistant-id": _assistant_static_ip_id_component(assistant_id, max_length=63),
+        "migration-id": _assistant_static_ip_id_component(migration_id, max_length=63),
+    }
+
+
+def _assert_assistant_migration_ownership(
+    resource: Any,
+    *,
+    assistant_id: str,
+    migration_id: str,
+    resource_name: str,
+) -> None:
+    expected = _assistant_migration_labels(assistant_id, migration_id)
+    actual = dict(getattr(resource, "labels", None) or {})
+    if any(actual.get(key) != value for key, value in expected.items()):
+        raise ValueError(
+            f"Migration resource {resource_name} is not owned by the requested migration",
+        )
+
+
+def prepare_assistant_cross_region_migration(
+    *,
+    assistant_id: str,
+    migration_id: str,
+    source: VmPlacement,
+    target: VmPlacement,
+) -> dict[str, Any]:
+    """Copy an assistant disk to an explicit target zone and reserve its IP.
+
+    This is preparation only: it never detaches, changes, or deletes source
+    resources. Repeating the same migration ID reuses its immutable snapshot
+    and target disk after validating their source linkage.
+    """
+
+    if source.region == target.region:
+        raise ValueError("Source and target placements must use different regions")
+
+    source_disk_name = _assistant_disk_name_at_placement(assistant_id, source)
+    target_disk_name = _assistant_disk_name_at_placement(assistant_id, target)
+    disks = compute_v1.DisksClient()
+    try:
+        source_disk = disks.get(
+            project=SETTINGS.vm_project_id,
+            zone=source.zone,
+            disk=source_disk_name,
+        )
+    except NotFound as exc:
+        raise ValueError(
+            f"Source assistant disk {source_disk_name} was not found in {source.zone}",
+        ) from exc
+
+    source_disk_link = str(getattr(source_disk, "self_link", "") or "")
+    if not source_disk_link:
+        raise RuntimeError(f"Source assistant disk {source_disk_name} has no self link")
+
+    snapshot_name = assistant_migration_snapshot_name(assistant_id, migration_id)
+    migration_labels = _assistant_migration_labels(assistant_id, migration_id)
+    snapshots = compute_v1.SnapshotsClient()
+    try:
+        snapshot = snapshots.get(
+            project=SETTINGS.vm_project_id,
+            snapshot=snapshot_name,
+        )
+    except NotFound:
+        try:
+            snapshots.insert(
+                project=SETTINGS.vm_project_id,
+                snapshot_resource=compute_v1.Snapshot(
+                    name=snapshot_name,
+                    source_disk=source_disk_link,
+                    description=(
+                        f"Migration {migration_id} snapshot for assistant {assistant_id}"
+                    ),
+                    labels=migration_labels,
+                ),
+            ).result()
+        except Conflict:
+            pass
+        snapshot = snapshots.get(
+            project=SETTINGS.vm_project_id,
+            snapshot=snapshot_name,
+        )
+
+    if str(getattr(snapshot, "source_disk", "") or "") != source_disk_link:
+        raise ValueError(
+            f"Migration snapshot {snapshot_name} does not belong to the requested source disk",
+        )
+    _assert_assistant_migration_ownership(
+        snapshot,
+        assistant_id=assistant_id,
+        migration_id=migration_id,
+        resource_name=snapshot_name,
+    )
+
+    snapshot_link = str(getattr(snapshot, "self_link", "") or "")
+    if not snapshot_link:
+        raise RuntimeError(f"Migration snapshot {snapshot_name} has no self link")
+
+    target_created = False
+    try:
+        target_disk = disks.get(
+            project=SETTINGS.vm_project_id,
+            zone=target.zone,
+            disk=target_disk_name,
+        )
+    except NotFound:
+        try:
+            disks.insert(
+                project=SETTINGS.vm_project_id,
+                zone=target.zone,
+                disk_resource=compute_v1.Disk(
+                    name=target_disk_name,
+                    source_snapshot=snapshot_link,
+                    type_=(f"zones/{target.zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}"),
+                    description=(
+                        f"Migration {migration_id} copy for assistant {assistant_id}"
+                    ),
+                    labels=migration_labels,
+                ),
+            ).result()
+            target_created = True
+        except Conflict:
+            pass
+        target_disk = disks.get(
+            project=SETTINGS.vm_project_id,
+            zone=target.zone,
+            disk=target_disk_name,
+        )
+
+    _assert_assistant_migration_ownership(
+        target_disk,
+        assistant_id=assistant_id,
+        migration_id=migration_id,
+        resource_name=target_disk_name,
+    )
+    target_source_snapshot = str(getattr(target_disk, "source_snapshot", "") or "")
+    if target_source_snapshot and target_source_snapshot != snapshot_link:
+        raise ValueError(
+            f"Target disk {target_disk_name} does not belong to migration {migration_id}",
+        )
+
+    target_address = reserve_assistant_static_ip(assistant_id, region=target.region)
+    _log_vm_pool_event(
+        "prepare_cross_region_migration",
+        assistant_id=assistant_id,
+        migration_id=migration_id,
+        source_zone=source.zone,
+        target_zone=target.zone,
+        source_disk=source_disk_name,
+        target_disk=target_disk_name,
+        snapshot=snapshot_name,
+        target_disk_created=target_created,
+        target_address_created=target_address.get("created", False),
+    )
+    return {
+        "snapshot": _migration_snapshot_details(snapshot),
+        "target_disk": {
+            "name": target_disk_name,
+            "self_link": str(getattr(target_disk, "self_link", "") or "") or None,
+            "zone": target.zone,
+            "created": target_created,
+        },
+        "target_address": target_address,
+    }
 
 
 def assistant_static_ip_rotation_name(assistant_id: str, operation_id: str) -> str:
@@ -308,7 +648,8 @@ def assistant_static_ip_rotation_name(assistant_id: str, operation_id: str) -> s
     prefix = "unity-assistant-ip-"
     suffix = SETTINGS.env_suffix
     operation_normalized = _assistant_static_ip_id_component(
-        operation_id, max_length=63,
+        operation_id,
+        max_length=63,
     )
     operation_digest = hashlib.sha256(str(operation_id).encode()).hexdigest()[:8]
     operation_component = (
@@ -343,7 +684,7 @@ def _get_assistant_rotation_address(
     try:
         address = client.get(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=_current_vm_placement().region,
             address=name,
         )
     except NotFound:
@@ -377,7 +718,7 @@ def reserve_assistant_static_ip_rotation_candidate(
     try:
         client.insert(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=_current_vm_placement().region,
             address_resource=compute_v1.Address(
                 name=name,
                 address_type="EXTERNAL",
@@ -396,19 +737,21 @@ def reserve_assistant_static_ip_rotation_candidate(
     if created:
         created_address = client.get(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=_current_vm_placement().region,
             address=name,
         )
         expected_labels = _assistant_rotation_labels(assistant_id, operation_id)
         if dict(getattr(created_address, "labels", None) or {}) != expected_labels:
             client.set_labels(
                 project=SETTINGS.vm_project_id,
-                region=SETTINGS.vm_region,
+                region=_current_vm_placement().region,
                 resource=name,
                 region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
                     labels=expected_labels,
                     label_fingerprint=getattr(
-                        created_address, "label_fingerprint", None,
+                        created_address,
+                        "label_fingerprint",
+                        None,
                     ),
                 ),
             ).result()
@@ -428,7 +771,7 @@ def _rotation_vm_state(
     client = compute_v1.InstancesClient()
     instance = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     labels = dict(getattr(instance, "labels", None) or {})
@@ -438,7 +781,9 @@ def _rotation_vm_state(
         raise ValueError(f"VM {vm_name} is not assigned to binding {binding_id}")
     if labels.get(ASSISTANT_ID_LABEL) != assistant_id.lower().replace("_", "-"):
         raise ValueError(f"VM {vm_name} is not assigned to assistant {assistant_id}")
-    network_interface, access_config_name, current_ip = _external_access_config(instance)
+    network_interface, access_config_name, current_ip = _external_access_config(
+        instance,
+    )
     return client, network_interface, access_config_name, current_ip
 
 
@@ -449,7 +794,7 @@ def _verify_rotation_nat(
 ) -> None:
     instance = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     _, _, actual_ip = _external_access_config(instance)
@@ -491,7 +836,9 @@ def rotate_assistant_static_ip(
         )
         candidate_ip = str(candidate["address"])
         client, nic, access_config, current_ip = _rotation_vm_state(
-            vm_name, binding_id, assistant_id,
+            vm_name,
+            binding_id,
+            assistant_id,
         )
         if current_ip == candidate_ip:
             _verify_rotation_nat(client, vm_name, candidate_ip)
@@ -508,8 +855,11 @@ def rotate_assistant_static_ip(
             )
         try:
             _replace_vm_external_ip(
-                client, vm_name, network_interface=nic,
-                access_config_name=access_config, current_ip=current_ip,
+                client,
+                vm_name,
+                network_interface=nic,
+                access_config_name=access_config,
+                current_ip=current_ip,
                 replacement_ip=candidate_ip,
             )
             _verify_rotation_nat(client, vm_name, candidate_ip)
@@ -519,12 +869,17 @@ def rotate_assistant_static_ip(
             # observations before surfacing the original operation failure.
             try:
                 _, _, _, observed_ip = _rotation_vm_state(
-                    vm_name, binding_id, assistant_id,
+                    vm_name,
+                    binding_id,
+                    assistant_id,
                 )
                 if observed_ip != expected_old_ip:
                     _replace_vm_external_ip(
-                        client, vm_name, network_interface=nic,
-                        access_config_name=access_config, current_ip=observed_ip,
+                        client,
+                        vm_name,
+                        network_interface=nic,
+                        access_config_name=access_config,
+                        current_ip=observed_ip,
                         replacement_ip=expected_old_ip,
                     )
                 _upsert_dns_a_record(hostname, expected_old_ip)
@@ -565,7 +920,9 @@ def rollback_assistant_static_ip_rotation(
             raise ValueError("Rotation candidate does not exist")
         candidate_ip = str(candidate["address"])
         client, nic, access_config, current_ip = _rotation_vm_state(
-            vm_name, binding_id, assistant_id,
+            vm_name,
+            binding_id,
+            assistant_id,
         )
         if current_ip not in (candidate_ip, expected_old_ip):
             raise ValueError(f"VM {vm_name} has unexpected external IP {current_ip}")
@@ -579,8 +936,11 @@ def rollback_assistant_static_ip_rotation(
             }
         try:
             _replace_vm_external_ip(
-                client, vm_name, network_interface=nic,
-                access_config_name=access_config, current_ip=candidate_ip,
+                client,
+                vm_name,
+                network_interface=nic,
+                access_config_name=access_config,
+                current_ip=candidate_ip,
                 replacement_ip=expected_old_ip,
             )
             _verify_rotation_nat(client, vm_name, expected_old_ip)
@@ -589,7 +949,9 @@ def rollback_assistant_static_ip_rotation(
             try:
                 _upsert_dns_a_record(hostname, candidate_ip)
             except Exception:
-                logger.exception("Failed restoring candidate DNS after rollback failure")
+                logger.exception(
+                    "Failed restoring candidate DNS after rollback failure",
+                )
             raise
         return {
             "hostname": hostname,
@@ -626,9 +988,16 @@ def finalize_assistant_static_ip_rotation(
         candidate = _get_assistant_rotation_address(assistant_id, operation_id)
         if candidate is None:
             return {
-                "hostname": hostname, "old": {"address": expected_old_ip},
-                "candidate": {"name": assistant_static_ip_rotation_name(assistant_id, operation_id)},
-                "idempotent": True, "deleted": False,
+                "hostname": hostname,
+                "old": {"address": expected_old_ip},
+                "candidate": {
+                    "name": assistant_static_ip_rotation_name(
+                        assistant_id,
+                        operation_id,
+                    ),
+                },
+                "idempotent": True,
+                "deleted": False,
             }
         candidate_ip = str(candidate.get("address") or "")
         if candidate_ip != expected_old_ip:
@@ -638,13 +1007,15 @@ def finalize_assistant_static_ip_rotation(
             raise ValueError("Refusing to finalize an active or attached candidate")
         compute_v1.AddressesClient().delete(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=_current_vm_placement().region,
             address=str(candidate["name"]),
         ).result()
         return {
-            "hostname": hostname, "old": {"address": expected_old_ip},
+            "hostname": hostname,
+            "old": {"address": expected_old_ip},
             "candidate": _rotation_response_address(candidate),
-            "idempotent": False, "deleted": True,
+            "idempotent": False,
+            "deleted": True,
         }
     finally:
         _release_binding_vm_lease(coord_api, binding_id, namespace, holder_id)
@@ -715,31 +1086,40 @@ def _run_vm_pool_stage(
 # ---------------------------------------------------------------------------
 # Demand tracking for pool replenishment
 # ---------------------------------------------------------------------------
-_pending_claims: Dict[str, int] = {}
+PoolScopeKey = tuple[str, str, str]
+
+_pending_claims: Dict[PoolScopeKey, int] = {}
 _pending_lock = threading.Lock()
 
-_replenish_locks: Dict[str, threading.Lock] = {}
+_replenish_locks: Dict[PoolScopeKey, threading.Lock] = {}
 _replenish_locks_guard = threading.Lock()
 
-_trim_locks: Dict[str, threading.Lock] = {}
+_trim_locks: Dict[PoolScopeKey, threading.Lock] = {}
 _trim_locks_guard = threading.Lock()
 
 _vm_claim_locks: Dict[str, threading.Lock] = {}
 _vm_claim_locks_guard = threading.Lock()
 
 
+def _pool_scope_key(vm_type: str) -> PoolScopeKey:
+    placement = _current_vm_placement()
+    return vm_type, placement.location.id, placement.zone
+
+
 def _get_replenish_lock(vm_type: str) -> threading.Lock:
+    key = _pool_scope_key(vm_type)
     with _replenish_locks_guard:
-        if vm_type not in _replenish_locks:
-            _replenish_locks[vm_type] = threading.Lock()
-        return _replenish_locks[vm_type]
+        if key not in _replenish_locks:
+            _replenish_locks[key] = threading.Lock()
+        return _replenish_locks[key]
 
 
 def _get_trim_lock(vm_type: str) -> threading.Lock:
+    key = _pool_scope_key(vm_type)
     with _trim_locks_guard:
-        if vm_type not in _trim_locks:
-            _trim_locks[vm_type] = threading.Lock()
-        return _trim_locks[vm_type]
+        if key not in _trim_locks:
+            _trim_locks[key] = threading.Lock()
+        return _trim_locks[key]
 
 
 def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
@@ -1074,7 +1454,7 @@ def _request_vm_stop(
     try:
         op = client.stop(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
         logger.info(
@@ -1118,12 +1498,12 @@ def _refresh_inflight_progress_phase(client: compute_v1.InstancesClient, instanc
     if not updated:
         return client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=instance.name,
         )
     return client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=instance.name,
     )
 
@@ -1132,7 +1512,7 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.vm-type={vm_type}",
     )
     now = datetime.now(timezone.utc)
@@ -1140,7 +1520,7 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
     for instance in client.list(request=request):
         refreshed = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=instance.name,
         )
         refreshed = _refresh_inflight_progress_phase(client, refreshed)
@@ -1459,16 +1839,28 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
 
 
 def _pool_vm_name(vm_type: str, n: int) -> str:
-    return f"{pool_vm_name_prefix(vm_type)}-{vm_type}-{n}{SETTINGS.env_suffix}"
+    location = _current_vm_placement().location.id
+    location_component = "" if location == SETTINGS.vm_region else f"-{location}"
+    return (
+        f"{pool_vm_name_prefix(vm_type)}-{vm_type}{location_component}-{n}"
+        f"{SETTINGS.env_suffix}"
+    )
 
 
 def _pool_ip_name(vm_type: str, n: int) -> str:
-    return f"{pool_vm_name_prefix(vm_type)}-{vm_type}-ip-{n}{SETTINGS.env_suffix}"
+    location = _current_vm_placement().location.id
+    location_component = "" if location == SETTINGS.vm_region else f"-{location}"
+    return (
+        f"{pool_vm_name_prefix(vm_type)}-{vm_type}{location_component}-ip-{n}"
+        f"{SETTINGS.env_suffix}"
+    )
 
 
 def _pool_hostname(vm_type: str, n: int) -> str:
+    location = _current_vm_placement().location.id
+    location_component = "" if location == SETTINGS.vm_region else f"-{location}"
     return (
-        f"{pool_vm_name_prefix(vm_type)}-{vm_type}-{n}"
+        f"{pool_vm_name_prefix(vm_type)}-{vm_type}{location_component}-{n}"
         f"{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
     )
 
@@ -1518,10 +1910,17 @@ def _parse_pool_vm_identity(
                     # Bare production names must not swallow active staging
                     # (or retired) suffixes as part of the numeric id.
                     continue
+                location_and_number = number_text.rsplit("-", 1)
                 try:
-                    return prefix, candidate_type, int(number_text), env_suffix
+                    number = int(location_and_number[-1])
                 except ValueError:
                     continue
+                if len(location_and_number) == 2:
+                    try:
+                        get_pool_location(location_and_number[0])
+                    except ValueError:
+                        continue
+                return prefix, candidate_type, number, env_suffix
     return None
 
 
@@ -1536,8 +1935,7 @@ def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
     parsed = _parse_pool_vm_identity(vm_name, vm_type)
     if parsed is None:
         return f"{vm_name}.{DOMAIN_SUFFIX}"
-    prefix, _, vm_number, env_suffix = parsed
-    return f"{prefix}-{vm_type}-{vm_number}{env_suffix}.{DOMAIN_SUFFIX}"
+    return f"{vm_name}.{DOMAIN_SUFFIX}"
 
 
 def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
@@ -1551,8 +1949,10 @@ def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
     parsed = _parse_pool_vm_identity(vm_name, vm_type)
     if parsed is None:
         return None
-    prefix, _, vm_number, env_suffix = parsed
-    return f"{prefix}-{vm_type}-ip-{vm_number}{env_suffix}"
+    _, _, vm_number, env_suffix = parsed
+    stem = vm_name[: -len(env_suffix)] if env_suffix else vm_name
+    prefix = stem[: -len(f"-{vm_number}")]
+    return f"{prefix}-ip-{vm_number}{env_suffix}"
 
 
 def _pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
@@ -1575,7 +1975,9 @@ def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Option
 
 def _assistant_disk_name(assistant_id: str) -> str:
     sanitized = assistant_id.lower().replace("_", "-")
-    return f"unity-disk-{sanitized}{SETTINGS.env_suffix}"
+    location = _current_vm_placement().location.id
+    location_component = "" if location == SETTINGS.vm_region else f"-{location}"
+    return f"unity-disk-{sanitized}{location_component}{SETTINGS.env_suffix}"
 
 
 def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, str]:
@@ -1618,7 +2020,7 @@ def _wait_for_pool_static_ip(ip_client, ip_name: str) -> str:
         try:
             ip_result = ip_client.get(
                 project=SETTINGS.vm_project_id,
-                region=SETTINGS.vm_region,
+                region=_current_vm_placement().region,
                 address=ip_name,
             )
         except NotFound:
@@ -1706,7 +2108,7 @@ def _replace_vm_external_ip(
 
     client.delete_access_config(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
         access_config=access_config_name,
         network_interface=network_interface,
@@ -1714,7 +2116,7 @@ def _replace_vm_external_ip(
     try:
         client.add_access_config(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
             network_interface=network_interface,
             access_config_resource=compute_v1.AccessConfig(
@@ -1728,7 +2130,7 @@ def _replace_vm_external_ip(
         try:
             client.add_access_config(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
                 network_interface=network_interface,
                 access_config_resource=compute_v1.AccessConfig(
@@ -1767,7 +2169,7 @@ def attach_assistant_static_ip_to_pool_vm(
     client = compute_v1.InstancesClient()
     instance = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     network_interface, access_config_name, current_ip = _external_access_config(
@@ -1792,6 +2194,14 @@ def attach_assistant_static_ip_to_pool_vm(
 
     hostname = get_dns_hostname(assistant_id)
     _upsert_dns_a_record(hostname, assistant_ip)
+    _report_assistant_static_ip_attachment(
+        assistant_id=assistant_id,
+        address_name=str(
+            reserved.get("name") or assistant_static_ip_name(assistant_id),
+        ),
+        address=assistant_ip,
+        hostname=hostname,
+    )
     _log_vm_pool_event(
         "assistant_static_ip_attached",
         assistant_id=assistant_id,
@@ -1801,6 +2211,69 @@ def attach_assistant_static_ip_to_pool_vm(
         ip_address=assistant_ip,
     )
     return {"hostname": hostname, "ip_address": assistant_ip}
+
+
+def _report_assistant_static_ip_attachment(
+    *,
+    assistant_id: str,
+    address_name: str,
+    address: str,
+    hostname: str,
+) -> None:
+    """Best-effort sync of an attached regional address to Orchestra."""
+
+    if not SETTINGS.orchestra_url or not SETTINGS.orchestra_admin_key:
+        logger.warning(
+            "Cannot report attached assistant IP for %s: Orchestra is not configured",
+            assistant_id,
+        )
+        return
+    placement = _current_vm_placement()
+    try:
+        response = requests.post(
+            (
+                f"{SETTINGS.orchestra_url}/admin/assistant/{assistant_id}"
+                "/managed-desktop/network-identity"
+            ),
+            json={
+                "gcp_address_name": address_name,
+                "address": address,
+                "region": placement.region,
+                "pool_location": placement.location.id,
+                "hostname": hostname,
+            },
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception:
+        logger.exception(
+            "Failed reporting attached assistant IP for %s to Orchestra",
+            assistant_id,
+        )
+
+
+def sync_assistant_static_ip_attachment(
+    assistant_id: str,
+    placement: VmPlacement | None,
+) -> bool:
+    """Report an existing assistant address without changing its VM binding."""
+
+    with vm_placement_scope(placement):
+        allocation = get_assistant_static_ip(assistant_id)
+        if not allocation or not allocation.get("address"):
+            return False
+        _report_assistant_static_ip_attachment(
+            assistant_id=assistant_id,
+            address_name=str(
+                allocation.get("name") or assistant_static_ip_name(assistant_id),
+            ),
+            address=str(allocation["address"]),
+            hostname=str(
+                allocation.get("hostname") or get_dns_hostname(assistant_id),
+            ),
+        )
+    return True
 
 
 def restore_pool_static_ip_on_vm(
@@ -1819,7 +2292,7 @@ def restore_pool_static_ip_on_vm(
     client = compute_v1.InstancesClient()
     instance = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     network_interface, access_config_name, current_ip = _external_access_config(
@@ -1869,7 +2342,7 @@ def _delete_pool_static_ip(ip_name: str) -> bool:
         try:
             ip_client.delete(
                 project=SETTINGS.vm_project_id,
-                region=SETTINGS.vm_region,
+                region=_current_vm_placement().region,
                 address=ip_name,
             ).result()
             logger.info("Deleted static IP: %s", ip_name)
@@ -1957,7 +2430,7 @@ def find_vm_with_disk(assistant_id: str) -> Optional[str]:
     try:
         disk = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             disk=disk_name,
         )
     except NotFound:
@@ -1974,7 +2447,7 @@ def _attached_disk_vm_state(vm_name: str) -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
     vm = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     labels = dict(vm.labels) if vm.labels else {}
@@ -2008,23 +2481,25 @@ def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
     owner_binding_id = str(owner.get("binding_id", "") or "")
     owner_pool_role = str(owner.get("pool_role", "") or "")
     requested_binding = binding_id.lower().replace("_", "-")
-    if owner_binding_id and owner_binding_id != requested_binding:
-        if owner_pool_role == POOL_ROLE_RELEASING:
-            _log_vm_pool_event(
-                "disk_handoff_finalize_stale_release",
-                assistant_id=assistant_id,
-                binding_id=binding_id,
-                stale_binding_id=owner_binding_id,
-                vm_name=attached_vm_name,
-                stale_pool_role=owner_pool_role,
-            )
-            complete_pool_vm_release(attached_vm_name, owner_binding_id)
-            attached_vm_name = find_vm_with_disk(assistant_id)
-            if not attached_vm_name:
-                return
-            owner = _attached_disk_vm_state(attached_vm_name)
-            owner_binding_id = str(owner.get("binding_id", "") or "")
-            owner_pool_role = str(owner.get("pool_role", "") or "")
+    if owner_binding_id != requested_binding and owner_pool_role != "assigned":
+        _log_vm_pool_event(
+            "disk_handoff_reclaim_stale_owner",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            stale_binding_id=owner_binding_id or None,
+            vm_name=attached_vm_name,
+            stale_pool_role=owner_pool_role or None,
+        )
+        reclaim_orphaned_assistant_disk(
+            assistant_id,
+            current_binding_id=binding_id,
+        )
+        attached_vm_name = find_vm_with_disk(assistant_id)
+        if not attached_vm_name:
+            return
+        owner = _attached_disk_vm_state(attached_vm_name)
+        owner_binding_id = str(owner.get("binding_id", "") or "")
+        owner_pool_role = str(owner.get("pool_role", "") or "")
 
     details = [attached_vm_name]
     if owner_pool_role:
@@ -2047,7 +2522,7 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
 
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=label_filter,
     )
     results = []
@@ -2136,7 +2611,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     try:
         op = ip_client.insert(
             project=SETTINGS.vm_project_id,
-            region=SETTINGS.vm_region,
+            region=_current_vm_placement().region,
             address_resource=address,
         )
         op.result()
@@ -2177,6 +2652,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         BINDING_ID_LABEL: "",
         "vm-type": vm_type,
         "pool-hostname": hostname.replace(".", "-"),
+        "pool-location": _current_vm_placement().location.id,
         POOL_CONTRACT_GENERATION_LABEL: POOL_VM_CONTRACT_GENERATION,
         POOL_TRANSITION_EPOCH_LABEL: _pool_transition_epoch_value(),
         POOL_PROGRESS_PHASE_LABEL: "provisioning",
@@ -2187,7 +2663,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
 
     instance_kwargs = dict(
         name=vm_name,
-        machine_type=f"zones/{SETTINGS.vm_zone}/machineTypes/{cfg['machine_type']}",
+        machine_type=f"zones/{_current_vm_placement().zone}/machineTypes/{cfg['machine_type']}",
         description=f"Unity pool VM ({vm_type}) #{n}",
         labels=labels,
         tags=compute_v1.Tags(items=cfg["tags"]),
@@ -2197,7 +2673,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
                 auto_delete=True,
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     disk_size_gb=cfg["disk_size_gb"],
-                    disk_type=f"zones/{SETTINGS.vm_zone}/diskTypes/{VM_DISK_TYPE}",
+                    disk_type=f"zones/{_current_vm_placement().zone}/diskTypes/{VM_DISK_TYPE}",
                     source_image=f"projects/{cfg['image_project']}/global/images/family/{cfg['image_family']}",
                 ),
             ),
@@ -2236,7 +2712,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
     op = client.insert(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance_resource=instance,
     )
 
@@ -2285,7 +2761,7 @@ def _set_pool_labels(
     for attempt in range(max_retries):
         fresh = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
         labels = dict(fresh.labels) if fresh.labels else {}
@@ -2312,7 +2788,7 @@ def _set_pool_labels(
         try:
             client.set_labels(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
                 instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
                     labels=labels,
@@ -2328,6 +2804,278 @@ def _set_pool_labels(
                 f"retrying ({attempt + 1}/{max_retries})",
             )
     return False
+
+
+def _regional_reaper_core_api():
+    """Return the Core API used to persist regional pool reaper state."""
+    from .helpers import setup_kubernetes_client
+
+    _, core_api, _, _ = setup_kubernetes_client()
+    if core_api is None:
+        raise RuntimeError(
+            "Kubernetes CoreV1Api is unavailable for regional pool reaper",
+        )
+    return core_api
+
+
+def _read_regional_reaper_state(
+    core_api,
+    region: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Read one region's durable reaper state and ConfigMap resource version."""
+    try:
+        config_map = core_api.read_namespaced_config_map(
+            REGIONAL_POOL_REAPER_CONFIG_MAP,
+            SETTINGS.default_namespace,
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        return {}, None
+    data = dict(config_map.data or {})
+    raw = data.get(region, "")
+    try:
+        state = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        logger.warning("Ignoring malformed regional reaper state for %s", region)
+        state = {}
+    return (
+        state if isinstance(state, dict) else {}
+    ), config_map.metadata.resource_version
+
+
+def _write_regional_reaper_state(
+    core_api,
+    region: str,
+    state: dict[str, Any],
+    *,
+    resource_version: str | None,
+) -> None:
+    """Persist one region's state with a resource-version CAS."""
+    encoded = json.dumps(state, sort_keys=True, separators=(",", ":"))
+    if resource_version is None:
+        try:
+            core_api.create_namespaced_config_map(
+                SETTINGS.default_namespace,
+                k8s_client.V1ConfigMap(
+                    metadata=k8s_client.V1ObjectMeta(
+                        name=REGIONAL_POOL_REAPER_CONFIG_MAP,
+                    ),
+                    data={region: encoded},
+                ),
+            )
+            return
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
+            # Another worker created the shared map. Retry using its version.
+            _, resource_version = _read_regional_reaper_state(core_api, region)
+
+    config_map = core_api.read_namespaced_config_map(
+        REGIONAL_POOL_REAPER_CONFIG_MAP,
+        SETTINGS.default_namespace,
+    )
+    data = dict(config_map.data or {})
+    data[region] = encoded
+    config_map.data = data
+    core_api.replace_namespaced_config_map(
+        REGIONAL_POOL_REAPER_CONFIG_MAP,
+        SETTINGS.default_namespace,
+        config_map,
+    )
+
+
+def _set_regional_reaper_state(
+    region: str,
+    state: dict[str, Any],
+    *,
+    core_api=None,
+) -> None:
+    """Persist a regional reaper fence, retrying ConfigMap update conflicts."""
+    core_api = core_api or _regional_reaper_core_api()
+    for attempt in range(3):
+        _, resource_version = _read_regional_reaper_state(core_api, region)
+        try:
+            _write_regional_reaper_state(
+                core_api,
+                region,
+                state,
+                resource_version=resource_version,
+            )
+            return
+        except ApiException as exc:
+            if exc.status != 409 or attempt == 2:
+                raise
+    raise RuntimeError(f"Unable to persist regional reaper state for {region}")
+
+
+def _regional_pool_reaper_state(region: str, *, core_api=None) -> dict[str, Any]:
+    core_api = core_api or _regional_reaper_core_api()
+    state, _ = _read_regional_reaper_state(core_api, region)
+    return state
+
+
+def clear_regional_pool_reaper_fence(
+    placement: VmPlacement | None = None,
+    *,
+    core_api=None,
+) -> None:
+    """Reopen a nonlegacy location before an assignment can claim capacity."""
+    placement = placement or _current_vm_placement()
+    if placement.region == SETTINGS.vm_region:
+        return
+    state = _regional_pool_reaper_state(placement.region, core_api=core_api)
+    if not state.get("fenced") and not state.get("emptySince"):
+        return
+    _set_regional_reaper_state(
+        placement.region,
+        {"fenced": False},
+        core_api=core_api,
+    )
+    logger.info("Cleared regional pool reaper fence for %s", placement.region)
+
+
+def _regional_pool_reaper_fenced(placement: VmPlacement | None = None) -> bool:
+    """Return whether background capacity maintenance is fenced for a region."""
+    placement = placement or _current_vm_placement()
+    if placement.region == SETTINGS.vm_region:
+        return False
+    return bool(_regional_pool_reaper_state(placement.region).get("fenced"))
+
+
+def _parse_reaper_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def reap_inactive_regional_pools(
+    *,
+    core_api=None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fence and remove idle capacity in unused nonlegacy regional pools.
+
+    A location must have no assigned or releasing VM for a full hour before it
+    is fenced. The fence is persisted in Kubernetes before deletion and is
+    rechecked after a fresh GCE read, so an assignment that clears the fence
+    cannot race into deleting an owned VM.
+    """
+    core_api = core_api or _regional_reaper_core_api()
+    now = now or datetime.now(timezone.utc)
+    results: list[dict[str, Any]] = []
+    client = compute_v1.InstancesClient()
+
+    for location in list_pool_locations():
+        if location.region == SETTINGS.vm_region:
+            continue
+        vms_by_zone: dict[str, list[Any]] = {}
+        for zone in location.zones:
+            placement = VmPlacement(location, zone, "", "regional_reaper")
+            with vm_placement_scope(placement):
+                vms_by_zone[zone] = list(
+                    client.list(
+                        request=compute_v1.ListInstancesRequest(
+                            project=SETTINGS.vm_project_id,
+                            zone=zone,
+                            filter="labels.pool-role:*",
+                        ),
+                    ),
+                )
+        vms = [vm for zone_vms in vms_by_zone.values() for vm in zone_vms]
+        roles = {str((vm.labels or {}).get(POOL_ROLE_LABEL, "")) for vm in vms}
+        active = bool({POOL_ROLE_RELEASING, "assigned"} & roles)
+        state = _regional_pool_reaper_state(location.region, core_api=core_api)
+        if active:
+            if state:
+                _set_regional_reaper_state(
+                    location.region,
+                    {"fenced": False},
+                    core_api=core_api,
+                )
+            results.append(
+                {"region": location.region, "action": "active", "vm_count": len(vms)},
+            )
+            continue
+
+        empty_since = _parse_reaper_timestamp(state.get("emptySince"))
+        if empty_since is None:
+            _set_regional_reaper_state(
+                location.region,
+                {"emptySince": now.isoformat(), "fenced": False},
+                core_api=core_api,
+            )
+            results.append({"region": location.region, "action": "grace_started"})
+            continue
+        if (now - empty_since).total_seconds() < REGIONAL_POOL_REAPER_GRACE_SECONDS:
+            results.append({"region": location.region, "action": "grace_pending"})
+            continue
+
+        fence_state = {"emptySince": empty_since.isoformat(), "fenced": True}
+        _set_regional_reaper_state(location.region, fence_state, core_api=core_api)
+        # Read after fencing. An assignment clears the fence before claiming,
+        # and an owned VM is never an eligible deletion target regardless.
+        state = _regional_pool_reaper_state(location.region, core_api=core_api)
+        current_vms_by_zone: dict[str, list[Any]] = {}
+        for zone in location.zones:
+            placement = VmPlacement(location, zone, "", "regional_reaper")
+            with vm_placement_scope(placement):
+                current_vms_by_zone[zone] = list(
+                    client.list(
+                        request=compute_v1.ListInstancesRequest(
+                            project=SETTINGS.vm_project_id,
+                            zone=zone,
+                            filter="labels.pool-role:*",
+                        ),
+                    ),
+                )
+        current_vms = [
+            vm for zone_vms in current_vms_by_zone.values() for vm in zone_vms
+        ]
+        current_roles = {
+            str((vm.labels or {}).get(POOL_ROLE_LABEL, "")) for vm in current_vms
+        }
+        if not state.get("fenced") or {POOL_ROLE_RELEASING, "assigned"} & current_roles:
+            _set_regional_reaper_state(
+                location.region,
+                {"fenced": False},
+                core_api=core_api,
+            )
+            results.append({"region": location.region, "action": "reopen_race"})
+            continue
+        deleted = []
+        for zone, zone_vms in current_vms_by_zone.items():
+            placement = VmPlacement(location, zone, "", "regional_reaper")
+            with vm_placement_scope(placement):
+                for vm in zone_vms:
+                    role = str((vm.labels or {}).get(POOL_ROLE_LABEL, ""))
+                    if role not in REGIONAL_POOL_REAPER_REAPABLE_ROLES:
+                        continue
+                    # Claiming uses the same label-fingerprint CAS. Moving a
+                    # candidate out of its claimable role before deletion
+                    # makes this race-safe: either the assignment wins and we
+                    # skip it, or the reaper wins and the assignment retries.
+                    if not _set_pool_labels(
+                        client,
+                        vm.name,
+                        {POOL_ROLE_LABEL: "reaping"},
+                        expected_role=role,
+                    ):
+                        continue
+                    _delete_pool_vm_instance(
+                        client,
+                        vm.name,
+                        vm_type=(vm.labels or {}).get("vm-type"),
+                    )
+                    deleted.append(vm.name)
+        results.append(
+            {"region": location.region, "action": "reaped", "deleted": deleted},
+        )
+    return {"regions": results}
 
 
 def claim_idle_vm(
@@ -2352,8 +3100,9 @@ def claim_idle_vm(
         "AND status=RUNNING"
     )
 
+    pending_key = _pool_scope_key(vm_type)
     with _pending_lock:
-        _pending_claims[vm_type] = _pending_claims.get(vm_type, 0) + 1
+        _pending_claims[pending_key] = _pending_claims.get(pending_key, 0) + 1
 
     try:
         return _claim_idle_vm_inner(
@@ -2366,7 +3115,10 @@ def claim_idle_vm(
         )
     finally:
         with _pending_lock:
-            _pending_claims[vm_type] = max(0, _pending_claims.get(vm_type, 0) - 1)
+            _pending_claims[pending_key] = max(
+                0,
+                _pending_claims.get(pending_key, 0) - 1,
+            )
 
 
 def _claim_idle_vm_inner(
@@ -2380,7 +3132,7 @@ def _claim_idle_vm_inner(
     while True:
         request = compute_v1.ListInstancesRequest(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             filter=label_filter,
         )
         idle_vms = list(client.list(request=request))
@@ -2417,7 +3169,7 @@ def _claim_idle_vm_inner(
             # the CAS check.  GET is strongly consistent per GCE docs.
             fresh = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=candidate_name,
             )
             if not _has_current_pool_contract(fresh):
@@ -2466,7 +3218,7 @@ def _claim_idle_vm_inner(
             try:
                 op = client.set_labels(
                     project=SETTINGS.vm_project_id,
-                    zone=SETTINGS.vm_zone,
+                    zone=_current_vm_placement().zone,
                     instance=candidate_name,
                     instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
                         labels=new_labels,
@@ -2530,14 +3282,14 @@ def create_assistant_disk(assistant_id: str) -> str:
     disk = compute_v1.Disk(
         name=disk_name,
         size_gb=POOL_ASSISTANT_DISK_SIZE_GB,
-        type_=f"zones/{SETTINGS.vm_zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}",
+        type_=f"zones/{_current_vm_placement().zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}",
         description=f"Persistent storage for assistant {assistant_id}",
     )
 
     try:
         op = client.insert(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             disk_resource=disk,
         )
         op.result()
@@ -2555,7 +3307,7 @@ def create_assistant_disk(assistant_id: str) -> str:
 
     result = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         disk=disk_name,
     )
     return result.self_link
@@ -2573,9 +3325,7 @@ def attach_assistant_disk(
     """
     client = compute_v1.InstancesClient()
     disk_name = _assistant_disk_name(assistant_id)
-    disk_source = (
-        f"projects/{SETTINGS.vm_project_id}/zones/{SETTINGS.vm_zone}/disks/{disk_name}"
-    )
+    disk_source = f"projects/{SETTINGS.vm_project_id}/zones/{_current_vm_placement().zone}/disks/{disk_name}"
 
     attached_disk = compute_v1.AttachedDisk(
         source=disk_source,
@@ -2586,7 +3336,7 @@ def attach_assistant_disk(
 
     op = client.attach_disk(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
         attached_disk_resource=attached_disk,
     )
@@ -2614,7 +3364,7 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
 
     vm = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     actual_device_name = None
@@ -2636,7 +3386,7 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
 
     op = client.detach_disk(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
         device_name=actual_device_name,
     )
@@ -2668,7 +3418,7 @@ def delete_assistant_disk(assistant_id: str) -> bool:
     try:
         op = client.delete(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             disk=disk_name,
         )
         op.result()
@@ -2748,7 +3498,7 @@ def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
     client = compute_v1.InstancesClient()
     vm = client.get(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     )
     attached_disks = [
@@ -2765,7 +3515,7 @@ def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
         disk_name = (attached_disk.source or "").rsplit("/", 1)[-1]
         client.detach_disk(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
             device_name=attached_disk.device_name,
         ).result()
@@ -2847,7 +3597,7 @@ def _update_instance_metadata(
     for attempt in range(max_retries + 1):
         instance = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
 
@@ -2865,14 +3615,14 @@ def _update_instance_metadata(
         try:
             op = client.set_metadata(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
                 metadata_resource=metadata,
             )
             op.result()
             refreshed = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
             )
             tracked_keys = sorted(
@@ -2920,7 +3670,7 @@ def _delete_pool_vm_instance(
 ) -> None:
     client.delete(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         instance=vm_name,
     ).result()
     _cleanup_deleted_pool_vm_network_resources(vm_name, vm_type=vm_type)
@@ -2954,7 +3704,7 @@ def _recycle_stale_pool_vms(vm_type: str) -> list[str]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.vm-type={vm_type}",
     )
 
@@ -2981,12 +3731,13 @@ def _recycle_stale_pool_vms(vm_type: str) -> list[str]:
     return actions
 
 
-def assign_pool_vm(
+def _assign_pool_vm(
     assistant_id: str,
     binding_id: str,
     unify_apikey: str,
     vm_type: str = "ubuntu",
     vm_number: int | None = None,
+    attach_static_ip: bool = True,
 ) -> Dict[str, Any]:
     """Claim and configure exactly one VM for a specific binding."""
     started_at = time.monotonic()
@@ -3020,6 +3771,16 @@ def assign_pool_vm(
             binding_id=binding_id,
             vm_type=vm_type,
         )
+        if attach_static_ip:
+            current_stage = "reclaim_stale_assistant_ip_owner"
+            _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=lambda: reclaim_stale_assistant_ip_owners(assistant_id),
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_type=vm_type,
+            )
         current_stage = "claim_idle_vm"
         claimed = _run_vm_pool_stage(
             operation="assign",
@@ -3037,24 +3798,25 @@ def assign_pool_vm(
         )
         vm_name = claimed["vm_name"]
         hostname = claimed["hostname"]
-        current_stage = "attach_assistant_static_ip"
-        stable_network = _run_vm_pool_stage(
-            operation="assign",
-            stage=current_stage,
-            fn=lambda: attach_assistant_static_ip_to_pool_vm(
-                vm_name,
-                assistant_id,
-                vm_type,
-            ),
-            assistant_id=assistant_id,
-            binding_id=binding_id,
-            vm_name=vm_name,
-            vm_type=vm_type,
-        )
-        hostname = stable_network["hostname"]
-        claimed["hostname"] = hostname
-        claimed["ip_address"] = stable_network["ip_address"]
-        claimed["desktop_url"] = f"https://{hostname}"
+        if attach_static_ip:
+            current_stage = "attach_assistant_static_ip"
+            stable_network = _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=lambda: attach_assistant_static_ip_to_pool_vm(
+                    vm_name,
+                    assistant_id,
+                    vm_type,
+                ),
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=vm_name,
+                vm_type=vm_type,
+            )
+            hostname = stable_network["hostname"]
+            claimed["hostname"] = hostname
+            claimed["ip_address"] = stable_network["ip_address"]
+            claimed["desktop_url"] = f"https://{hostname}"
         current_stage = "create_assistant_disk"
         _run_vm_pool_stage(
             operation="assign",
@@ -3177,8 +3939,25 @@ def assign_pool_vm(
             "status": "RUNNING",
             "ssh_username": POOL_SSH_USERNAME,
             "ssh_port": SSH_SYNC_PORT,
+            "pool_location": _current_vm_placement().location.id,
+            "region": _current_vm_placement().region,
+            "zone": _current_vm_placement().zone,
         }
     except Exception as exc:
+        if vm_name and current_stage in {
+            "attach_assistant_static_ip",
+            "reclaim_stale_assistant_ip_owner",
+        }:
+            _set_pool_labels(
+                compute_v1.InstancesClient(),
+                vm_name,
+                {
+                    POOL_ROLE_LABEL: "idle",
+                    ASSISTANT_ID_LABEL: "",
+                    BINDING_ID_LABEL: "",
+                },
+                expected_role="assigned",
+            )
         _log_vm_pool_event(
             "assign_failed",
             assistant_id=assistant_id,
@@ -3202,6 +3981,32 @@ def assign_pool_vm(
         )
 
 
+def assign_pool_vm(
+    assistant_id: str,
+    binding_id: str,
+    unify_apikey: str,
+    vm_type: str = "ubuntu",
+    vm_number: int | None = None,
+    *,
+    placement: VmPlacement | None = None,
+    attach_static_ip: bool = True,
+) -> Dict[str, Any]:
+    """Claim a VM within one explicit pool location."""
+    # A demand-driven assignment is authoritative evidence that this location
+    # is needed again. Clear the durable reaper fence before it can replenish
+    # or claim capacity.
+    clear_regional_pool_reaper_fence(placement)
+    with vm_placement_scope(placement):
+        return _assign_pool_vm(
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            unify_apikey=unify_apikey,
+            vm_type=vm_type,
+            vm_number=vm_number,
+            attach_static_ip=attach_static_ip,
+        )
+
+
 def has_assigned_vm(assistant_id: str) -> bool:
     """Check whether an assigned VM exists for this assistant.
 
@@ -3221,7 +4026,7 @@ def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
     sanitized = assistant_id.lower().replace("_", "-")
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
     )
     assigned = list(client.list(request=request))
@@ -3242,7 +4047,7 @@ def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
     return _vm_ref_from_instance(vm)
 
 
-def verify_vm_assignment(
+def _verify_vm_assignment(
     vm_name: str,
     binding_id: str,
     assistant_id: str | None = None,
@@ -3256,7 +4061,7 @@ def verify_vm_assignment(
     try:
         vm = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
     except Exception:
@@ -3269,6 +4074,18 @@ def verify_vm_assignment(
     if assistant_label is not None and labels.get("assistant-id") != assistant_label:
         return None
     return _vm_ref_from_instance(vm)
+
+
+def verify_vm_assignment(
+    vm_name: str,
+    binding_id: str,
+    assistant_id: str | None = None,
+    *,
+    placement: VmPlacement | None = None,
+) -> Optional[Dict[str, Any]]:
+    """Strongly verify one assignment in its persisted VM location."""
+    with vm_placement_scope(placement):
+        return _verify_vm_assignment(vm_name, binding_id, assistant_id)
 
 
 def _vm_ref_from_instance(vm) -> Dict[str, Any]:
@@ -3285,6 +4102,11 @@ def _vm_ref_from_instance(vm) -> Dict[str, Any]:
         "name": vm.name,
         "hostname": hostname,
         "vmType": labels.get("vm-type", "ubuntu"),
+        # This is routing metadata, not identity. Legacy bindings omit it and
+        # remain valid while the configured Iowa pool is the only pool.
+        "poolLocation": _current_vm_placement().region,
+        "region": _current_vm_placement().region,
+        "zone": _current_vm_placement().zone,
     }
 
 
@@ -3327,12 +4149,12 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
     client = compute_v1.InstancesClient()
     assigned_request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.pool-role=assigned AND labels.vm-type={vm_type}",
     )
     releasing_request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.pool-role={POOL_ROLE_RELEASING} AND labels.vm-type={vm_type}",
     )
     assigned_vms = list(client.list(request=assigned_request))
@@ -3401,7 +4223,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
         try:
             refreshed = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm.name,
             )
             refreshed = _refresh_inflight_progress_phase(client, refreshed)
@@ -3479,7 +4301,7 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.pool-role=quarantined AND labels.vm-type={vm_type}",
     )
     quarantined = list(client.list(request=request))
@@ -3529,7 +4351,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
     address_client = compute_v1.AddressesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
     )
     existing_names = {vm.name for vm in instance_client.list(request=request)}
     cutoff = (
@@ -3540,7 +4362,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
     candidates: list[dict[str, str]] = []
     for address in address_client.list(
         project=SETTINGS.vm_project_id,
-        region=SETTINGS.vm_region,
+        region=_current_vm_placement().region,
     ):
         ip_name = str(getattr(address, "name", "") or "")
         vm_name = _pool_vm_name_from_ip_name(ip_name, vm_type)
@@ -3611,7 +4433,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
     }
 
 
-def release_pool_vm(
+def _release_pool_vm(
     assistant_id: str,
     binding_id: str,
     *,
@@ -3676,7 +4498,7 @@ def release_pool_vm(
             try:
                 candidate = client.get(
                     project=SETTINGS.vm_project_id,
-                    zone=SETTINGS.vm_zone,
+                    zone=_current_vm_placement().zone,
                     instance=vm_name,
                 )
             except NotFound:
@@ -3724,7 +4546,7 @@ def release_pool_vm(
             label_filter = f"labels.{BINDING_ID_LABEL}={binding_label}"
             request = compute_v1.ListInstancesRequest(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 filter=label_filter,
             )
             candidates = [
@@ -3868,7 +4690,7 @@ def release_pool_vm(
             if not updated:
                 refreshed = client.get(
                     project=SETTINGS.vm_project_id,
-                    zone=SETTINGS.vm_zone,
+                    zone=_current_vm_placement().zone,
                     instance=vm_name,
                 )
                 refreshed_labels = dict(refreshed.labels) if refreshed.labels else {}
@@ -3945,6 +4767,24 @@ def release_pool_vm(
         )
 
 
+def release_pool_vm(
+    assistant_id: str,
+    binding_id: str,
+    *,
+    vm_name: str | None = None,
+    release_generation: int | None = None,
+    placement: VmPlacement | None = None,
+) -> Dict[str, Any]:
+    """Release a VM in the location recorded by its binding."""
+    with vm_placement_scope(placement):
+        return _release_pool_vm(
+            assistant_id,
+            binding_id,
+            vm_name=vm_name,
+            release_generation=release_generation,
+        )
+
+
 def _replenish_after_retired_release(result: Dict[str, Any]) -> bool:
     """Backfill pool capacity after a release path retires a VM."""
 
@@ -4002,7 +4842,7 @@ def retire_pool_vm_release(
         try:
             vm = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
             )
         except NotFound:
@@ -4122,7 +4962,7 @@ def recover_stuck_pool_vm_release(
     return result
 
 
-def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
+def _complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
     """Finalize release by idling current VMs or retiring stale-contract ones."""
     client = compute_v1.InstancesClient()
     started_at = time.monotonic()
@@ -4135,7 +4975,7 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
     try:
         vm = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
         labels = dict(vm.labels) if vm.labels else {}
@@ -4145,6 +4985,29 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         binding_label = binding_id.lower().replace("_", "-")
         vm_type = labels.get("vm-type", "ubuntu")
 
+        if vm.status != "RUNNING" and current_role == POOL_ROLE_RELEASING:
+            current_stage = "detach_assistant_disk_from_stopped_vm"
+            detached, disk_name = _detach_attached_assistant_disk(vm_name)
+            current_stage = "retire_stopped_releasing_vm"
+            _delete_pool_vm_instance(client, vm_name, vm_type=vm_type)
+            _log_vm_pool_event(
+                "release_complete_stopped_vm",
+                assistant_id=assistant_id or None,
+                binding_id=current_binding_id or None,
+                vm_name=vm_name,
+                disk_name=disk_name,
+                detached=detached,
+            )
+            return {
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "pool_role": "retired",
+                "assistant_id": assistant_id or None,
+                "binding_id": current_binding_id or None,
+                "disk_name": disk_name,
+                "detached": detached,
+                "retired": True,
+            }
         if vm.status != "RUNNING":
             return {
                 "vm_name": vm_name,
@@ -4227,7 +5090,7 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         if not updated:
             refreshed = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=vm_name,
             )
             return {
@@ -4271,6 +5134,18 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         raise
 
 
+def complete_pool_vm_release(
+    vm_name: str,
+    binding_id: str,
+    *,
+    placement: VmPlacement | None = None,
+) -> Dict[str, Any]:
+    """Finalize release in a persisted or discovered pool location."""
+    resolved = placement or _placement_for_vm_name(vm_name)
+    with vm_placement_scope(resolved):
+        return _complete_pool_vm_release(vm_name, binding_id)
+
+
 def _list_pool_state(vm_type: str):
     """Snapshot current pool state for a VM type.
 
@@ -4282,7 +5157,7 @@ def _list_pool_state(vm_type: str):
     type_filter = f"labels.vm-type={vm_type}"
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=type_filter,
     )
     all_vms = list(client.list(request=request))
@@ -4354,7 +5229,7 @@ def _start_one_stopped_vm(client, vm) -> bool:
 
         op = client.start(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm.name,
         )
         logger.info(
@@ -4396,7 +5271,7 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     try:
         vm = client.get(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
     except NotFound:
@@ -4433,7 +5308,7 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     try:
         op = client.start(
             project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
+            zone=_current_vm_placement().zone,
             instance=vm_name,
         )
         op.result()
@@ -4465,6 +5340,18 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     forget from assign_pool_endpoint, poll-driven from claim_idle_vm) don't
     duplicate work.  Starts and provisions are parallelised via a thread pool.
     """
+    if _regional_pool_reaper_fenced():
+        logger.info(
+            "Skipping replenish for fenced regional pool %s",
+            _current_vm_placement().region,
+        )
+        return {
+            "vm_type": vm_type,
+            "actions": [],
+            "skipped": True,
+            "fenced": True,
+        }
+
     lock = _get_replenish_lock(vm_type)
     if not lock.acquire(blocking=False):
         return {"vm_type": vm_type, "actions": [], "skipped": True}
@@ -4487,7 +5374,7 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=(
             f"labels.pool-role=idle AND labels.vm-type={vm_type} "
             f"AND labels.{POOL_CONTRACT_GENERATION_LABEL}={POOL_VM_CONTRACT_GENERATION} "
@@ -4531,6 +5418,7 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
 
 
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
+    placement = _current_vm_placement()
     actions = _recycle_stale_pool_vms(vm_type)
     actions.extend(_quarantine_stale_inflight_vms(vm_type))
     actions.extend(_scrub_inconsistent_vms(vm_type))
@@ -4545,7 +5433,7 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     )
 
     with _pending_lock:
-        pending = _pending_claims.get(vm_type, 0)
+        pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
 
     target = max(POOL_TARGET_IDLE, pending)
     deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
@@ -4589,10 +5477,22 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     ) as pool:
         futures = {}
         for vm in vms_to_start:
-            f = pool.submit(_start_one_stopped_vm, client, vm)
+            f = pool.submit(
+                _run_in_vm_placement,
+                placement,
+                _start_one_stopped_vm,
+                client,
+                vm,
+            )
             futures[f] = f"Started stopped VM {vm.name}"
         for num in numbers_to_provision:
-            f = pool.submit(provision_pool_vm, vm_type, num)
+            f = pool.submit(
+                _run_in_vm_placement,
+                placement,
+                provision_pool_vm,
+                vm_type,
+                num,
+            )
             futures[f] = f"Provisioned new pool VM #{num}"
 
         started_count = 0
@@ -4623,7 +5523,13 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
                 for _ in range(reserve_deficit):
                     while _pool_vm_name(vm_type, nr) in existing_names_now:
                         nr += 1
-                    rf = pool.submit(provision_pool_vm, vm_type, nr)
+                    rf = pool.submit(
+                        _run_in_vm_placement,
+                        placement,
+                        provision_pool_vm,
+                        vm_type,
+                        nr,
+                    )
                     reserve_futures[rf] = nr
                     existing_names_now.add(_pool_vm_name(vm_type, nr))
                     nr += 1
@@ -4706,7 +5612,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
         try:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
             with _pending_lock:
-                pending = _pending_claims.get(vm_type, 0)
+                pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
             target = max(POOL_TARGET_IDLE, pending)
             if len(idle_vms) <= target:
                 break
@@ -4739,7 +5645,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
             try:
                 client.stop(
                     project=SETTINGS.vm_project_id,
-                    zone=SETTINGS.vm_zone,
+                    zone=_current_vm_placement().zone,
                     instance=candidate.name,
                 ).result()
             except Exception as e:
@@ -4751,7 +5657,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
             fresh = client.get(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 instance=candidate.name,
             )
             if fresh.status == "RUNNING":
@@ -4761,7 +5667,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 try:
                     client.stop(
                         project=SETTINGS.vm_project_id,
-                        zone=SETTINGS.vm_zone,
+                        zone=_current_vm_placement().zone,
                         instance=candidate.name,
                     ).result()
                 except Exception as e:
@@ -4898,7 +5804,7 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter=f"labels.vm-type={vm_type}",
     )
     all_vms = list(client.list(request=request))
@@ -5056,7 +5962,7 @@ def reconcile_orphaned_disks(
     client = compute_v1.DisksClient()
     request = compute_v1.ListDisksRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
     )
 
     now = datetime.now(timezone.utc)
@@ -5083,7 +5989,7 @@ def reconcile_orphaned_disks(
         try:
             op = client.delete(
                 project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
+                zone=_current_vm_placement().zone,
                 disk=disk_name,
             )
             op.result()
@@ -5348,7 +6254,7 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
+        zone=_current_vm_placement().zone,
         filter="labels.pool-role:*",
     )
     pool_vms = list(client.list(request=request))

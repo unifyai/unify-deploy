@@ -16,8 +16,8 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -30,7 +30,7 @@ from google.api_core.exceptions import (
 from google.protobuf import duration_pb2, timestamp_pb2
 from kubernetes.client.rest import ApiException
 
-from common.assistant_lookup import get_assistant
+from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.int_list_codec import encode_int_list_for_env
 from common.team_summaries_codec import encode_team_summaries_for_env
 from common.settings import SETTINGS
@@ -47,22 +47,26 @@ from unify.task_scheduler.types.run_source import RunSource
 
 from communication.dependencies import authorize_admin_or_assistant
 from communication.infra.provider_event_dispatch import (
+    ProviderEventDispatchAuthorizationError,
     ProviderEventDispatchOutcome,
     ProviderEventDispatchRequest,
     ProviderEventDispatchValidationError,
     dispatch_provider_event_offline,
-    public_status_for_inbox_state,
     validate_provider_event_dispatch_request,
-)
-from communication.infra.provider_event_dispatch_inbox import (
-    ProviderEventDispatchInbox,
-    ProviderEventInboxMismatchError,
 )
 from .models import (
     OfflineTaskDispatchRequest,
     ScheduledTaskActivationDeleteRequest,
     ScheduledTaskActivationUpsertRequest,
     TaskActivationDiagnosticRequest,
+)
+from .assistant_sessions import (
+    DESIRED_STATE_RUNNING,
+    assistant_session_desired_state,
+    binding_desktop_url,
+    get_assistant_session,
+    get_custom_objects_api,
+    session_binding,
 )
 from .runtime_clients import (
     get_cloud_tasks_client as _get_cloud_tasks_client,
@@ -85,25 +89,12 @@ ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
 ORCHESTRA_TASK_RUN_GET_PATH = "/admin/task-run/get"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
-OFFLINE_TASK_JOB_BACKOFF_LIMIT = 0
+OFFLINE_TASK_JOB_BACKOFF_LIMIT = 2
+# Live assistant conversation Jobs keep backoffLimit=0 (controller replaces
+# work). Offline task Jobs need a small positive limit so a single transient
+# pod crash can restart without waiting for the next scheduler delivery.
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
-_provider_event_dispatch_inbox: ProviderEventDispatchInbox | None = None
-
-
-def _get_provider_event_dispatch_inbox() -> ProviderEventDispatchInbox:
-    """Return the local provider-event dispatch inbox.
-
-    # TODO: Remove once downstream adoption is persisted through Orchestra
-    instead of this container-local SQLite file.
-    """
-
-    global _provider_event_dispatch_inbox
-    if _provider_event_dispatch_inbox is None:
-        _provider_event_dispatch_inbox = ProviderEventDispatchInbox(
-            Path(SETTINGS.provider_event_dispatch_inbox_path),
-        )
-    return _provider_event_dispatch_inbox
 
 
 def _get_precreated_task_run(
@@ -175,6 +166,7 @@ def _offline_dispatch_request_from_provider_event(
     """Adapt one provider-event dispatch request for offline job launch."""
 
     source_task_log_id = activation.get("source_task_log_id")
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return OfflineTaskDispatchRequest(
         assistant_id=request.assistant_id,
         destination=activation.get("destination"),
@@ -182,6 +174,8 @@ def _offline_dispatch_request_from_provider_event(
         source_task_log_id=int(source_task_log_id or request.task_id),
         activation_revision=request.accepted_activation_revision,
         execution_mode="offline",
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
         entrypoint=activation.get("entrypoint"),
         source_type=RunSource.provider_event,
         task_name=activation.get("task_name"),
@@ -194,12 +188,12 @@ def _execute_provider_event_offline_dispatch(
     *,
     launch_job,
 ) -> ProviderEventDispatchOutcome:
-    """Run the durable inbox adoption and owner-only launch sequence."""
+    """Claim through Orchestra, then launch at most one offline job."""
 
     return dispatch_provider_event_offline(
-        inbox=_get_provider_event_dispatch_inbox(),
         request=request,
         launch_job=launch_job,
+        resolve_launch_identity=lambda req: _build_offline_task_job_name(req.run_key),
     )
 
 
@@ -212,6 +206,22 @@ def _emit_task_activation_event(event: str, **fields: Any) -> None:
             default=str,
         ),
     )
+
+
+def _resolve_resource_flags(
+    data: Mapping[str, Any] | None,
+    *,
+    request_requires_filesystem: bool = False,
+    request_requires_computer: bool = False,
+) -> tuple[bool, bool]:
+    data = data or {}
+    requires_filesystem = bool(request_requires_filesystem) or bool(
+        data.get("requires_filesystem"),
+    )
+    requires_computer = bool(request_requires_computer) or bool(
+        data.get("requires_computer"),
+    )
+    return requires_filesystem, requires_computer
 
 
 def _offline_dispatch_event_fields(
@@ -395,6 +405,8 @@ def _scheduled_activation_http_body(
         "activation_revision": request.activation_revision,
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
+        "requires_filesystem": request.requires_filesystem,
+        "requires_computer": request.requires_computer,
         "entrypoint": request.entrypoint,
         "source_type": request.source_type,
         "task_label": request.task_label or "",
@@ -1148,6 +1160,7 @@ def _launch_offline_task_job(
         unity_status="offline",
         priority_class_name="unity-idle",
         app_label="unity-task-run",
+        backoff_limit=OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         extra_labels={
             "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
             "task-id": str(request.task_id),
@@ -1164,11 +1177,82 @@ def _launch_offline_task_job(
             body=manifest,
         )
     except ApiException as exc:
-        if exc.status == 409:
-            return False
-        raise
+        if exc.status != 409:
+            raise
+        existing = batch_api.read_namespaced_job(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+        )
+        if isinstance(existing, dict):
+            annotations = (existing.get("metadata") or {}).get("annotations") or {}
+        else:
+            annotations = (
+                getattr(getattr(existing, "metadata", None), "annotations", None) or {}
+            )
+        existing_run_key = annotations.get("unify.ai/task-run-key")
+        if existing_run_key != run_key:
+            raise ProviderEventDispatchValidationError(
+                "offline_job_run_key_mismatch",
+            )
+        return False
     _adopt_offline_env_secret(core_api, job_name=job_name, job=job)
     return True
+
+
+async def _assistant_desktop_browser_env(
+    assistant_id: str,
+    *,
+    assistant_data: dict[str, Any],
+) -> dict[str, str]:
+    """Resolve a ready assistant desktop into browser-target runner variables.
+
+    Scheduler workers remain the execution surface. This binding only makes
+    website-facing browser work use the assistant's current desktop VM. When
+    Computer Use is disabled, callers receive no desktop variables and retain
+    normal worker-local browser behavior. Once entitled, a missing or draining
+    VM is retryable; callers must never silently fall back.
+    """
+
+    if not managed_desktop_entitled(assistant_data):
+        return {}
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop browser target is temporarily unavailable",
+        )
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if (
+        session is None
+        or assistant_session_desired_state(session) != DESIRED_STATE_RUNNING
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop is not running; desktop-targeted task will retry",
+        )
+    conditions = (session.get("status") or {}).get("conditions") or []
+    desktop_ready = any(
+        condition.get("type") == "DesktopReady" and condition.get("status") == "True"
+        for condition in conditions
+        if isinstance(condition, dict)
+    )
+    binding = session_binding(session)
+    desktop_url = binding_desktop_url(binding).strip()
+    if not desktop_ready or not desktop_url.startswith("https://"):
+        raise HTTPException(
+            status_code=503,
+            detail="Assistant desktop is not ready; desktop-targeted task will retry",
+        )
+    return {
+        "ASSISTANT_BROWSER_TARGET": "assistant_desktop",
+        "ASSISTANT_DESKTOP_URL": desktop_url,
+        "ASSISTANT_ID": assistant_id,
+    }
 
 
 def _build_offline_runner_env(
@@ -1200,6 +1284,11 @@ def _build_offline_runner_env(
     team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
+    requires_filesystem, requires_computer = _resolve_resource_flags(
+        activation,
+        request_requires_filesystem=request.requires_filesystem,
+        request_requires_computer=request.requires_computer,
+    )
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     provider_event_kwargs: dict[str, Any] = {}
     if provider_event_dispatch is not None:
@@ -1214,25 +1303,41 @@ def _build_offline_runner_env(
             "provider_event_context_ref": provider_event_dispatch.event_context_ref,
             "provider_event_issued_at": issued_at.astimezone(timezone.utc).isoformat(),
         }
-    env = _build_offline_runner_env_shared(
-        assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
-        task_id=request.task_id,
-        source_task_log_id=request.source_task_log_id,
-        activation_revision=request.activation_revision,
-        source_type=request.source_type,
-        run_key=run_key,
-        task_name=str(activation.get("task_name") or ""),
-        task_description=str(activation.get("task_description") or ""),
-        scheduled_for=request.scheduled_for,
-        source_ref=request.source_ref,
-        source_medium=(
+    shared_kwargs: dict[str, Any] = {
+        "assistant_id": (
+            str(assistant_data.get("assistant_id") or request.assistant_id)
+        ),
+        "task_id": request.task_id,
+        "source_task_log_id": request.source_task_log_id,
+        "activation_revision": request.activation_revision,
+        "source_type": request.source_type,
+        "run_key": run_key,
+        "task_name": str(activation.get("task_name") or ""),
+        "task_description": str(activation.get("task_description") or ""),
+        "scheduled_for": request.scheduled_for,
+        "source_ref": request.source_ref,
+        "source_medium": (
             request.source_medium or str(activation.get("trigger_medium") or "")
         ),
-        source_contact_id=request.source_contact_id,
-        entrypoint=entrypoint,
-        job_name=job_name,
+        "source_contact_id": request.source_contact_id,
+        "entrypoint": entrypoint,
+        "job_name": job_name,
+        "requires_filesystem": requires_filesystem,
+        "requires_computer": requires_computer,
         **provider_event_kwargs,
-    )
+    }
+    try:
+        env = _build_offline_runner_env_shared(**shared_kwargs)
+    except TypeError:
+        # Unity contract may briefly lag the hosted kwargs; still emit the
+        # resource-requirement env vars from this layer.
+        shared_kwargs.pop("requires_filesystem", None)
+        shared_kwargs.pop("requires_computer", None)
+        env = _build_offline_runner_env_shared(**shared_kwargs)
+        env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] = (
+            "1" if requires_filesystem else "0"
+        )
+        env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] = "1" if requires_computer else "0"
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.
@@ -1619,6 +1724,7 @@ def _activation_health(
 def _scheduled_activation_upsert_request_from_activation(
     activation: dict[str, Any],
 ) -> ScheduledTaskActivationUpsertRequest:
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return ScheduledTaskActivationUpsertRequest(
         assistant_id=str(activation.get("assistant_id") or ""),
         task_id=int(activation.get("task_id") or 0),
@@ -1630,6 +1736,8 @@ def _scheduled_activation_upsert_request_from_activation(
         execution_mode=(
             "offline" if activation.get("execution_mode") == "offline" else "live"
         ),
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -1644,12 +1752,15 @@ def _scheduled_activation_upsert_request_from_activation(
 def _offline_dispatch_request_from_activation(
     activation: dict[str, Any],
 ) -> OfflineTaskDispatchRequest:
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
     return OfflineTaskDispatchRequest(
         assistant_id=str(activation.get("assistant_id") or ""),
         task_id=int(activation.get("task_id") or 0),
         source_task_log_id=int(activation.get("source_task_log_id") or 0),
         activation_revision=str(activation.get("activation_revision") or ""),
         execution_mode="offline",
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -2082,6 +2193,18 @@ async def dispatch_offline_task(
 
         stage = "launch_job"
         job_name = _build_offline_task_job_name(run_key, retry_count=retry_count)
+        requires_filesystem, requires_computer = _resolve_resource_flags(
+            activation or {},
+            request_requires_filesystem=request.requires_filesystem,
+            request_requires_computer=request.requires_computer,
+        )
+        desktop_browser_env: dict[str, str] = {}
+        if requires_computer or requires_filesystem:
+            stage = "desktop_target_resolve"
+            desktop_browser_env = await _assistant_desktop_browser_env(
+                request.assistant_id,
+                assistant_data=assistant_data,
+            )
         offline_env = _build_offline_runner_env(
             request=request,
             activation=activation or {},
@@ -2089,6 +2212,7 @@ async def dispatch_offline_task(
             run_key=run_key,
             job_name=job_name,
         )
+        offline_env.update(desktop_browser_env)
         _emit_task_activation_event(
             "task_activation.offline_dispatch.stage",
             **_offline_dispatch_event_fields(
@@ -2155,6 +2279,18 @@ async def dispatch_offline_task(
             "run_key": run_key,
             "job_name": job_name,
         }
+    except HTTPException as exc:
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.deferred",
+            **_offline_dispatch_event_fields(
+                request,
+                stage=stage,
+                run_key=run_key,
+                job_name=job_name,
+                error=exc,
+            ),
+        )
+        raise
     except requests.RequestException as exc:
         _emit_task_activation_event(
             "task_activation.offline_dispatch.failed",
@@ -2196,9 +2332,7 @@ async def dispatch_provider_event_offline_route(
     """Adopt one pre-created provider-event run and launch at most one offline job.
 
     Auth: platform admin key (Orchestra trigger worker and control-plane callers).
-
-    TODO: Drive delivery from Orchestra dispatch operations and drop the local
-    inbox/status path once downstream adoption convergence is wired.
+    Launch ownership is claimed through Orchestra before Kubernetes I/O.
     """
 
     try:
@@ -2223,6 +2357,13 @@ async def dispatch_provider_event_offline_route(
     batch_api, core_api, _, _ = await _get_k8s_clients()
     activation = await asyncio.to_thread(_provider_event_activation_metadata, request)
     assistant_data = await asyncio.to_thread(_get_assistant_data, request.assistant_id)
+    requires_filesystem, requires_computer = _resolve_resource_flags(activation)
+    desktop_browser_env: dict[str, str] = {}
+    if requires_computer or requires_filesystem:
+        desktop_browser_env = await _assistant_desktop_browser_env(
+            request.assistant_id,
+            assistant_data=assistant_data,
+        )
 
     def launch_job(provider_request: ProviderEventDispatchRequest) -> str:
         offline_request = _offline_dispatch_request_from_provider_event(
@@ -2246,6 +2387,7 @@ async def dispatch_provider_event_offline_route(
             job_name=job_name,
             provider_event_dispatch=provider_request,
         )
+        offline_env.update(desktop_browser_env)
         _launch_offline_task_job(
             batch_api=batch_api,
             core_api=core_api,
@@ -2253,6 +2395,7 @@ async def dispatch_provider_event_offline_route(
             run_key=run_key,
             job_name=job_name,
             offline_env=offline_env,
+            max_runtime_seconds=None,
         )
         _update_task_run(
             assistant_id=provider_request.assistant_id,
@@ -2272,10 +2415,10 @@ async def dispatch_provider_event_offline_route(
             status_code=400,
             detail={"reason": exc.reason_code},
         ) from exc
-    except ProviderEventInboxMismatchError as exc:
+    except ProviderEventDispatchAuthorizationError as exc:
         raise HTTPException(
             status_code=409,
-            detail={"reason": str(exc)},
+            detail={"reason": exc.reason_code},
         ) from exc
     except requests.RequestException as exc:
         logger.exception(
@@ -2293,32 +2436,6 @@ async def dispatch_provider_event_offline_route(
         "run_key": outcome.run_key,
         "status": outcome.status,
         "job_name": outcome.job_name,
+        "fencing_token": outcome.fencing_token,
         "adopted_only": outcome.adopted_only,
-    }
-
-
-@router.get(f"{PROVIDER_EVENT_DISPATCH_PATH}/{{operation_id}}")
-async def get_provider_event_dispatch_status(operation_id: str):
-    """Return the recorded Communication inbox state for one dispatch operation.
-
-    TODO: Remove once dispatch status is read from Orchestra downstream adoption.
-    """
-
-    record = await asyncio.to_thread(
-        _get_provider_event_dispatch_inbox().get,
-        operation_id=operation_id,
-    )
-    if record is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"reason": "provider_event_dispatch_not_found"},
-        )
-    return {
-        "operation_id": record.operation_id,
-        "run_id": record.run_id,
-        "run_key": record.run_key,
-        "status": public_status_for_inbox_state(record.state),
-        "job_name": record.job_name,
-        "launch_count": record.launch_count,
-        "terminal_reason": record.terminal_reason,
     }

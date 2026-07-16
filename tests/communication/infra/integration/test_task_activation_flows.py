@@ -477,9 +477,15 @@ class TestTaskActivationFlows:
                 "visibility_policy": "silent_by_default",
                 "recurrence_hint": "one_off",
             }
-            assert expected_reason in list(
-                bootstrap_payload.get("wake_reasons") or [],
-            ), (
+            wake_reasons = list(bootstrap_payload.get("wake_reasons") or [])
+            matching_reasons = [
+                reason
+                for reason in wake_reasons
+                if all(
+                    reason.get(key) == value for key, value in expected_reason.items()
+                )
+            ]
+            assert matching_reasons, (
                 f"Expected wake reason {expected_reason} in bootstrap payload "
                 f"but saw {bootstrap_payload}"
             )
@@ -805,7 +811,10 @@ class TestTaskActivationFlows:
             job = task_run_jobs[0]
             assert job.metadata.name.startswith("unity-task-run-")
             assert job.metadata.labels.get("task-id") == str(task_id)
-            assert job.spec.backoff_limit == 0
+            # Matches task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT. Hardcoded
+            # because this merge_gate suite does not install the unify SDK that
+            # importing task_activation would require.
+            assert job.spec.backoff_limit == 2
             assert job.spec.ttl_seconds_after_finished is not None
             # Runtime bound is per-task: the seeded task sets
             # max_runtime_seconds, which maps onto activeDeadlineSeconds.

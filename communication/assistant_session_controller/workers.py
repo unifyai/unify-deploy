@@ -26,12 +26,15 @@ from communication.infra.observability import (
     causal_log_fields,
     current_causal_context,
 )
+from communication.infra.gcp_region_catalog import placement_from_ref
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
     assign_pool_vm,
+    prepare_assistant_cross_region_migration,
     probe_vm_agent_service,
     release_pool_vm,
     replenish_pool,
+    vm_placement_scope,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,15 +235,80 @@ def _run_vm_assignment(
         )
         return
 
+    session = get_assistant_session(custom_api, namespace, assistant_id) or {}
+    placement_payload = (session.get("spec") or {}).get("desktop", {}).get("placement")
+    placement = placement_from_ref(
+        placement_payload if isinstance(placement_payload, dict) else None,
+    )
+    source_vm_ref = session_binding(session).get("vmRef") or {}
+    source_placement = placement_from_ref(
+        source_vm_ref if isinstance(source_vm_ref, dict) else None,
+    )
+    migration = None
+    if (
+        placement is not None
+        and source_placement is not None
+        and source_placement.region != placement.region
+    ):
+        migration = {
+            "id": binding_id,
+            "source": {
+                "poolLocation": source_placement.location.id,
+                "region": source_placement.region,
+                "zone": source_placement.zone,
+            },
+        }
     startup_payload = read_bootstrap_secret(core_api, namespace, secret_name)
     api_key = str(startup_payload.get("api_key", "") or "")
     try:
+        if placement is None:
+            raise ValueError(
+                "Desktop assignment requires a complete AssistantSession placement; "
+                "refusing the default pool location"
+            )
+        if migration is not None:
+            # Preparation is replay-safe and leaves the source disk/IP intact.
+            # The target address is attached only after the target VM reports
+            # readiness below.
+            prepare_assistant_cross_region_migration(
+                assistant_id=assistant_id,
+                migration_id=migration["id"],
+                source=source_placement,
+                target=placement,
+            )
         result = assign_pool_vm(
             assistant_id=assistant_id,
             binding_id=binding_id,
             unify_apikey=api_key,
             vm_type=vm_type,
+            placement=placement,
+            attach_static_ip=migration is None,
         )
+        if (
+            result["pool_location"] != placement.location.id
+            or result["region"] != placement.region
+            or result["zone"] != placement.zone
+        ):
+            actual_placement = placement_from_ref(
+                {
+                    "poolLocation": result["pool_location"],
+                    "region": result["region"],
+                    "zone": result["zone"],
+                }
+            )
+            try:
+                release_pool_vm(
+                    assistant_id,
+                    binding_id,
+                    vm_name=result["vm_name"],
+                    placement=actual_placement,
+                )
+            finally:
+                raise ValueError(
+                    "Pool assignment returned a VM outside the requested placement: "
+                    f"expected={placement.location.id}/{placement.zone} "
+                    f"actual={result['pool_location']}/{result['zone']}"
+                )
         persisted = persist_binding_vm_assignment_result(
             custom_api,
             namespace,
@@ -252,6 +320,10 @@ def _run_vm_assignment(
                 "name": result["vm_name"],
                 "hostname": result["hostname"],
                 "vmType": vm_type,
+                "poolLocation": result["pool_location"],
+                "region": result["region"],
+                "zone": result["zone"],
+                **({"regionalMigration": migration} if migration is not None else {}),
             },
             source="worker.vm_assignment",
         )
@@ -264,7 +336,12 @@ def _run_vm_assignment(
             vm_name=result["vm_name"],
         )
         try:
-            release_pool_vm(assistant_id, binding_id, vm_name=result["vm_name"])
+            release_pool_vm(
+                assistant_id,
+                binding_id,
+                vm_name=result["vm_name"],
+                placement=placement,
+            )
         except Exception:
             logger.exception(
                 "Failed releasing stale VM assignment for %s",
@@ -272,7 +349,9 @@ def _run_vm_assignment(
             )
         return
     except ValueError as exc:
-        replenish_pool(vm_type)
+        if placement is not None:
+            with vm_placement_scope(placement):
+                replenish_pool(vm_type)
         persist_binding_vm_assignment_result(
             custom_api,
             namespace,
@@ -413,15 +492,21 @@ def _run_vm_release_request(
         )
         return
 
+    current_vm_ref = session_binding(session).get("vmRef") or {}
+    placement = placement_from_ref(
+        current_vm_ref if isinstance(current_vm_ref, dict) else None,
+    )
     try:
         result = release_pool_vm(
             assistant_id,
             binding_id,
             vm_name=vm_name,
             release_generation=release_generation,
+            placement=placement,
         )
         if result.get("retired"):
-            replenish_pool(str(result.get("vm_type", "ubuntu") or "ubuntu"))
+            with vm_placement_scope(placement):
+                replenish_pool(str(result.get("vm_type", "ubuntu") or "ubuntu"))
         if result.get("retired"):
             state = "retired"
         elif result.get("released") or result.get("pool_role") == "releasing":
