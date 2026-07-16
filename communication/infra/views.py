@@ -2938,7 +2938,7 @@ async def repair_assistant_static_ip_owners_endpoint(
 )
 async def release_assistant_static_ip_endpoint(
     assistant_id: str,
-    region: str | None = None,
+    region: str,
 ):
     """Idempotently release an assistant-owned regional GCP address."""
 
