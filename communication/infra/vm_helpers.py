@@ -2411,23 +2411,28 @@ def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
     owner_binding_id = str(owner.get("binding_id", "") or "")
     owner_pool_role = str(owner.get("pool_role", "") or "")
     requested_binding = binding_id.lower().replace("_", "-")
-    if owner_binding_id and owner_binding_id != requested_binding:
-        if owner_pool_role == POOL_ROLE_RELEASING:
-            _log_vm_pool_event(
-                "disk_handoff_finalize_stale_release",
-                assistant_id=assistant_id,
-                binding_id=binding_id,
-                stale_binding_id=owner_binding_id,
-                vm_name=attached_vm_name,
-                stale_pool_role=owner_pool_role,
-            )
-            complete_pool_vm_release(attached_vm_name, owner_binding_id)
-            attached_vm_name = find_vm_with_disk(assistant_id)
-            if not attached_vm_name:
-                return
-            owner = _attached_disk_vm_state(attached_vm_name)
-            owner_binding_id = str(owner.get("binding_id", "") or "")
-            owner_pool_role = str(owner.get("pool_role", "") or "")
+    if (
+        owner_binding_id != requested_binding
+        and owner_pool_role != "assigned"
+    ):
+        _log_vm_pool_event(
+            "disk_handoff_reclaim_stale_owner",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            stale_binding_id=owner_binding_id or None,
+            vm_name=attached_vm_name,
+            stale_pool_role=owner_pool_role or None,
+        )
+        reclaim_orphaned_assistant_disk(
+            assistant_id,
+            current_binding_id=binding_id,
+        )
+        attached_vm_name = find_vm_with_disk(assistant_id)
+        if not attached_vm_name:
+            return
+        owner = _attached_disk_vm_state(attached_vm_name)
+        owner_binding_id = str(owner.get("binding_id", "") or "")
+        owner_pool_role = str(owner.get("pool_role", "") or "")
 
     details = [attached_vm_name]
     if owner_pool_role:
@@ -4880,6 +4885,45 @@ def _complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         binding_label = binding_id.lower().replace("_", "-")
         vm_type = labels.get("vm-type", "ubuntu")
 
+        if vm.status != "RUNNING" and current_role == POOL_ROLE_RELEASING:
+            current_stage = "detach_assistant_disk_from_stopped_vm"
+            detached, disk_name = _detach_attached_assistant_disk(vm_name)
+            current_stage = "mark_stopped"
+            updated = _set_pool_labels(
+                client,
+                vm_name,
+                {
+                    POOL_ROLE_LABEL: "stopped",
+                    ASSISTANT_ID_LABEL: "",
+                    BINDING_ID_LABEL: "",
+                },
+                expected_role=POOL_ROLE_RELEASING,
+            )
+            if not updated:
+                return {
+                    "vm_name": vm_name,
+                    "status": vm.status,
+                    "pool_role": current_role,
+                    "skipped": True,
+                    "reason": "role_changed",
+                }
+            _log_vm_pool_event(
+                "release_complete_stopped_vm",
+                assistant_id=assistant_id or None,
+                binding_id=current_binding_id or None,
+                vm_name=vm_name,
+                disk_name=disk_name,
+                detached=detached,
+            )
+            return {
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "pool_role": "stopped",
+                "assistant_id": assistant_id or None,
+                "binding_id": current_binding_id or None,
+                "disk_name": disk_name,
+                "detached": detached,
+            }
         if vm.status != "RUNNING":
             return {
                 "vm_name": vm_name,
