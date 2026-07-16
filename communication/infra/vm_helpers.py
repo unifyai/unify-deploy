@@ -258,6 +258,7 @@ def _assistant_static_ip_details(
         "region": str(getattr(address, "region", "") or "") or None,
         "hostname": get_dns_hostname(assistant_id) if assistant_id else None,
         "labels": dict(getattr(address, "labels", None) or {}),
+        "users": list(getattr(address, "users", None) or []),
     }
 
 
@@ -295,6 +296,35 @@ def get_assistant_static_ip(
 
     _assert_assistant_static_ip_ownership(address, assistant_id)
     return _assistant_static_ip_details(address, assistant_id=assistant_id)
+
+
+def reclaim_stale_assistant_ip_owners(assistant_id: str) -> list[str]:
+    """Retire quarantined VMs that still hold an assistant-owned address."""
+
+    allocation = get_assistant_static_ip(assistant_id)
+    retired: list[str] = []
+    client = compute_v1.InstancesClient()
+    for user in allocation.get("users", []) if allocation else []:
+        if "/instances/" not in user:
+            continue
+        vm_name = user.rsplit("/", 1)[-1]
+        vm = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=_current_vm_placement().zone,
+            instance=vm_name,
+        )
+        role = str((vm.labels or {}).get(POOL_ROLE_LABEL, "") or "")
+        if role != "quarantined":
+            raise AssistantDiskInUseError(
+                f"Assistant address is still attached to {vm_name} pool_role={role}",
+            )
+        _delete_pool_vm_instance(
+            client,
+            vm_name,
+            vm_type=str((vm.labels or {}).get("vm-type", "ubuntu")),
+        )
+        retired.append(vm_name)
+    return retired
 
 
 def reserve_assistant_static_ip(
@@ -3695,6 +3725,16 @@ def _assign_pool_vm(
             binding_id=binding_id,
             vm_type=vm_type,
         )
+        if attach_static_ip:
+            current_stage = "reclaim_stale_assistant_ip_owner"
+            _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=lambda: reclaim_stale_assistant_ip_owners(assistant_id),
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_type=vm_type,
+            )
         current_stage = "claim_idle_vm"
         claimed = _run_vm_pool_stage(
             operation="assign",
@@ -3858,6 +3898,20 @@ def _assign_pool_vm(
             "zone": _current_vm_placement().zone,
         }
     except Exception as exc:
+        if vm_name and current_stage in {
+            "attach_assistant_static_ip",
+            "reclaim_stale_assistant_ip_owner",
+        }:
+            _set_pool_labels(
+                compute_v1.InstancesClient(),
+                vm_name,
+                {
+                    POOL_ROLE_LABEL: "idle",
+                    ASSISTANT_ID_LABEL: "",
+                    BINDING_ID_LABEL: "",
+                },
+                expected_role="assigned",
+            )
         _log_vm_pool_event(
             "assign_failed",
             assistant_id=assistant_id,
@@ -4888,25 +4942,8 @@ def _complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         if vm.status != "RUNNING" and current_role == POOL_ROLE_RELEASING:
             current_stage = "detach_assistant_disk_from_stopped_vm"
             detached, disk_name = _detach_attached_assistant_disk(vm_name)
-            current_stage = "mark_stopped"
-            updated = _set_pool_labels(
-                client,
-                vm_name,
-                {
-                    POOL_ROLE_LABEL: "stopped",
-                    ASSISTANT_ID_LABEL: "",
-                    BINDING_ID_LABEL: "",
-                },
-                expected_role=POOL_ROLE_RELEASING,
-            )
-            if not updated:
-                return {
-                    "vm_name": vm_name,
-                    "status": vm.status,
-                    "pool_role": current_role,
-                    "skipped": True,
-                    "reason": "role_changed",
-                }
+            current_stage = "retire_stopped_releasing_vm"
+            _delete_pool_vm_instance(client, vm_name, vm_type=vm_type)
             _log_vm_pool_event(
                 "release_complete_stopped_vm",
                 assistant_id=assistant_id or None,
@@ -4918,11 +4955,12 @@ def _complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
             return {
                 "vm_name": vm_name,
                 "vm_type": vm_type,
-                "pool_role": "stopped",
+                "pool_role": "retired",
                 "assistant_id": assistant_id or None,
                 "binding_id": current_binding_id or None,
                 "disk_name": disk_name,
                 "detached": detached,
+                "retired": True,
             }
         if vm.status != "RUNNING":
             return {

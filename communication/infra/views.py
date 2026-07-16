@@ -99,6 +99,7 @@ from .vm_helpers import (
     finalize_assistant_static_ip_rotation,
     get_dns_hostname,
     get_assistant_static_ip,
+    reclaim_stale_assistant_ip_owners,
     prepare_assistant_cross_region_migration,
     probe_vm_agent_service_authenticated,
     release_assistant_static_ip,
@@ -2882,16 +2883,53 @@ async def prepare_assistant_cross_region_migration_endpoint(
     "/vm/assistant-static-ip/{assistant_id}",
     response_model=AssistantStaticIPResponse,
 )
-async def get_assistant_static_ip_endpoint(assistant_id: str):
+async def get_assistant_static_ip_endpoint(
+    assistant_id: str,
+    pool_location: str | None = None,
+    region: str | None = None,
+    zone: str | None = None,
+):
     """Read the requested assistant's owned regional GCP address."""
 
     try:
-        result = await asyncio.to_thread(get_assistant_static_ip, assistant_id)
+        placement = placement_from_ref(
+            {
+                "poolLocation": pool_location or region,
+                "region": region,
+                "zone": zone,
+            },
+        )
+        with vm_placement_scope(placement):
+            result = await asyncio.to_thread(get_assistant_static_ip, assistant_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if result is None:
         raise HTTPException(status_code=404, detail="Assistant static IP not found")
     return AssistantStaticIPResponse(assistant_id=assistant_id, **result)
+
+
+@router.post("/vm/assistant-static-ip/{assistant_id}/repair")
+async def repair_assistant_static_ip_owners_endpoint(
+    assistant_id: str,
+    pool_location: str,
+    region: str,
+    zone: str,
+):
+    """Idempotently retire quarantined owners of an assistant's regional IP."""
+
+    try:
+        placement = placement_from_ref(
+            {"poolLocation": pool_location, "region": region, "zone": zone}
+        )
+        if placement is None:
+            raise ValueError("A complete regional placement is required")
+        with vm_placement_scope(placement):
+            retired = await asyncio.to_thread(
+                reclaim_stale_assistant_ip_owners, assistant_id
+            )
+        return {"assistant_id": assistant_id, "retired_vm_names": retired}
+    except (AssistantDiskInUseError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete(
