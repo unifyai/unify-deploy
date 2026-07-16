@@ -111,6 +111,7 @@ def test_attach_assistant_static_ip_replaces_pool_ip_and_updates_stable_dns():
         "34.0.0.1",
     )
     dns_upsert = MagicMock()
+    report_attachment = MagicMock()
 
     with (
         patch.object(
@@ -127,6 +128,11 @@ def test_attach_assistant_static_ip_replaces_pool_ip_and_updates_stable_dns():
         ),
         patch.object(vm_helpers.compute_v1, "InstancesClient", return_value=client),
         patch.object(vm_helpers, "_upsert_dns_a_record", dns_upsert),
+        patch.object(
+            vm_helpers,
+            "_report_assistant_static_ip_attachment",
+            report_attachment,
+        ),
     ):
         result = vm_helpers.attach_assistant_static_ip_to_pool_vm(
             vm_name,
@@ -142,6 +148,12 @@ def test_attach_assistant_static_ip_replaces_pool_ip_and_updates_stable_dns():
         "ip_address": "34.0.0.9",
     }
     dns_upsert.assert_called_once_with(result["hostname"], "34.0.0.9")
+    report_attachment.assert_called_once_with(
+        assistant_id="assistant-123",
+        address_name=vm_helpers.assistant_static_ip_name("assistant-123"),
+        address="34.0.0.9",
+        hostname=result["hostname"],
+    )
 
 
 def test_restore_pool_static_ip_keeps_assistant_reservation():

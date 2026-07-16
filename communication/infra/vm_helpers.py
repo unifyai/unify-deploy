@@ -2126,6 +2126,12 @@ def attach_assistant_static_ip_to_pool_vm(
 
     hostname = get_dns_hostname(assistant_id)
     _upsert_dns_a_record(hostname, assistant_ip)
+    _report_assistant_static_ip_attachment(
+        assistant_id=assistant_id,
+        address_name=str(reserved.get("name") or assistant_static_ip_name(assistant_id)),
+        address=assistant_ip,
+        hostname=hostname,
+    )
     _log_vm_pool_event(
         "assistant_static_ip_attached",
         assistant_id=assistant_id,
@@ -2135,6 +2141,46 @@ def attach_assistant_static_ip_to_pool_vm(
         ip_address=assistant_ip,
     )
     return {"hostname": hostname, "ip_address": assistant_ip}
+
+
+def _report_assistant_static_ip_attachment(
+    *,
+    assistant_id: str,
+    address_name: str,
+    address: str,
+    hostname: str,
+) -> None:
+    """Best-effort sync of an attached regional address to Orchestra."""
+
+    if not SETTINGS.orchestra_url or not SETTINGS.orchestra_admin_key:
+        logger.warning(
+            "Cannot report attached assistant IP for %s: Orchestra is not configured",
+            assistant_id,
+        )
+        return
+    placement = _current_vm_placement()
+    try:
+        response = requests.post(
+            (
+                f"{SETTINGS.orchestra_url}/admin/assistant/{assistant_id}"
+                "/managed-desktop/network-identity"
+            ),
+            json={
+                "gcp_address_name": address_name,
+                "address": address,
+                "region": placement.region,
+                "pool_location": placement.location.id,
+                "hostname": hostname,
+            },
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception:
+        logger.exception(
+            "Failed reporting attached assistant IP for %s to Orchestra",
+            assistant_id,
+        )
 
 
 def restore_pool_static_ip_on_vm(
