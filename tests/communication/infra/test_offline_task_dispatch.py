@@ -190,7 +190,11 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
         "offline:scheduled:assistant-123:101:abc123def456:once"
     )
-    assert manifest["spec"]["backoffLimit"] == 0
+    assert (
+        manifest["spec"]["backoffLimit"]
+        == task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT
+    )
+    assert manifest["spec"]["backoffLimit"] > 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
     # No per-task bound means the run is unbounded: no activeDeadlineSeconds.
     assert "activeDeadlineSeconds" not in manifest["spec"]
@@ -1348,7 +1352,7 @@ def test_desktop_browser_target_resolves_ready_binding():
                     desktop_mode="ubuntu",
                     managed_desktop_status="active",
                 ),
-            )
+            ),
         )
 
     assert env == {
@@ -1362,12 +1366,15 @@ def test_desktop_browser_target_uses_local_worker_without_computer_use():
     """Desktop-eligible tasks retain the normal worker browser when disabled."""
     from communication.infra import task_activation
 
-    assert asyncio.run(
-        task_activation._assistant_desktop_browser_env(
-            "assistant-123",
-            assistant_data=_assistant_data(
-                desktop_mode="none",
-                managed_desktop_status="disabled",
+    assert (
+        asyncio.run(
+            task_activation._assistant_desktop_browser_env(
+                "assistant-123",
+                assistant_data=_assistant_data(
+                    desktop_mode="none",
+                    managed_desktop_status="disabled",
+                ),
             ),
         )
-    ) == {}
+        == {}
+    )

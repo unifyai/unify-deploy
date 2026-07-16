@@ -298,6 +298,7 @@ def build_unity_job_manifest(
     extra_labels: dict | None = None,
     extra_annotations: dict | None = None,
     extra_env: dict[str, str] | None = None,
+    backoff_limit: int = 0,
 ) -> dict:
     """Build the Kubernetes ``batch/v1`` Job manifest for a Unity assistant.
 
@@ -343,6 +344,11 @@ def build_unity_job_manifest(
         extra_env: Env vars added to the container. Vars whose name
             matches one already in the explicit env list override the
             earlier definition (see :func:`_merge_env_overrides`).
+        backoff_limit: Kubernetes Job ``spec.backoffLimit``. Live
+            assistant conversation Jobs stay at ``0`` (no pod restart;
+            controller replaces work). Offline task Jobs pass a small
+            positive value so a single transient pod failure can retry
+            without waiting for the next scheduler tick.
     """
     optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
     unity_config_env = []
@@ -488,7 +494,7 @@ def build_unity_job_manifest(
             "annotations": metadata_annotations,
         },
         "spec": {
-            "backoffLimit": 0,
+            "backoffLimit": backoff_limit,
             "template": {
                 "metadata": {
                     "labels": {"app": app_label},

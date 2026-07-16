@@ -93,7 +93,10 @@ ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
 ORCHESTRA_TASK_RUN_GET_PATH = "/admin/task-run/get"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
-OFFLINE_TASK_JOB_BACKOFF_LIMIT = 0
+OFFLINE_TASK_JOB_BACKOFF_LIMIT = 2
+# Live assistant conversation Jobs keep backoffLimit=0 (controller replaces
+# work). Offline task Jobs need a small positive limit so a single transient
+# pod crash can restart without waiting for the next scheduler delivery.
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
 _provider_event_dispatch_inbox: ProviderEventDispatchInbox | None = None
@@ -1157,6 +1160,7 @@ def _launch_offline_task_job(
         unity_status="offline",
         priority_class_name="unity-idle",
         app_label="unity-task-run",
+        backoff_limit=OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         extra_labels={
             "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
             "task-id": str(request.task_id),
@@ -1208,12 +1212,15 @@ async def _assistant_desktop_browser_env(
         SETTINGS.default_namespace,
         assistant_id,
     )
-    if session is None or assistant_session_desired_state(session) != DESIRED_STATE_RUNNING:
+    if (
+        session is None
+        or assistant_session_desired_state(session) != DESIRED_STATE_RUNNING
+    ):
         raise HTTPException(
             status_code=503,
             detail="Assistant desktop is not running; desktop-targeted task will retry",
         )
-    conditions = ((session.get("status") or {}).get("conditions") or [])
+    conditions = (session.get("status") or {}).get("conditions") or []
     desktop_ready = any(
         condition.get("type") == "DesktopReady" and condition.get("status") == "True"
         for condition in conditions

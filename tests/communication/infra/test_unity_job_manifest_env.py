@@ -368,6 +368,10 @@ def test_job_top_level_shape() -> None:
     assert manifest["metadata"]["name"] == "shape-staging"
     assert manifest["metadata"]["namespace"] == "staging"
     assert manifest["spec"]["backoffLimit"] == 0
+    assert (
+        build_unity_job_manifest(job_name="x", backoff_limit=2)["spec"]["backoffLimit"]
+        == 2
+    )
     pod_spec = manifest["spec"]["template"]["spec"]
     assert pod_spec["restartPolicy"] == "Never"
     # Assistant Jobs run under the minimally-scoped Workload Identity SA, not the
