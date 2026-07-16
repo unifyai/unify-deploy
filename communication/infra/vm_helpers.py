@@ -2183,6 +2183,29 @@ def _report_assistant_static_ip_attachment(
         )
 
 
+def sync_assistant_static_ip_attachment(
+    assistant_id: str,
+    placement: VmPlacement | None,
+) -> bool:
+    """Report an existing assistant address without changing its VM binding."""
+
+    with vm_placement_scope(placement):
+        allocation = get_assistant_static_ip(assistant_id)
+        if not allocation or not allocation.get("address"):
+            return False
+        _report_assistant_static_ip_attachment(
+            assistant_id=assistant_id,
+            address_name=str(
+                allocation.get("name") or assistant_static_ip_name(assistant_id),
+            ),
+            address=str(allocation["address"]),
+            hostname=str(
+                allocation.get("hostname") or get_dns_hostname(assistant_id),
+            ),
+        )
+    return True
+
+
 def restore_pool_static_ip_on_vm(
     vm_name: str,
     assistant_id: str,

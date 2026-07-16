@@ -21,7 +21,12 @@ from communication.infra.assistant_sessions import (
 from communication.infra.idle_job_pool import schedule_idle_job_pool_replenishment
 from communication.infra.vm_config import SUPPORTED_POOL_VM_TYPES
 from communication.infra.gcp_region_catalog import VmPlacement, placement_from_ref
-from communication.infra.vm_helpers import replenish_pool, trim_pool, vm_placement_scope
+from communication.infra.vm_helpers import (
+    replenish_pool,
+    sync_assistant_static_ip_attachment,
+    trim_pool,
+    vm_placement_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +35,11 @@ POOL_CONTROLLER_INTERVAL_SECONDS = float(
     os.environ.get("POOL_CONTROLLER_INTERVAL_SECONDS", "10"),
 )
 MIN_IDLE_JOBS = int(os.environ.get("UNITY_MIN_IDLE_JOBS", "3"))
+ASSISTANT_IP_SYNC_INTERVAL_SECONDS = float(
+    os.environ.get("UNITY_ASSISTANT_IP_SYNC_INTERVAL_SECONDS", "300"),
+)
 _IMAGE_HASH_LABEL = "unity-image-hash"
+_last_assistant_ip_sync_at = 0.0
 
 
 def _get_current_image_hash() -> str | None:
@@ -182,6 +191,30 @@ def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
     return pending
 
 
+def sync_active_assistant_ip_reports(sessions: list[dict[str, Any]]) -> int:
+    """Backfill Orchestra network identities for active desktop bindings."""
+
+    synced = 0
+    for session in sessions:
+        if not session_desktop_required(session):
+            continue
+        spec = session.get("spec") or {}
+        assistant_id = str(spec.get("assistantId") or "")
+        vm_ref = binding_vm_ref(session_binding(session))
+        if not assistant_id or not isinstance(vm_ref, dict):
+            continue
+        try:
+            placement = placement_from_ref(vm_ref)
+            if sync_assistant_static_ip_attachment(assistant_id, placement):
+                synced += 1
+        except Exception:
+            logger.exception(
+                "Failed syncing assistant network identity for %s",
+                assistant_id,
+            )
+    return synced
+
+
 def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[str, Any]:
     """Run one pool-capacity reconciliation cycle."""
 
@@ -189,6 +222,11 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
     pending_jobs = pending_job_demand(sessions)
     demand, invalid_demand = pending_vm_demand_by_pool(sessions)
     results: dict[str, Any] = {}
+    global _last_assistant_ip_sync_at
+    if time.monotonic() - _last_assistant_ip_sync_at >= ASSISTANT_IP_SYNC_INTERVAL_SECONDS:
+        synced = sync_active_assistant_ip_reports(sessions)
+        _last_assistant_ip_sync_at = time.monotonic()
+        results["assistant_ip_sync"] = {"synced": synced}
     try:
         job_extra_demand = _unity_job_replenish_extra_demand(pending_jobs)
         replenish_scheduled = (
