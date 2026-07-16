@@ -45,9 +45,7 @@ def regional_client():
             "compute_engine": {
                 "instance_name": "unity-pool-ubuntu-europe-west2-1-staging",
                 "project_id": SETTINGS.vm_project_id,
-                "zone": (
-                    f"projects/{SETTINGS.vm_project_id}/zones/europe-west2-a"
-                ),
+                "zone": (f"projects/{SETTINGS.vm_project_id}/zones/europe-west2-a"),
             },
         },
     }

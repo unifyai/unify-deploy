@@ -309,11 +309,7 @@ def authenticate_vm_identity(
         )
 
     gce = claims.get("google", {}).get("compute_engine", {})
-    if (
-        not gce.get("instance_name")
-        or not gce.get("project_id")
-        or not gce.get("zone")
-    ):
+    if not gce.get("instance_name") or not gce.get("project_id") or not gce.get("zone"):
         raise HTTPException(
             status_code=403,
             detail="Token missing compute engine identity claims.",

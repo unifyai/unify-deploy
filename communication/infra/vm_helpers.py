@@ -151,6 +151,7 @@ def _placement_for_vm_name(vm_name: str) -> VmPlacement | None:
         )
     return None
 
+
 POOL_ROLE_LABEL = "pool-role"
 ASSISTANT_ID_LABEL = "assistant-id"
 BINDING_ID_LABEL = "binding-id"
@@ -247,7 +248,9 @@ def assistant_static_ip_labels(assistant_id: str) -> dict[str, str]:
 
 
 def _assistant_static_ip_details(
-    address: Any, *, assistant_id: str | None = None
+    address: Any,
+    *,
+    assistant_id: str | None = None,
 ) -> dict[str, Any]:
     """Serialize the stable public details of a GCP regional address."""
 
@@ -278,7 +281,9 @@ def _assert_assistant_static_ip_ownership(address: Any, assistant_id: str) -> No
 
 
 def get_assistant_static_ip(
-    assistant_id: str, *, region: str | None = None
+    assistant_id: str,
+    *,
+    region: str | None = None,
 ) -> dict[str, Any] | None:
     """Read an assistant-owned regional external address, if it exists."""
 
@@ -328,7 +333,9 @@ def reclaim_stale_assistant_ip_owners(assistant_id: str) -> list[str]:
 
 
 def reserve_assistant_static_ip(
-    assistant_id: str, *, region: str | None = None
+    assistant_id: str,
+    *,
+    region: str | None = None,
 ) -> dict[str, Any]:
     """Idempotently reserve the assistant's regional external address.
 
@@ -393,7 +400,9 @@ def reserve_assistant_static_ip(
 
 
 def release_assistant_static_ip(
-    assistant_id: str, *, region: str | None = None
+    assistant_id: str,
+    *,
+    region: str | None = None,
 ) -> bool:
     """Idempotently release an assistant-owned regional external address."""
 
@@ -580,9 +589,7 @@ def prepare_assistant_cross_region_migration(
                 disk_resource=compute_v1.Disk(
                     name=target_disk_name,
                     source_snapshot=snapshot_link,
-                    type_=(
-                        f"zones/{target.zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}"
-                    ),
+                    type_=(f"zones/{target.zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}"),
                     description=(
                         f"Migration {migration_id} copy for assistant {assistant_id}"
                     ),
@@ -641,7 +648,8 @@ def assistant_static_ip_rotation_name(assistant_id: str, operation_id: str) -> s
     prefix = "unity-assistant-ip-"
     suffix = SETTINGS.env_suffix
     operation_normalized = _assistant_static_ip_id_component(
-        operation_id, max_length=63,
+        operation_id,
+        max_length=63,
     )
     operation_digest = hashlib.sha256(str(operation_id).encode()).hexdigest()[:8]
     operation_component = (
@@ -741,7 +749,9 @@ def reserve_assistant_static_ip_rotation_candidate(
                 region_set_labels_request_resource=compute_v1.RegionSetLabelsRequest(
                     labels=expected_labels,
                     label_fingerprint=getattr(
-                        created_address, "label_fingerprint", None,
+                        created_address,
+                        "label_fingerprint",
+                        None,
                     ),
                 ),
             ).result()
@@ -771,7 +781,9 @@ def _rotation_vm_state(
         raise ValueError(f"VM {vm_name} is not assigned to binding {binding_id}")
     if labels.get(ASSISTANT_ID_LABEL) != assistant_id.lower().replace("_", "-"):
         raise ValueError(f"VM {vm_name} is not assigned to assistant {assistant_id}")
-    network_interface, access_config_name, current_ip = _external_access_config(instance)
+    network_interface, access_config_name, current_ip = _external_access_config(
+        instance,
+    )
     return client, network_interface, access_config_name, current_ip
 
 
@@ -824,7 +836,9 @@ def rotate_assistant_static_ip(
         )
         candidate_ip = str(candidate["address"])
         client, nic, access_config, current_ip = _rotation_vm_state(
-            vm_name, binding_id, assistant_id,
+            vm_name,
+            binding_id,
+            assistant_id,
         )
         if current_ip == candidate_ip:
             _verify_rotation_nat(client, vm_name, candidate_ip)
@@ -841,8 +855,11 @@ def rotate_assistant_static_ip(
             )
         try:
             _replace_vm_external_ip(
-                client, vm_name, network_interface=nic,
-                access_config_name=access_config, current_ip=current_ip,
+                client,
+                vm_name,
+                network_interface=nic,
+                access_config_name=access_config,
+                current_ip=current_ip,
                 replacement_ip=candidate_ip,
             )
             _verify_rotation_nat(client, vm_name, candidate_ip)
@@ -852,12 +869,17 @@ def rotate_assistant_static_ip(
             # observations before surfacing the original operation failure.
             try:
                 _, _, _, observed_ip = _rotation_vm_state(
-                    vm_name, binding_id, assistant_id,
+                    vm_name,
+                    binding_id,
+                    assistant_id,
                 )
                 if observed_ip != expected_old_ip:
                     _replace_vm_external_ip(
-                        client, vm_name, network_interface=nic,
-                        access_config_name=access_config, current_ip=observed_ip,
+                        client,
+                        vm_name,
+                        network_interface=nic,
+                        access_config_name=access_config,
+                        current_ip=observed_ip,
                         replacement_ip=expected_old_ip,
                     )
                 _upsert_dns_a_record(hostname, expected_old_ip)
@@ -898,7 +920,9 @@ def rollback_assistant_static_ip_rotation(
             raise ValueError("Rotation candidate does not exist")
         candidate_ip = str(candidate["address"])
         client, nic, access_config, current_ip = _rotation_vm_state(
-            vm_name, binding_id, assistant_id,
+            vm_name,
+            binding_id,
+            assistant_id,
         )
         if current_ip not in (candidate_ip, expected_old_ip):
             raise ValueError(f"VM {vm_name} has unexpected external IP {current_ip}")
@@ -912,8 +936,11 @@ def rollback_assistant_static_ip_rotation(
             }
         try:
             _replace_vm_external_ip(
-                client, vm_name, network_interface=nic,
-                access_config_name=access_config, current_ip=candidate_ip,
+                client,
+                vm_name,
+                network_interface=nic,
+                access_config_name=access_config,
+                current_ip=candidate_ip,
                 replacement_ip=expected_old_ip,
             )
             _verify_rotation_nat(client, vm_name, expected_old_ip)
@@ -922,7 +949,9 @@ def rollback_assistant_static_ip_rotation(
             try:
                 _upsert_dns_a_record(hostname, candidate_ip)
             except Exception:
-                logger.exception("Failed restoring candidate DNS after rollback failure")
+                logger.exception(
+                    "Failed restoring candidate DNS after rollback failure",
+                )
             raise
         return {
             "hostname": hostname,
@@ -959,9 +988,16 @@ def finalize_assistant_static_ip_rotation(
         candidate = _get_assistant_rotation_address(assistant_id, operation_id)
         if candidate is None:
             return {
-                "hostname": hostname, "old": {"address": expected_old_ip},
-                "candidate": {"name": assistant_static_ip_rotation_name(assistant_id, operation_id)},
-                "idempotent": True, "deleted": False,
+                "hostname": hostname,
+                "old": {"address": expected_old_ip},
+                "candidate": {
+                    "name": assistant_static_ip_rotation_name(
+                        assistant_id,
+                        operation_id,
+                    ),
+                },
+                "idempotent": True,
+                "deleted": False,
             }
         candidate_ip = str(candidate.get("address") or "")
         if candidate_ip != expected_old_ip:
@@ -975,9 +1011,11 @@ def finalize_assistant_static_ip_rotation(
             address=str(candidate["name"]),
         ).result()
         return {
-            "hostname": hostname, "old": {"address": expected_old_ip},
+            "hostname": hostname,
+            "old": {"address": expected_old_ip},
             "candidate": _rotation_response_address(candidate),
-            "idempotent": False, "deleted": True,
+            "idempotent": False,
+            "deleted": True,
         }
     finally:
         _release_binding_vm_lease(coord_api, binding_id, namespace, holder_id)
@@ -2158,7 +2196,9 @@ def attach_assistant_static_ip_to_pool_vm(
     _upsert_dns_a_record(hostname, assistant_ip)
     _report_assistant_static_ip_attachment(
         assistant_id=assistant_id,
-        address_name=str(reserved.get("name") or assistant_static_ip_name(assistant_id)),
+        address_name=str(
+            reserved.get("name") or assistant_static_ip_name(assistant_id),
+        ),
         address=assistant_ip,
         hostname=hostname,
     )
@@ -2441,10 +2481,7 @@ def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
     owner_binding_id = str(owner.get("binding_id", "") or "")
     owner_pool_role = str(owner.get("pool_role", "") or "")
     requested_binding = binding_id.lower().replace("_", "-")
-    if (
-        owner_binding_id != requested_binding
-        and owner_pool_role != "assigned"
-    ):
+    if owner_binding_id != requested_binding and owner_pool_role != "assigned":
         _log_vm_pool_event(
             "disk_handoff_reclaim_stale_owner",
             assistant_id=assistant_id,
@@ -2775,11 +2812,16 @@ def _regional_reaper_core_api():
 
     _, core_api, _, _ = setup_kubernetes_client()
     if core_api is None:
-        raise RuntimeError("Kubernetes CoreV1Api is unavailable for regional pool reaper")
+        raise RuntimeError(
+            "Kubernetes CoreV1Api is unavailable for regional pool reaper",
+        )
     return core_api
 
 
-def _read_regional_reaper_state(core_api, region: str) -> tuple[dict[str, Any], str | None]:
+def _read_regional_reaper_state(
+    core_api,
+    region: str,
+) -> tuple[dict[str, Any], str | None]:
     """Read one region's durable reaper state and ConfigMap resource version."""
     try:
         config_map = core_api.read_namespaced_config_map(
@@ -2797,7 +2839,9 @@ def _read_regional_reaper_state(core_api, region: str) -> tuple[dict[str, Any], 
     except (TypeError, json.JSONDecodeError):
         logger.warning("Ignoring malformed regional reaper state for %s", region)
         state = {}
-    return state if isinstance(state, dict) else {}, config_map.metadata.resource_version
+    return (
+        state if isinstance(state, dict) else {}
+    ), config_map.metadata.resource_version
 
 
 def _write_regional_reaper_state(
@@ -2943,16 +2987,19 @@ def reap_inactive_regional_pools(
                     ),
                 )
         vms = [vm for zone_vms in vms_by_zone.values() for vm in zone_vms]
-        roles = {
-            str((vm.labels or {}).get(POOL_ROLE_LABEL, ""))
-            for vm in vms
-        }
+        roles = {str((vm.labels or {}).get(POOL_ROLE_LABEL, "")) for vm in vms}
         active = bool({POOL_ROLE_RELEASING, "assigned"} & roles)
         state = _regional_pool_reaper_state(location.region, core_api=core_api)
         if active:
             if state:
-                _set_regional_reaper_state(location.region, {"fenced": False}, core_api=core_api)
-            results.append({"region": location.region, "action": "active", "vm_count": len(vms)})
+                _set_regional_reaper_state(
+                    location.region,
+                    {"fenced": False},
+                    core_api=core_api,
+                )
+            results.append(
+                {"region": location.region, "action": "active", "vm_count": len(vms)},
+            )
             continue
 
         empty_since = _parse_reaper_timestamp(state.get("emptySince"))
@@ -2990,8 +3037,7 @@ def reap_inactive_regional_pools(
             vm for zone_vms in current_vms_by_zone.values() for vm in zone_vms
         ]
         current_roles = {
-            str((vm.labels or {}).get(POOL_ROLE_LABEL, ""))
-            for vm in current_vms
+            str((vm.labels or {}).get(POOL_ROLE_LABEL, "")) for vm in current_vms
         }
         if not state.get("fenced") or {POOL_ROLE_RELEASING, "assigned"} & current_roles:
             _set_regional_reaper_state(
@@ -3026,7 +3072,9 @@ def reap_inactive_regional_pools(
                         vm_type=(vm.labels or {}).get("vm-type"),
                     )
                     deleted.append(vm.name)
-        results.append({"region": location.region, "action": "reaped", "deleted": deleted})
+        results.append(
+            {"region": location.region, "action": "reaped", "deleted": deleted},
+        )
     return {"regions": results}
 
 
@@ -3277,9 +3325,7 @@ def attach_assistant_disk(
     """
     client = compute_v1.InstancesClient()
     disk_name = _assistant_disk_name(assistant_id)
-    disk_source = (
-        f"projects/{SETTINGS.vm_project_id}/zones/{_current_vm_placement().zone}/disks/{disk_name}"
-    )
+    disk_source = f"projects/{SETTINGS.vm_project_id}/zones/{_current_vm_placement().zone}/disks/{disk_name}"
 
     attached_disk = compute_v1.AttachedDisk(
         source=disk_source,

@@ -16,7 +16,6 @@ from google.api_core.exceptions import GoogleAPICallError, NotFound
 from google.auth.exceptions import GoogleAuthError
 from google.cloud import compute_v1
 
-
 _DATA_DIR = Path(__file__).with_name("data")
 _EARTH_RADIUS_KM = 6_371.0088
 _LEGACY_LOCATION_ID = "us-central1"
@@ -116,10 +115,14 @@ def validate_iana_timezone(timezone_name: str | None) -> str | None:
 
 
 def _distance_km(
-    latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float
+    latitude_a: float,
+    longitude_a: float,
+    latitude_b: float,
+    longitude_b: float,
 ) -> float:
     lat_a, lon_a, lat_b, lon_b = map(
-        math.radians, (latitude_a, longitude_a, latitude_b, longitude_b)
+        math.radians,
+        (latitude_a, longitude_a, latitude_b, longitude_b),
     )
     return (
         _EARTH_RADIUS_KM
@@ -127,14 +130,18 @@ def _distance_km(
         * math.asin(
             math.sqrt(
                 math.sin((lat_b - lat_a) / 2) ** 2
-                + math.cos(lat_a) * math.cos(lat_b) * math.sin((lon_b - lon_a) / 2) ** 2
-            )
+                + math.cos(lat_a)
+                * math.cos(lat_b)
+                * math.sin((lon_b - lon_a) / 2) ** 2,
+            ),
         )
     )
 
 
 def _nearest_location(
-    latitude: float, longitude: float, candidates: Iterable[PoolLocation]
+    latitude: float,
+    longitude: float,
+    candidates: Iterable[PoolLocation],
 ) -> PoolLocation:
     available = tuple(candidates)
     if not available:
@@ -158,11 +165,14 @@ def _locations_by_distance(
             candidates,
             key=lambda location: (
                 _distance_km(
-                    latitude, longitude, location.latitude, location.longitude
+                    latitude,
+                    longitude,
+                    location.latitude,
+                    location.longitude,
                 ),
                 location.id,
             ),
-        )
+        ),
     )
 
 
@@ -225,7 +235,7 @@ def resolve_pool_location(
     zone = enabled[selected.id]
     if zone not in selected.zones:
         raise ValueError(
-            f"Zone {zone} is not part of configured pool location {selected.id}"
+            f"Zone {zone} is not part of configured pool location {selected.id}",
         )
     return VmPlacement(
         location=selected,
@@ -332,7 +342,7 @@ def resolve_viable_pool_location(
     legacy = get_pool_location(legacy_location_id)
     if legacy_zone is not None and legacy_zone not in legacy.zones:
         raise ValueError(
-            f"Zone {legacy_zone} is not part of legacy pool location {legacy.id}"
+            f"Zone {legacy_zone} is not part of legacy pool location {legacy.id}",
         )
     normalized_timezone = validate_iana_timezone(timezone_name)
     coordinates = (
@@ -393,7 +403,7 @@ def placement_from_ref(value: Mapping[str, object] | None) -> VmPlacement | None
     location = get_pool_location(location_id)
     if declared_region and declared_region != location.region:
         raise ValueError(
-            f"Pool location {location_id} does not match declared region {declared_region}"
+            f"Pool location {location_id} does not match declared region {declared_region}",
         )
     if zone not in location.zones:
         raise ValueError(f"Zone {zone} is not part of pool location {location_id}")

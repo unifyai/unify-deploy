@@ -236,15 +236,13 @@ def _run_vm_assignment(
         return
 
     session = get_assistant_session(custom_api, namespace, assistant_id) or {}
-    placement_payload = (
-        (session.get("spec") or {}).get("desktop", {}).get("placement")
-    )
+    placement_payload = (session.get("spec") or {}).get("desktop", {}).get("placement")
     placement = placement_from_ref(
-        placement_payload if isinstance(placement_payload, dict) else None
+        placement_payload if isinstance(placement_payload, dict) else None,
     )
     source_vm_ref = session_binding(session).get("vmRef") or {}
     source_placement = placement_from_ref(
-        source_vm_ref if isinstance(source_vm_ref, dict) else None
+        source_vm_ref if isinstance(source_vm_ref, dict) else None,
     )
     migration = None
     if (
@@ -463,9 +461,9 @@ def _run_vm_release_request(
         )
         return
 
-    current_vm_ref = (session_binding(session).get("vmRef") or {})
+    current_vm_ref = session_binding(session).get("vmRef") or {}
     placement = placement_from_ref(
-        current_vm_ref if isinstance(current_vm_ref, dict) else None
+        current_vm_ref if isinstance(current_vm_ref, dict) else None,
     )
     try:
         result = release_pool_vm(

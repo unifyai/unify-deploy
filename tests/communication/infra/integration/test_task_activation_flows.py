@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from communication.infra.assistant_sessions import read_bootstrap_secret
+from communication.infra.task_activation import OFFLINE_TASK_JOB_BACKOFF_LIMIT
 
 from .conftest import (
     ADAPTERS_URL,
@@ -805,7 +806,7 @@ class TestTaskActivationFlows:
             job = task_run_jobs[0]
             assert job.metadata.name.startswith("unity-task-run-")
             assert job.metadata.labels.get("task-id") == str(task_id)
-            assert job.spec.backoff_limit == 0
+            assert job.spec.backoff_limit == OFFLINE_TASK_JOB_BACKOFF_LIMIT
             assert job.spec.ttl_seconds_after_finished is not None
             # Runtime bound is per-task: the seeded task sets
             # max_runtime_seconds, which maps onto activeDeadlineSeconds.

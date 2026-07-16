@@ -305,7 +305,8 @@ def test_rotate_assistant_static_ip_uses_operation_candidate_and_verifies_nat():
     assert result["idempotent"] is False
     assert replacement.call_args.kwargs["replacement_ip"] == "34.1.2.4"
     dns_upsert.assert_called_once_with(
-        vm_helpers.get_dns_hostname("assistant-123"), "34.1.2.4",
+        vm_helpers.get_dns_hostname("assistant-123"),
+        "34.1.2.4",
     )
 
 
@@ -370,7 +371,11 @@ def test_finalize_rotation_deletes_only_unattached_inactive_candidate():
             "_rotation_vm_state",
             return_value=(MagicMock(), "nic0", "External NAT", "34.1.2.4"),
         ),
-        patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=address_client),
+        patch.object(
+            vm_helpers.compute_v1,
+            "AddressesClient",
+            return_value=address_client,
+        ),
     ):
         result = vm_helpers.finalize_assistant_static_ip_rotation(
             assistant_id="assistant-123",

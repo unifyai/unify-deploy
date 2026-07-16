@@ -223,7 +223,10 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
     demand, invalid_demand = pending_vm_demand_by_pool(sessions)
     results: dict[str, Any] = {}
     global _last_assistant_ip_sync_at
-    if time.monotonic() - _last_assistant_ip_sync_at >= ASSISTANT_IP_SYNC_INTERVAL_SECONDS:
+    if (
+        time.monotonic() - _last_assistant_ip_sync_at
+        >= ASSISTANT_IP_SYNC_INTERVAL_SECONDS
+    ):
         synced = sync_active_assistant_ip_reports(sessions)
         _last_assistant_ip_sync_at = time.monotonic()
         results["assistant_ip_sync"] = {"synced": synced}

@@ -210,6 +210,7 @@ def test_reconcile_pool_once_replenishes_each_regional_pool(monkeypatch):
 
     assert ("ubuntu", 1, SETTINGS.vm_region, SETTINGS.vm_zone) in replenished
     assert ("ubuntu", 1, "europe-west2", "europe-west2-a") in replenished
-    assert result["vm_pools"]["ubuntu:europe-west2:europe-west2-a"][
-        "pending_sessions"
-    ] == 1
+    assert (
+        result["vm_pools"]["ubuntu:europe-west2:europe-west2-a"]["pending_sessions"]
+        == 1
+    )
