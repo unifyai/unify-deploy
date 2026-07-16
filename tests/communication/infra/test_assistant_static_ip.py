@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from google.api_core.exceptions import NotFound
 
 from communication.infra import vm_helpers
+from communication.infra.gcp_region_catalog import VmPlacement, get_pool_location
 
 
 def _address(assistant_id: str, *, ip: str = "34.1.2.3") -> MagicMock:
@@ -373,3 +374,98 @@ def test_finalize_rotation_deletes_only_unattached_inactive_candidate():
         region=vm_helpers.SETTINGS.vm_region,
         address=candidate["name"],
     )
+
+
+def test_prepare_cross_region_migration_copies_disk_and_reserves_target_ip():
+    assistant_id = "assistant-123"
+    migration_id = "move-eu"
+    source = VmPlacement(
+        location=get_pool_location("us-central1"),
+        zone="us-central1-a",
+        source_timezone="",
+        resolution="test",
+    )
+    target = VmPlacement(
+        location=get_pool_location("europe-west1"),
+        zone="europe-west1-b",
+        source_timezone="",
+        resolution="test",
+    )
+    source_disk = SimpleNamespace(
+        self_link="projects/project/zones/us-central1-a/disks/unity-disk-assistant-123",
+    )
+    snapshot = SimpleNamespace(
+        name=vm_helpers.assistant_migration_snapshot_name(assistant_id, migration_id),
+        self_link="projects/project/global/snapshots/migration",
+        source_disk=source_disk.self_link,
+        status="READY",
+        labels=vm_helpers._assistant_migration_labels(assistant_id, migration_id),
+    )
+    target_disk = SimpleNamespace(
+        self_link="projects/project/zones/europe-west1-b/disks/target",
+        source_snapshot=snapshot.self_link,
+        labels=vm_helpers._assistant_migration_labels(assistant_id, migration_id),
+    )
+    disk_client = MagicMock()
+    disk_client.get.side_effect = [source_disk, NotFound("missing"), target_disk]
+    snapshot_client = MagicMock()
+    snapshot_client.get.side_effect = [NotFound("missing"), snapshot]
+
+    with (
+        patch.object(vm_helpers.compute_v1, "DisksClient", return_value=disk_client),
+        patch.object(
+            vm_helpers.compute_v1,
+            "SnapshotsClient",
+            return_value=snapshot_client,
+        ),
+        patch.object(
+            vm_helpers,
+            "reserve_assistant_static_ip",
+            return_value={"name": "target-ip", "created": True},
+        ) as reserve_address,
+    ):
+        result = vm_helpers.prepare_assistant_cross_region_migration(
+            assistant_id=assistant_id,
+            migration_id=migration_id,
+            source=source,
+            target=target,
+        )
+
+    assert result["snapshot"]["name"] == snapshot.name
+    assert result["target_disk"]["zone"] == target.zone
+    assert result["target_address"]["name"] == "target-ip"
+    disk_client.delete.assert_not_called()
+    snapshot_resource = snapshot_client.insert.call_args.kwargs["snapshot_resource"]
+    assert snapshot_resource.source_disk == source_disk.self_link
+    target_resource = disk_client.insert.call_args.kwargs["disk_resource"]
+    assert target_resource.source_snapshot == snapshot.self_link
+    reserve_address.assert_called_once_with(assistant_id, region=target.region)
+
+
+def test_prepare_migration_route_requires_explicit_matching_placements():
+    from communication.infra import views
+
+    app = FastAPI()
+    app.include_router(views.router, prefix="/infra")
+    client = TestClient(app)
+
+    response = client.post(
+        "/infra/vm/assistant-migration/prepare",
+        json={
+            "assistant_id": "assistant-123",
+            "migration_id": "move-eu",
+            "source": {
+                "pool_location": "us-central1",
+                "region": "europe-west1",
+                "zone": "us-central1-a",
+            },
+            "target": {
+                "pool_location": "europe-west1",
+                "region": "europe-west1",
+                "zone": "europe-west1-b",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert "does not match declared region" in response.json()["detail"]

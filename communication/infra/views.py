@@ -80,6 +80,11 @@ from .assistant_sessions import (
     vm_refs_match,
 )
 from .idle_job_pool import schedule_idle_job_pool_replenishment
+from .gcp_region_catalog import (
+    get_pool_location,
+    placement_from_ref,
+    resolve_viable_pool_location,
+)
 from .observability import (
     build_causal_context,
     pop_causal_context,
@@ -87,17 +92,20 @@ from .observability import (
 )
 from .vm_helpers import (
     AssistantDiskInUseError,
+    attach_assistant_static_ip_to_pool_vm,
     assistant_static_ip_name,
     complete_pool_vm_release,
     finalize_assistant_static_ip_rotation,
     get_dns_hostname,
     get_assistant_static_ip,
+    prepare_assistant_cross_region_migration,
     probe_vm_agent_service_authenticated,
     release_assistant_static_ip,
     rollback_assistant_static_ip_rotation,
     rotate_assistant_static_ip,
     reserve_assistant_static_ip,
     verify_vm_assignment,
+    vm_placement_scope,
     _set_pool_labels,
     _update_instance_metadata,
     provision_pool_vm,
@@ -114,6 +122,7 @@ from .vm_helpers import (
     delete_assistant_pool_archive,
     reconcile_orphaned_disks,
 )
+from .vm_config import UBUNTU_VM_MACHINE_TYPE, WINDOWS_VM_MACHINE_TYPE
 from .tunnel_helpers import (
     register_tunnel,
     unregister_tunnel,
@@ -121,11 +130,15 @@ from .tunnel_helpers import (
     list_user_tunnels,
 )
 from .models import (
+    AssistantPlacementResolveRequest,
+    AssistantPlacementResolveResponse,
     AssistantStaticIPReconcileRequest,
     AssistantStaticIPReleaseResponse,
     AssistantStaticIPResponse,
     AssistantStaticIPRotationRequest,
     AssistantStaticIPRotationResponse,
+    AssistantMigrationPrepareRequest,
+    AssistantMigrationPrepareResponse,
     VMReadyRequest,
     VMReleaseCompleteRequest,
     VMWipeMetadataKeyRequest,
@@ -281,6 +294,29 @@ def _resolve_session_desktop_requirements(
     else:
         session_desktop_required = parsed_override and entitled
     return effective_desktop_mode, session_desktop_required
+
+
+async def _resolve_dynamic_vm_placement(
+    timezone_name: str | None,
+    *,
+    desktop_mode: str | None = None,
+    candidate_location_ids: tuple[str, ...] | None = None,
+):
+    """Preflight catalog regions without relying on deployment env mutation."""
+    machine_type = (
+        WINDOWS_VM_MACHINE_TYPE
+        if desktop_mode == "windows"
+        else UBUNTU_VM_MACHINE_TYPE if desktop_mode == "ubuntu" else None
+    )
+    return await asyncio.to_thread(
+        resolve_viable_pool_location,
+        timezone_name,
+        project_id=SETTINGS.vm_project_id,
+        machine_type=machine_type,
+        legacy_zone=SETTINGS.vm_zone,
+        cache_ttl_seconds=SETTINGS.vm_location_preflight_cache_ttl_seconds,
+        candidate_location_ids=candidate_location_ids,
+    )
 
 
 def _parse_desktop_required_form(
@@ -1399,6 +1435,34 @@ async def start_job(
         )
         attempted_secret_refs.append((secret_name, activation_id))
 
+        desktop_placement = None
+        if session_desktop_required:
+            existing_placement = (
+                (existing_session or {})
+                .get("spec", {})
+                .get("desktop", {})
+                .get("placement")
+            )
+            # An active binding must retain its persisted routing. A normal
+            # post-release recycle deliberately resolves again so a timezone
+            # change can select a new target pool without mutating live
+            # resources.
+            if isinstance(existing_placement, dict) and (
+                reused_active_session or restart_in_progress
+            ):
+                desktop_placement = dict(existing_placement)
+            else:
+                resolved_placement = await _resolve_dynamic_vm_placement(
+                    assistant_timezone,
+                    desktop_mode=effective_desktop_mode,
+                )
+                desktop_placement = {
+                    "poolLocation": resolved_placement.location.id,
+                    "region": resolved_placement.region,
+                    "zone": resolved_placement.zone,
+                    "timezone": resolved_placement.source_timezone,
+                    "resolution": resolved_placement.resolution,
+                }
         spec = build_assistant_session_spec(
             assistant_id=assistant_id,
             user_id=user_id,
@@ -1407,6 +1471,7 @@ async def start_job(
             startup_secret_ref=secret_name,
             activation_id=activation_id,
             desktop_required=session_desktop_required,
+            desktop_placement=desktop_placement,
         )
         try:
             session = await asyncio.to_thread(
@@ -1469,6 +1534,7 @@ async def start_job(
                 startup_secret_ref=secret_name,
                 activation_id=activation_id,
                 desktop_required=session_desktop_required,
+                desktop_placement=desktop_placement,
             )
             try:
                 session = await asyncio.to_thread(
@@ -2510,6 +2576,7 @@ async def vm_ready_endpoint(
             existing_vm_name,
             current_binding_id,
             assistant_id,
+            placement=placement_from_ref(existing_vm_ref),
         )
 
         if assigned_vm_ref is None:
@@ -2583,6 +2650,23 @@ async def vm_ready_endpoint(
                 detail=f"VM agent not ready at {hostname}",
             )
 
+        migration = existing_vm_ref.get("regionalMigration")
+        if isinstance(migration, dict):
+            target_placement = placement_from_ref(existing_vm_ref)
+            if target_placement is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Regional migration target placement is incomplete",
+                )
+            stable_network = await asyncio.to_thread(
+                _attach_static_ip_at_placement,
+                existing_vm_name,
+                assistant_id,
+                vm_type,
+                target_placement,
+            )
+            hostname = str(stable_network["hostname"])
+
         message_id = await _publish_desktop_ready(
             assistant_id,
             hostname,
@@ -2627,9 +2711,46 @@ async def vm_ready_endpoint(
         pop_causal_context(causal_token)
 
 
+def _attach_static_ip_at_placement(
+    vm_name: str,
+    assistant_id: str,
+    vm_type: str,
+    placement,
+) -> dict[str, Any]:
+    """Attach a prepared target address after its VM passes readiness checks."""
+
+    with vm_placement_scope(placement):
+        return attach_assistant_static_ip_to_pool_vm(vm_name, assistant_id, vm_type)
+
+
 # =============================================================================
 # VM Pool Endpoints
 # =============================================================================
+
+
+@router.post(
+    "/vm/assistant-placement/resolve",
+    response_model=AssistantPlacementResolveResponse,
+)
+async def resolve_assistant_placement_endpoint(
+    request: AssistantPlacementResolveRequest,
+):
+    """Preflight a timezone target without reserving an address or VM."""
+
+    try:
+        placement = await _resolve_dynamic_vm_placement(
+            request.assistant_timezone,
+            desktop_mode=request.desktop_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AssistantPlacementResolveResponse(
+        pool_location=placement.location.id,
+        region=placement.region,
+        zone=placement.zone,
+        timezone=placement.source_timezone,
+        resolution=placement.resolution,
+    )
 
 
 @router.post(
@@ -2646,12 +2767,82 @@ async def reconcile_assistant_static_ip_endpoint(
     """
 
     try:
+        if request.pool_location:
+            location = get_pool_location(request.pool_location)
+            if request.region and request.region != location.region:
+                raise ValueError(
+                    "Requested pool_location and region do not describe the same GCP location"
+                )
+            placement = await _resolve_dynamic_vm_placement(
+                request.assistant_timezone,
+                candidate_location_ids=(location.id,),
+            )
+            if placement.location.id != location.id:
+                raise ValueError(
+                    f"Pool location {location.id} is not currently capable for assistant VMs"
+                )
+        else:
+            placement = await _resolve_dynamic_vm_placement(
+                request.assistant_timezone,
+            )
         result = await asyncio.to_thread(
-            reserve_assistant_static_ip, request.assistant_id
+            reserve_assistant_static_ip, request.assistant_id, region=placement.region
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return AssistantStaticIPResponse(assistant_id=request.assistant_id, **result)
+    return AssistantStaticIPResponse(
+        assistant_id=request.assistant_id,
+        pool_location=placement.location.id,
+        zone=placement.zone,
+        **result,
+    )
+
+
+@router.post(
+    "/vm/assistant-migration/prepare",
+    response_model=AssistantMigrationPrepareResponse,
+)
+async def prepare_assistant_cross_region_migration_endpoint(
+    request: AssistantMigrationPrepareRequest,
+):
+    """Prepare target disk/IP resources; source resources remain untouched."""
+
+    try:
+        source = placement_from_ref(
+            {
+                "poolLocation": request.source.pool_location,
+                "region": request.source.region,
+                "zone": request.source.zone,
+            },
+        )
+        target = placement_from_ref(
+            {
+                "poolLocation": request.target.pool_location,
+                "region": request.target.region,
+                "zone": request.target.zone,
+            },
+        )
+        if source is None or target is None:
+            raise ValueError("Source and target placements must be complete")
+        result = await asyncio.to_thread(
+            prepare_assistant_cross_region_migration,
+            assistant_id=request.assistant_id,
+            migration_id=request.migration_id,
+            source=source,
+            target=target,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return AssistantMigrationPrepareResponse(
+        assistant_id=request.assistant_id,
+        migration_id=request.migration_id,
+        source=request.source,
+        target=request.target,
+        **result,
+    )
 
 
 @router.get(
@@ -2674,11 +2865,18 @@ async def get_assistant_static_ip_endpoint(assistant_id: str):
     "/vm/assistant-static-ip/{assistant_id}",
     response_model=AssistantStaticIPReleaseResponse,
 )
-async def release_assistant_static_ip_endpoint(assistant_id: str):
+async def release_assistant_static_ip_endpoint(
+    assistant_id: str,
+    region: str | None = None,
+):
     """Idempotently release an assistant-owned regional GCP address."""
 
     try:
-        released = await asyncio.to_thread(release_assistant_static_ip, assistant_id)
+        released = await asyncio.to_thread(
+            release_assistant_static_ip,
+            assistant_id,
+            region=region,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return AssistantStaticIPReleaseResponse(
@@ -2713,17 +2911,54 @@ async def _validate_static_ip_rotation_binding(
             status_code=409,
             detail="AssistantSession binding does not reference the requested VM",
         )
+    persisted_placement = placement_from_ref(persisted_vm_ref)
+    if persisted_placement is not None:
+        if (
+            request.pool_location
+            and request.pool_location != persisted_placement.location.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Requested pool location does not match the binding VM",
+            )
+        if request.region and request.region != persisted_placement.region:
+            raise HTTPException(
+                status_code=409,
+                detail="Requested region does not match the binding VM",
+            )
+        if request.zone and request.zone != persisted_placement.zone:
+            raise HTTPException(
+                status_code=409,
+                detail="Requested zone does not match the binding VM",
+            )
     observed_vm_ref = await asyncio.to_thread(
         verify_vm_assignment,
         request.vm_name,
         request.binding_id,
         request.assistant_id,
+        placement=persisted_placement,
     )
     if not observed_vm_ref or not vm_refs_match(persisted_vm_ref, observed_vm_ref):
         raise HTTPException(
             status_code=409,
             detail="Requested VM is not the current assigned VM for this binding",
         )
+
+
+def _run_static_ip_operation_at_placement(
+    operation,
+    request: AssistantStaticIPRotationRequest,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    placement = placement_from_ref(
+        {
+            "poolLocation": request.pool_location or request.region,
+            "region": request.region,
+            "zone": request.zone,
+        }
+    )
+    with vm_placement_scope(placement):
+        return operation(**kwargs)
 
 
 def _static_ip_rotation_response(
@@ -2758,7 +2993,9 @@ async def rotate_assistant_static_ip_endpoint(
     await _validate_static_ip_rotation_binding(request)
     try:
         result = await asyncio.to_thread(
+            _run_static_ip_operation_at_placement,
             rotate_assistant_static_ip,
+            request,
             assistant_id=request.assistant_id,
             operation_id=request.operation_id,
             vm_name=request.vm_name,
@@ -2784,7 +3021,9 @@ async def rollback_assistant_static_ip_endpoint(
     await _validate_static_ip_rotation_binding(request)
     try:
         result = await asyncio.to_thread(
+            _run_static_ip_operation_at_placement,
             rollback_assistant_static_ip_rotation,
+            request,
             assistant_id=request.assistant_id,
             operation_id=request.operation_id,
             vm_name=request.vm_name,
@@ -2814,7 +3053,9 @@ async def finalize_assistant_static_ip_endpoint(
     await _validate_static_ip_rotation_binding(request)
     try:
         result = await asyncio.to_thread(
+            _run_static_ip_operation_at_placement,
             finalize_assistant_static_ip_rotation,
+            request,
             assistant_id=request.assistant_id,
             operation_id=request.operation_id,
             vm_name=request.vm_name,
@@ -3785,6 +4026,19 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
     batch_api, _, _, _ = await _get_k8s_clients()
     result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
     return result
+
+
+@router.post("/vm/pool/reap-inactive-regions")
+async def reap_inactive_regional_pools_endpoint():
+    """Reap fenced, unused nonlegacy regional VM pools.
+
+    The /infra router requires the platform admin key. The reaper itself keeps
+    a durable ConfigMap fence and only deletes idle/stopped/quarantined VMs
+    after the region has had no assigned or releasing VM for one hour.
+    """
+    from .vm_helpers import reap_inactive_regional_pools
+
+    return await asyncio.to_thread(reap_inactive_regional_pools)
 
 
 @router.post("/vm/pool/reconcile-orphan-disks")

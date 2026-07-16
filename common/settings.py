@@ -241,6 +241,18 @@ class Settings:
             "staging": "us-central1-a",
         }
         self.vm_zone: str = _zone_map.get(self.deploy_env, "us-central1-f")
+        # Retained for legacy VM discovery paths. New placements are selected
+        # on demand from the GCP capability preflight, not Cloud Run env vars.
+        self.vm_provisioned_locations: dict[str, str] = {
+            self.vm_region: self.vm_zone,
+        }
+        self.vm_location_preflight_cache_ttl_seconds: float = float(
+            os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300")
+        )
+        if self.vm_location_preflight_cache_ttl_seconds <= 0:
+            raise ValueError(
+                "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive"
+            )
 
         # Tunnel relay service
         self.tunnel_subdomain: str = (

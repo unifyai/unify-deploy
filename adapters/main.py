@@ -6076,6 +6076,22 @@ def scheduled_infra_maintenance():
             logger.exception("maintenance: orphan VM reconcile failed for %s", vm_type)
             results[f"{key}_error"] = str(exc)
 
+    # 4a — Fence and remove unused capacity in catalog-selected nonlegacy
+    # regions. The Comms endpoint persists its one-hour grace state in K8s.
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pool/reap-inactive-regions",
+            headers=headers,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            results["inactive_regional_pools"] = resp.json()
+        else:
+            results["inactive_regional_pools_error"] = resp.text
+    except Exception as exc:
+        logger.exception("maintenance: inactive regional pool reaper failed")
+        results["inactive_regional_pools_error"] = str(exc)
+
     # 4b — Garbage-collect unattached assistant disks. Covers:
     #   - orphan: assistant unhired, detached > max_age_hours.
     #   - idle:   assistant still hired but detached > idle_hours with a

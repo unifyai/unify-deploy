@@ -75,6 +75,7 @@ from communication.infra.vm_helpers import (
     split_binding_runtime_vms,
     verify_vm_assignment,
 )
+from communication.infra.gcp_region_catalog import placement_from_ref
 from communication.assistant_session_controller.workers import (
     schedule_guest_health_probe,
     schedule_vm_assignment,
@@ -2996,6 +2997,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         str(current_vm_ref.get("name", "") or ""),
         current_binding_id,
         assistant_id,
+        placement=placement_from_ref(current_vm_ref),
     )
     if verified_vm_ref is None:
         try:
