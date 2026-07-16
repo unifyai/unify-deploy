@@ -219,8 +219,8 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert owner_refs[0]["kind"] == "Job"
 
 
-def test_launch_offline_task_job_returns_false_on_name_conflict():
-    """A 409 means another delivery of the same attempt already created the Job."""
+def test_launch_offline_task_job_adopts_existing_job_with_matching_run_key():
+    """A 409 with the same run-key annotation is treated as adopt-not-create."""
 
     from kubernetes.client.rest import ApiException
 
@@ -230,6 +230,11 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
     batch_api = MagicMock()
     core_api = MagicMock()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
+    batch_api.read_namespaced_job.return_value = {
+        "metadata": {
+            "annotations": {"unify.ai/task-run-key": "rk"},
+        },
+    }
 
     created = task_activation._launch_offline_task_job(
         batch_api=batch_api,
@@ -242,6 +247,44 @@ def test_launch_offline_task_job_returns_false_on_name_conflict():
     )
 
     assert created is False
+    batch_api.read_namespaced_job.assert_called_once_with(
+        name="unity-task-run-abc123def456",
+        namespace=task_activation.SETTINGS.default_namespace,
+    )
+    core_api.patch_namespaced_secret.assert_not_called()
+
+
+def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key():
+    """A 409 whose existing Job carries a different run key fails closed."""
+
+    from kubernetes.client.rest import ApiException
+
+    from communication.infra import task_activation
+    from communication.infra.provider_event_dispatch import (
+        ProviderEventDispatchValidationError,
+    )
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    batch_api = MagicMock()
+    core_api = MagicMock()
+    batch_api.create_namespaced_job.side_effect = ApiException(status=409)
+    batch_api.read_namespaced_job.return_value = {
+        "metadata": {
+            "annotations": {"unify.ai/task-run-key": "other-run-key"},
+        },
+    }
+
+    with pytest.raises(ProviderEventDispatchValidationError) as exc:
+        task_activation._launch_offline_task_job(
+            batch_api=batch_api,
+            core_api=core_api,
+            request=request,
+            run_key="rk",
+            job_name="unity-task-run-abc123def456",
+            offline_env={},
+            max_runtime_seconds=None,
+        )
+    assert exc.value.reason_code == "offline_job_run_key_mismatch"
     core_api.patch_namespaced_secret.assert_not_called()
 
 
