@@ -113,6 +113,23 @@ def vm_placement_scope(placement: VmPlacement | None):
         _ACTIVE_VM_PLACEMENT.reset(token)
 
 
+def _run_in_vm_placement(
+    placement: VmPlacement,
+    fn: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run a worker-thread callback with its caller's placement context.
+
+    ``ContextVar`` values do not propagate into ``ThreadPoolExecutor`` worker
+    threads. Pool replenish uses those workers for VM creation, so carrying
+    this scope explicitly prevents a regional demand from provisioning into
+    the legacy Iowa pool.
+    """
+    with vm_placement_scope(placement):
+        return fn(*args, **kwargs)
+
+
 def _placement_for_vm_name(vm_name: str) -> VmPlacement | None:
     """Find a VM's configured pool location for callback-only lifecycle paths."""
     client = compute_v1.InstancesClient()
@@ -5191,6 +5208,7 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
 
 
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
+    placement = _current_vm_placement()
     actions = _recycle_stale_pool_vms(vm_type)
     actions.extend(_quarantine_stale_inflight_vms(vm_type))
     actions.extend(_scrub_inconsistent_vms(vm_type))
@@ -5249,10 +5267,22 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     ) as pool:
         futures = {}
         for vm in vms_to_start:
-            f = pool.submit(_start_one_stopped_vm, client, vm)
+            f = pool.submit(
+                _run_in_vm_placement,
+                placement,
+                _start_one_stopped_vm,
+                client,
+                vm,
+            )
             futures[f] = f"Started stopped VM {vm.name}"
         for num in numbers_to_provision:
-            f = pool.submit(provision_pool_vm, vm_type, num)
+            f = pool.submit(
+                _run_in_vm_placement,
+                placement,
+                provision_pool_vm,
+                vm_type,
+                num,
+            )
             futures[f] = f"Provisioned new pool VM #{num}"
 
         started_count = 0
@@ -5283,7 +5313,13 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
                 for _ in range(reserve_deficit):
                     while _pool_vm_name(vm_type, nr) in existing_names_now:
                         nr += 1
-                    rf = pool.submit(provision_pool_vm, vm_type, nr)
+                    rf = pool.submit(
+                        _run_in_vm_placement,
+                        placement,
+                        provision_pool_vm,
+                        vm_type,
+                        nr,
+                    )
                     reserve_futures[rf] = nr
                     existing_names_now.add(_pool_vm_name(vm_type, nr))
                     nr += 1
