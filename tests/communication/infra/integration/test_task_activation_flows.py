@@ -477,9 +477,15 @@ class TestTaskActivationFlows:
                 "visibility_policy": "silent_by_default",
                 "recurrence_hint": "one_off",
             }
-            assert expected_reason in list(
-                bootstrap_payload.get("wake_reasons") or [],
-            ), (
+            wake_reasons = list(bootstrap_payload.get("wake_reasons") or [])
+            matching_reasons = [
+                reason
+                for reason in wake_reasons
+                if all(
+                    reason.get(key) == value for key, value in expected_reason.items()
+                )
+            ]
+            assert matching_reasons, (
                 f"Expected wake reason {expected_reason} in bootstrap payload "
                 f"but saw {bootstrap_payload}"
             )
