@@ -4,6 +4,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from common.settings import SETTINGS
+
 
 def _make_vm(status: str = "RUNNING", pool_role: str = "starting"):
     vm = MagicMock()
@@ -23,6 +25,29 @@ def client():
         "google": {
             "compute_engine": {
                 "instance_name": "unity-pool-ubuntu-1-staging",
+                "project_id": SETTINGS.vm_project_id,
+                "zone": f"projects/{SETTINGS.vm_project_id}/zones/{SETTINGS.vm_zone}",
+            },
+        },
+    }
+    return TestClient(app)
+
+
+@pytest.fixture
+def regional_client():
+    from communication.dependencies import authenticate_vm_identity
+    from communication.infra.views import vm_self_router
+
+    app = FastAPI()
+    app.include_router(vm_self_router, prefix="/infra")
+    app.dependency_overrides[authenticate_vm_identity] = lambda: {
+        "google": {
+            "compute_engine": {
+                "instance_name": "unity-pool-ubuntu-europe-west2-1-staging",
+                "project_id": SETTINGS.vm_project_id,
+                "zone": (
+                    f"projects/{SETTINGS.vm_project_id}/zones/europe-west2-a"
+                ),
             },
         },
     }
@@ -69,6 +94,57 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
         {"pool-role": "idle"},
         expected_role="starting",
     )
+
+
+def test_vm_mark_idle_uses_calling_regional_zone(regional_client):
+    seen_zones = []
+
+    def set_labels(*_args, **_kwargs):
+        from communication.infra.vm_helpers import _current_vm_placement
+
+        seen_zones.append(_current_vm_placement().zone)
+        return True
+
+    with (
+        patch(
+            "communication.infra.views.compute_v1.InstancesClient",
+        ) as mock_client_cls,
+        patch(
+            "communication.infra.views._set_pool_labels",
+            side_effect=set_labels,
+        ),
+    ):
+        mock_client_cls.return_value.get.return_value = _make_vm()
+        response = regional_client.post("/infra/vm/mark-idle")
+
+    assert response.status_code == 200
+    assert mock_client_cls.return_value.get.call_args.kwargs["zone"] == "europe-west2-a"
+    assert seen_zones == ["europe-west2-a"]
+
+
+def test_vm_wipe_metadata_key_uses_calling_regional_zone(regional_client):
+    seen_zones = []
+
+    def update_metadata(*_args, **_kwargs):
+        from communication.infra.vm_helpers import _current_vm_placement
+
+        seen_zones.append(_current_vm_placement().zone)
+
+    with patch(
+        "communication.infra.views._update_instance_metadata",
+        side_effect=update_metadata,
+    ) as update_metadata_mock:
+        response = regional_client.post(
+            "/infra/vm/wipe-metadata-key",
+            json={"key": "github-token"},
+        )
+
+    assert response.status_code == 200
+    update_metadata_mock.assert_called_once_with(
+        "unity-pool-ubuntu-europe-west2-1-staging",
+        {"github-token": ""},
+    )
+    assert seen_zones == ["europe-west2-a"]
 
 
 def test_vm_release_complete_records_signal_for_active_binding(client):

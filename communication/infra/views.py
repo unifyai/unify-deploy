@@ -81,6 +81,7 @@ from .assistant_sessions import (
 )
 from .idle_job_pool import schedule_idle_job_pool_replenishment
 from .gcp_region_catalog import (
+    VmPlacement,
     get_pool_location,
     placement_from_ref,
     resolve_viable_pool_location,
@@ -316,6 +317,38 @@ async def _resolve_dynamic_vm_placement(
         legacy_zone=SETTINGS.vm_zone,
         cache_ttl_seconds=SETTINGS.vm_location_preflight_cache_ttl_seconds,
         candidate_location_ids=candidate_location_ids,
+    )
+
+
+def _placement_from_vm_identity(claims: dict) -> VmPlacement:
+    """Return the trusted caller placement from a verified GCE identity token."""
+
+    gce = claims["google"]["compute_engine"]
+    zone_reference = str(gce["zone"]).rstrip("/")
+    zone = zone_reference.rsplit("/", 1)[-1]
+    region, separator, _ = zone.rpartition("-")
+    if not separator:
+        raise HTTPException(
+            status_code=403,
+            detail="VM identity token has an invalid zone.",
+        )
+    try:
+        location = get_pool_location(region)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="VM identity token references an unsupported pool region.",
+        ) from exc
+    if zone not in location.zones:
+        raise HTTPException(
+            status_code=403,
+            detail="VM identity token references an unsupported pool zone.",
+        )
+    return VmPlacement(
+        location=location,
+        zone=zone,
+        source_timezone="",
+        resolution="vm_identity",
     )
 
 
@@ -4126,14 +4159,16 @@ async def vm_mark_idle_endpoint(
     """
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
+    placement = _placement_from_vm_identity(claims)
 
     client = compute_v1.InstancesClient()
-    vm = await asyncio.to_thread(
-        client.get,
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-        instance=vm_name,
-    )
+    with vm_placement_scope(placement):
+        vm = await asyncio.to_thread(
+            client.get,
+            project=SETTINGS.vm_project_id,
+            zone=placement.zone,
+            instance=vm_name,
+        )
 
     if vm.status != "RUNNING":
         logger.warning(
@@ -4161,25 +4196,27 @@ async def vm_mark_idle_endpoint(
             "skipped": True,
         }
 
-    updated = await asyncio.to_thread(
-        _set_pool_labels,
-        client,
-        vm_name,
-        {"pool-role": "idle"},
-        expected_role=current_role,
-    )
+    with vm_placement_scope(placement):
+        updated = await asyncio.to_thread(
+            _set_pool_labels,
+            client,
+            vm_name,
+            {"pool-role": "idle"},
+            expected_role=current_role,
+        )
     if not updated:
         logger.warning(
             "VM %s skipped mark-idle because pool-role changed from %s",
             vm_name,
             current_role,
         )
-        refreshed_vm = await asyncio.to_thread(
-            client.get,
-            project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
-            instance=vm_name,
-        )
+        with vm_placement_scope(placement):
+            refreshed_vm = await asyncio.to_thread(
+                client.get,
+                project=SETTINGS.vm_project_id,
+                zone=placement.zone,
+                instance=vm_name,
+            )
         return {
             "vm_name": vm_name,
             "pool_role": (refreshed_vm.labels or {}).get("pool-role", ""),
@@ -4205,13 +4242,15 @@ async def vm_release_complete_endpoint(
     try:
         gce = claims["google"]["compute_engine"]
         vm_name = gce["instance_name"]
+        placement = _placement_from_vm_identity(claims)
         client = compute_v1.InstancesClient()
-        vm = await asyncio.to_thread(
-            client.get,
-            project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
-            instance=vm_name,
-        )
+        with vm_placement_scope(placement):
+            vm = await asyncio.to_thread(
+                client.get,
+                project=SETTINGS.vm_project_id,
+                zone=placement.zone,
+                instance=vm_name,
+            )
         labels = dict(vm.labels) if vm.labels else {}
         assistant_id = str(labels.get("assistant-id", "") or "")
         current_binding_id = str(labels.get("binding-id", "") or "")
@@ -4246,11 +4285,12 @@ async def vm_release_complete_endpoint(
                 "reason": "binding_changed",
             }
 
-        release_result = await asyncio.to_thread(
-            complete_pool_vm_release,
-            vm_name,
-            body.binding_id,
-        )
+        with vm_placement_scope(placement):
+            release_result = await asyncio.to_thread(
+                complete_pool_vm_release,
+                vm_name,
+                body.binding_id,
+            )
         release_pool_role = str(release_result.get("pool_role", "") or pool_role or "")
         emit_observability_event(
             "infra.vm_release_complete.pool_result",
@@ -4471,7 +4511,9 @@ async def vm_wipe_metadata_key_endpoint(
     """Wipe a metadata key on the calling VM. Authenticated via GCP identity token."""
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
+    placement = _placement_from_vm_identity(claims)
 
-    await asyncio.to_thread(_update_instance_metadata, vm_name, {body.key: ""})
+    with vm_placement_scope(placement):
+        await asyncio.to_thread(_update_instance_metadata, vm_name, {body.key: ""})
     logger.info(f"VM {vm_name} wiped metadata key '{body.key}' via identity token")
     return {"vm_name": vm_name, "key": body.key, "wiped": True}

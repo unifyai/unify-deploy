@@ -1253,14 +1253,15 @@ def test_trim_pool_respects_pending_claims_target(monkeypatch):
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
         lambda: client,
     )
+    pending_key = vm_helpers_module._pool_scope_key("ubuntu")
     with vm_helpers_module._pending_lock:
-        vm_helpers_module._pending_claims["ubuntu"] = 1
+        vm_helpers_module._pending_claims[pending_key] = 1
 
     try:
         result = vm_helpers_module.trim_pool("ubuntu")
     finally:
         with vm_helpers_module._pending_lock:
-            vm_helpers_module._pending_claims.pop("ubuntu", None)
+            vm_helpers_module._pending_claims.pop(pending_key, None)
 
     assert result["actions"] == []
     set_labels.assert_not_called()

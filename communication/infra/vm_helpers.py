@@ -1018,31 +1018,40 @@ def _run_vm_pool_stage(
 # ---------------------------------------------------------------------------
 # Demand tracking for pool replenishment
 # ---------------------------------------------------------------------------
-_pending_claims: Dict[str, int] = {}
+PoolScopeKey = tuple[str, str, str]
+
+_pending_claims: Dict[PoolScopeKey, int] = {}
 _pending_lock = threading.Lock()
 
-_replenish_locks: Dict[str, threading.Lock] = {}
+_replenish_locks: Dict[PoolScopeKey, threading.Lock] = {}
 _replenish_locks_guard = threading.Lock()
 
-_trim_locks: Dict[str, threading.Lock] = {}
+_trim_locks: Dict[PoolScopeKey, threading.Lock] = {}
 _trim_locks_guard = threading.Lock()
 
 _vm_claim_locks: Dict[str, threading.Lock] = {}
 _vm_claim_locks_guard = threading.Lock()
 
 
+def _pool_scope_key(vm_type: str) -> PoolScopeKey:
+    placement = _current_vm_placement()
+    return vm_type, placement.location.id, placement.zone
+
+
 def _get_replenish_lock(vm_type: str) -> threading.Lock:
+    key = _pool_scope_key(vm_type)
     with _replenish_locks_guard:
-        if vm_type not in _replenish_locks:
-            _replenish_locks[vm_type] = threading.Lock()
-        return _replenish_locks[vm_type]
+        if key not in _replenish_locks:
+            _replenish_locks[key] = threading.Lock()
+        return _replenish_locks[key]
 
 
 def _get_trim_lock(vm_type: str) -> threading.Lock:
+    key = _pool_scope_key(vm_type)
     with _trim_locks_guard:
-        if vm_type not in _trim_locks:
-            _trim_locks[vm_type] = threading.Lock()
-        return _trim_locks[vm_type]
+        if key not in _trim_locks:
+            _trim_locks[key] = threading.Lock()
+        return _trim_locks[key]
 
 
 def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
@@ -2939,8 +2948,9 @@ def claim_idle_vm(
         "AND status=RUNNING"
     )
 
+    pending_key = _pool_scope_key(vm_type)
     with _pending_lock:
-        _pending_claims[vm_type] = _pending_claims.get(vm_type, 0) + 1
+        _pending_claims[pending_key] = _pending_claims.get(pending_key, 0) + 1
 
     try:
         return _claim_idle_vm_inner(
@@ -2953,7 +2963,10 @@ def claim_idle_vm(
         )
     finally:
         with _pending_lock:
-            _pending_claims[vm_type] = max(0, _pending_claims.get(vm_type, 0) - 1)
+            _pending_claims[pending_key] = max(
+                0,
+                _pending_claims.get(pending_key, 0) - 1,
+            )
 
 
 def _claim_idle_vm_inner(
@@ -5223,7 +5236,7 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     )
 
     with _pending_lock:
-        pending = _pending_claims.get(vm_type, 0)
+        pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
 
     target = max(POOL_TARGET_IDLE, pending)
     deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
@@ -5402,7 +5415,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
         try:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
             with _pending_lock:
-                pending = _pending_claims.get(vm_type, 0)
+                pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
             target = max(POOL_TARGET_IDLE, pending)
             if len(idle_vms) <= target:
                 break
