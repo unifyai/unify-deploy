@@ -13,7 +13,6 @@ import pytest
 import requests
 
 from communication.infra.assistant_sessions import read_bootstrap_secret
-from communication.infra.task_activation import OFFLINE_TASK_JOB_BACKOFF_LIMIT
 
 from .conftest import (
     ADAPTERS_URL,
@@ -806,7 +805,10 @@ class TestTaskActivationFlows:
             job = task_run_jobs[0]
             assert job.metadata.name.startswith("unity-task-run-")
             assert job.metadata.labels.get("task-id") == str(task_id)
-            assert job.spec.backoff_limit == OFFLINE_TASK_JOB_BACKOFF_LIMIT
+            # Matches task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT. Hardcoded
+            # because this merge_gate suite does not install the unify SDK that
+            # importing task_activation would require.
+            assert job.spec.backoff_limit == 2
             assert job.spec.ttl_seconds_after_finished is not None
             # Runtime bound is per-task: the seeded task sets
             # max_runtime_seconds, which maps onto activeDeadlineSeconds.
