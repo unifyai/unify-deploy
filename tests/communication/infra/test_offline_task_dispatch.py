@@ -1367,8 +1367,8 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
     )
 
 
-def test_resolve_resource_flags_merges_request_activation_and_legacy_browser():
-    """Request flags, activation flags, and browser_target all imply computer."""
+def test_resolve_resource_flags_merges_request_and_activation():
+    """Request and activation requires_* flags merge with OR semantics."""
     from communication.infra import task_activation
 
     assert task_activation._resolve_resource_flags({}) == (False, False)
@@ -1379,20 +1379,17 @@ def test_resolve_resource_flags_merges_request_activation_and_legacy_browser():
         {"requires_computer": True},
     ) == (False, True)
     assert task_activation._resolve_resource_flags(
-        {"browser_target": "assistant_desktop"},
-    ) == (False, True)
-    assert task_activation._resolve_resource_flags(
         {},
         request_requires_computer=True,
     ) == (False, True)
     assert task_activation._resolve_resource_flags(
         {"requires_filesystem": False},
         request_requires_filesystem=True,
-        request_browser_target="assistant_desktop",
+        request_requires_computer=True,
     ) == (True, True)
 
 
-def test_desktop_browser_target_resolves_ready_binding():
+def test_assistant_desktop_browser_env_resolves_ready_binding():
     """Desktop-targeted workers receive only the current ready binding URL."""
     from communication.infra import task_activation
 
@@ -1431,7 +1428,7 @@ def test_desktop_browser_target_resolves_ready_binding():
 
 
 def test_requires_computer_offline_dispatch_resolves_desktop_binding():
-    """requires_computer=True takes the same desktop-ready gate as browser_target."""
+    """requires_computer=True takes the desktop-ready gate before launch."""
 
     client = _client()
     desktop_env = {
@@ -1479,7 +1476,7 @@ def test_requires_computer_offline_dispatch_resolves_desktop_binding():
     assert offline_env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
 
-def test_desktop_browser_target_uses_local_worker_without_computer_use():
+def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():
     """Desktop-eligible tasks retain the normal worker browser when disabled."""
     from communication.infra import task_activation
 

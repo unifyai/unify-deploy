@@ -12,7 +12,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.parse import quote
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 from fastapi import (
     Body,
     Depends,
@@ -1543,7 +1543,6 @@ class ScheduledTaskDuePayload(BaseModel):
     execution_mode: str = "live"
     requires_filesystem: bool = False
     requires_computer: bool = False
-    browser_target: Optional[Literal["assistant_desktop"]] = None
     source_type: str = "scheduled"
     task_label: str = ""
     task_summary: str = ""
@@ -2779,8 +2778,6 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
     }
     if payload.destination is not None:
         reason["destination"] = payload.destination
-    if payload.browser_target is not None:
-        reason["browser_target"] = payload.browser_target
     return reason
 
 
@@ -2984,13 +2981,7 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
     assistant_id = assistant_data["assistant_id"]
     wake_reason = _build_task_due_reason(payload)
     desktop_required = (
-        True
-        if (
-            payload.requires_filesystem
-            or payload.requires_computer
-            or payload.browser_target == "assistant_desktop"
-        )
-        else None
+        True if (payload.requires_filesystem or payload.requires_computer) else None
     )
 
     try:

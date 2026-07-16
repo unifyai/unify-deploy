@@ -176,12 +176,6 @@ def _offline_dispatch_request_from_provider_event(
         execution_mode="offline",
         requires_filesystem=requires_filesystem,
         requires_computer=requires_computer,
-        browser_target=(
-            "assistant_desktop"
-            if activation.get("browser_target") == "assistant_desktop"
-            or requires_computer
-            else None
-        ),
         entrypoint=activation.get("entrypoint"),
         source_type=RunSource.provider_event,
         task_name=activation.get("task_name"),
@@ -219,7 +213,6 @@ def _resolve_resource_flags(
     *,
     request_requires_filesystem: bool = False,
     request_requires_computer: bool = False,
-    request_browser_target: str | None = None,
 ) -> tuple[bool, bool]:
     data = data or {}
     requires_filesystem = bool(request_requires_filesystem) or bool(
@@ -228,9 +221,6 @@ def _resolve_resource_flags(
     requires_computer = bool(request_requires_computer) or bool(
         data.get("requires_computer"),
     )
-    browser = request_browser_target or data.get("browser_target")
-    if browser == "assistant_desktop":
-        requires_computer = True
     return requires_filesystem, requires_computer
 
 
@@ -417,7 +407,6 @@ def _scheduled_activation_http_body(
         "execution_mode": request.execution_mode,
         "requires_filesystem": request.requires_filesystem,
         "requires_computer": request.requires_computer,
-        "browser_target": request.browser_target,
         "entrypoint": request.entrypoint,
         "source_type": request.source_type,
         "task_label": request.task_label or "",
@@ -1299,7 +1288,6 @@ def _build_offline_runner_env(
         activation,
         request_requires_filesystem=request.requires_filesystem,
         request_requires_computer=request.requires_computer,
-        request_browser_target=request.browser_target,
     )
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     provider_event_kwargs: dict[str, Any] = {}
@@ -1750,12 +1738,6 @@ def _scheduled_activation_upsert_request_from_activation(
         ),
         requires_filesystem=requires_filesystem,
         requires_computer=requires_computer,
-        browser_target=(
-            "assistant_desktop"
-            if activation.get("browser_target") == "assistant_desktop"
-            or requires_computer
-            else None
-        ),
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -1779,12 +1761,6 @@ def _offline_dispatch_request_from_activation(
         execution_mode="offline",
         requires_filesystem=requires_filesystem,
         requires_computer=requires_computer,
-        browser_target=(
-            "assistant_desktop"
-            if activation.get("browser_target") == "assistant_desktop"
-            or requires_computer
-            else None
-        ),
         entrypoint=(
             int(activation["entrypoint"])
             if activation.get("entrypoint") is not None
@@ -2221,7 +2197,6 @@ async def dispatch_offline_task(
             activation or {},
             request_requires_filesystem=request.requires_filesystem,
             request_requires_computer=request.requires_computer,
-            request_browser_target=request.browser_target,
         )
         desktop_browser_env: dict[str, str] = {}
         if requires_computer or requires_filesystem:

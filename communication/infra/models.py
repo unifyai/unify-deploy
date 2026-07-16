@@ -176,7 +176,6 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     execution_mode: Literal["live", "offline"] = "live"
     requires_filesystem: bool = False
     requires_computer: bool = False
-    browser_target: Optional[Literal["assistant_desktop"]] = None
     entrypoint: Optional[int] = None
     source_type: Literal["scheduled"] = "scheduled"
     task_label: Optional[str] = None
@@ -210,7 +209,6 @@ class OfflineTaskDispatchRequest(BaseModel):
     execution_mode: Literal["offline"] = "offline"
     requires_filesystem: bool = False
     requires_computer: bool = False
-    browser_target: Optional[Literal["assistant_desktop"]] = None
     entrypoint: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
     source_type: RunSource = RunSource.scheduled
