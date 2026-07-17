@@ -980,11 +980,11 @@ def _validate_current_offline_activation(
     if int(activation.get("source_task_log_id") or 0) != request.source_task_log_id:
         return "source_task_log_id_mismatch"
     activation_entrypoint = activation.get("entrypoint")
-    if int(activation_entrypoint or 0) <= 0 and request.entrypoint:
+    if activation_entrypoint is None and request.entrypoint is not None:
         return "entrypoint_mismatch"
     if (
-        activation_entrypoint
-        and request.entrypoint
+        activation_entrypoint is not None
+        and request.entrypoint is not None
         and int(activation_entrypoint) != int(request.entrypoint)
     ):
         return "entrypoint_mismatch"
@@ -1279,7 +1279,11 @@ def _build_offline_runner_env(
        in the bootstrap secret / offline env file.
     """
 
-    entrypoint = activation.get("entrypoint") or request.entrypoint
+    entrypoint = (
+        activation.get("entrypoint")
+        if activation.get("entrypoint") is not None
+        else request.entrypoint
+    )
     team_ids = assistant_data.get("team_ids") or []
     team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
@@ -1485,7 +1489,11 @@ def _build_offline_run_create_payload(
         "source_task_log_id": request.source_task_log_id,
         "source_type": request.source_type,
         "execution_mode": "offline",
-        "entrypoint": activation.get("entrypoint") or request.entrypoint,
+        "entrypoint": (
+            activation.get("entrypoint")
+            if activation.get("entrypoint") is not None
+            else request.entrypoint
+        ),
         "activation_revision": request.activation_revision,
         "scheduled_for": _request_scheduled_for_iso(request),
         "source_medium": request.source_medium or None,

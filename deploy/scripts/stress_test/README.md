@@ -27,7 +27,7 @@ Each assistant is created with a random name suffix and default profile settings
 
 ### `unify_message_assistants.py`
 
-Sends messages to multiple assistants **in parallel** via the adapters `/unify/message` endpoint.
+Sends messages to multiple assistants **in parallel** via the adapters `/unify/chat` endpoint.
 
 | Variable | Source | Description |
 |---|---|---|

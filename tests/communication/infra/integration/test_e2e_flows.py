@@ -269,7 +269,7 @@ class TestE2EFlows:
         comms,
         pubsub_subscriber,
     ):
-        """After wakeup, a message sent via /unify/message must produce a reply.
+        """After wakeup, a message sent via /unify/chat must produce a reply.
 
         Exercises the full round-trip: adapter publishes message to Pub/Sub ->
         Unity container receives it -> LLM processes -> reply published to

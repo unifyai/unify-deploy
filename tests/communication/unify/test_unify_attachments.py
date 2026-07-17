@@ -221,125 +221,76 @@ class TestAttachmentUploadCurrentBehavior:
         assert len(ids) == 3  # All unique
 
 
-class TestMessageWithAttachmentsCurrentBehavior:
-    """Tests for current /unify/message endpoint behavior with attachments."""
+class TestChatDispatchAttachments:
+    """Attachments ride the unified /unify/chat dispatch untouched."""
 
-    def test_message_without_attachments(self, client):
-        """Messages without attachments work normally."""
-        response = client.post(
-            "/unify/message",
-            json={
+    def _chat_payload(self, attachments):
+        return {
+            "kind": "assistant_dm",
+            "thread_id": 5,
+            "assistant_id": "test-assistant",
+            "message": {
+                "id": 1,
+                "thread_id": 5,
+                "kind": "assistant_dm",
                 "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Hello!",
+                "sender_kind": "user",
+                "content": "See attached",
+                "attachments": attachments,
             },
-        )
+            "fanout_assistant_ids": ["test-assistant"],
+            "assistant_event": {
+                "thread_id": 5,
+                "thread_kind": "assistant_dm",
+                "chat_message_id": 1,
+                "body": "See attached",
+                "sender_user_id": "",
+                "sender_email": "user@example.com",
+                "sender_name": "User",
+                "attachments": attachments,
+            },
+        }
 
+    def test_chat_without_attachments(self, client):
+        response = client.post("/unify/chat", json=self._chat_payload([]))
         assert response.status_code == 200
 
-        # Verify PubSub message
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
+        # The runtime fan-out envelope carries the (empty) attachments list.
+        fanout = client._mock_pubsub.publish.call_args_list[-1]
+        published = json.loads(fanout[0][1].decode("utf-8"))
         assert published["thread"] == "unify_message"
-        assert published["event"]["body"] == "Hello!"
+        assert published["event"]["body"] == "See attached"
         assert published["event"]["attachments"] == []
 
-    def test_message_with_attachment(self, client):
-        """Attachments are forwarded in PubSub message."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "See attached",
-                "attachments": [
-                    {"id": "abc-123", "filename": "doc.pdf", "url": "https://url"},
-                ],
+    def test_chat_with_attachments(self, client):
+        attachments = [
+            {
+                "id": "abc-123",
+                "filename": "doc.pdf",
+                "gs_url": "gs://bucket/doc.pdf",
+                "content_type": "application/pdf",
+                "size_bytes": 10,
             },
-        )
-
+        ]
+        response = client.post("/unify/chat", json=self._chat_payload(attachments))
         assert response.status_code == 200
 
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
+        fanout = client._mock_pubsub.publish.call_args_list[-1]
+        published = json.loads(fanout[0][1].decode("utf-8"))
+        assert published["thread"] == "unify_message"
         assert len(published["event"]["attachments"]) == 1
         assert published["event"]["attachments"][0]["filename"] == "doc.pdf"
 
-    def test_message_with_multiple_attachments(self, client):
-        """Multiple attachments are all forwarded."""
-        attachments = [
-            {"id": f"id-{i}", "filename": f"file{i}.pdf", "url": f"https://url{i}"}
-            for i in range(5)
-        ]
-
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Multiple files",
-                "attachments": attachments,
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert len(published["event"]["attachments"]) == 5
-
-    def test_message_filters_invalid_attachments(self, client):
-        """Invalid attachment objects are filtered out."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Test",
-                "attachments": [
-                    {"id": "valid", "filename": "good.pdf", "url": "https://url"},
-                    {"id": "no-url", "filename": "bad.pdf"},  # Missing url
-                    {"filename": "no-id.pdf", "url": "https://x"},  # Missing id
-                    "not-an-object",
-                    None,
-                ],
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert len(published["event"]["attachments"]) == 1
-        assert published["event"]["attachments"][0]["id"] == "valid"
-
-    def test_message_requires_assistant_id(self, client):
-        """assistant_id is required."""
-        response = client.post(
-            "/unify/message",
-            json={"contact_id": TEST_BOSS_CONTACT_ID, "body": "Hello"},
-        )
+    def test_chat_requires_assistant_id(self, client):
+        payload = self._chat_payload([])
+        del payload["assistant_id"]
+        del payload["message"]["assistant_id"]
+        response = client.post("/unify/chat", json=payload)
         assert response.status_code == 400
 
-    def test_message_requires_contact_id(self, client):
-        """contact_id is required."""
-        response = client.post(
-            "/unify/message",
-            json={"assistant_id": "test-assistant", "body": "Hello"},
-        )
-        assert response.status_code == 400
-
-    def test_message_requires_authorization(self, client):
-        """Requests without valid auth are rejected."""
+    def test_chat_requires_authorization(self, client):
         client.headers["Authorization"] = "Bearer wrong-key"
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Hi",
-            },
-        )
+        response = client.post("/unify/chat", json=self._chat_payload([]))
         assert response.status_code == 403
 
 
@@ -358,14 +309,33 @@ class TestEndToEndFlow:
         assert upload_resp.status_code == 200
         attachment = upload_resp.json()
 
-        # Step 2: Send message with attachment
+        # Step 2: Dispatch a chat message with the attachment
         msg_resp = client.post(
-            "/unify/message",
+            "/unify/chat",
             json={
+                "kind": "assistant_dm",
+                "thread_id": 5,
                 "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Please review",
-                "attachments": [attachment],
+                "message": {
+                    "id": 1,
+                    "thread_id": 5,
+                    "kind": "assistant_dm",
+                    "assistant_id": "test-assistant",
+                    "sender_kind": "user",
+                    "content": "Please review",
+                    "attachments": [attachment],
+                },
+                "fanout_assistant_ids": ["test-assistant"],
+                "assistant_event": {
+                    "thread_id": 5,
+                    "thread_kind": "assistant_dm",
+                    "chat_message_id": 1,
+                    "body": "Please review",
+                    "sender_user_id": "",
+                    "sender_email": "user@example.com",
+                    "sender_name": "User",
+                    "attachments": [attachment],
+                },
             },
         )
         assert msg_resp.status_code == 200
@@ -457,67 +427,6 @@ class TestAttachmentUploadNewBehavior:
         assert data["size_bytes"] == 1024
 
 
-class TestMessageNewBehavior:
-    """Tests for /unify/message new features.
-
-    These features are now implemented:
-    - Attachment count limit (max 10)
-    - Full attachment metadata in PubSub (gs_url, content_type, size_bytes)
-    """
-
-    def test_message_accepts_more_than_10_attachments(self, client):
-        """Messages with more than 10 attachments are accepted (no server-side limit)."""
-        attachments = [
-            {"id": f"id-{i}", "filename": f"file{i}.pdf", "url": f"https://url{i}"}
-            for i in range(11)
-        ]
-
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Many attachments",
-                "attachments": attachments,
-            },
-        )
-
-        assert response.status_code == 200
-
-    def test_message_includes_gs_url_in_pubsub(self, client):
-        """PubSub message includes gs_url for each attachment."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "With gs_url",
-                "attachments": [
-                    {
-                        "id": "att-1",
-                        "filename": "doc.pdf",
-                        "url": "https://signed-url",
-                        "gs_url": "gs://bucket/path/doc.pdf",
-                        "content_type": "application/pdf",
-                        "size_bytes": 1024,
-                    },
-                ],
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        att = published["event"]["attachments"][0]
-
-        # New fields should be preserved
-        assert "gs_url" in att
-        assert att["gs_url"] == "gs://bucket/path/doc.pdf"
-        assert "content_type" in att
-        assert "size_bytes" in att
-
-
 # =============================================================================
 # EDGE CASES - Should work with current implementation
 # =============================================================================
@@ -525,56 +434,6 @@ class TestMessageNewBehavior:
 
 class TestEdgeCases:
     """Edge cases that should work with current implementation."""
-
-    def test_empty_body_with_attachment(self, client):
-        """Message with empty body but attachments is valid."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "",
-                "attachments": [
-                    {"id": "att-1", "filename": "doc.pdf", "url": "https://url"},
-                ],
-            },
-        )
-        assert response.status_code == 200
-
-    def test_null_attachments_field(self, client):
-        """Null attachments field is handled as empty list."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "No attachments",
-                "attachments": None,
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert published["event"]["attachments"] == []
-
-    def test_missing_attachments_field(self, client):
-        """Missing attachments field defaults to empty list."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "No attachments key",
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert published["event"]["attachments"] == []
 
     def test_filename_with_multiple_dots(self, client):
         """Filenames with multiple dots are preserved."""
@@ -590,49 +449,6 @@ class TestEdgeCases:
 
         assert response.status_code == 200
         assert response.json()["filename"] == "report.2026.01.final.pdf"
-
-    def test_unicode_in_message_body(self, client):
-        """Unicode content in message body is preserved."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Hello 你好 مرحبا 👋",
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert "你好" in published["event"]["body"]
-        assert "👋" in published["event"]["body"]
-
-    def test_attachment_order_preserved(self, client):
-        """Attachments maintain their order."""
-        attachments = [
-            {"id": "first", "filename": "1.pdf", "url": "https://1"},
-            {"id": "second", "filename": "2.pdf", "url": "https://2"},
-            {"id": "third", "filename": "3.pdf", "url": "https://3"},
-        ]
-
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "Ordered",
-                "attachments": attachments,
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        ids = [a["id"] for a in published["event"]["attachments"]]
-        assert ids == ["first", "second", "third"]
 
     def test_upload_without_assistant_id(self, client):
         """Upload works without explicit assistant_id (uses default)."""
@@ -702,47 +518,6 @@ class TestStressBehavior:
 
         # All should be unique even with same content
         assert len(set(ids)) == 3
-
-    def test_message_with_empty_attachment_list(self, client):
-        """Empty attachment list is valid."""
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": "No attachments",
-                "attachments": [],
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert published["event"]["attachments"] == []
-
-    def test_long_message_body_with_attachments(self, client):
-        """Long message body with attachments works."""
-        long_body = "x" * 50000  # 50KB of text
-
-        response = client.post(
-            "/unify/message",
-            json={
-                "assistant_id": "test-assistant",
-                "contact_id": TEST_BOSS_CONTACT_ID,
-                "body": long_body,
-                "attachments": [
-                    {"id": "att-1", "filename": "doc.pdf", "url": "https://url"},
-                ],
-            },
-        )
-
-        assert response.status_code == 200
-
-        call_args = client._mock_pubsub.publish.call_args
-        published = json.loads(call_args[0][1].decode("utf-8"))
-        assert len(published["event"]["body"]) == 50000
-        assert len(published["event"]["attachments"]) == 1
 
     def test_attachment_with_very_long_filename(self, client):
         """Very long filenames are handled."""
