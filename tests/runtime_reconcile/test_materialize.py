@@ -23,6 +23,9 @@ class _FakeFunctionManager:
     def list_functions(self):
         return {}
 
+    def list_function_name_to_ids(self):
+        return {}
+
 
 class _FakeGuidanceManager:
     def __init__(self) -> None:
@@ -64,6 +67,9 @@ class _FakeSecretManager:
         self.calls.append({"source_secrets": source_secrets})
         return True
 
+    def _sync_dotenv(self) -> None:
+        return None
+
 
 class _FakeKnowledgeManager:
     def __init__(self) -> None:
@@ -104,6 +110,12 @@ class _FakeTaskScheduler:
             },
         )
         return True
+
+    def sync_custom_tasks(self, *, source_tasks=None, function_name_to_id=None) -> bool:
+        return self.sync_custom(
+            source_tasks=source_tasks,
+            function_name_to_id=function_name_to_id,
+        )
 
 
 class _FakeFileManager:
