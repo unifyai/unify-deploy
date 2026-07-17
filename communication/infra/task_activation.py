@@ -89,7 +89,9 @@ ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
 ORCHESTRA_TASK_RUN_GET_PATH = "/admin/task-run/get"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
+ORCHESTRA_TASK_SOURCE_RELEASE_PATH = "/admin/task-source/release-active"
 OFFLINE_TASK_JOB_BACKOFF_LIMIT = 2
+_INFLIGHT_RUN_STATES = frozenset({"pending", "running"})
 # Live assistant conversation Jobs keep backoffLimit=0 (controller replaces
 # work). Offline task Jobs need a small positive limit so a single transient
 # pod crash can restart without waiting for the next scheduler delivery.
@@ -742,6 +744,103 @@ def _update_task_run(
             "updates": updates,
         },
     )
+
+
+def _release_active_task_source(
+    *,
+    assistant_id: str,
+    source_task_log_id: int,
+    mode: str,
+    info: str | None = None,
+) -> dict[str, Any]:
+    """Release a Tasks row left ``active`` after its offline worker vanished.
+
+    ``mode="reopen"`` is used before retrying the same ``source_task_log_id``.
+    ``mode="fail"`` is for terminal crash writeback without an immediate retry.
+    """
+
+    payload: dict[str, Any] = {
+        "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+        "assistant_id": assistant_id,
+        "source_task_log_id": int(source_task_log_id),
+        "mode": mode,
+    }
+    if info:
+        payload["info"] = info
+    return _orchestra_admin_post(ORCHESTRA_TASK_SOURCE_RELEASE_PATH, payload)
+
+
+def _fail_stale_inflight_run_and_reopen_source(
+    *,
+    assistant_id: str,
+    source_task_log_id: int,
+    run_key: str,
+    run_state: str,
+    job_status: dict[str, Any],
+    retry_count: int | None = None,
+    previous_error: str | None = None,
+) -> str:
+    """Fail a stale Run row and reopen its Tasks source for reclaim."""
+
+    error = _stale_inflight_run_error(
+        run_key=run_key,
+        run_state=run_state,
+        job_status=job_status,
+    )
+    _update_task_run(
+        assistant_id=assistant_id,
+        run_key=run_key,
+        updates=_failed_task_run_updates(
+            error=error,
+            result_summary=error,
+            retry_count=retry_count,
+            previous_error=previous_error,
+        ),
+    )
+    _release_active_task_source(
+        assistant_id=assistant_id,
+        source_task_log_id=source_task_log_id,
+        mode="reopen",
+        info=error,
+    )
+    return error
+
+
+def _adopt_inflight_source_conflict(
+    *,
+    batch_api: Any,
+    request: OfflineTaskDispatchRequest,
+    exclude_run_key: str,
+) -> dict[str, Any] | None:
+    """Return an adopt payload when another Job already owns this Tasks source."""
+
+    latest = _lookup_latest_task_run(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        source_task_log_id=request.source_task_log_id,
+    )
+    if not isinstance(latest, dict):
+        return None
+    other_run_key = str(latest.get("run_key") or "")
+    if not other_run_key or other_run_key == exclude_run_key:
+        return None
+    if str(latest.get("state") or "") not in _INFLIGHT_RUN_STATES:
+        return None
+    job_name = str(latest.get("job_name") or "")
+    if not job_name:
+        return None
+    job_status = _classify_offline_job_status(batch_api, job_name)
+    if job_status.get("status") != "active":
+        return None
+    return {
+        "success": True,
+        "status": "adopted_inflight_source",
+        "run_key": other_run_key,
+        "job_name": job_name,
+        "run_state": str(latest.get("state") or ""),
+        "job_status": job_status,
+        "source_task_log_id": request.source_task_log_id,
+    }
 
 
 def _running_task_run_updates(
@@ -2136,6 +2235,16 @@ async def dispatch_offline_task(
         if not created and run_state == "failed":
             retry_count = int(run.get("retry_count") or 0) + 1
             previous_error = str(run.get("error") or "")
+            await asyncio.to_thread(
+                _release_active_task_source,
+                assistant_id=request.assistant_id,
+                source_task_log_id=request.source_task_log_id,
+                mode="reopen",
+                info=(
+                    "Reopening Tasks source before offline retry of failed run "
+                    f"{run_key}."
+                ),
+            )
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.retrying",
                 **_offline_dispatch_event_fields(
@@ -2185,24 +2294,19 @@ async def dispatch_offline_task(
                     "job_status": job_status,
                 }
             # The recorded Job is gone or terminal while the run row still
-            # claims to be in flight: fail the stale row and launch a retry.
+            # claims to be in flight: fail the stale row, reopen the Tasks
+            # source if it is still active, and launch a retry.
             retry_count = int(run.get("retry_count") or 0) + 1
             previous_error = str(run.get("error") or "")
-            error = _stale_inflight_run_error(
+            await asyncio.to_thread(
+                _fail_stale_inflight_run_and_reopen_source,
+                assistant_id=request.assistant_id,
+                source_task_log_id=request.source_task_log_id,
                 run_key=run_key,
                 run_state=run_state,
                 job_status=job_status,
-            )
-            await asyncio.to_thread(
-                _update_task_run,
-                assistant_id=request.assistant_id,
-                run_key=run_key,
-                updates=_failed_task_run_updates(
-                    error=error,
-                    result_summary=error,
-                    retry_count=retry_count,
-                    previous_error=previous_error,
-                ),
+                retry_count=retry_count,
+                previous_error=previous_error,
             )
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.retrying",
@@ -2215,6 +2319,27 @@ async def dispatch_offline_task(
                     status="retrying_stale_inflight_run",
                 ),
             )
+
+        stage = "source_single_flight"
+        conflict = await asyncio.to_thread(
+            _adopt_inflight_source_conflict,
+            batch_api=batch_api,
+            request=request,
+            exclude_run_key=run_key,
+        )
+        if conflict is not None:
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.adopted",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=str(conflict.get("run_key") or ""),
+                    job_name=str(conflict.get("job_name") or ""),
+                    run_state=str(conflict.get("run_state") or ""),
+                    status="adopted_inflight_source",
+                ),
+            )
+            return conflict
 
         stage = "launch_job"
         job_name = _build_offline_task_job_name(run_key, retry_count=retry_count)

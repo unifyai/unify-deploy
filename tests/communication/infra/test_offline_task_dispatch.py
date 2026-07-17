@@ -65,6 +65,17 @@ def _client() -> TestClient:
     return test_client
 
 
+@pytest.fixture(autouse=True)
+def _default_no_latest_run_for_source_flight():
+    """Avoid Orchestra HTTP from source single-flight checks in unit tests."""
+
+    with patch(
+        "communication.infra.task_activation._lookup_latest_task_run",
+        return_value=None,
+    ):
+        yield
+
+
 def test_offline_dispatch_skips_stale_activation():
     """Stale deliveries must not launch headless Unity jobs."""
 
@@ -447,6 +458,10 @@ def test_offline_dispatch_retries_failed_terminal_run():
         patch(
             "communication.infra.task_activation._update_task_run",
         ) as mock_update_run,
+        patch(
+            "communication.infra.task_activation._release_active_task_source",
+            return_value={"updated": True, "mode": "reopen"},
+        ) as mock_release,
     ):
         response = client.post(
             "/infra/task-activation/offline-dispatch",
@@ -469,6 +484,8 @@ def test_offline_dispatch_retries_failed_terminal_run():
     assert update_kwargs["updates"]["retry_count"] == 2
     assert update_kwargs["updates"]["previous_error"] == "boom"
     assert update_kwargs["updates"]["error"] is None
+    mock_release.assert_called_once()
+    assert mock_release.call_args.kwargs["mode"] == "reopen"
 
 
 def test_offline_dispatch_retries_stale_inflight_run():
@@ -511,6 +528,10 @@ def test_offline_dispatch_retries_stale_inflight_run():
         patch(
             "communication.infra.task_activation._update_task_run",
         ) as mock_update_run,
+        patch(
+            "communication.infra.task_activation._release_active_task_source",
+            return_value={"updated": True, "mode": "reopen"},
+        ) as mock_release,
     ):
         response = client.post(
             "/infra/task-activation/offline-dispatch",
@@ -534,6 +555,97 @@ def test_offline_dispatch_retries_stale_inflight_run():
     assert running_update["state"] == "running"
     assert running_update["job_name"] == expected_job_name
     assert running_update["retry_count"] == 1
+    mock_release.assert_called_once()
+    assert mock_release.call_args.kwargs["mode"] == "reopen"
+    assert mock_release.call_args.kwargs["source_task_log_id"] == 555
+
+
+def test_offline_dispatch_adopts_inflight_source_for_different_run_key():
+    """A second dispatch must not launch when another Job owns the Tasks source."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={
+                "run": {
+                    "state": "pending",
+                    "run_key": "offline:explicit:assistant-123:101:ref-new",
+                },
+                "created": True,
+            },
+        ),
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            new=AsyncMock(return_value=("batch-api", None, None, None)),
+        ),
+        patch(
+            "communication.infra.task_activation._adopt_inflight_source_conflict",
+            return_value={
+                "success": True,
+                "status": "adopted_inflight_source",
+                "run_key": "offline:scheduled:assistant-123:101:rev-123",
+                "job_name": "unity-task-run-owner",
+                "run_state": "running",
+                "job_status": {"status": "active"},
+                "source_task_log_id": 555,
+            },
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+        ) as mock_launch,
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(source_type="explicit", source_ref="ref-new"),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "adopted_inflight_source"
+    assert body["job_name"] == "unity-task-run-owner"
+    mock_launch.assert_not_called()
+
+
+def test_adopt_inflight_source_conflict_detects_active_foreign_job():
+    from communication.infra import task_activation as mod
+    from communication.infra.models import OfflineTaskDispatchRequest
+
+    request = OfflineTaskDispatchRequest(
+        **_payload(source_type="explicit", source_ref="b"),
+    )
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_latest_task_run",
+            return_value={
+                "run_key": "offline:scheduled:assistant-123:101:rev-123",
+                "state": "running",
+                "job_name": "unity-task-run-owner",
+            },
+        ),
+        patch(
+            "communication.infra.task_activation._classify_offline_job_status",
+            return_value={"status": "active", "job_name": "unity-task-run-owner"},
+        ),
+    ):
+        conflict = mod._adopt_inflight_source_conflict(
+            batch_api=object(),
+            request=request,
+            exclude_run_key="offline:explicit:assistant-123:101:b",
+        )
+
+    assert conflict is not None
+    assert conflict["status"] == "adopted_inflight_source"
+    assert conflict["job_name"] == "unity-task-run-owner"
 
 
 def test_diagnose_classifies_missing_job_run_as_stale():
@@ -627,7 +739,7 @@ def test_task_activation_health_summarizes_blocking_conditions():
     assert summary["repairable"] == 1
     assert summary["statuses"] == {"stale_running_run": 1}
     assert summary["blocking_conditions"] == {"stale_running_run": 1}
-    assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 0
+    assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 2
     assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] == (
         "per-task max_runtime_seconds (None = unbounded)"
     )
