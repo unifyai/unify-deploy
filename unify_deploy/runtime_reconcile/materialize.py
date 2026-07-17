@@ -245,6 +245,16 @@ def materialize_runtime_state(
 ) -> RuntimeStateResult:
     """Apply side-effectful runtime state for a resolved assistant deployment."""
 
+    from unify.session_details import SESSION_DETAILS
+
+    if identity.owner_team_id is not None:
+        if SESSION_DETAILS.owner_team_id != identity.owner_team_id:
+            raise RuntimeError(
+                f"Refusing runtime materialize for assistant {identity.assistant_id}: "
+                f"expected SESSION_DETAILS.owner_team_id={identity.owner_team_id}, "
+                f"got {SESSION_DETAILS.owner_team_id!r}",
+            )
+
     from unify.function_manager.custom_functions import (
         collect_functions_from_directories,
         collect_venvs_from_directories,

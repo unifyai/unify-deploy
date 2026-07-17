@@ -88,6 +88,14 @@ def activate_runtime_context(identity: RuntimeIdentity) -> None:
         )
     SESSION_DETAILS.unify_key = identity.api_key
     SESSION_DETAILS.export_to_env()
+    if identity.owner_team_id is not None:
+        if SESSION_DETAILS.owner_team_id != identity.owner_team_id:
+            raise ValueError(
+                f"Team-owned assistant {identity.assistant_id} failed to hydrate "
+                f"SESSION_DETAILS.owner_team_id "
+                f"(expected {identity.owner_team_id}, got "
+                f"{SESSION_DETAILS.owner_team_id!r})",
+            )
     activate_unify_context(
         user_id=identity.user_id,
         assistant_id=identity.assistant_id,
