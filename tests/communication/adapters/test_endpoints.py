@@ -185,13 +185,31 @@ def test_twilio_whatsapp_webhook(test_client):
 
 
 def test_unify_message_webhook(test_client):
-    """Test successful Unify Message webhook processing."""
-    endpoint = "/unify/message"
+    """Test successful unified chat webhook processing (assistant DM)."""
+    endpoint = "/unify/chat"
     body = "Hello, this is a unify_message test message"
     json_payload = {
+        "kind": "assistant_dm",
+        "thread_id": 1,
         "assistant_id": "default-test-assistant",
-        "contact_id": 1,
-        "body": body,
+        "message": {
+            "id": 1,
+            "thread_id": 1,
+            "kind": "assistant_dm",
+            "assistant_id": "default-test-assistant",
+            "sender_kind": "user",
+            "content": body,
+        },
+        "fanout_assistant_ids": ["default-test-assistant"],
+        "assistant_event": {
+            "thread_id": 1,
+            "thread_kind": "assistant_dm",
+            "chat_message_id": 1,
+            "body": body,
+            "sender_user_id": "",
+            "sender_email": "",
+            "sender_name": "Test",
+        },
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -217,11 +235,12 @@ def test_unify_message_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "unify_message"
+        assert "thread" in data and data["thread"] in (
+            "chat_message",
+            "unify_message",
+        )
         assert "event" in data and data["event"] is not None
-        assert data["event"]["contact_id"] == 1
-        assert data["event"]["assistant_id"] == "default-test-assistant"
-        assert data["event"]["body"] == body
+        assert data["event"].get("body") == body or data["event"].get("content") == body
     except AssertionError as e:
         print(e)
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
@@ -622,11 +641,12 @@ def test_scheduled_teams_watches(test_client):
 
 
 def test_unify_message_webhook_unauthorized(test_client):
-    """Test that unify_message webhook rejects unauthorized requests."""
-    endpoint = "/unify/message"
+    """Test that the unified chat webhook rejects unauthorized requests."""
+    endpoint = "/unify/chat"
     json_payload = {
+        "kind": "assistant_dm",
         "assistant_id": "default-test-assistant",
-        "body": "Unauthorized test message",
+        "message": {"content": "Unauthorized test message"},
     }
 
     # Request without authorization header
@@ -636,10 +656,11 @@ def test_unify_message_webhook_unauthorized(test_client):
 
 
 def test_unify_message_webhook_missing_assistant_id(test_client):
-    """Test that unify_message webhook requires assistant_id."""
-    endpoint = "/unify/message"
+    """Test that assistant-DM chat frames require assistant_id."""
+    endpoint = "/unify/chat"
     json_payload = {
-        "body": "Test message without assistant_id",
+        "kind": "assistant_dm",
+        "message": {"content": "Test message without assistant_id"},
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}

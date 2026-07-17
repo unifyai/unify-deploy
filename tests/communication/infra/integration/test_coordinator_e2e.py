@@ -332,12 +332,26 @@ def _post_wakeup(coordinator_id: str) -> None:
 
 
 def _send_runtime_message(assistant: dict[str, Any], body: str) -> None:
+    assistant_id = str(assistant["assistant_id"])
     response = requests.post(
-        f"{ADAPTERS_URL}/unify/message",
+        f"{ADAPTERS_URL}/unify/chat",
         json={
-            "assistant_id": str(assistant["assistant_id"]),
-            "contact_id": int(assistant["boss_contact_id"]),
-            "body": body,
+            "kind": "assistant_dm",
+            "assistant_id": assistant_id,
+            "message": {
+                "kind": "assistant_dm",
+                "assistant_id": assistant_id,
+                "sender_kind": "user",
+                "content": body,
+            },
+            "fanout_assistant_ids": [assistant_id],
+            "assistant_event": {
+                "thread_kind": "assistant_dm",
+                "body": body,
+                "sender_user_id": str(assistant.get("user_id") or ""),
+                "sender_email": str(assistant.get("user_email") or ""),
+                "sender_name": "Coordinator E2E",
+            },
         },
         headers=_auth_headers(ADMIN_KEY),
         timeout=30,

@@ -50,7 +50,7 @@ All adapter endpoints that can trigger actions (start containers, send messages,
 
 **Authenticated endpoints** (require `Authorization: Bearer {ORCHESTRA_ADMIN_KEY}`):
 - `/assistant/wakeup`, `/assistant/update` — called by Orchestra during hiring/config changes
-- `/unify/attachment`, `/unify/message`, `/unify/meet` — called by Unity containers and Console
+- `/unify/attachment`, `/unify/chat`, `/unify/meet` — called by Orchestra dispatch, Unity containers, and Console
 - `/unity/system-event`, `/unity/pre-hire` — called by Orchestra
 - `/scheduled/*` (all 5 endpoints) — called by Cloud Scheduler with admin key in headers
 

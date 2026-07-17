@@ -2801,13 +2801,27 @@ _PUBSUB_SUFFIX = os.getenv(
 
 
 def send_test_message(assistant_data: dict, body: str = "Integration test message"):
-    """Send a message via the adapter's /unify/message endpoint."""
+    """Send an assistant-DM message via the adapter's /unify/chat endpoint."""
+    assistant_id = str(assistant_data["assistant_id"])
     resp = requests.post(
-        f"{ADAPTERS_URL}/unify/message",
+        f"{ADAPTERS_URL}/unify/chat",
         json={
-            "assistant_id": str(assistant_data["assistant_id"]),
-            "contact_id": int(assistant_data["boss_contact_id"]),
-            "body": body,
+            "kind": "assistant_dm",
+            "assistant_id": assistant_id,
+            "message": {
+                "kind": "assistant_dm",
+                "assistant_id": assistant_id,
+                "sender_kind": "user",
+                "content": body,
+            },
+            "fanout_assistant_ids": [assistant_id],
+            "assistant_event": {
+                "thread_kind": "assistant_dm",
+                "body": body,
+                "sender_user_id": str(assistant_data.get("user_id") or ""),
+                "sender_email": str(assistant_data.get("user_email") or ""),
+                "sender_name": "Integration Test",
+            },
         },
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=30,

@@ -2004,7 +2004,7 @@ async def unify_attachment_upload(
     Upload a file attachment for use in Unify messages.
 
     The file is stored in GCS and both permanent (gs://) and signed URLs are returned.
-    The returned attachment object can be included in /unify/message requests.
+    The returned attachment object can be included in /unify/chat sends.
 
     Args:
         file: The file to upload (multipart/form-data)
@@ -2102,201 +2102,13 @@ async def unify_attachment_upload(
 # =============================================================================
 
 
-@app.post("/unify/message", dependencies=[Depends(require_admin_key)])
-async def unify_message_webhook(request: Request):
-    """
-    Unify message webhook - handles internal message events.
-
-    Accepts an optional 'attachments' array in the request body. Each attachment
-    should be an object with: {"id": str, "filename": str, "url": str}
-    (as returned by /unify/attachment).
-    """
-    logger.info("unify_message_webhook function started")
-
-    # accept JSON or form payloads
-    content_type = request.headers.get("Content-Type", "")
-    if "application/json" in content_type:
-        payload = await request.json()
-        assistant_id_input = payload.get("assistant_id", "")
-        contact_id = payload.get("contact_id")
-        body = payload.get("body", "") or ""
-        attachments = payload.get("attachments") or []
-    else:
-        form_data = await request.form()
-        assistant_id_input = form_data.get("assistant_id", "")
-        contact_id = form_data.get("contact_id")
-        body = form_data.get("Body", "") or ""
-        # Form data doesn't support attachments well, default to empty
-        attachments = []
-
-    if not assistant_id_input:
-        logger.info("Assistant ID is required")
-        return Response(status_code=400)
-
-    if contact_id is None:
-        logger.info("contact_id is required for unify_message")
-        return Response(status_code=400, content="contact_id is required")
-
-    # Validate attachments format and preserve full metadata
-    validated_attachments = []
-    for att in attachments:
-        if (
-            isinstance(att, dict)
-            and att.get("id")
-            and att.get("filename")
-            and (att.get("url") or att.get("gs_url"))  # Accept either URL type
-        ):
-            # Build validated attachment with all available metadata
-            validated_att = {
-                "id": str(att["id"]),
-                "filename": str(att["filename"]),
-                "url": str(att.get("url", "")),
-            }
-            # Include additional metadata if provided
-            if att.get("gs_url"):
-                validated_att["gs_url"] = str(att["gs_url"])
-            if att.get("content_type"):
-                validated_att["content_type"] = str(att["content_type"])
-            if att.get("size_bytes") is not None:
-                validated_att["size_bytes"] = int(att["size_bytes"])
-
-            validated_attachments.append(validated_att)
-        else:
-            logger.info(f"Skipping invalid attachment: {att}")
-
-    attachment_info = (
-        f" with {len(validated_attachments)} attachment(s)"
-        if validated_attachments
-        else ""
-    )
-    logger.info(
-        f"Received unify_message for assistant_id={assistant_id_input}{attachment_info}",
-    )
-
-    # shared context
-    context = await asyncio.to_thread(
-        build_webhook_context,
-        channel="unify_message",
-        destination="",
-        sender="",
-        assistant_id=assistant_id_input,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    assistant_id = context["assistant"]["assistant_id"]
-    contacts = context["contacts"]
-    logger.info(
-        "Activation intent scheduled (legacy is_job_running flag): %s",
-        context["is_job_running"],
-    )
-
-    # publish to pubsub
-    pubsub_client = get_pubsub_client()
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
-    logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
-    try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "unify_message",
-                    "publish_timestamp": time.time(),
-                    "event": {
-                        "contact_id": contact_id,
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "body": body,
-                        "attachments": validated_attachments,
-                    },
-                },
-            ).encode("utf-8"),
-            thread="inbound",
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            logger.info(f"Message ID: {message_id}")
-        logger.info("unify_message message published to Pub/Sub successfully")
-    except Exception as e:
-        logger.error(f"Error publishing unify_message to Pub/Sub: {e}")
-        return Response(content="Error publishing to Pub/Sub", status_code=500)
-
-    return Response(status_code=200)
-
-
-@app.post("/unify/reaction", dependencies=[Depends(require_admin_key)])
-async def unify_reaction_webhook(request: Request):
-    """Unify reaction webhook — user emoji reactions on console chat messages."""
-    logger.info("unify_reaction_webhook function started")
-    content_type = request.headers.get("Content-Type", "")
-    if "application/json" in content_type:
-        payload = await request.json()
-    else:
-        form_data = await request.form()
-        payload = dict(form_data)
-
-    assistant_id_input = payload.get("assistant_id", "")
-    contact_id = payload.get("contact_id")
-    target_message_id = payload.get("target_message_id")
-    emoji = payload.get("emoji")
-    if emoji == "":
-        emoji = None
-
-    if not assistant_id_input:
-        return Response(status_code=400, content="assistant_id is required")
-    if contact_id is None or target_message_id is None:
-        return Response(
-            status_code=400,
-            content="contact_id and target_message_id are required",
-        )
-
-    context = await asyncio.to_thread(
-        build_webhook_context,
-        channel="unify_reaction",
-        destination="",
-        sender="",
-        assistant_id=assistant_id_input,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    assistant_id = context["assistant"]["assistant_id"]
-    contacts = context["contacts"]
-
-    pubsub_client = get_pubsub_client()
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
-    try:
-        pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "unify_message_reaction",
-                    "publish_timestamp": time.time(),
-                    "event": {
-                        "contact_id": contact_id,
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "target_message_id": target_message_id,
-                        "emoji": emoji,
-                    },
-                },
-            ).encode("utf-8"),
-            thread="inbound",
-        )
-    except Exception as e:
-        logger.error(f"Error publishing unify_message_reaction to Pub/Sub: {e}")
-        return Response(content="Error publishing to Pub/Sub", status_code=500)
-
-    return Response(status_code=200)
-
-
 # =============================================================================
-# Org Chat (team group chat + human DMs)
+# Unified chat delivery (assistant DMs, team/group rooms, human DMs, calls)
 # =============================================================================
 
 # Org topics whose existence has been verified by this process. One topic per
-# organization carries every team-chat and DM frame for that org; Console's
-# SSE route subscribes per user and filters frames server-side.
+# organization carries every room/DM frame for that org; Console's SSE route
+# subscribes per user and filters frames server-side.
 _ensured_org_topics: set[str] = set()
 
 
@@ -2312,52 +2124,36 @@ def _ensure_org_topic(pubsub_client, topic_path: str) -> None:
     _ensured_org_topics.add(topic_path)
 
 
-@app.post("/unify/org-chat", dependencies=[Depends(require_admin_key)])
-async def unify_org_chat_webhook(request: Request):
-    """Deliver one org-chat message or org-call lifecycle event.
+@app.post("/unify/chat", dependencies=[Depends(require_admin_key)])
+async def unify_chat_webhook(request: Request):
+    """Deliver one unified chat-store message, reaction, or call event.
 
-    Orchestra has already persisted the message; this endpoint owns hosted
-    delivery:
+    Orchestra has already persisted the payload in the unified chat store;
+    this endpoint owns hosted delivery:
 
-    1. Publish the Console frame to the per-organization topic
-       (``unity-org-{org_id}``) so every member's Console SSE stream sees it.
-    2. For human-sent team/group messages, publish one standard
-       ``unify_message`` envelope per listed assistant (ensuring each runtime
-       job is started) — team/group chat is ordinary unify_message traffic
-       fanned out to every listed assistant, like a large email CC chain.
-       Assistant replies arrive with no ``fanout_assistant_ids`` — they are
-       Console-publish only, which prevents AI reply loops.
-    3. For org call lifecycle events (``kind="org_call"`` or legacy
-       ``kind="dm_call"``), publish one Console-only frame on
-       ``org_call_*`` so the browser can drive ringing and teardown UI.
+    1. Publish the Console frame — org-scoped threads (``dm`` / ``team`` /
+       ``group``) go to the per-organization topic (``unity-org-{org_id}``);
+       assistant DMs go to the per-assistant topic Console's 1-on-1 stream
+       subscribes to. Frames carry ``thread`` = ``chat_message`` /
+       ``chat_reaction``.
+    2. Fan out one standard ``unify_message`` envelope per listed assistant
+       (ensuring each runtime job is started) — chat is ordinary
+       unify_message traffic, like a large email CC chain. The author is
+       never listed, which prevents AI reply loops.
+    3. ``kind="reaction"`` also fans out ``unify_message_reaction`` envelopes
+       so runtimes can patch their own Transcripts mirrors.
+    4. ``kind="org_call"`` publishes one Console-only ``org_call_*`` frame.
     """
     payload = await request.json()
     kind = payload.get("kind")
     organization_id = payload.get("organization_id")
     message = payload.get("message") or {}
-    call = payload.get("call") or {}
 
-    if kind not in (
-        "team",
-        "dm",
-        "dm_call",
-        "org_call",
-        "group",
-        "team_reaction",
-        "group_reaction",
-        "dm_reaction",
-    ):
-        return Response(
-            status_code=400,
-            content=(
-                "kind must be 'team', 'dm', 'dm_call', 'org_call', 'group', "
-                "'team_reaction', 'group_reaction', or 'dm_reaction'"
-            ),
-        )
-    if not organization_id:
-        return Response(status_code=400, content="organization_id is required")
-    if kind in ("dm_call", "org_call"):
+    pubsub_client = get_pubsub_client()
+
+    if kind == "org_call":
         action = payload.get("action")
+        call = payload.get("call") or {}
         allowed_actions = {
             "incoming",
             "answered",
@@ -2374,8 +2170,8 @@ async def unify_org_chat_webhook(request: Request):
                     "declined, participant_joined, or participant_left"
                 ),
             )
-        if not call:
-            return Response(status_code=400, content="call is required")
+        if not organization_id:
+            return Response(status_code=400, content="organization_id is required")
         if not call.get("call_id"):
             return Response(status_code=400, content="call.call_id is required")
         if not call.get("room_name"):
@@ -2385,7 +2181,6 @@ async def unify_org_chat_webhook(request: Request):
             call.get("callee_user_id"),
         ]
         participants = [str(user_id) for user_id in user_ids if user_id]
-        # Deduplicate while preserving order.
         seen: set[str] = set()
         ordered: list[str] = []
         for user_id in participants:
@@ -2401,7 +2196,6 @@ async def unify_org_chat_webhook(request: Request):
             )
         call = {**call, "user_ids": participants}
         thread = f"org_call_{action}"
-        event = call
         attributes = {
             "thread": thread,
             "organization_id": str(organization_id),
@@ -2416,78 +2210,102 @@ async def unify_org_chat_webhook(request: Request):
             attributes["team_id"] = str(call["team_id"])
         if call.get("group_id") is not None:
             attributes["group_id"] = str(call["group_id"])
-    else:
-        if not message:
-            return Response(status_code=400, content="message is required")
-        if kind in ("team", "team_reaction"):
-            thread = (
-                "team_message_reaction" if kind == "team_reaction" else "team_message"
+
+        org_topic_path = pubsub_client.topic_path(
+            SETTINGS.gcp_project_id,
+            SETTINGS.org_topic(organization_id),
+        )
+        try:
+            await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
+            pubsub_client.publish(
+                org_topic_path,
+                json.dumps(
+                    {
+                        "thread": thread,
+                        "publish_timestamp": time.time(),
+                        "event": call,
+                    },
+                ).encode("utf-8"),
+                **attributes,
             )
-        elif kind in ("group", "group_reaction"):
-            thread = (
-                "group_message_reaction"
-                if kind == "group_reaction"
-                else "group_message"
+        except Exception as e:
+            logger.error(f"Error publishing {thread} to org topic: {e}")
+            return Response(content="Error publishing to Pub/Sub", status_code=500)
+        return Response(
+            content=json.dumps({"published": True, "fanned_out": 0}),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    if kind not in ("assistant_dm", "dm", "team", "group", "reaction"):
+        return Response(
+            status_code=400,
+            content=(
+                "kind must be 'assistant_dm', 'dm', 'team', 'group', "
+                "'reaction', or 'org_call'"
+            ),
+        )
+    if not message:
+        return Response(status_code=400, content="message is required")
+
+    frame_thread = "chat_reaction" if kind == "reaction" else "chat_message"
+    thread_kind = str(payload.get("thread_kind") or kind)
+    attributes = {"thread": frame_thread}
+    for key in ("organization_id", "thread_id", "team_id", "group_id", "assistant_id"):
+        value = payload.get(key) or message.get(key)
+        if value is not None:
+            attributes[key] = str(value)
+    if thread_kind:
+        attributes["kind"] = thread_kind
+    user_ids = message.get("user_ids") or []
+    if len(user_ids) == 2:
+        attributes["dm_user_a"] = str(user_ids[0])
+        attributes["dm_user_b"] = str(user_ids[1])
+
+    frame_bytes = json.dumps(
+        {
+            "thread": frame_thread,
+            "publish_timestamp": time.time(),
+            "event": message,
+        },
+    ).encode("utf-8")
+
+    try:
+        if thread_kind == "assistant_dm":
+            frame_assistant_id = payload.get("assistant_id") or message.get(
+                "assistant_id",
             )
+            if not frame_assistant_id:
+                return Response(status_code=400, content="assistant_id is required")
+            assistant_topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                SETTINGS.assistant_topic(str(frame_assistant_id)),
+            )
+            pubsub_client.publish(assistant_topic_path, frame_bytes, **attributes)
         else:
-            thread = "dm_message_reaction" if kind == "dm_reaction" else "dm_message"
-        event = message
-        attributes = {"thread": thread, "organization_id": str(organization_id)}
-        if kind in ("team", "team_reaction"):
-            team_id = payload.get("team_id") or message.get("team_id")
-            if not team_id:
-                return Response(status_code=400, content="team_id is required")
-            attributes["team_id"] = str(team_id)
-        elif kind in ("group", "group_reaction"):
-            group_id = payload.get("group_id") or message.get("group_id")
-            if not group_id:
-                return Response(status_code=400, content="group_id is required")
-            attributes["group_id"] = str(group_id)
-        else:
-            user_ids = message.get("user_ids") or []
-            if len(user_ids) != 2:
+            if not organization_id:
                 return Response(
                     status_code=400,
-                    content="message.user_ids must be a pair",
+                    content="organization_id is required",
                 )
-            attributes["dm_user_a"] = str(user_ids[0])
-            attributes["dm_user_b"] = str(user_ids[1])
-
-    pubsub_client = get_pubsub_client()
-    org_topic_path = pubsub_client.topic_path(
-        SETTINGS.gcp_project_id,
-        SETTINGS.org_topic(organization_id),
-    )
-    try:
-        await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
-        pubsub_client.publish(
-            org_topic_path,
-            json.dumps(
-                {
-                    "thread": thread,
-                    "publish_timestamp": time.time(),
-                    "event": event,
-                },
-            ).encode("utf-8"),
-            **attributes,
-        )
+            org_topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                SETTINGS.org_topic(organization_id),
+            )
+            await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
+            pubsub_client.publish(org_topic_path, frame_bytes, **attributes)
     except Exception as e:
-        logger.error(f"Error publishing {thread} to org topic: {e}")
+        logger.error(f"Error publishing {frame_thread} Console frame: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    # Team/group chat fan-out rides the standard unify_message thread — every
-    # listed assistant receives a copy, like a large email CC chain. When the
+    # Fan-out rides the standard unify_message thread — every listed
+    # assistant receives a copy, like a large email CC chain. When the
     # sender is this assistant's owner we can resolve contact_id here;
-    # otherwise the runtime resolves the sender by email against its Contacts
-    # table. assistant_event may include team_id/team_name or
-    # group_id/group_name depending on kind. Reaction updates are Console-only.
-    fanout_kinds = ("team", "group")
-    fanout_assistant_ids = (
-        (payload.get("fanout_assistant_ids") or []) if kind in fanout_kinds else []
-    )
-    assistant_event = (
-        (payload.get("assistant_event") or {}) if kind in fanout_kinds else {}
-    )
+    # otherwise the runtime resolves the sender by email against its
+    # Contacts table. Reactions fan out on unify_message_reaction so the
+    # runtime can patch its own Transcripts mirror.
+    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
+    assistant_event = payload.get("assistant_event") or {}
     fanout_errors: list[str] = []
     for raw_assistant_id in fanout_assistant_ids:
         try:
@@ -2502,25 +2320,41 @@ async def unify_org_chat_webhook(request: Request):
             )
             assistant = context["assistant"]
             assistant_id = assistant["assistant_id"]
-            event = {
-                **assistant_event,
-                "assistant_id": assistant_id,
-                "contacts": context["contacts"],
-            }
-            sender_user_id = str(assistant_event.get("sender_user_id") or "")
-            if sender_user_id and sender_user_id == str(
-                assistant.get("user_id") or "",
-            ):
-                event["contact_id"] = assistant.get("boss_contact_id")
             topic_path = pubsub_client.topic_path(
                 SETTINGS.gcp_project_id,
                 SETTINGS.assistant_topic(assistant_id),
             )
+            if kind == "reaction":
+                event = {
+                    "contacts": context["contacts"],
+                    "assistant_id": assistant_id,
+                    "chat_message_id": message.get("id"),
+                    "thread_id": payload.get("thread_id") or message.get("thread_id"),
+                    "emoji": payload.get("emoji"),
+                }
+                reactor_user_id = str(payload.get("reactor_user_id") or "")
+                if reactor_user_id and reactor_user_id == str(
+                    assistant.get("user_id") or "",
+                ):
+                    event["contact_id"] = assistant.get("boss_contact_id")
+                envelope_thread = "unify_message_reaction"
+            else:
+                event = {
+                    **assistant_event,
+                    "assistant_id": assistant_id,
+                    "contacts": context["contacts"],
+                }
+                sender_user_id = str(assistant_event.get("sender_user_id") or "")
+                if sender_user_id and sender_user_id == str(
+                    assistant.get("user_id") or "",
+                ):
+                    event["contact_id"] = assistant.get("boss_contact_id")
+                envelope_thread = "unify_message"
             pubsub_client.publish(
                 topic_path,
                 json.dumps(
                     {
-                        "thread": "unify_message",
+                        "thread": envelope_thread,
                         "publish_timestamp": time.time(),
                         "event": event,
                     },
@@ -2529,7 +2363,7 @@ async def unify_org_chat_webhook(request: Request):
             )
         except Exception as e:
             logger.error(
-                f"Error fanning out org chat message to assistant "
+                f"Error fanning out chat message to assistant "
                 f"{raw_assistant_id}: {e}",
             )
             fanout_errors.append(str(raw_assistant_id))
@@ -6272,7 +6106,7 @@ if __name__ == "__main__":
     logger.info("    - POST /twilio/whatsapp-call")
     logger.info("    - POST /twilio/whatsapp-call-status")
     logger.info("  Unify:")
-    logger.info("    - POST /unify/message")
+    logger.info("    - POST /unify/chat")
     logger.info("    - POST /unify/meet")
     logger.info("  Unity:")
     logger.info("    - POST /unity/system-event")

@@ -24,12 +24,25 @@ SILLY_MESSAGES = [
 ]
 
 
-async def send_unify_message(session, assistant_id, message):
-    url = f"{ADAPTER_URL}/unify/message"
+async def send_unify_message(session, assistant_id, message, owner_user_id=""):
+    url = f"{ADAPTER_URL}/unify/chat"
     payload = {
+        "kind": "assistant_dm",
         "assistant_id": str(assistant_id),
-        "contact_id": CONTACT_ID,
-        "body": message,
+        "message": {
+            "kind": "assistant_dm",
+            "assistant_id": str(assistant_id),
+            "sender_kind": "user",
+            "content": message,
+        },
+        "fanout_assistant_ids": [str(assistant_id)],
+        "assistant_event": {
+            "thread_kind": "assistant_dm",
+            "body": message,
+            "sender_user_id": owner_user_id,
+            "sender_email": "",
+            "sender_name": "Stress Test",
+        },
     }
     headers = {
         "Authorization": f"Bearer {ADMIN_KEY}",
