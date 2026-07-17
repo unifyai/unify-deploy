@@ -280,12 +280,12 @@ class TestOrgChat:
         response = client.post(
             "/unify/chat",
             json={
-                "kind": "org_call",
+                "kind": "call",
                 "action": "incoming",
                 "organization_id": 11,
                 "call": {
                     "call_id": "call-123",
-                    "room_name": "unity_org_11_call_call-123",
+                    "room_name": "unity_call_call-123",
                     "status": "ringing",
                     "caller_user_id": "user-a",
                     "callee_user_id": "user-b",
@@ -301,26 +301,58 @@ class TestOrgChat:
         dm_call = publish_calls[0]
         assert dm_call[0][0].endswith("/topics/unity-org-11")
         org_frame = json.loads(dm_call[0][1].decode("utf-8"))
-        assert org_frame["thread"] == "org_call_incoming"
+        assert org_frame["thread"] == "call_incoming"
         assert org_frame["event"]["call_id"] == "call-123"
         assert org_frame["event"]["user_ids"] == ["user-a", "user-b", "user-c"]
-        assert dm_call[1]["thread"] == "org_call_incoming"
+        assert dm_call[1]["thread"] == "call_incoming"
         assert dm_call[1]["dm_user_a"] == "user-a"
         assert dm_call[1]["dm_user_b"] == "user-b"
         assert dm_call[1]["call_id"] == "call-123"
         assert dm_call[1]["user_ids"] == "user-a,user-b,user-c"
         assert "group_id" not in dm_call[1]
 
+    def test_assistant_dm_call_frame_routes_to_assistant_topic(self, client):
+        """1:1 assistant call signaling rides the assistant topic, not an org."""
+        response = client.post(
+            "/unify/chat",
+            json={
+                "kind": "call",
+                "action": "incoming",
+                "organization_id": None,
+                "call": {
+                    "call_id": "call-adm-1",
+                    "room_name": "unity_call_call-adm-1",
+                    "status": "ringing",
+                    "scope": "assistant_dm",
+                    "caller_user_id": "user-a",
+                    "created_by_assistant_id": 777,
+                    "user_ids": ["user-a"],
+                    "assistant_ids": [777],
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        publish_calls = client._mock_pubsub.publish.call_args_list
+        assert len(publish_calls) == 1
+        frame_call = publish_calls[0]
+        assert frame_call[0][0].endswith("/topics/unity-777")
+        frame = json.loads(frame_call[0][1].decode("utf-8"))
+        assert frame["thread"] == "call_incoming"
+        assert frame["event"]["call_id"] == "call-adm-1"
+        assert frame_call[1]["thread"] == "call_incoming"
+        assert frame_call[1]["assistant_id"] == "777"
+
     def test_org_call_passes_through_group_id(self, client):
         response = client.post(
             "/unify/chat",
             json={
-                "kind": "org_call",
+                "kind": "call",
                 "action": "incoming",
                 "organization_id": 11,
                 "call": {
                     "call_id": "call-group-1",
-                    "room_name": "unity_org_11_call_call-group-1",
+                    "room_name": "unity_call_call-group-1",
                     "status": "ringing",
                     "caller_user_id": "user-a",
                     "user_ids": ["user-a", "user-b"],
@@ -453,7 +485,7 @@ class TestOrgChat:
             client.post(
                 "/unify/chat",
                 json={
-                    "kind": "org_call",
+                    "kind": "call",
                     "organization_id": 1,
                     "call": {"call_id": "call-1", "room_name": "room-1"},
                 },

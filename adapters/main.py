@@ -2142,7 +2142,10 @@ async def unify_chat_webhook(request: Request):
        never listed, which prevents AI reply loops.
     3. ``kind="reaction"`` also fans out ``unify_message_reaction`` envelopes
        so runtimes can patch their own Transcripts mirrors.
-    4. ``kind="org_call"`` publishes one Console-only ``org_call_*`` frame.
+    4. ``kind="call"`` publishes one Console-only ``call_*`` signaling frame,
+       routed by call scope: org scopes (dm/team/group) go to the org topic;
+       ``assistant_dm`` goes to the assistant topic the owner's 1-on-1
+       stream subscribes to.
     """
     payload = await request.json()
     kind = payload.get("kind")
@@ -2151,7 +2154,7 @@ async def unify_chat_webhook(request: Request):
 
     pubsub_client = get_pubsub_client()
 
-    if kind == "org_call":
+    if kind == "call":
         action = payload.get("action")
         call = payload.get("call") or {}
         allowed_actions = {
@@ -2166,12 +2169,11 @@ async def unify_chat_webhook(request: Request):
             return Response(
                 status_code=400,
                 content=(
-                    "org_call action must be incoming, answered, ended, "
+                    "call action must be incoming, answered, ended, "
                     "declined, participant_joined, or participant_left"
                 ),
             )
-        if not organization_id:
-            return Response(status_code=400, content="organization_id is required")
+        scope = call.get("scope") or ""
         if not call.get("call_id"):
             return Response(status_code=400, content="call.call_id is required")
         if not call.get("room_name"):
@@ -2195,13 +2197,14 @@ async def unify_chat_webhook(request: Request):
                 content="call user_ids must resolve to at least one participant",
             )
         call = {**call, "user_ids": participants}
-        thread = f"org_call_{action}"
+        thread = f"call_{action}"
         attributes = {
             "thread": thread,
-            "organization_id": str(organization_id),
             "call_id": str(call["call_id"]),
             "user_ids": ",".join(participants),
         }
+        if organization_id:
+            attributes["organization_id"] = str(organization_id)
         if len(participants) >= 1:
             attributes["dm_user_a"] = participants[0]
         if len(participants) >= 2:
@@ -2211,23 +2214,55 @@ async def unify_chat_webhook(request: Request):
         if call.get("group_id") is not None:
             attributes["group_id"] = str(call["group_id"])
 
+        frame = json.dumps(
+            {
+                "thread": thread,
+                "publish_timestamp": time.time(),
+                "event": call,
+            },
+        ).encode("utf-8")
+
+        if scope == "assistant_dm":
+            # 1:1 assistant calls signal on the assistant topic — the same
+            # per-assistant stream the owner's Console chat panel follows.
+            assistant_ids = [str(a) for a in (call.get("assistant_ids") or []) if a]
+            if not assistant_ids:
+                return Response(
+                    status_code=400,
+                    content="assistant_dm call frames require assistant_ids",
+                )
+            try:
+                for assistant_id in assistant_ids:
+                    topic_path = pubsub_client.topic_path(
+                        SETTINGS.gcp_project_id,
+                        SETTINGS.assistant_topic(assistant_id),
+                    )
+                    pubsub_client.publish(
+                        topic_path,
+                        frame,
+                        **{**attributes, "assistant_id": assistant_id},
+                    )
+            except Exception as e:
+                logger.error(f"Error publishing {thread} to assistant topic: {e}")
+                return Response(
+                    content="Error publishing to Pub/Sub",
+                    status_code=500,
+                )
+            return Response(
+                content=json.dumps({"published": True, "fanned_out": 0}),
+                status_code=200,
+                media_type="application/json",
+            )
+
+        if not organization_id:
+            return Response(status_code=400, content="organization_id is required")
         org_topic_path = pubsub_client.topic_path(
             SETTINGS.gcp_project_id,
             SETTINGS.org_topic(organization_id),
         )
         try:
             await asyncio.to_thread(_ensure_org_topic, pubsub_client, org_topic_path)
-            pubsub_client.publish(
-                org_topic_path,
-                json.dumps(
-                    {
-                        "thread": thread,
-                        "publish_timestamp": time.time(),
-                        "event": call,
-                    },
-                ).encode("utf-8"),
-                **attributes,
-            )
+            pubsub_client.publish(org_topic_path, frame, **attributes)
         except Exception as e:
             logger.error(f"Error publishing {thread} to org topic: {e}")
             return Response(content="Error publishing to Pub/Sub", status_code=500)
@@ -2242,7 +2277,7 @@ async def unify_chat_webhook(request: Request):
             status_code=400,
             content=(
                 "kind must be 'assistant_dm', 'dm', 'team', 'group', "
-                "'reaction', or 'org_call'"
+                "'reaction', or 'call'"
             ),
         )
     if not message:
@@ -2487,12 +2522,18 @@ async def unify_meet_webhook(request: Request):
         payload = dict(form_data)
 
     room_name = payload.get("room_name", "")
-    livekit_agent_name = payload.get("livekit_agent_name", "") or ""
     call_session_id = str(payload.get("call_session_id") or "").strip()
     raw_participants = payload.get("participants") or []
     if not room_name:
         logger.info("room_name is required")
         return Response(status_code=400)
+    # Every meet is a call session with a roster; Orchestra owns dispatch.
+    if not call_session_id:
+        logger.info("call_session_id is required")
+        return Response(status_code=400, content="call_session_id is required")
+    if not isinstance(raw_participants, list) or not raw_participants:
+        logger.info("participants roster is required")
+        return Response(status_code=400, content="participants roster is required")
 
     assistant_id_input = payload.get("assistant_id", "")
     if not assistant_id_input:
@@ -2519,15 +2560,9 @@ async def unify_meet_webhook(request: Request):
             )
         opening_config = raw_opening_config
 
-    # Org multi-party rooms must not force agent_name = room_name (collides
-    # across assistants). Fall back to room only for classic 1:1 Meet.
-    if not livekit_agent_name and not call_session_id:
-        livekit_agent_name = room_name
-
     logger.info(
         f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} "
-        f"livekit_agent_name={livekit_agent_name or '(runtime worker)'} "
-        f"call_session_id={call_session_id or '-'} participants={len(raw_participants)}",
+        f"call_session_id={call_session_id} participants={len(raw_participants)}",
     )
 
     # shared context
@@ -2572,14 +2607,10 @@ async def unify_meet_webhook(request: Request):
         "contacts": contacts,
         "assistant_id": assistant_id,
         "livekit_room": room_name,
+        "call_session_id": call_session_id,
+        "participants": participants,
         "timestamp": int(time.time() * 1000),
     }
-    if livekit_agent_name:
-        event_payload["livekit_agent_name"] = livekit_agent_name
-    if call_session_id:
-        event_payload["call_session_id"] = call_session_id
-    if participants:
-        event_payload["participants"] = participants
     if opening_config is not None:
         event_payload["opening_config"] = opening_config
     try:
