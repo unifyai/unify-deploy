@@ -203,6 +203,8 @@ def _run_named_phase(
 ) -> tuple[Any, float]:
     """Run one reconcile sub-phase with start/complete timing logs."""
 
+    from unify.common.sync_lease import SyncLeaseBusy
+
     started = perf_counter()
     logger.info(
         "Runtime reconcile phase starting: assistant=%s phase=%s",
@@ -211,6 +213,18 @@ def _run_named_phase(
     )
     try:
         result = fn()
+    except SyncLeaseBusy as exc:
+        duration = perf_counter() - started
+        logger.warning(
+            "Runtime reconcile phase skipped (sync lease busy): assistant=%s "
+            "phase=%s duration=%.2fs lease_key=%s held_by=%s",
+            assistant_id,
+            phase,
+            duration,
+            exc.lease_key,
+            exc.held_by,
+        )
+        return False, duration
     except Exception:
         logger.exception(
             "Runtime reconcile phase failed: assistant=%s phase=%s duration=%.2fs",
@@ -236,6 +250,7 @@ def _parallel_sync_wave(
 ) -> dict[str, tuple[Any, float]]:
     """Run independent sync callables concurrently; return phase→(result, duration)."""
 
+    import contextvars
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if not jobs:
@@ -252,9 +267,11 @@ def _parallel_sync_wave(
         assistant_id,
         [phase for phase, _ in jobs],
     )
+    ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
         future_to_phase = {
             executor.submit(
+                ctx.run,
                 _run_named_phase,
                 assistant_id=assistant_id,
                 phase=phase,
@@ -516,10 +533,24 @@ def materialize_runtime_state(
         )
         fm = ManagerRegistry.get_function_manager()
         sync_start = perf_counter()
-        custom_changed = fm.sync_custom(
-            source_functions=source_functions,
-            source_venvs=source_venvs,
-        )
+        try:
+            custom_changed = fm.sync_custom(
+                source_functions=source_functions,
+                source_venvs=source_venvs,
+            )
+        except Exception as exc:
+            from unify.common.sync_lease import SyncLeaseBusy
+
+            if not isinstance(exc, SyncLeaseBusy):
+                raise
+            logger.warning(
+                "Runtime reconcile skipping custom function sync for assistant=%s; "
+                "sync lease busy (lease_key=%s held_by=%s)",
+                identity.assistant_id,
+                exc.lease_key,
+                exc.held_by,
+            )
+            custom_changed = False
         sync_duration = perf_counter() - sync_start
         logger.info(
             "Runtime reconcile custom function sync_custom complete: assistant=%s "
