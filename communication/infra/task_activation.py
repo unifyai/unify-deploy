@@ -1411,17 +1411,34 @@ def _build_offline_runner_env(
             # (Data, Tasks, Contacts, …) must resolve to Teams/{owner}/… . The
             # runtime reads this via SESSION_DETAILS.owner_team_id; omitting it
             # silently routes the offline tick to the personal root.
-            "OWNER_TEAM_ID": (
-                str(assistant_data.get("owner_team_id"))
-                if assistant_data.get("owner_team_id") is not None
-                else ""
-            ),
+            "OWNER_TEAM_ID": _required_owner_team_id_env(assistant_data),
         },
     )
     destination = request.destination or activation.get("destination")
     if destination is not None:
         env["TASK_DESTINATION"] = str(destination)
     return env
+
+
+def _required_owner_team_id_env(assistant_data: dict) -> str:
+    """Return OWNER_TEAM_ID env value; refuse invalid team-owned payloads."""
+
+    raw = assistant_data.get("owner_team_id")
+    if raw is None:
+        return ""
+    try:
+        owner_team_id = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Assistant {assistant_data.get('agent_id') or assistant_data.get('assistant_id')!r} "
+            f"has invalid owner_team_id={raw!r}",
+        ) from exc
+    if owner_team_id <= 0:
+        raise RuntimeError(
+            f"Assistant {assistant_data.get('agent_id') or assistant_data.get('assistant_id')!r} "
+            f"has invalid owner_team_id={owner_team_id}",
+        )
+    return str(owner_team_id)
 
 
 def _delete_previous_materialization(
