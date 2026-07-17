@@ -2337,10 +2337,22 @@ async def unify_org_chat_webhook(request: Request):
     message = payload.get("message") or {}
     call = payload.get("call") or {}
 
-    if kind not in ("team", "dm", "dm_call", "org_call", "group"):
+    if kind not in (
+        "team",
+        "dm",
+        "dm_call",
+        "org_call",
+        "group",
+        "team_reaction",
+        "group_reaction",
+        "dm_reaction",
+    ):
         return Response(
             status_code=400,
-            content="kind must be 'team', 'dm', 'dm_call', 'org_call', or 'group'",
+            content=(
+                "kind must be 'team', 'dm', 'dm_call', 'org_call', 'group', "
+                "'team_reaction', 'group_reaction', or 'dm_reaction'"
+            ),
         )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
@@ -2407,20 +2419,26 @@ async def unify_org_chat_webhook(request: Request):
     else:
         if not message:
             return Response(status_code=400, content="message is required")
-        if kind == "team":
-            thread = "team_message"
-        elif kind == "group":
-            thread = "group_message"
+        if kind in ("team", "team_reaction"):
+            thread = (
+                "team_message_reaction" if kind == "team_reaction" else "team_message"
+            )
+        elif kind in ("group", "group_reaction"):
+            thread = (
+                "group_message_reaction"
+                if kind == "group_reaction"
+                else "group_message"
+            )
         else:
-            thread = "dm_message"
+            thread = "dm_message_reaction" if kind == "dm_reaction" else "dm_message"
         event = message
         attributes = {"thread": thread, "organization_id": str(organization_id)}
-        if kind == "team":
+        if kind in ("team", "team_reaction"):
             team_id = payload.get("team_id") or message.get("team_id")
             if not team_id:
                 return Response(status_code=400, content="team_id is required")
             attributes["team_id"] = str(team_id)
-        elif kind == "group":
+        elif kind in ("group", "group_reaction"):
             group_id = payload.get("group_id") or message.get("group_id")
             if not group_id:
                 return Response(status_code=400, content="group_id is required")
@@ -2462,7 +2480,7 @@ async def unify_org_chat_webhook(request: Request):
     # sender is this assistant's owner we can resolve contact_id here;
     # otherwise the runtime resolves the sender by email against its Contacts
     # table. assistant_event may include team_id/team_name or
-    # group_id/group_name depending on kind.
+    # group_id/group_name depending on kind. Reaction updates are Console-only.
     fanout_kinds = ("team", "group")
     fanout_assistant_ids = (
         (payload.get("fanout_assistant_ids") or []) if kind in fanout_kinds else []
