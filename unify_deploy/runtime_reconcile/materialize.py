@@ -178,6 +178,112 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
     return result
 
 
+def _function_name_to_ids(fm: Any) -> dict[str, int]:
+    """Resolve entrypoint names once, preferring a lean id-only listing."""
+
+    list_ids = getattr(fm, "list_function_name_to_ids", None)
+    if callable(list_ids):
+        return {
+            name: int(function_id)
+            for name, function_id in list_ids().items()
+            if function_id is not None
+        }
+    return {
+        name: int(data["function_id"])
+        for name, data in fm.list_functions().items()
+        if data.get("function_id") is not None
+    }
+
+
+def _run_named_phase(
+    *,
+    assistant_id: str,
+    phase: str,
+    fn: Any,
+) -> tuple[Any, float]:
+    """Run one reconcile sub-phase with start/complete timing logs."""
+
+    started = perf_counter()
+    logger.info(
+        "Runtime reconcile phase starting: assistant=%s phase=%s",
+        assistant_id,
+        phase,
+    )
+    try:
+        result = fn()
+    except Exception:
+        logger.exception(
+            "Runtime reconcile phase failed: assistant=%s phase=%s duration=%.2fs",
+            assistant_id,
+            phase,
+            perf_counter() - started,
+        )
+        raise
+    duration = perf_counter() - started
+    logger.info(
+        "Runtime reconcile phase completed: assistant=%s phase=%s duration=%.2fs",
+        assistant_id,
+        phase,
+        duration,
+    )
+    return result, duration
+
+
+def _parallel_sync_wave(
+    *,
+    assistant_id: str,
+    jobs: list[tuple[str, Any]],
+) -> dict[str, tuple[Any, float]]:
+    """Run independent sync callables concurrently; return phase→(result, duration)."""
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not jobs:
+        return {}
+    if len(jobs) == 1:
+        phase, fn = jobs[0]
+        return {phase: _run_named_phase(assistant_id=assistant_id, phase=phase, fn=fn)}
+
+    results: dict[str, tuple[Any, float]] = {}
+    errors: list[tuple[str, BaseException]] = []
+    wave_started = perf_counter()
+    logger.info(
+        "Runtime reconcile parallel wave starting: assistant=%s phases=%s",
+        assistant_id,
+        [phase for phase, _ in jobs],
+    )
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        future_to_phase = {
+            executor.submit(
+                _run_named_phase,
+                assistant_id=assistant_id,
+                phase=phase,
+                fn=fn,
+            ): phase
+            for phase, fn in jobs
+        }
+        for future in as_completed(future_to_phase):
+            phase = future_to_phase[future]
+            exc = future.exception()
+            if exc is not None:
+                errors.append((phase, exc))
+                continue
+            results[phase] = future.result()
+    logger.info(
+        "Runtime reconcile parallel wave completed: assistant=%s duration=%.2fs phases=%d errors=%d",
+        assistant_id,
+        perf_counter() - wave_started,
+        len(jobs),
+        len(errors),
+    )
+    if errors:
+        phase, exc = errors[0]
+        raise RuntimeError(
+            f"Runtime reconcile phase {phase!r} failed: {exc}",
+        ) from exc
+    return results
+
+
 def _enabled_integration_source_dirs() -> (
     tuple[list[Path], list[Path], list[Path]] | None
 ):
@@ -372,241 +478,261 @@ def materialize_runtime_state(
     logger.info(
         "Runtime reconcile phase starting: assistant=%s phase=syncing_custom_functions "
         "deployment_function_dirs=%d integration_function_dirs=%d "
-        "deployment_venv_dirs=%d integration_venv_dirs=%d",
+        "deployment_venv_dirs=%d integration_venv_dirs=%d can_sync_custom=%s",
         identity.assistant_id,
         len(resolved.function_dirs),
         len(integration_function_dirs),
         len(resolved.venv_dirs),
         len(integration_venv_dirs),
+        can_sync_custom,
     )
     if status is not None:
         status.update(
             phase="syncing_custom_functions",
-            message="Preparing deployment-defined custom tools.",
+            message="Preparing deployment-defined custom functions.",
             blocking_resources=("functions",),
             resources=function_resources,
             data_freshness="partial",
         )
 
     custom_changed = False
-    guidance_changed = False
-    contacts_changed = False
-    secrets_changed = False
-    knowledge_changed = False
-    custom_data_changed = False
-    dashboards_changed = False
-    tasks_changed = False
-    files_changed = False
-    blacklist_changed = False
-    custom_start = perf_counter()
+    function_name_to_id: dict[str, int] = {}
     if can_sync_custom:
+        functions_phase_start = perf_counter()
         collect_start = perf_counter()
-        source_fns = collect_functions_from_directories(function_dirs)
+        source_functions = collect_functions_from_directories(function_dirs)
         source_venvs = collect_venvs_from_directories(venv_dirs)
-        source_guidance = collect_guidance_from_directories(guidance_dirs)
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] runtime_reconcile.collect_custom_sources assistant=%s duration=%.2fs functions=%d venvs=%d guidance=%d",
+        collect_duration = perf_counter() - collect_start
+        logger.info(
+            "Runtime reconcile custom function collect complete: assistant=%s "
+            "duration=%.2fs function_dirs=%d venv_dirs=%d "
+            "source_functions=%d source_venvs=%d",
             identity.assistant_id,
-            perf_counter() - collect_start,
-            len(source_fns),
+            collect_duration,
+            len(function_dirs),
+            len(venv_dirs),
+            len(source_functions),
             len(source_venvs),
-            len(source_guidance),
         )
-        fm_start = perf_counter()
         fm = ManagerRegistry.get_function_manager()
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] runtime_reconcile.get_function_manager assistant=%s duration=%.2fs",
-            identity.assistant_id,
-            perf_counter() - fm_start,
-        )
         sync_start = perf_counter()
         custom_changed = fm.sync_custom(
-            source_functions=source_fns,
+            source_functions=source_functions,
             source_venvs=source_venvs,
         )
-        log_startup_timing(
-            logger,
-            "⏱️ [StartupTiming] runtime_reconcile.sync_custom assistant=%s duration=%.2fs changed=%s",
+        sync_duration = perf_counter() - sync_start
+        logger.info(
+            "Runtime reconcile custom function sync_custom complete: assistant=%s "
+            "duration=%.2fs custom_changed=%s",
             identity.assistant_id,
-            perf_counter() - sync_start,
+            sync_duration,
             custom_changed,
         )
-
-        function_name_to_id = {
-            name: data["function_id"]
-            for name, data in fm.list_functions().items()
-            if data.get("function_id") is not None
-        }
-        if status is not None:
-            status.update(
-                phase="syncing_custom_functions",
-                message="Preparing deployment-defined custom guidance.",
-                blocking_resources=("guidance",),
-                resources={
-                    **function_resources,
-                    "functions": "ready",
-                    "guidance": "syncing",
-                },
-                data_freshness="partial",
-            )
-        guidance_start = perf_counter()
-        gm = ManagerRegistry.get_guidance_manager()
-        guidance_changed = gm.sync_custom(
-            source_guidance=source_guidance,
-            function_name_to_id=function_name_to_id,
-        )
+        function_name_to_id = _function_name_to_ids(fm)
         log_startup_timing(
             logger,
-            "⏱️ [StartupTiming] runtime_reconcile.sync_custom_guidance assistant=%s duration=%.2fs changed=%s",
+            "⏱️ [StartupTiming] runtime_reconcile.sync_custom_functions assistant=%s duration=%.2fs changed=%s",
             identity.assistant_id,
-            perf_counter() - guidance_start,
-            guidance_changed,
+            perf_counter() - functions_phase_start,
+            custom_changed,
+        )
+        logger.info(
+            "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions "
+            "duration=%.2fs custom_changed=%s collect_duration=%.2fs sync_duration=%.2fs",
+            identity.assistant_id,
+            perf_counter() - functions_phase_start,
+            custom_changed,
+            collect_duration,
+            sync_duration,
         )
     else:
         logger.warning(
-            "Runtime reconcile skipped custom function sync for assistant=%s "
-            "because enabled integration sources were unavailable",
+            "Runtime reconcile skipping custom function sync for assistant=%s; "
+            "enabled integration sources are unavailable",
+            identity.assistant_id,
+        )
+        function_name_to_id = _function_name_to_ids(
+            ManagerRegistry.get_function_manager(),
+        )
+        logger.info(
+            "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions "
+            "duration=0.00s custom_changed=False skipped=True",
             identity.assistant_id,
         )
 
-    contacts_dirs = _dedupe_paths(resolved.contacts_dirs)
-    source_contacts = collect_contacts_from_directories(contacts_dirs)
-    contacts_start = perf_counter()
-    cm = ManagerRegistry.get_contact_manager()
-    contacts_changed = cm.sync_custom(source_contacts=source_contacts)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_contacts assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - contacts_start,
-        contacts_changed,
-    )
+    function_resources = {
+        **function_resources,
+        "functions": "ready",
+        "guidance": "syncing",
+        "knowledge": "syncing",
+        "secrets": "syncing",
+        "contacts": "syncing",
+    }
+    if status is not None:
+        status.update(
+            phase="syncing_custom_state",
+            message="Preparing deployment-defined runtime state.",
+            blocking_resources=(),
+            resources=function_resources,
+            data_freshness="partial",
+        )
 
-    knowledge_dirs = _dedupe_paths(resolved.knowledge_dirs)
     from unify.knowledge_manager.custom_knowledge import (
         collect_knowledge_from_directories,
     )
-
-    source_knowledge = collect_knowledge_from_directories(knowledge_dirs)
-    knowledge_start = perf_counter()
-    km = ManagerRegistry.get_knowledge_manager()
-    knowledge_changed = km.sync_custom(source_claims=source_knowledge)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_knowledge assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - knowledge_start,
-        knowledge_changed,
-    )
-
-    custom_data_dirs = _dedupe_paths(resolved.custom_data_dirs)
     from unify.data_manager.custom_data import collect_data_from_directories
-
-    source_data = collect_data_from_directories(custom_data_dirs)
-    custom_data_start = perf_counter()
-    dm = ManagerRegistry.get_data_manager()
-    custom_data_changed = dm.sync_custom(source_tables=source_data)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_data assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - custom_data_start,
-        custom_data_changed,
-    )
-
-    dashboards_dirs = _dedupe_paths(resolved.dashboards_dirs)
     from unify.dashboard_manager.custom_dashboards import (
         collect_dashboards_from_directories,
     )
-
-    source_dashboards = collect_dashboards_from_directories(dashboards_dirs)
-    dashboards_start = perf_counter()
-    dash_mgr = ManagerRegistry.get_dashboard_manager()
-    dashboards_changed = dash_mgr.sync_custom(source_entities=source_dashboards)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_dashboards assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - dashboards_start,
-        dashboards_changed,
-    )
-
-    tasks_dirs = _dedupe_paths(resolved.tasks_dirs)
     from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
-
-    source_tasks = collect_tasks_from_directories(tasks_dirs)
-    fm_for_tasks = ManagerRegistry.get_function_manager()
-    function_name_to_id_for_tasks = {
-        name: data["function_id"]
-        for name, data in fm_for_tasks.list_functions().items()
-        if data.get("function_id") is not None
-    }
-    tasks_start = perf_counter()
-    ts = ManagerRegistry.get_task_scheduler()
-    tasks_changed = ts.sync_custom(
-        source_tasks=source_tasks,
-        function_name_to_id=function_name_to_id_for_tasks,
-    )
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_tasks assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - tasks_start,
-        tasks_changed,
-    )
-
-    files_dirs = _dedupe_paths(resolved.files_dirs)
     from unify.file_manager.custom_files import collect_files_from_directories
 
-    source_files = collect_files_from_directories(files_dirs)
-    files_start = perf_counter()
+    # Eager manager construction on the main thread so ManagerRegistry stays
+    # single-threaded; workers only call sync methods on already-built managers.
+    gm = ManagerRegistry.get_guidance_manager()
+    cmgr = ManagerRegistry.get_contact_manager()
+    km = ManagerRegistry.get_knowledge_manager()
+    dm = ManagerRegistry.get_data_manager()
+    dbm = ManagerRegistry.get_dashboard_manager()
+    tm = ManagerRegistry.get_task_scheduler()
     file_mgr = ManagerRegistry.get_file_manager()
-    files_changed = file_mgr.sync_custom(source_files=source_files)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_files assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - files_start,
-        files_changed,
-    )
-
-    secrets_dirs = _dedupe_paths(resolved.secrets_dirs)
-    source_secrets = collect_secrets_from_directories(secrets_dirs)
-    source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
-    secrets_start = perf_counter()
     sm = ManagerRegistry.get_secret_manager()
-    secrets_changed = sm.sync_custom(source_secrets=source_secrets)
-    # Custom secret rows land in Orchestra after SM construction; re-mirror so
-    # os.environ / .env see deployment-defined keys before task entrypoints run.
-    sm._sync_dotenv()
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_secrets assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - secrets_start,
-        secrets_changed,
+    bm = ManagerRegistry.get_blacklist_manager()
+
+    source_guidance = (
+        collect_guidance_from_directories(guidance_dirs) if can_sync_custom else {}
+    )
+    source_contacts = collect_contacts_from_directories(
+        _dedupe_paths(resolved.contacts_dirs),
+    )
+    source_knowledge = collect_knowledge_from_directories(
+        _dedupe_paths(resolved.knowledge_dirs),
+    )
+    source_data = collect_data_from_directories(
+        _dedupe_paths(resolved.custom_data_dirs),
+    )
+    source_dashboards = collect_dashboards_from_directories(
+        _dedupe_paths(resolved.dashboards_dirs),
+    )
+    source_tasks = collect_tasks_from_directories(
+        _dedupe_paths(resolved.tasks_dirs),
+    )
+    source_files = collect_files_from_directories(
+        _dedupe_paths(resolved.files_dirs),
+    )
+    source_secrets = collect_secrets_from_directories(
+        _dedupe_paths(resolved.secrets_dirs),
+    )
+    source_secrets.update(collect_secrets_from_secret_models(resolved.secrets))
+    source_blacklist = collect_blacklist_from_directories(
+        _dedupe_paths(resolved.blacklist_dirs),
     )
 
-    blacklist_dirs = _dedupe_paths(resolved.blacklist_dirs)
-    source_blacklist = collect_blacklist_from_directories(blacklist_dirs)
-    blacklist_start = perf_counter()
-    bm = ManagerRegistry.get_blacklist_manager()
-    blacklist_changed = bm.sync_custom(source_blacklist=source_blacklist)
-    log_startup_timing(
-        logger,
-        "⏱️ [StartupTiming] runtime_reconcile.sync_custom_blacklist assistant=%s duration=%.2fs changed=%s",
-        identity.assistant_id,
-        perf_counter() - blacklist_start,
-        blacklist_changed,
+    jobs: list[tuple[str, Any]] = []
+    if can_sync_custom:
+        jobs.append(
+            (
+                "syncing_custom_guidance",
+                lambda: gm.sync_custom(
+                    source_guidance=source_guidance,
+                    function_name_to_id=function_name_to_id,
+                ),
+            ),
+        )
+    else:
+        logger.warning(
+            "Runtime reconcile skipping custom guidance sync for assistant=%s; "
+            "enabled integration sources are unavailable",
+            identity.assistant_id,
+        )
+
+    jobs.extend(
+        [
+            (
+                "syncing_custom_contacts",
+                lambda: cmgr.sync_custom(source_contacts=source_contacts),
+            ),
+            (
+                "syncing_custom_knowledge",
+                lambda: km.sync_custom(source_claims=source_knowledge),
+            ),
+            (
+                "syncing_custom_data",
+                lambda: dm.sync_custom(source_tables=source_data),
+            ),
+            (
+                "syncing_custom_dashboards",
+                lambda: dbm.sync_custom(source_entities=source_dashboards),
+            ),
+            (
+                "syncing_custom_tasks",
+                lambda: tm.sync_custom(
+                    source_tasks=source_tasks,
+                    function_name_to_id=function_name_to_id,
+                ),
+            ),
+            (
+                "syncing_custom_files",
+                lambda: file_mgr.sync_custom(source_files=source_files),
+            ),
+            (
+                "syncing_custom_secrets",
+                lambda: (
+                    sm.sync_custom(source_secrets=source_secrets),
+                    sm._sync_dotenv(),
+                )[0],
+            ),
+            (
+                "syncing_custom_blacklist",
+                lambda: bm.sync_custom(source_blacklist=source_blacklist),
+            ),
+        ],
     )
-    logger.info(
-        "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions duration=%.2fs custom_changed=%s",
-        identity.assistant_id,
-        perf_counter() - custom_start,
-        custom_changed,
+
+    wave = _parallel_sync_wave(
+        assistant_id=identity.assistant_id,
+        jobs=jobs,
     )
+
+    def _changed(phase: str) -> bool:
+        packed = wave.get(phase)
+        return bool(packed[0]) if packed is not None else False
+
+    def _duration(phase: str) -> float:
+        packed = wave.get(phase)
+        return float(packed[1]) if packed is not None else 0.0
+
+    guidance_changed = _changed("syncing_custom_guidance")
+    contacts_changed = _changed("syncing_custom_contacts")
+    knowledge_changed = _changed("syncing_custom_knowledge")
+    custom_data_changed = _changed("syncing_custom_data")
+    dashboards_changed = _changed("syncing_custom_dashboards")
+    tasks_changed = _changed("syncing_custom_tasks")
+    files_changed = _changed("syncing_custom_files")
+    secrets_changed = _changed("syncing_custom_secrets")
+    blacklist_changed = _changed("syncing_custom_blacklist")
+
+    for phase_name, changed_flag, timing_key in (
+        ("syncing_custom_guidance", guidance_changed, "sync_custom_guidance"),
+        ("syncing_custom_contacts", contacts_changed, "sync_custom_contacts"),
+        ("syncing_custom_knowledge", knowledge_changed, "sync_custom_knowledge"),
+        ("syncing_custom_data", custom_data_changed, "sync_custom_data"),
+        ("syncing_custom_dashboards", dashboards_changed, "sync_custom_dashboards"),
+        ("syncing_custom_tasks", tasks_changed, "sync_custom_tasks"),
+        ("syncing_custom_files", files_changed, "sync_custom_files"),
+        ("syncing_custom_secrets", secrets_changed, "sync_custom_secrets"),
+        ("syncing_custom_blacklist", blacklist_changed, "sync_custom_blacklist"),
+    ):
+        if phase_name not in wave and phase_name == "syncing_custom_guidance":
+            continue
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.%s assistant=%s duration=%.2fs changed=%s",
+            timing_key,
+            identity.assistant_id,
+            _duration(phase_name),
+            changed_flag,
+        )
 
     if status is not None:
         status.update(
@@ -652,12 +778,12 @@ def materialize_runtime_state(
         integration_registry_changed=integration_registry_changed,
         custom_changed=custom_changed,
         guidance_changed=guidance_changed,
+        secrets_changed=secrets_changed,
         contacts_changed=contacts_changed,
         knowledge_changed=knowledge_changed,
         custom_data_changed=custom_data_changed,
         dashboards_changed=dashboards_changed,
         tasks_changed=tasks_changed,
         files_changed=files_changed,
-        secrets_changed=secrets_changed,
         blacklist_changed=blacklist_changed,
     )
