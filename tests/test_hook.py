@@ -4,6 +4,7 @@ import logging
 from types import SimpleNamespace
 
 from unify_deploy import hook
+from unify_deploy import runtime_bootstrap
 from unify_deploy import startup_config
 from unify_deploy.runtime_reconcile import runner as runtime_runner
 from unify_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
@@ -13,12 +14,28 @@ from unify_deploy.utils.orchestra_client import OrchestraClientError
 def test_sync_console_config_repairs_assistant_console_config(monkeypatch):
     captured: dict = {}
 
-    def fake_patch_json(path, body):
+    def fake_patch_json(path, body, auth_token=None):
         captured["path"] = path
         captured["body"] = body
+        captured["auth_token"] = auth_token
         return {"status": "ok"}
 
-    monkeypatch.setattr(hook, "patch_json", fake_patch_json)
+    monkeypatch.setattr(runtime_bootstrap, "patch_json", fake_patch_json)
+    monkeypatch.setattr(
+        runtime_bootstrap,
+        "SESSION_DETAILS",
+        SimpleNamespace(unify_key="test-key"),
+        raising=False,
+    )
+
+    # SESSION_DETAILS is imported inside _sync_console_config from unify
+    import unify.session_details as session_details_mod
+
+    monkeypatch.setattr(
+        session_details_mod,
+        "SESSION_DETAILS",
+        SimpleNamespace(unify_key="test-key"),
+    )
 
     console_config = {
         "version": "1",
@@ -26,17 +43,23 @@ def test_sync_console_config_repairs_assistant_console_config(monkeypatch):
     }
     hook._sync_console_config(123, console_config)
 
-    assert captured == {
-        "path": "/admin/assistant/123",
-        "body": {"console_config": console_config},
-    }
+    assert captured["path"] == "/assistant/123/runtime-profile"
+    assert captured["body"] == {"console_config": console_config}
 
 
 def test_sync_console_config_drift_repair_is_best_effort(monkeypatch, caplog):
-    def fake_patch_json(path, body):
+    def fake_patch_json(path, body, auth_token=None):
         raise OrchestraClientError(500, "server exploded")
 
-    monkeypatch.setattr(hook, "patch_json", fake_patch_json)
+    monkeypatch.setattr(runtime_bootstrap, "patch_json", fake_patch_json)
+
+    import unify.session_details as session_details_mod
+
+    monkeypatch.setattr(
+        session_details_mod,
+        "SESSION_DETAILS",
+        SimpleNamespace(unify_key="test-key"),
+    )
 
     with caplog.at_level(logging.WARNING):
         hook._sync_console_config(123, {"version": "1"})
@@ -151,6 +174,49 @@ def test_startup_hook_runs_blocking_runtime_reconcile_when_explicitly_enabled(
     )
 
     result = hook.startup_hook(None, _session_details())
+
+    assert result == {"actor_kwargs": {"guidelines": "ready"}}
+    assert calls == ["blocking"]
+
+
+def test_ensure_deployment_runtime_accepts_explicit_blocking_mode(monkeypatch):
+    resolved = _resolved_startup_spec()
+    calls: list[str] = []
+
+    monkeypatch.delenv("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", raising=False)
+    monkeypatch.setattr(
+        startup_config,
+        "resolve_startup_spec",
+        lambda identity: resolved,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "expand_startup_integrations",
+        lambda value: value,
+    )
+
+    def fake_start_runtime_reconcile(cm, resolved, identity, *, mode, revision=None):
+        calls.append(mode)
+        status = RuntimeReconcileStatusHandle()
+        status.update(phase="complete")
+        return SimpleNamespace(status=status)
+
+    monkeypatch.setattr(
+        runtime_runner,
+        "start_runtime_reconcile",
+        fake_start_runtime_reconcile,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "build_actor_startup_config",
+        lambda value: {"actor_kwargs": {"guidelines": "ready"}},
+    )
+
+    result = runtime_bootstrap.ensure_deployment_runtime(
+        _session_details(),
+        cm=None,
+        reconcile_mode="blocking",
+    )
 
     assert result == {"actor_kwargs": {"guidelines": "ready"}}
     assert calls == ["blocking"]

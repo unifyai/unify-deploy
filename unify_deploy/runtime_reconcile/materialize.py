@@ -578,6 +578,9 @@ def materialize_runtime_state(
     secrets_start = perf_counter()
     sm = ManagerRegistry.get_secret_manager()
     secrets_changed = sm.sync_custom(source_secrets=source_secrets)
+    # Custom secret rows land in Orchestra after SM construction; re-mirror so
+    # os.environ / .env see deployment-defined keys before task entrypoints run.
+    sm._sync_dotenv()
     log_startup_timing(
         logger,
         "⏱️ [StartupTiming] runtime_reconcile.sync_custom_secrets assistant=%s duration=%.2fs changed=%s",
