@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 from unify.logger import LOGGER as logger
+from unify.common.sync_lease import sync_lease_wait_seconds
 from unify_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
 from unify_deploy.runtime_reconcile.context import (
     RuntimeIdentity,
@@ -75,6 +76,7 @@ def _run_runtime_reconcile(
     identity: RuntimeIdentity,
     status: RuntimeReconcileStatusHandle,
     revision: str | None = None,
+    lease_wait_seconds: float = 600.0,
 ) -> None:
     logger.info(
         "Starting assistant-scoped runtime reconciliation for assistant %s",
@@ -103,12 +105,15 @@ def _run_runtime_reconcile(
             identity.assistant_id,
             perf_counter() - context_start,
         )
-        materialize_runtime_state(
-            resolved,
-            identity,
-            revision=revision,
-            status=status,
-        )
+        # Live async reconcile yields immediately if a Job already holds the
+        # sync lease (wait=0). Blocking Jobs wait for the lease.
+        with sync_lease_wait_seconds(lease_wait_seconds):
+            materialize_runtime_state(
+                resolved,
+                identity,
+                revision=revision,
+                status=status,
+            )
         _push_setup_notification(
             cm,
             "Assistant setup complete; deployment-defined data and custom tools are ready.",
@@ -185,6 +190,7 @@ def start_runtime_reconcile(
             identity=identity,
             status=status,
             revision=revision,
+            lease_wait_seconds=600.0,
         )
         return RuntimeReconcileHandle(status=status)
 
@@ -202,6 +208,8 @@ def start_runtime_reconcile(
             "identity": identity,
             "status": status,
             "revision": revision,
+            # Live boot yields to any writer that already holds the lease.
+            "lease_wait_seconds": 0.0,
         },
         name=f"unity-deploy-runtime-reconcile-{identity.assistant_id}",
         daemon=True,

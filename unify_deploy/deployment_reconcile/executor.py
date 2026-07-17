@@ -139,6 +139,7 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
                 message=f"applied {len(item.target.control_plane_operations)} operation(s)",
             )
 
+        from unify.common.sync_lease import sync_lease_wait_seconds
         from unify_deploy.runtime_reconcile import (
             activate_runtime_context,
             materialize_runtime_state,
@@ -147,11 +148,12 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
         with _RUNTIME_STATE_LOCK:
             identity = _resolve_runtime_identity(item)
             activate_runtime_context(identity)
-            result = materialize_runtime_state(
-                item.target.resolved,
-                identity,
-                revision=item.revision,
-            )
+            with sync_lease_wait_seconds(600.0):
+                result = materialize_runtime_state(
+                    item.target.resolved,
+                    identity,
+                    revision=item.revision,
+                )
         return DeploymentWorkResult(
             item=item,
             status="applied",
