@@ -595,6 +595,12 @@ cmd_seed_builtins() {
     args+=(--integration-bootstrap-manifest "$manifest")
     export UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
     export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-$(console_admin_key)}"
+    # The direct worker imports orchestra, which lives in the sibling
+    # checkout's venv — not in unify's.
+    local orchestra_py="$ORCHESTRA_REPO_PATH/.venv/bin/python"
+    if [[ -x "$orchestra_py" ]]; then
+      export UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD="${UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD:-$orchestra_py -m orchestra.workers.builtins_artifacts_seed_job}"
+    fi
   fi
 
   log_info "Seeding Builtins catalogues..."
@@ -602,6 +608,11 @@ cmd_seed_builtins() {
     cd "$UNITY_REPO_PATH"
     UNIFY_KEY="$api_key" \
       ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0" \
+      ORCHESTRA_DB_HOST="${ORCHESTRA_DB_HOST:-127.0.0.1}" \
+      ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-$(default_orchestra_db_port)}" \
+      ORCHESTRA_DB_USER="${ORCHESTRA_DB_USER:-orchestra}" \
+      ORCHESTRA_DB_PASS="${ORCHESTRA_DB_PASS:-orchestra}" \
+      ORCHESTRA_DB_BASE="${ORCHESTRA_DB_BASE:-orchestra}" \
       "$py" scripts/seed_builtins_catalog.py "${args[@]}"
   )
 }

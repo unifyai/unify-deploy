@@ -130,7 +130,6 @@ from orchestra.db.models.coordinator_voice import (
     ensure_coordinator_voice_row,
 )
 from orchestra.services.coordinator_service import (
-    COORDINATOR_DEFAULT_DESKTOP_MODE,
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
     COORDINATOR_DEFAULT_NATIONALITY,
@@ -231,7 +230,7 @@ def reset_coordinator_profile(session, coordinator: Assistant) -> None:
     coordinator.nationality = COORDINATOR_DEFAULT_NATIONALITY
     coordinator.profile_photo = None
     coordinator.profile_video = None
-    coordinator.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
+    coordinator.desktop_mode = None
     coordinator.about = ""
     coordinator.weekly_limit = None
     coordinator.monthly_spending_cap = None
