@@ -103,7 +103,7 @@ The egress is started via `start_room_egress()` (or `create_room_and_dispatch_ag
 | **Phone call** (Twilio inbound) | After Twilio conference setup in the adapter webhook | `adapters/main.py` line ~177: `await start_room_egress(room_name, assistant_id)` |
 | **Unify Meet** (browser WebRTC) | Inside `create_room_and_dispatch_agent()` when `record=True` | `common/livekit.py` — called from the `/dispatch-livekit-agent` endpoint |
 
-All room names are produced by `make_room_name(assistant_id, medium)` which returns `unity_{assistant_id}_{medium}`. For phone calls: `unity_25_phone`. For Unify Meets: `unity_25_meet`. For Teams calls: `unity_25_teams`. The same value is used as both the LiveKit room name and the agent name.
+Phone/WhatsApp/browser-meet room names are produced by `make_room_name(assistant_id, medium)` which returns `unity_{assistant_id}_{medium}` (e.g. `unity_25_phone`, `unity_25_teams`); those channels use the same value as both the LiveKit room name and the agent name. Unify Meets are call sessions: their rooms are named `unity_call_{session_id}` by Orchestra, one room per session, and each assistant registers a distinct per-assistant agent name (`unity_{assistant_id}`).
 
 ### Egress Lifecycle
 
@@ -154,7 +154,7 @@ When LiveKit Egress completes and the webhook fires, the **adapter** (not the co
 ```
 
 **Key fields:**
-- `conference_name` — the LiveKit room name (produced by `make_room_name()`). This is the join key used to match the recording to its exchange. For phone calls: `unity_25_phone`, for Unify Meets: `unity_25_meet`.
+- `conference_name` — the LiveKit room name. This is the join key used to match the recording to its exchange. For phone calls: `unity_25_phone`; for Unify Meets: the session room `unity_call_{session_id}`.
 - `recording_url` — the public GCS URL for the MP3 file.
 
 ### Publishing Logic
@@ -178,7 +178,7 @@ Exchanges support arbitrary `metadata` (a dict). The recording-related keys are:
 | Key | Set When | Set By | Value |
 |-----|----------|--------|-------|
 | `conference_name` | Phone call ends (`PhoneCallEnded`) | Event handler in `event_handlers.py` | Twilio conference name, e.g. `Unity_12025551234_2026_02_18_10_30_00` |
-| `room_name` | Unify Meet ends (`UnifyMeetEnded`) | Event handler in `event_handlers.py` | LiveKit room name, e.g. `unity_25_meet` |
+| `room_name` | Unify Meet ends (`UnifyMeetEnded`) | Event handler in `event_handlers.py` | LiveKit room name, e.g. `unity_call_{session_id}` |
 | `recording_url` | Recording is ready (`RecordingReady`) | Event handler in `event_handlers.py` | Full GCS public URL |
 
 ### How Exchange Metadata is Populated
