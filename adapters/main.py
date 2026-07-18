@@ -2198,10 +2198,23 @@ async def unify_chat_webhook(request: Request):
             )
         call = {**call, "user_ids": participants}
         thread = f"call_{action}"
+        # Pub/Sub attribute values cap at 1024 bytes; the full roster always
+        # rides in the frame payload (event.user_ids), so the attribute is a
+        # routing hint that can be safely truncated for very large calls.
+        joined_user_ids = ",".join(participants)
+        if len(joined_user_ids.encode("utf-8")) > 1000:
+            truncated: list[str] = []
+            size = 0
+            for user_id in participants:
+                size += len(user_id.encode("utf-8")) + 1
+                if size > 1000:
+                    break
+                truncated.append(user_id)
+            joined_user_ids = ",".join(truncated)
         attributes = {
             "thread": thread,
             "call_id": str(call["call_id"]),
-            "user_ids": ",".join(participants),
+            "user_ids": joined_user_ids,
         }
         if organization_id:
             attributes["organization_id"] = str(organization_id)
