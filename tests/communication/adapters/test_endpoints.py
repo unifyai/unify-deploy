@@ -292,17 +292,29 @@ def test_log_pre_hire_chats_webhook(test_client):
 
 
 def test_unify_meet_webhook(test_client):
-    """Test successful unify_meet webhook processing."""
+    """Meet dispatch carries session + roster + opening config to the runtime."""
     endpoint = "/unify/meet"
-    room_name = "unity_default-test-assistant_meet"
+    room_name = "unity_call_sess-intro-1"
     opening_config = {
         "mode": "simulated",
         "simulated_utterance": "Hello from the coordinator.",
         "source": "coordinator_onboarding_intro",
     }
+    participants = [
+        {
+            "kind": "human",
+            "user_id": "user-1",
+            "assistant_id": None,
+            "display_name": "Ada Owner",
+            "contact_id": 1,
+            "email": "ada@example.com",
+        },
+    ]
     json_payload = {
         "room_name": room_name,
         "assistant_id": "default-test-assistant",
+        "call_session_id": "sess-intro-1",
+        "participants": participants,
         "opening_config": opening_config,
     }
 
@@ -333,7 +345,9 @@ def test_unify_meet_webhook(test_client):
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["livekit_room"] == room_name
-        assert data["event"]["livekit_agent_name"] == room_name
+        assert data["event"]["call_session_id"] == "sess-intro-1"
+        assert data["event"]["participants"] == participants
+        assert "livekit_agent_name" not in data["event"]
         assert data["event"]["opening_config"] == opening_config
     except AssertionError as e:
         print(e)
@@ -341,10 +355,37 @@ def test_unify_meet_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
+def test_unify_meet_webhook_rejects_sessionless_dispatch(test_client):
+    """Every meet is a call session with a roster; legacy wakes are rejected."""
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    no_session = test_client.make_request(
+        "POST",
+        "/unify/meet",
+        json={
+            "room_name": "unity_default-test-assistant_meet",
+            "assistant_id": "default-test-assistant",
+        },
+        headers=headers,
+    )
+    assert no_session.status_code == 400
+
+    no_roster = test_client.make_request(
+        "POST",
+        "/unify/meet",
+        json={
+            "room_name": "unity_call_sess-2",
+            "assistant_id": "default-test-assistant",
+            "call_session_id": "sess-2",
+        },
+        headers=headers,
+    )
+    assert no_roster.status_code == 400
+
+
 def test_unify_meet_webhook_org_call_participants(test_client):
     """Org call meet wakes publish participants and omit shared-room agent_name."""
     endpoint = "/unify/meet"
-    room_name = "unity_org_11_call_abc"
+    room_name = "unity_call_abc"
     participants = [
         {
             "kind": "human",
