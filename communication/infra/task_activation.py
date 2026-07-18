@@ -91,6 +91,9 @@ ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 ORCHESTRA_TASK_SOURCE_RELEASE_PATH = "/admin/task-source/release-active"
 OFFLINE_TASK_JOB_BACKOFF_LIMIT = 2
+# Above SmartLead's 60s HTTP client timeout so SIGTERM writeback can finish
+# before kubelet SIGKILLs the offline runner.
+OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS = 120
 _INFLIGHT_RUN_STATES = frozenset({"pending", "running"})
 # Live assistant conversation Jobs keep backoffLimit=0 (controller replaces
 # work). Offline task Jobs need a small positive limit so a single transient
@@ -1260,6 +1263,7 @@ def _launch_offline_task_job(
         priority_class_name="unity-idle",
         app_label="unity-task-run",
         backoff_limit=OFFLINE_TASK_JOB_BACKOFF_LIMIT,
+        termination_grace_period_seconds=OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS,
         extra_labels={
             "assistant-id": _normalize_task_id_component(request.assistant_id)[:63],
             "task-id": str(request.task_id),

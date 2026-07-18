@@ -209,6 +209,13 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert "ttlSecondsAfterFinished" in manifest["spec"]
     # No per-task bound means the run is unbounded: no activeDeadlineSeconds.
     assert "activeDeadlineSeconds" not in manifest["spec"]
+    # Offline Jobs need grace above SmartLead's 60s HTTP timeout so SIGTERM
+    # writeback can finish before kubelet SIGKILLs the runner.
+    assert (
+        manifest["spec"]["template"]["spec"]["terminationGracePeriodSeconds"]
+        == task_activation.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS
+    )
+    assert task_activation.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS > 60
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [
