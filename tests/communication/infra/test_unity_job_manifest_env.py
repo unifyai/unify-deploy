@@ -354,6 +354,16 @@ def test_ttl_and_active_deadline_only_appear_when_set() -> None:
     assert bounded["spec"]["activeDeadlineSeconds"] == 3600
 
 
+def test_termination_grace_period_override() -> None:
+    defaulted = build_unity_job_manifest(job_name="x")
+    assert defaulted["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] == 30
+    longer = build_unity_job_manifest(
+        job_name="x",
+        termination_grace_period_seconds=120,
+    )
+    assert longer["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] == 120
+
+
 def test_container_resources_are_right_sized() -> None:
     """Pins the 2 vCPU / 8 GiB / 10 GiB ephemeral shape applied in
     the 2026-04 rightsizing. Tests against accidental regression to
@@ -383,6 +393,7 @@ def test_job_top_level_shape() -> None:
     )
     pod_spec = manifest["spec"]["template"]["spec"]
     assert pod_spec["restartPolicy"] == "Never"
+    assert pod_spec["terminationGracePeriodSeconds"] == 30
     # Assistant Jobs run under the minimally-scoped Workload Identity SA, not the
     # fleet-wide comm-sa, and mount no JSON service-account key.
     assert pod_spec["serviceAccountName"] == "assistant-runtime-sa"

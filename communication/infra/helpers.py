@@ -299,6 +299,7 @@ def build_unity_job_manifest(
     extra_annotations: dict | None = None,
     extra_env: dict[str, str] | None = None,
     backoff_limit: int = 0,
+    termination_grace_period_seconds: int = 30,
 ) -> dict:
     """Build the Kubernetes ``batch/v1`` Job manifest for a Unity assistant.
 
@@ -349,6 +350,12 @@ def build_unity_job_manifest(
             controller replaces work). Offline task Jobs pass a small
             positive value so a single transient pod failure can retry
             without waiting for the next scheduler tick.
+        termination_grace_period_seconds: Pod
+            ``spec.terminationGracePeriodSeconds``. Live conversation
+            Jobs keep the short default (30). Offline task Jobs pass a
+            longer grace so SIGTERM writeback can finish after a blocked
+            outbound HTTP call (e.g. SmartLead's 60s client timeout)
+            returns or is interrupted.
     """
     optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
     unity_config_env = []
@@ -508,7 +515,7 @@ def build_unity_job_manifest(
                     # so no JSON key is mounted and a compromised pod cannot use
                     # comm-sa's broad GCS/compute access.
                     "serviceAccountName": "assistant-runtime-sa",
-                    "terminationGracePeriodSeconds": 30,  # Faster termination
+                    "terminationGracePeriodSeconds": termination_grace_period_seconds,
                     "priorityClassName": (priority_class_name or "unity-idle"),
                     "containers": [
                         {
