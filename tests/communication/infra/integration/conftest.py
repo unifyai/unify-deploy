@@ -2830,15 +2830,32 @@ def send_test_message(assistant_data: dict, body: str = "Integration test messag
 
 
 def send_test_meet(assistant_data: dict, room_name: str | None = None):
-    """Send a meet invite via the adapter's /unify/meet endpoint."""
+    """Send a meet invite via the adapter's /unify/meet endpoint.
+
+    Meet dispatches always carry a call session id and a participants
+    roster — session-less payloads are rejected with 400.
+    """
     aid = str(assistant_data["assistant_id"])
-    room = room_name or f"stress-test-meet-{aid}-{int(time.time())}"
+    session_id = f"stress-{aid}-{int(time.time())}"
+    room = room_name or f"unity_call_{session_id}"
     resp = requests.post(
         f"{ADAPTERS_URL}/unify/meet",
         json={
             "assistant_id": aid,
             "room_name": room,
-            "livekit_agent_name": f"unity_{aid}",
+            "call_session_id": session_id,
+            "participants": [
+                {
+                    "kind": "human",
+                    "user_id": str(assistant_data.get("user_id") or "stress-user"),
+                    "display_name": "Stress Tester",
+                },
+                {
+                    "kind": "assistant",
+                    "assistant_id": int(aid),
+                    "display_name": "Stress Assistant",
+                },
+            ],
         },
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=30,
