@@ -2200,16 +2200,16 @@ def count_idle_jobs(batch_api, namespace: str = NAMESPACE) -> int:
 
 def get_assistant_jobs_records(assistant_id: str, running_only: bool = True) -> list:
     """Query AssistantJobs for records matching this assistant."""
-    filter_expr = f"assistant_id == '{assistant_id}'"
+    row_filter = f"assistant_id == '{assistant_id}'"
     if running_only:
-        filter_expr += " and running == 'true'"
+        row_filter += " and running == 'true'"
 
     resp = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
             "project_name": "AssistantJobs",
             "context": "startup_events",
-            "filter_expr": filter_expr,
+            "filter": row_filter,
             "limit": 50,
         },
         headers={"Authorization": f"Bearer {SHARED_KEY}"},

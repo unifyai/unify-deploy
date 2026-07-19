@@ -370,7 +370,7 @@ def fetch_sessions(assistant_ids: list[str], shared_key: str) -> list[dict]:
             params={
                 "project_name": "AssistantJobs",
                 "context": "startup_events",
-                "filter_expr": f"assistant_id == '{aid}'",
+                "filter": f"assistant_id == '{aid}'",
                 "limit": 500,
             },
             headers={"Authorization": f"Bearer {shared_key}"},
