@@ -271,7 +271,7 @@ def _get_context_logs(
         "limit": limit,
     }
     if filter_expr:
-        params["filter_expr"] = filter_expr
+        params["filter"] = filter_expr
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params=params,

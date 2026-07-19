@@ -120,14 +120,14 @@ def _create_startup_log(entries: dict[str, Any]) -> dict[str, Any]:
 
 
 def _find_startup_log_id(*, assistant_id: str, job_name: str) -> int | None:
-    filter_expr = f"assistant_id == '{assistant_id}' and job_name == '{job_name}'"
+    row_filter = f"assistant_id == '{assistant_id}' and job_name == '{job_name}'"
     response = requests.get(
         f"{_orchestra_base()}/logs",
         headers=_orchestra_admin_headers(),
         params={
             "project_name": PROJECT_NAME,
             "context": CONTEXT_NAME,
-            "filter_expr": filter_expr,
+            "filter": row_filter,
             "limit": 1,
         },
         timeout=ORCHESTRA_TIMEOUT_SECONDS,

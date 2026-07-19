@@ -48,17 +48,17 @@ def ensure_project_exists(api_key: str) -> None:
 
 def get_assistant_logs(
     api_key: str,
-    filter_expr: str,
+    filter: str,
     limit: int = 100,
 ) -> list:
-    """Fetch AssistantJobs log entries matching *filter_expr*.
+    """Fetch AssistantJobs log entries matching *filter*.
 
     Returns a list of ``unisdk.Log`` objects.
     """
     return unisdk.get_logs(
         project=PROJECT_NAME,
         context=CONTEXT,
-        filter=filter_expr,
+        filter=filter,
         limit=limit,
         api_key=api_key,
     )
