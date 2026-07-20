@@ -56,6 +56,7 @@ from communication.infra.provider_event_dispatch import (
 )
 from .models import (
     OfflineTaskDispatchRequest,
+    OfflineTaskJobTerminalRequest,
     ScheduledTaskActivationDeleteRequest,
     ScheduledTaskActivationUpsertRequest,
     TaskActivationDiagnosticRequest,
@@ -80,6 +81,7 @@ logger = logging.getLogger(__name__)
 TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
 TASK_ACTIVATION_REPAIR_PATH = "/infra/task-activation/repair"
 OFFLINE_TASK_DISPATCH_PATH = "/infra/task-activation/offline-dispatch"
+OFFLINE_TASK_JOB_TERMINAL_PATH = "/infra/offline-task/job-terminal"
 PROVIDER_EVENT_DISPATCH_PATH = "/task-activation/provider-event-dispatch"
 TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
@@ -891,6 +893,102 @@ def _failed_task_run_updates(
     return updates
 
 
+def _completed_task_run_updates(
+    *,
+    result_summary: str | None = None,
+) -> dict[str, Any]:
+    """Return the canonical terminal patch for a completed offline run."""
+
+    updates: dict[str, Any] = {
+        "state": "completed",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "error": None,
+    }
+    if result_summary is not None:
+        updates["result_summary"] = result_summary
+    return updates
+
+
+def _terminalize_offline_job_outcome(
+    *,
+    assistant_id: str,
+    run_key: str,
+    source_task_log_id: int,
+    job_name: str,
+    terminal_type: str,
+) -> dict[str, Any]:
+    """Idempotently mirror a terminal Kubernetes Job onto Tasks/Runs.
+
+    Kubernetes Job terminal state is the source of truth. In-pod SIGTERM
+    writeback may already have finalized both rows; release-active and
+    conditional Run updates no-op in that case.
+    """
+
+    normalized = str(terminal_type or "").strip()
+    if normalized not in {"Complete", "Failed"}:
+        raise ValueError(
+            f"terminal_type must be 'Complete' or 'Failed', got {terminal_type!r}.",
+        )
+
+    run = _get_precreated_task_run(
+        assistant_id=assistant_id,
+        run_key=run_key,
+        source_task_log_id=source_task_log_id,
+    )
+    run_state = str((run or {}).get("state") or "")
+    run_updated = False
+    info = f"Kubernetes Job {job_name} reached terminal condition={normalized}"
+
+    if normalized == "Failed":
+        if run_state in _INFLIGHT_RUN_STATES:
+            _update_task_run(
+                assistant_id=assistant_id,
+                run_key=run_key,
+                updates=_failed_task_run_updates(
+                    error=info,
+                    result_summary=info,
+                ),
+            )
+            run_updated = True
+        release = _release_active_task_source(
+            assistant_id=assistant_id,
+            source_task_log_id=source_task_log_id,
+            mode="fail",
+            info=info,
+        )
+    else:
+        if run_state in _INFLIGHT_RUN_STATES:
+            _update_task_run(
+                assistant_id=assistant_id,
+                run_key=run_key,
+                updates=_completed_task_run_updates(
+                    result_summary=(
+                        f"Job {job_name} Complete while Run was still {run_state}; "
+                        "assumed in-pod success writeback lost the race"
+                    ),
+                ),
+            )
+            run_updated = True
+        # Always attempt release: Orchestra no-ops when the Tasks row is not
+        # active (e.g. runner already wrote success).
+        release = _release_active_task_source(
+            assistant_id=assistant_id,
+            source_task_log_id=source_task_log_id,
+            mode="fail",
+            info=info,
+        )
+
+    return {
+        "success": True,
+        "terminal_type": normalized,
+        "run_key": run_key,
+        "job_name": job_name,
+        "run_state_before": run_state or None,
+        "run_updated": run_updated,
+        "source_release": release,
+    }
+
+
 def _job_condition_status(job: Any, condition_type: str) -> bool:
     """Return whether a Kubernetes Job exposes a true condition."""
 
@@ -1270,6 +1368,7 @@ def _launch_offline_task_job(
         },
         extra_annotations={
             "unify.ai/task-run-key": run_key,
+            "unify.ai/source-task-log-id": str(request.source_task_log_id),
         },
     )
     container = manifest["spec"]["template"]["spec"]["containers"][0]
@@ -2123,6 +2222,40 @@ async def delete_scheduled_task_activation(
             execution_mode=request.execution_mode,
         ),
     }
+
+
+@router.post("/offline-task/job-terminal")
+async def terminalize_offline_task_job(
+    request: OfflineTaskJobTerminalRequest,
+):
+    """Mirror a terminal ``unity-task-run`` Job onto Orchestra Tasks/Runs.
+
+    Called by the job-watcher when a Job reaches Complete or Failed. Idempotent:
+    already-terminal Runs are left alone, and release-active no-ops when the
+    Tasks row is no longer ``active``.
+    """
+
+    try:
+        return await asyncio.to_thread(
+            _terminalize_offline_job_outcome,
+            assistant_id=request.assistant_id,
+            run_key=request.run_key,
+            source_task_log_id=request.source_task_log_id,
+            job_name=request.job_name,
+            terminal_type=request.terminal_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "Failed to terminalize offline Job %s for assistant %s",
+            request.job_name,
+            request.assistant_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to terminalize offline Job: {exc}",
+        ) from exc
 
 
 def _validate_offline_dispatch_request(request: OfflineTaskDispatchRequest) -> None:

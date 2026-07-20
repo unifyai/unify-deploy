@@ -256,3 +256,73 @@ def stop_assistant_session(
             log.exception("Error stopping assistant session for %s", assistant_id)
             traceback.print_exc()
             return False
+
+
+def notify_offline_task_job_terminal(
+    comms_url: str,
+    admin_key: str,
+    *,
+    assistant_id: str,
+    run_key: str,
+    source_task_log_id: int,
+    job_name: str,
+    terminal_type: str,
+    max_attempts: int = VM_RELEASE_ATTEMPTS,
+) -> bool:
+    """Ask Comms to mirror a terminal unity-task-run Job onto Tasks/Runs.
+
+    Returns True when Comms accepts the request (including idempotent no-ops).
+    """
+
+    headers = {"Authorization": f"Bearer {admin_key}"}
+    payload = {
+        "assistant_id": assistant_id,
+        "run_key": run_key,
+        "source_task_log_id": int(source_task_log_id),
+        "job_name": job_name,
+        "terminal_type": terminal_type,
+    }
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(
+                f"{comms_url}/infra/offline-task/job-terminal",
+                json=payload,
+                headers=headers,
+                timeout=60,
+            )
+            if resp.ok:
+                log.info(
+                    "Offline Job terminal accepted for %s/%s: %s",
+                    assistant_id,
+                    job_name,
+                    resp.text[:500],
+                )
+                return True
+
+            if resp.status_code >= 500 and attempt < max_attempts:
+                log.warning(
+                    "Offline Job terminal got %d for %s, retrying (%d/%d)",
+                    resp.status_code,
+                    job_name,
+                    attempt,
+                    max_attempts,
+                )
+                time.sleep(attempt)
+                continue
+
+            log.error(
+                "Failed to terminalize offline Job %s: %d %s",
+                job_name,
+                resp.status_code,
+                resp.text,
+            )
+            return False
+        except Exception:
+            log.exception("Error terminalizing offline Job %s", job_name)
+            traceback.print_exc()
+            if attempt < max_attempts:
+                time.sleep(attempt)
+                continue
+            return False
+    return False

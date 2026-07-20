@@ -221,6 +221,16 @@ class OfflineTaskDispatchRequest(BaseModel):
     task_description: Optional[str] = None
 
 
+class OfflineTaskJobTerminalRequest(BaseModel):
+    """Terminalize Orchestra Tasks/Runs after a unity-task-run Job ends."""
+
+    assistant_id: str
+    run_key: str
+    source_task_log_id: int
+    job_name: str
+    terminal_type: Literal["Complete", "Failed"]
+
+
 class TaskActivationDiagnosticRequest(BaseModel):
     """Inspect task activation materialization for one assistant task."""
 
