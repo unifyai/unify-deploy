@@ -201,6 +201,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
         "offline:scheduled:assistant-123:101:abc123def456:once"
     )
+    assert manifest["metadata"]["annotations"]["unify.ai/source-task-log-id"] == "555"
     assert (
         manifest["spec"]["backoffLimit"]
         == task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT
@@ -1633,3 +1634,140 @@ def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():
         )
         == {}
     )
+
+
+def test_terminalize_offline_job_failed_updates_run_and_releases_source():
+    """Failed Jobs fail inflight Runs and release-active with mode=fail."""
+
+    from communication.infra import task_activation
+
+    with (
+        patch(
+            "communication.infra.task_activation._get_precreated_task_run",
+            return_value={"state": "running"},
+        ),
+        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch(
+            "communication.infra.task_activation._release_active_task_source",
+            return_value={"updated": True, "reason": "released"},
+        ) as mock_release,
+    ):
+        result = task_activation._terminalize_offline_job_outcome(
+            assistant_id="assistant-123",
+            run_key="rk",
+            source_task_log_id=555,
+            job_name="unity-task-run-abc",
+            terminal_type="Failed",
+        )
+
+    assert result["success"] is True
+    assert result["run_updated"] is True
+    mock_update.assert_called_once()
+    updates = mock_update.call_args.kwargs["updates"]
+    assert updates["state"] == "failed"
+    mock_release.assert_called_once_with(
+        assistant_id="assistant-123",
+        source_task_log_id=555,
+        mode="fail",
+        info=mock_release.call_args.kwargs["info"],
+    )
+    assert "unity-task-run-abc" in mock_release.call_args.kwargs["info"]
+
+
+def test_terminalize_offline_job_complete_marks_inflight_run_completed():
+    """Complete Jobs heal Runs still stuck running/pending, then release."""
+
+    from communication.infra import task_activation
+
+    with (
+        patch(
+            "communication.infra.task_activation._get_precreated_task_run",
+            return_value={"state": "running"},
+        ),
+        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch(
+            "communication.infra.task_activation._release_active_task_source",
+            return_value={"updated": True, "reason": "released"},
+        ) as mock_release,
+    ):
+        result = task_activation._terminalize_offline_job_outcome(
+            assistant_id="assistant-123",
+            run_key="rk",
+            source_task_log_id=555,
+            job_name="unity-task-run-abc",
+            terminal_type="Complete",
+        )
+
+    assert result["run_updated"] is True
+    assert mock_update.call_args.kwargs["updates"]["state"] == "completed"
+    mock_release.assert_called_once()
+    assert mock_release.call_args.kwargs["mode"] == "fail"
+
+
+def test_terminalize_offline_job_idempotent_when_already_terminal():
+    """Second call after success writeback must not re-fail a completed Run."""
+
+    from communication.infra import task_activation
+
+    with (
+        patch(
+            "communication.infra.task_activation._get_precreated_task_run",
+            return_value={"state": "completed"},
+        ),
+        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch(
+            "communication.infra.task_activation._release_active_task_source",
+            return_value={"updated": False, "reason": "not_active"},
+        ) as mock_release,
+    ):
+        first = task_activation._terminalize_offline_job_outcome(
+            assistant_id="assistant-123",
+            run_key="rk",
+            source_task_log_id=555,
+            job_name="unity-task-run-abc",
+            terminal_type="Complete",
+        )
+        second = task_activation._terminalize_offline_job_outcome(
+            assistant_id="assistant-123",
+            run_key="rk",
+            source_task_log_id=555,
+            job_name="unity-task-run-abc",
+            terminal_type="Failed",
+        )
+
+    assert first["run_updated"] is False
+    assert second["run_updated"] is False
+    mock_update.assert_not_called()
+    assert mock_release.call_count == 2
+
+
+def test_offline_task_job_terminal_endpoint():
+    """Admin-auth route wires the terminalize helper."""
+
+    from common.settings import SETTINGS
+    from communication.infra.views import router
+
+    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
+    app = FastAPI()
+    app.include_router(router, prefix="/infra")
+    client = TestClient(app)
+    client.headers.update({"Authorization": "Bearer TEST-ADMIN-KEY"})
+
+    with patch(
+        "communication.infra.task_activation._terminalize_offline_job_outcome",
+        return_value={"success": True, "run_updated": True},
+    ) as mock_terminalize:
+        response = client.post(
+            "/infra/offline-task/job-terminal",
+            json={
+                "assistant_id": "assistant-123",
+                "run_key": "rk",
+                "source_task_log_id": 555,
+                "job_name": "unity-task-run-abc",
+                "terminal_type": "Failed",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    mock_terminalize.assert_called_once()

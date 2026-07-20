@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Watch Unity job terminations and run crash-safe VM cleanup.
+"""Watch Unity job terminations and run crash-safe cleanup.
 
-Uses kopf (Kubernetes Operator Pythonic Framework) to watch Jobs labelled
-``app=unity``.  When a Job reaches a terminal condition (*Complete* or
-*Failed*), the handler releases any pool VM still assigned to the
-assistant (prevents leaked VMs lingering in "assigned" state after a
-crash).
+Uses kopf (Kubernetes Operator Pythonic Framework) to watch Jobs:
+
+* ``app=unity`` — release any pool VM still assigned to the assistant
+  (prevents leaked VMs lingering in "assigned" state after a crash).
+* ``app=unity-task-run`` — terminalize Orchestra Tasks/Runs for offline
+  task Jobs when in-pod SIGTERM writeback never ran.
 
 The ``assistant-id`` label is set on the Job (not the Pod) by
-``mark_job_label`` during startup, so we must watch Jobs to read it.
+``mark_job_label`` / offline launch, so we must watch Jobs to read it.
 
-On graceful exit, ``mark_job_done`` in the Unity container performs the
-same idempotent VM release.  The job-watcher covers crash scenarios
-where in-container cleanup never runs.
+On graceful exit, in-container cleanup performs the same idempotent
+operations. The job-watcher covers crash scenarios where that never runs.
 
 Cleanup logic lives in ``assistant_jobs_api.py`` (shared with the
 Unity codebase) and is copied into this container at build time.
@@ -29,12 +29,14 @@ import os
 
 import kopf
 
-from assistant_jobs_api import release_pool_vm
+from assistant_jobs_api import notify_offline_task_job_terminal, release_pool_vm
 
 COMMS_URL = os.environ["UNITY_COMMS_URL"]
 ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 MAX_EVENT_AGE = datetime.timedelta(minutes=5)
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
+TASK_RUN_KEY_ANNOTATION = "unify.ai/task-run-key"
+SOURCE_TASK_LOG_ID_ANNOTATION = "unify.ai/source-task-log-id"
 
 _events_processed = 0
 
@@ -58,9 +60,37 @@ def _parse_k8s_timestamp(ts: str) -> datetime.datetime | None:
         return None
 
 
+def _terminal_condition(job: dict) -> dict | None:
+    """Return the Complete/Failed condition when the Job is terminal."""
+
+    status = job.get("status", {})
+    if status.get("active", 0) >= 1:
+        return None
+
+    conditions = status.get("conditions", [])
+    return next(
+        (
+            c
+            for c in conditions
+            if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
+        ),
+        None,
+    )
+
+
+def _within_max_event_age(terminal: dict) -> bool:
+    """Skip stale terminal events that kopf may replay on startup."""
+
+    transition_time = _parse_k8s_timestamp(terminal.get("lastTransitionTime", ""))
+    if transition_time is None:
+        return True
+    age = datetime.datetime.now(datetime.timezone.utc) - transition_time
+    return age <= MAX_EVENT_AGE
+
+
 @kopf.on.event("batch", "v1", "jobs", labels={"app": "unity"})
 def on_job_event(event, **_):
-    """React to every Job event; filter for terminal conditions."""
+    """React to every live-session Job event; filter for terminal conditions."""
     global _events_processed
 
     job = event.get("object", {})
@@ -69,27 +99,12 @@ def on_job_event(event, **_):
         f"job_name: {job.get('metadata', {}).get('name', 'unknown')} status: {status}",
     )
 
-    if status.get("active", 0) >= 1:
-        return
-
-    conditions = status.get("conditions", [])
-
-    terminal = next(
-        (
-            c
-            for c in conditions
-            if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
-        ),
-        None,
-    )
+    terminal = _terminal_condition(job)
     if terminal is None:
         return
 
-    transition_time = _parse_k8s_timestamp(terminal.get("lastTransitionTime", ""))
-    if transition_time is not None:
-        age = datetime.datetime.now(datetime.timezone.utc) - transition_time
-        if age > MAX_EVENT_AGE:
-            return
+    if not _within_max_event_age(terminal):
+        return
 
     metadata = job.get("metadata", {})
     labels = metadata.get("labels", {})
@@ -112,6 +127,66 @@ def on_job_event(event, **_):
         assistant_id,
         binding_id,
         job_name=job_name,
+    )
+
+
+@kopf.on.event("batch", "v1", "jobs", labels={"app": "unity-task-run"})
+def on_offline_task_job_event(event, **_):
+    """Terminalize Orchestra Tasks/Runs when an offline task Job ends."""
+    global _events_processed
+
+    job = event.get("object", {})
+    status = job.get("status", {})
+    print(
+        f"offline_job_name: "
+        f"{job.get('metadata', {}).get('name', 'unknown')} status: {status}",
+    )
+
+    terminal = _terminal_condition(job)
+    if terminal is None:
+        return
+
+    if not _within_max_event_age(terminal):
+        return
+
+    metadata = job.get("metadata", {})
+    labels = metadata.get("labels", {}) or {}
+    annotations = metadata.get("annotations", {}) or {}
+    job_name = metadata.get("name", "unknown")
+    assistant_id = labels.get("assistant-id")
+    run_key = annotations.get(TASK_RUN_KEY_ANNOTATION)
+    source_task_log_id_raw = annotations.get(SOURCE_TASK_LOG_ID_ANNOTATION)
+
+    print(
+        f"Offline Job {job_name} terminal "
+        f"(condition={terminal['type']}, assistant-id={assistant_id})",
+    )
+    _events_processed += 1
+
+    if not assistant_id or not run_key or not source_task_log_id_raw:
+        print(
+            f"Missing assistant-id/run-key/source-task-log-id on {job_name} — "
+            "skipping Tasks/Runs terminalization",
+        )
+        return
+
+    try:
+        source_task_log_id = int(source_task_log_id_raw)
+    except (TypeError, ValueError):
+        print(
+            f"Invalid source-task-log-id={source_task_log_id_raw!r} on {job_name} — "
+            "skipping Tasks/Runs terminalization",
+        )
+        return
+
+    notify_offline_task_job_terminal(
+        COMMS_URL,
+        ADMIN_KEY,
+        assistant_id=assistant_id,
+        run_key=run_key,
+        source_task_log_id=source_task_log_id,
+        job_name=job_name,
+        terminal_type=terminal["type"],
     )
 
 
