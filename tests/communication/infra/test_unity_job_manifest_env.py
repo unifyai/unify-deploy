@@ -67,6 +67,23 @@ def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
     }
 
 
+def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
+    """CM and offline Jobs inherit scoped Orchestra EventBus persistence.
+
+    Publishing + Pub/Sub stay on for Live Actions; Orchestra Events/* is
+    narrowed to execute_code / execute_function only.
+    """
+    manifest = build_unity_job_manifest(job_name="eventbus-persist-staging")
+    env = _env_by_name(manifest)
+    assert env["EVENTBUS_PUBLISHING_ENABLED"]["value"] == "true"
+    assert env["EVENTBUS_PUBSUB_STREAMING"]["value"] == "true"
+    assert env["EVENTBUS_ORCHESTRA_PERSIST_MODE"]["value"] == "allowlist"
+    assert (
+        env["EVENTBUS_ORCHESTRA_PERSIST_TOOLS"]["value"]
+        == "execute_code,execute_function"
+    )
+
+
 def test_smartlead_api_key_sourced_from_unity_secrets() -> None:
     manifest = build_unity_job_manifest(job_name="smartlead-key-staging")
     entry = _env_by_name(manifest)["SMARTLEAD_API_KEY"]

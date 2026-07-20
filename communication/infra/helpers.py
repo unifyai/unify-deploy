@@ -433,6 +433,13 @@ def build_unity_job_manifest(
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
         {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
         {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
+        # Orchestra Events/*: keep only CodeAct execution rows. Pub/Sub Live
+        # Actions streaming above stays full-fidelity (stream_filters only).
+        {"name": "EVENTBUS_ORCHESTRA_PERSIST_MODE", "value": "allowlist"},
+        {
+            "name": "EVENTBUS_ORCHESTRA_PERSIST_TOOLS",
+            "value": "execute_code,execute_function",
+        },
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
