@@ -45,6 +45,22 @@ def test_runtime_status_prompt_note_hides_internal_reconcile_language():
     assert "runtime reconciliation" not in note.lower()
 
 
+def test_runtime_status_prompt_note_surfaces_partial_function_sync_failure():
+    status = RuntimeReconcileStatusHandle()
+    status.update(
+        phase="complete",
+        error="Custom function sync partially failed for: run_social_render_storyboards",
+        resources={"functions": "failed", "tasks": "ready"},
+        data_freshness="partial",
+    )
+
+    note = runtime_reconcile_prompt_note(status)
+
+    assert note is not None
+    assert "failed to sync" in note
+    assert "runtime reconciliation" not in note.lower()
+
+
 def test_start_runtime_reconcile_returns_before_materialization_finishes(
     monkeypatch,
 ):
