@@ -149,6 +149,14 @@ FAILED_SETUP_NOTE = (
     "are ready."
 )
 
+PARTIAL_FUNCTIONS_SETUP_NOTE = (
+    "Background assistant setup finished, but some deployment-defined custom "
+    "functions failed to sync. Other data and tools are ready. If the user asks "
+    "about a missing or broken custom tool, explain that that function failed "
+    "during setup and will be retried on the next reconcile — do not pretend it "
+    "is available."
+)
+
 COMPLETE_SETUP_NOTE = (
     "Background assistant setup is complete. Deployment-defined data, guidance, "
     "secrets, and custom tools are ready."
@@ -170,6 +178,9 @@ def runtime_reconcile_prompt_note(
     if status.has_failed:
         return FAILED_SETUP_NOTE
     if status.is_complete:
+        resources = status.resources or {}
+        if resources.get("functions") == "failed" or status.error:
+            return PARTIAL_FUNCTIONS_SETUP_NOTE
         return COMPLETE_SETUP_NOTE if include_complete else None
     if status.is_running:
         return INCOMPLETE_SETUP_NOTE

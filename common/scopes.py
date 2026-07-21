@@ -37,6 +37,15 @@ GOOGLE_SCOPE_BUNDLES: dict[str, list[str]] = {
     "meet": [
         "https://www.googleapis.com/auth/meetings.space.readonly",
     ],
+    # Google Chat Workspace Events — least-privilege readonly scopes covering
+    # the independently subscribable Chat families. Mirrored in Orchestra.
+    "chat": [
+        "https://www.googleapis.com/auth/chat.messages.readonly",
+        "https://www.googleapis.com/auth/chat.memberships.readonly",
+        "https://www.googleapis.com/auth/chat.spaces.readonly",
+        "https://www.googleapis.com/auth/chat.users.readstate.readonly",
+        "https://www.googleapis.com/auth/chat.users.availability.readonly",
+    ],
 }
 
 GOOGLE_BASE_SCOPES = [

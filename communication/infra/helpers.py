@@ -402,7 +402,6 @@ def build_unity_job_manifest(
             "LIVEKIT_URL",
             "OPENAI_API_KEY",
             "OPENROUTER_API_KEY",
-            "SMARTLEAD_API_KEY",
             # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
             # authenticate to Orchestra and the hosted gateway with their own
             # per-assistant UNIFY_KEY against ownership-scoped routes, so a
