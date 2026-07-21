@@ -184,6 +184,14 @@ from common.task_destination import assistant_has_task_destination
 # communication package at runtime.
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
+from .meet_bridge import (
+    MeetBridgeMappingError,
+    MeetPushAuthError,
+    bearer_token_from_authorization,
+    map_pubsub_push_to_delivery,
+    post_native_google_delivery,
+    verify_meet_push_oidc,
+)
 from .helpers import (
     cleanup_idle_pool,
     get_admin_graph_bearer_token,
@@ -3319,6 +3327,107 @@ async def assistant_update_webhook(request: Request):
 
 
 # =============================================================================
+# Google Meet Workspace Events
+# =============================================================================
+
+
+@app.post("/meet/workspace-events")
+async def meet_workspace_events_bridge(request: Request):
+    """Bridge Google Meet Workspace Events Pub/Sub pushes into Orchestra.
+
+    Google delivers Meet events (e.g.
+    ``google.workspace.meet.transcript.v2.fileGenerated``) through Cloud
+    Pub/Sub, formatted as CloudEvents. The push subscription for the shared
+    ``meet-workspace-events`` topic targets this path. This handler:
+
+    1. verifies the Pub/Sub push OIDC token (Google-signed, correct audience
+       and push service-account email);
+    2. maps the CloudEvent to the Unify native delivery shape;
+    3. signs it with ``NATIVE_GOOGLE_WEBHOOK_SECRET`` and POSTs it to the
+       unrouted ``native_google`` ingress, where Orchestra resolves the binding
+       by ``external_trigger_id`` (the Workspace Events subscription name).
+
+    Ack policy: only ack (2xx to Pub/Sub) once Orchestra returns a durable
+    outcome (2xx accept/ignore). Any non-2xx from Orchestra, a missing signing
+    secret, or an unexpected error returns 503 so Pub/Sub retries rather than
+    dropping the event. Unauthenticated or unmappable pushes are rejected
+    without contacting Orchestra, so no task is woken.
+
+    A retryable outcome includes Orchestra's 401 for an unknown subscription:
+    that is usually a provisioning race (Google delivering before the binding
+    commits) worth retrying, at the cost of retrying a genuinely orphaned Google
+    subscription until Pub/Sub retention expires.
+    """
+
+    signing_secret = SETTINGS.native_google_webhook_secret
+    if not signing_secret:
+        logger.error(
+            "Meet bridge: NATIVE_GOOGLE_WEBHOOK_SECRET is not configured; "
+            "cannot sign delivery. Returning 503 for Pub/Sub retry.",
+        )
+        return Response(content="Meet bridge not configured", status_code=503)
+
+    bearer_token = bearer_token_from_authorization(
+        request.headers.get("Authorization"),
+    )
+    try:
+        verify_meet_push_oidc(
+            bearer_token,
+            audience=SETTINGS.adapters_url.rstrip("/"),
+            service_account_email=SETTINGS.meet_push_auth_service_account,
+        )
+    except MeetPushAuthError as exc:
+        logger.warning("Meet bridge: rejected unauthenticated push: %s", exc)
+        return Response(content="Unauthorized", status_code=401)
+
+    try:
+        envelope = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("Meet bridge: rejected push with non-JSON body")
+        return Response(content="Bad Request: invalid JSON", status_code=400)
+
+    try:
+        delivery = map_pubsub_push_to_delivery(envelope)
+    except MeetBridgeMappingError as exc:
+        logger.warning("Meet bridge: rejected unmappable push: %s", exc)
+        return Response(content=f"Bad Request: {exc}", status_code=400)
+
+    logger.info(
+        "Meet bridge: forwarding event_id=%s subscription=%s slug=%s",
+        delivery.event_id,
+        delivery.external_trigger_id,
+        delivery.payload.get("provider_trigger_slug"),
+    )
+
+    try:
+        orchestra_response = post_native_google_delivery(
+            delivery,
+            orchestra_url=SETTINGS.orchestra_url,
+            signing_secret=signing_secret,
+        )
+    except requests.RequestException as exc:
+        logger.error("Meet bridge: Orchestra ingress request failed: %s", exc)
+        return Response(content="Upstream request failed", status_code=503)
+
+    if orchestra_response.status_code // 100 == 2:
+        logger.info(
+            "Meet bridge: Orchestra durable outcome for event_id=%s: %s",
+            delivery.event_id,
+            orchestra_response.text[:256],
+        )
+        return Response(content="OK", status_code=200)
+
+    logger.warning(
+        "Meet bridge: Orchestra non-durable response %s for event_id=%s: %s; "
+        "returning 503 for Pub/Sub retry.",
+        orchestra_response.status_code,
+        delivery.event_id,
+        orchestra_response.text[:256],
+    )
+    return Response(content="Upstream not durable", status_code=503)
+
+
+# =============================================================================
 # Email Webhooks
 # =============================================================================
 
@@ -6152,6 +6261,8 @@ if __name__ == "__main__":
     logger.info("  Unify:")
     logger.info("    - POST /unify/chat")
     logger.info("    - POST /unify/meet")
+    logger.info("  Meet:")
+    logger.info("    - POST /meet/workspace-events")
     logger.info("  Unity:")
     logger.info("    - POST /unity/system-event")
     logger.info("    - POST /unity/pre-hire")
