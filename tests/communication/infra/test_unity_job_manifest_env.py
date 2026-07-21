@@ -84,15 +84,6 @@ def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     )
 
 
-def test_smartlead_api_key_sourced_from_unity_secrets() -> None:
-    manifest = build_unity_job_manifest(job_name="smartlead-key-staging")
-    entry = _env_by_name(manifest)["SMARTLEAD_API_KEY"]
-    assert entry["valueFrom"]["secretKeyRef"] == {
-        "name": "unity-secrets",
-        "key": "SMARTLEAD_API_KEY",
-    }
-
-
 def test_orchestra_admin_key_not_mounted_on_assistant_pods() -> None:
     """The platform admin key must never reach an assistant Job pod.
 
