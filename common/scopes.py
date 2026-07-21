@@ -28,6 +28,15 @@ GOOGLE_SCOPE_BUNDLES: dict[str, list[str]] = {
     "tasks": [
         "https://www.googleapis.com/auth/tasks",
     ],
+    # Google Meet Workspace Events subscriptions (transcript.v2.fileGenerated
+    # and friends) accept either meetings.space.readonly or
+    # meetings.space.created. Read-only metadata is the least privilege that
+    # still supports user-level transcript subscriptions where the user owns
+    # the meeting space; transcript file content in Drive is covered by the
+    # ``drive`` bundle. Mirrored in Orchestra's ``scopes.py``.
+    "meet": [
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+    ],
 }
 
 GOOGLE_BASE_SCOPES = [

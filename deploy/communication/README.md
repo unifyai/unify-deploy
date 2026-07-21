@@ -60,6 +60,7 @@ All adapter endpoints that can trigger actions (start containers, send messages,
 **Externally-validated endpoints** (no app-level auth, validated by the external service):
 - `/livekit/recording-complete` — LiveKit webhook signature verification
 - `/email/gmail` — Google Pub/Sub push (validated by Pub/Sub delivery)
+- `/meet/workspace-events` — Google Meet Workspace Events Pub/Sub push (OIDC verify + HMAC bridge into Orchestra native_google)
 - `/email/outlook`, `/chat/teams` — Microsoft Graph `clientState` secret validation
 - `/microsoft/router`, `/microsoft/auth/callback` — Microsoft OAuth flow
 - `/health` — health check
@@ -91,6 +92,7 @@ All logging uses `logger` (not `print`). Phone numbers are redacted to last 4 di
 The following infrastructure settings are configured directly in GCP (`gcp-project-runtime`):
 
 - **Cloud Scheduler**: All scheduler jobs (both staging and production) include `Authorization: Bearer {admin_key}` headers for all 10 adapter scheduled endpoints.
+- **Meet Workspace Events Pub/Sub**: The shared `meet-workspace-events{-staging}` topic, its `meet-api-event-push@system.gserviceaccount.com` publisher grant, and the push subscription to Adapters `/meet/workspace-events` are provisioned by `deploy/scripts/provision-meet-workspace-events-pubsub.sh`. Google Workspace Events subscriptions (created by Orchestra native provision) publish Meet events here; Adapters bridges them into Orchestra `native_google` ingress. The full topic resource name is passed to Orchestra as `NATIVE_GOOGLE_MEET_EVENTS_PUBSUB_TOPIC`.
 - **Firewall rules**: Remote-access rules (`default-allow-ssh`, `default-allow-rdp`, `allow-winrm`) are restricted to the IAP tunnel range (`35.235.240.0/20`). Direct SSH/RDP from the internet is blocked; use `gcloud compute ssh --tunnel-through-iap` instead. Pool VMs expose only port 443 (HTTPS via Caddy) and 2222 (SFTP file sync) publicly. Ports 6080 (noVNC) and 3000 (Agent Service) are **not** directly accessible — they are behind Caddy's reverse proxy.
 - **VMs**: Terminated VMs are deleted promptly to release external IPs and reduce attack surface. No idle VMs with external IPs should remain in the project.
 

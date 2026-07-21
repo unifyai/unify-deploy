@@ -125,6 +125,22 @@ class Settings:
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
 
+        # Google Meet Workspace Events bridge (Pub/Sub push -> Orchestra
+        # native_google ingress). Google delivers Meet events only via Cloud
+        # Pub/Sub; the push subscription attaches an OIDC token minted for
+        # ``meet_push_auth_service_account`` with the Adapters base URL as
+        # audience, which the bridge verifies before re-emitting a Unify-shaped,
+        # HMAC-signed body. ``native_google_webhook_secret`` holds the same
+        # value Orchestra verifies with (env:NATIVE_GOOGLE_WEBHOOK_SECRET).
+        self.native_google_webhook_secret: str = os.environ.get(
+            "NATIVE_GOOGLE_WEBHOOK_SECRET",
+            "",
+        )
+        self.meet_push_auth_service_account: str = os.environ.get(
+            "UNITY_MEET_PUSH_AUTH_SA",
+            f"comm-sa@{self.gcp_project_id}.iam.gserviceaccount.com",
+        )
+
         # Slack Events API signing secret. App-level (one value shared across
         # all workspace installs of the Slack app), set in the Slack-app
         # manifest. Used by the adapter's /slack/events webhook to HMAC-verify
