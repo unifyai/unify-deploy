@@ -269,7 +269,7 @@ def notify_offline_task_job_terminal(
     terminal_type: str,
     max_attempts: int = VM_RELEASE_ATTEMPTS,
 ) -> bool:
-    """Ask Comms to mirror a terminal unity-task-run Job onto Tasks/Runs.
+    """Ask Comms to mirror a terminal unity-task-run Job onto Tasks/Executions.
 
     Returns True when Comms accepts the request (including idempotent no-ops).
     """

@@ -37,9 +37,9 @@ class ProviderEventDispatchRequest(BaseModel):
     task_id: int
     binding_id: str
     receipt_id: str
-    accepted_activation_revision: str
-    source_type: Literal["provider_event"] = "provider_event"
-    dispatch_mode: Literal["live", "offline"] = "offline"
+    accepted_revision: str
+    wake: Literal["provider_event"] = "provider_event"
+    delivery: Literal["live", "offline"] = "offline"
     event_context_ref: str
     issued_at: datetime
     audience: str = Field(default=PROVIDER_EVENT_DISPATCH_AUDIENCE)
@@ -85,8 +85,8 @@ def validate_provider_event_dispatch_request(
 
     if request.audience != PROVIDER_EVENT_DISPATCH_AUDIENCE:
         raise ProviderEventDispatchValidationError("invalid_audience")
-    if request.dispatch_mode != "offline":
-        raise ProviderEventDispatchValidationError("invalid_dispatch_mode")
+    if request.delivery != "offline":
+        raise ProviderEventDispatchValidationError("invalid_delivery")
     current_time = now or datetime.now(timezone.utc)
     issued_at = request.issued_at
     if issued_at.tzinfo is None:
@@ -162,8 +162,8 @@ def claim_provider_event_dispatch(
             "task_id": request.task_id,
             "binding_id": request.binding_id,
             "receipt_id": request.receipt_id,
-            "accepted_activation_revision": request.accepted_activation_revision,
-            "dispatch_mode": request.dispatch_mode,
+            "accepted_revision": request.accepted_revision,
+            "delivery": request.delivery,
             "audience": request.audience,
             "claimant_id": claimant_id or _claimant_id(),
             "launch_identity": launch_identity,

@@ -1,6 +1,6 @@
 """Dashboard action dispatch for Communication.
 
-Sibling to :mod:`task_activation` -- reuses the same offline runner
+Sibling to :mod:`task_execution` -- reuses the same offline runner
 infrastructure (``offline_runner.py``, ``create_unity_job``,
 ``_create_or_adopt_task_run``) but with a different trigger source
 (Console tile button click) and a simpler validation path (no
@@ -26,7 +26,7 @@ from common.settings import SETTINGS
 
 from .helpers import create_unity_job
 from .runtime_clients import get_k8s_clients as _get_k8s_clients
-from .task_activation import (
+from .task_execution import (
     _create_or_adopt_task_run,
     _normalize_task_id_component,
     _orchestra_admin_headers,
@@ -104,9 +104,9 @@ def _build_dashboard_action_run_payload(
         "assistant_id": request.assistant_id,
         "task_id": 0,
         "source_task_log_id": 0,
-        "source_type": "dashboard_action",
-        "execution_mode": "offline",
-        "activation_revision": "",
+        "wake": "dashboard_action",
+        "delivery": "offline",
+        "revision": "",
         "task_name": request.action_name,
         "task_description": f"Dashboard action: {request.action_name}",
         "state": "pending",
@@ -138,7 +138,7 @@ def _build_dashboard_action_env(
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": "0",
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": "0",
-        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": "",
+        "UNITY_OFFLINE_TASK_EXECUTION_REVISION": "",
         "UNITY_OFFLINE_TASK_SOURCE_TYPE": "dashboard_action",
         "UNITY_OFFLINE_TASK_NAME": request.action_name,
         "UNITY_OFFLINE_TASK_DESCRIPTION": f"Dashboard action: {request.action_name}",

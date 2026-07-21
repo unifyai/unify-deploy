@@ -108,7 +108,7 @@ def test_build_control_plane_plan_filters_by_client():
     assert operations[0].assistant_id == "999"
 
 
-def test_build_control_plane_plan_does_not_emit_task_activation_ops():
+def test_build_control_plane_plan_does_not_emit_task_execution_ops():
     """Integrations do not project schedules into task activations."""
     registry = {
         "client_alpha": ClientDeploymentEntry(
@@ -138,7 +138,7 @@ def test_build_control_plane_plan_does_not_emit_task_activation_ops():
         registry=registry,
     )
 
-    assert all(op.field != "task_activation" for op in operations)
+    assert all(op.field != "task_execution" for op in operations)
     assert all(op.field == "console_config" for op in operations)
 
 
@@ -188,9 +188,9 @@ def test_apply_operations_posts_communication_operations(monkeypatch):
         client_name="client_alpha",
         assistant_id="1851",
         deployment="v2",
-        field="task_activation",
+        field="task_execution",
         action="upsert",
-        path="/infra/task-activation/upsert",
+        path="/infra/task-execution/upsert",
         payload={"task_id": 1},
         service="communication",
         method="post",
@@ -200,18 +200,18 @@ def test_apply_operations_posts_communication_operations(monkeypatch):
 
     assert responses == [{"ok": True}]
     assert captured == [
-        ("/infra/task-activation/upsert", operation.payload),
+        ("/infra/task-execution/upsert", operation.payload),
     ]
 
 
-def test_apply_operations_rejects_unresolved_task_activation():
+def test_apply_operations_rejects_unresolved_task_execution():
     operation = reconcile.ReconcileOperation(
         client_name="client_alpha",
         assistant_id="1851",
         deployment="v2",
-        field="task_activation",
+        field="task_execution",
         action="unresolved",
-        path="/infra/task-activation/upsert",
+        path="/infra/task-execution/upsert",
         payload={"unresolved_reason": "missing task ids"},
         service="communication",
         method="post",
@@ -221,7 +221,7 @@ def test_apply_operations_rejects_unresolved_task_activation():
         reconcile.apply_operations([operation])
 
 
-def test_apply_operations_defers_generic_task_activation(monkeypatch):
+def test_apply_operations_defers_generic_task_execution(monkeypatch):
     """Deferred control-plane ops are recorded locally and not transmitted."""
 
     def _boom(*args, **kwargs):
@@ -236,9 +236,9 @@ def test_apply_operations_defers_generic_task_activation(monkeypatch):
         client_name="unify_company",
         assistant_id="2098",
         deployment="v0",
-        field="task_activation",
+        field="task_execution",
         action="deferred",
-        path="/infra/task-activation/upsert",
+        path="/infra/task-execution/upsert",
         payload={"deferred_reason": "activation ids not seeded yet"},
         service="communication",
         method="post",
@@ -250,7 +250,7 @@ def test_apply_operations_defers_generic_task_activation(monkeypatch):
         {
             "status": "deferred",
             "assistant_id": "2098",
-            "field": "task_activation",
+            "field": "task_execution",
             "reason": "activation ids not seeded yet",
         },
     ]
@@ -283,9 +283,9 @@ def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
             client_name="unify_company",
             assistant_id="2098",
             deployment="default",
-            field="task_activation",
+            field="task_execution",
             action="upsert",
-            path="/infra/task-activation/upsert",
+            path="/infra/task-execution/upsert",
             payload={"task_id": 1},
             service="communication",
             method="post",
@@ -305,7 +305,7 @@ def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
         {
             "status": "skipped-missing",
             "assistant_id": "2098",
-            "field": "task_activation",
+            "field": "task_execution",
             "reason": "assistant target is missing",
         },
     ]

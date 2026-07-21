@@ -105,15 +105,15 @@ class Settings:
             "UNITY_TASK_OFFLINE_QUEUE_NAME",
             f"unity-task-offline{self.env_suffix}",
         )
-        self.task_activation_repair_queue_name: str = os.environ.get(
-            "UNITY_TASK_ACTIVATION_REPAIR_QUEUE_NAME",
-            f"unity-task-activation-repair{self.env_suffix}",
+        self.task_execution_repair_queue_name: str = os.environ.get(
+            "UNITY_TASK_EXECUTION_REPAIR_QUEUE_NAME",
+            f"unity-task-execution-repair{self.env_suffix}",
         )
         self.task_due_dispatch_deadline_seconds: int = int(
             os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
         )
-        self.task_activation_horizon_days: int = int(
-            os.environ.get("UNITY_TASK_ACTIVATION_HORIZON_DAYS", "29"),
+        self.task_execution_horizon_days: int = int(
+            os.environ.get("UNITY_TASK_EXECUTION_HORIZON_DAYS", "29"),
         )
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
@@ -241,11 +241,11 @@ class Settings:
             self.vm_region: self.vm_zone,
         }
         self.vm_location_preflight_cache_ttl_seconds: float = float(
-            os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300")
+            os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300"),
         )
         if self.vm_location_preflight_cache_ttl_seconds <= 0:
             raise ValueError(
-                "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive"
+                "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive",
             )
 
         # Tunnel relay service

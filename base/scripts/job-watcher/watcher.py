@@ -5,7 +5,7 @@ Uses kopf (Kubernetes Operator Pythonic Framework) to watch Jobs:
 
 * ``app=unity`` — release any pool VM still assigned to the assistant
   (prevents leaked VMs lingering in "assigned" state after a crash).
-* ``app=unity-task-run`` — terminalize Orchestra Tasks/Runs for offline
+* ``app=unity-task-run`` — terminalize Orchestra Tasks/Executions for offline
   task Jobs when in-pod SIGTERM writeback never ran.
 
 The ``assistant-id`` label is set on the Job (not the Pod) by
@@ -132,7 +132,7 @@ def on_job_event(event, **_):
 
 @kopf.on.event("batch", "v1", "jobs", labels={"app": "unity-task-run"})
 def on_offline_task_job_event(event, **_):
-    """Terminalize Orchestra Tasks/Runs when an offline task Job ends."""
+    """Terminalize Orchestra Tasks/Executions when an offline task Job ends."""
     global _events_processed
 
     job = event.get("object", {})
@@ -166,7 +166,7 @@ def on_offline_task_job_event(event, **_):
     if not assistant_id or not run_key or not source_task_log_id_raw:
         print(
             f"Missing assistant-id/run-key/source-task-log-id on {job_name} — "
-            "skipping Tasks/Runs terminalization",
+            "skipping Tasks/Executions terminalization",
         )
         return
 
@@ -175,7 +175,7 @@ def on_offline_task_job_event(event, **_):
     except (TypeError, ValueError):
         print(
             f"Invalid source-task-log-id={source_task_log_id_raw!r} on {job_name} — "
-            "skipping Tasks/Runs terminalization",
+            "skipping Tasks/Executions terminalization",
         )
         return
 
