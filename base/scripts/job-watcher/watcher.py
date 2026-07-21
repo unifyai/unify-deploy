@@ -5,7 +5,7 @@ Uses kopf (Kubernetes Operator Pythonic Framework) to watch Jobs:
 
 * ``app=unity`` — release any pool VM still assigned to the assistant
   (prevents leaked VMs lingering in "assigned" state after a crash).
-* ``app=unity-task-run`` — terminalize Orchestra Tasks/Executions for offline
+* ``app=unity-task-execution`` — terminalize Orchestra Tasks/Executions for offline
   task Jobs when in-pod SIGTERM writeback never ran.
 
 The ``assistant-id`` label is set on the Job (not the Pod) by
@@ -35,7 +35,7 @@ COMMS_URL = os.environ["UNITY_COMMS_URL"]
 ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 MAX_EVENT_AGE = datetime.timedelta(minutes=5)
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
-TASK_RUN_KEY_ANNOTATION = "unify.ai/task-run-key"
+TASK_EXECUTION_KEY_ANNOTATION = "unify.ai/task-execution-key"
 SOURCE_TASK_LOG_ID_ANNOTATION = "unify.ai/source-task-log-id"
 
 _events_processed = 0
@@ -130,7 +130,7 @@ def on_job_event(event, **_):
     )
 
 
-@kopf.on.event("batch", "v1", "jobs", labels={"app": "unity-task-run"})
+@kopf.on.event("batch", "v1", "jobs", labels={"app": "unity-task-execution"})
 def on_offline_task_job_event(event, **_):
     """Terminalize Orchestra Tasks/Executions when an offline task Job ends."""
     global _events_processed
@@ -154,7 +154,7 @@ def on_offline_task_job_event(event, **_):
     annotations = metadata.get("annotations", {}) or {}
     job_name = metadata.get("name", "unknown")
     assistant_id = labels.get("assistant-id")
-    run_key = annotations.get(TASK_RUN_KEY_ANNOTATION)
+    run_key = annotations.get(TASK_EXECUTION_KEY_ANNOTATION)
     source_task_log_id_raw = annotations.get(SOURCE_TASK_LOG_ID_ANNOTATION)
 
     print(

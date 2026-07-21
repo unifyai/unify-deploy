@@ -134,7 +134,7 @@ def _build_dashboard_action_env(
             "request",
             f"Execute dashboard action: {request.action_name}",
         ),
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": "0",
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": "0",

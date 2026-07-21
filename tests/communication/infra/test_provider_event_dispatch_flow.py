@@ -57,9 +57,9 @@ def test_offline_launch_identity_uses_deterministic_job_name() -> None:
     assert (
         offline_launch_identity(
             run_key="offline:provider_event:a:1:b:r:digest",
-            job_name="unity-task-run-abcdef012345",
+            job_name="unity-task-execution-abcdef012345",
         )
-        == "unity-task-run-abcdef012345"
+        == "unity-task-execution-abcdef012345"
     )
 
 

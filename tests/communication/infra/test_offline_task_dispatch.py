@@ -163,9 +163,9 @@ def test_offline_task_job_name_is_deterministic_and_retry_salted():
     retry = task_execution._build_offline_task_job_name(run_key, retry_count=1)
 
     assert first == second
-    assert first.startswith("unity-task-run-")
+    assert first.startswith("unity-task-execution-")
     assert retry != first
-    assert retry.startswith("unity-task-run-")
+    assert retry.startswith("unity-task-execution-")
 
 
 def test_launch_offline_task_job_builds_one_shot_manifest():
@@ -182,7 +182,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
         core_api=core_api,
         request=request,
         run_key="offline:scheduled:assistant-123:101:abc123def456:once",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={
             "UNITY_OFFLINE_TASK_MODE": "actor",
             "ASSISTANT_ID": "123",
@@ -193,11 +193,11 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
 
     assert created is True
     manifest = batch_api.create_namespaced_job.call_args.kwargs["body"]
-    assert manifest["metadata"]["name"] == "unity-task-run-abc123def456"
-    assert manifest["metadata"]["labels"]["app"] == "unity-task-run"
+    assert manifest["metadata"]["name"] == "unity-task-execution-abc123def456"
+    assert manifest["metadata"]["labels"]["app"] == "unity-task-execution"
     assert manifest["metadata"]["labels"]["unity-status"] == "offline"
     assert manifest["metadata"]["labels"]["task-id"] == "101"
-    assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
+    assert manifest["metadata"]["annotations"]["unify.ai/task-execution-key"] == (
         "offline:scheduled:assistant-123:101:abc123def456:once"
     )
     assert manifest["metadata"]["annotations"]["unify.ai/source-task-log-id"] == "555"
@@ -219,7 +219,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [
-        {"secretRef": {"name": "unity-task-run-abc123def456"}},
+        {"secretRef": {"name": "unity-task-execution-abc123def456"}},
     ]
     # Credentials must never appear inline in the pod spec.
     inline_env_names = {var["name"] for var in container["env"]}
@@ -227,7 +227,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert "UNITY_OFFLINE_TASK_MODE" not in inline_env_names
 
     secret_body = core_api.create_namespaced_secret.call_args.kwargs["body"]
-    assert secret_body.metadata.name == "unity-task-run-abc123def456"
+    assert secret_body.metadata.name == "unity-task-execution-abc123def456"
     assert secret_body.string_data["UNIFY_KEY"] == "secret-key"
     assert secret_body.string_data["UNITY_OFFLINE_TASK_MODE"] == "actor"
 
@@ -250,7 +250,7 @@ def test_launch_offline_task_job_adopts_existing_job_with_matching_run_key():
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
     batch_api.read_namespaced_job.return_value = {
         "metadata": {
-            "annotations": {"unify.ai/task-run-key": "rk"},
+            "annotations": {"unify.ai/task-execution-key": "rk"},
         },
     }
 
@@ -259,14 +259,14 @@ def test_launch_offline_task_job_adopts_existing_job_with_matching_run_key():
         core_api=core_api,
         request=request,
         run_key="rk",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={},
         max_runtime_seconds=None,
     )
 
     assert created is False
     batch_api.read_namespaced_job.assert_called_once_with(
-        name="unity-task-run-abc123def456",
+        name="unity-task-execution-abc123def456",
         namespace=task_execution.SETTINGS.default_namespace,
     )
     core_api.patch_namespaced_secret.assert_not_called()
@@ -288,7 +288,7 @@ def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
     batch_api.read_namespaced_job.return_value = {
         "metadata": {
-            "annotations": {"unify.ai/task-run-key": "other-run-key"},
+            "annotations": {"unify.ai/task-execution-key": "other-run-key"},
         },
     }
 
@@ -298,7 +298,7 @@ def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key()
             core_api=core_api,
             request=request,
             run_key="rk",
-            job_name="unity-task-run-abc123def456",
+            job_name="unity-task-execution-abc123def456",
             offline_env={},
             max_runtime_seconds=None,
         )
@@ -320,7 +320,7 @@ def test_launch_offline_task_job_applies_per_task_runtime_bound():
         core_api=core_api,
         request=request,
         run_key="rk",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={},
         max_runtime_seconds=7200,
     )
@@ -375,7 +375,7 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert body["job_name"] == _build_offline_task_job_name(run_key)
     assert mock_launch.call_args.kwargs["run_key"] == run_key
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_RUN_KEY"] == run_key
+    assert offline_env["UNITY_OFFLINE_RUN_KEY"] == run_key
     assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == body["job_name"]
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
@@ -447,7 +447,7 @@ def test_offline_dispatch_retries_failed_terminal_run():
             return_value={
                 "run": {
                     "state": "failed",
-                    "job_name": "unity-task-run-old",
+                    "job_name": "unity-task-execution-old",
                     "error": "boom",
                     "retry_count": 1,
                 },
@@ -515,7 +515,7 @@ def test_offline_dispatch_retries_stale_inflight_run():
                 "run": {
                     "state": "running",
                     "run_key": "offline:scheduled:assistant-123:101:rev-123",
-                    "job_name": "unity-task-run-missing",
+                    "job_name": "unity-task-execution-missing",
                 },
                 "created": False,
             },
@@ -526,7 +526,10 @@ def test_offline_dispatch_retries_stale_inflight_run():
         ),
         patch(
             "communication.infra.task_execution._classify_offline_job_status",
-            return_value={"status": "missing", "job_name": "unity-task-run-missing"},
+            return_value={
+                "status": "missing",
+                "job_name": "unity-task-execution-missing",
+            },
         ),
         patch(
             "communication.infra.task_execution._launch_offline_task_job",
@@ -601,7 +604,7 @@ def test_offline_dispatch_adopts_inflight_source_for_different_run_key():
                 "success": True,
                 "status": "adopted_inflight_source",
                 "run_key": "offline:scheduled:assistant-123:101:rev-123",
-                "job_name": "unity-task-run-owner",
+                "job_name": "unity-task-execution-owner",
                 "run_state": "running",
                 "job_status": {"status": "active"},
                 "source_task_log_id": 555,
@@ -619,7 +622,7 @@ def test_offline_dispatch_adopts_inflight_source_for_different_run_key():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "adopted_inflight_source"
-    assert body["job_name"] == "unity-task-run-owner"
+    assert body["job_name"] == "unity-task-execution-owner"
     mock_launch.assert_not_called()
 
 
@@ -636,12 +639,12 @@ def test_adopt_inflight_source_conflict_detects_active_foreign_job():
             return_value={
                 "run_key": "offline:scheduled:assistant-123:101:rev-123",
                 "state": "running",
-                "job_name": "unity-task-run-owner",
+                "job_name": "unity-task-execution-owner",
             },
         ),
         patch(
             "communication.infra.task_execution._classify_offline_job_status",
-            return_value={"status": "active", "job_name": "unity-task-run-owner"},
+            return_value={"status": "active", "job_name": "unity-task-execution-owner"},
         ),
     ):
         conflict = mod._adopt_inflight_source_conflict(
@@ -652,7 +655,7 @@ def test_adopt_inflight_source_conflict_detects_active_foreign_job():
 
     assert conflict is not None
     assert conflict["status"] == "adopted_inflight_source"
-    assert conflict["job_name"] == "unity-task-run-owner"
+    assert conflict["job_name"] == "unity-task-execution-owner"
 
 
 def test_diagnose_classifies_missing_job_run_as_stale():
@@ -842,7 +845,7 @@ def test_offline_dispatch_adopts_completed_terminal_run():
         patch(
             "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={
-                "run": {"state": "completed", "job_name": "unity-task-run-old"},
+                "run": {"state": "completed", "job_name": "unity-task-execution-old"},
                 "created": False,
             },
         ) as mock_create_run,
@@ -1650,7 +1653,7 @@ def test_terminalize_offline_job_failed_updates_run_and_releases_source():
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Failed",
         )
 
@@ -1665,7 +1668,7 @@ def test_terminalize_offline_job_failed_updates_run_and_releases_source():
         mode="fail",
         info=mock_release.call_args.kwargs["info"],
     )
-    assert "unity-task-run-abc" in mock_release.call_args.kwargs["info"]
+    assert "unity-task-execution-abc" in mock_release.call_args.kwargs["info"]
 
 
 def test_terminalize_offline_job_complete_marks_inflight_run_completed():
@@ -1688,7 +1691,7 @@ def test_terminalize_offline_job_complete_marks_inflight_run_completed():
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Complete",
         )
 
@@ -1718,14 +1721,14 @@ def test_terminalize_offline_job_idempotent_when_already_terminal():
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Complete",
         )
         second = task_execution._terminalize_offline_job_outcome(
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Failed",
         )
 
@@ -1757,7 +1760,7 @@ def test_offline_task_job_terminal_endpoint():
                 "assistant_id": "assistant-123",
                 "run_key": "rk",
                 "source_task_log_id": 555,
-                "job_name": "unity-task-run-abc",
+                "job_name": "unity-task-execution-abc",
                 "terminal_type": "Failed",
             },
         )

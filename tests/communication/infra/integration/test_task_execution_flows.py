@@ -758,7 +758,7 @@ class TestTaskExecutionFlows:
         batch_api,
         comms,
     ):
-        """Offline scheduled tasks launch one-shot ``unity-task-run`` Jobs.
+        """Offline scheduled tasks launch one-shot ``unity-task-execution`` Jobs.
 
         Offline execution must never touch the interactive-session machinery:
         no AssistantSession is created, and the run executes inside a
@@ -774,7 +774,9 @@ class TestTaskExecutionFlows:
         def _find_task_run_jobs() -> list[Any]:
             jobs = batch_api.list_namespaced_job(
                 namespace=NAMESPACE,
-                label_selector=(f"app=unity-task-run,assistant-id={assistant_id}"),
+                label_selector=(
+                    f"app=unity-task-execution,assistant-id={assistant_id}"
+                ),
             )
             return list(jobs.items or [])
 
@@ -803,13 +805,13 @@ class TestTaskExecutionFlows:
                 timeout=TASK_DUE_LEAD_SECONDS + TASK_FLOW_TIMEOUT_SECONDS,
                 interval=5,
                 description=(
-                    f"unity-task-run Job for offline task {task_id} "
+                    f"unity-task-execution Job for offline task {task_id} "
                     f"on assistant {assistant_id}"
                 ),
             )
-            assert task_run_jobs, "Expected a dedicated unity-task-run Job"
+            assert task_run_jobs, "Expected a dedicated unity-task-execution Job"
             job = task_run_jobs[0]
-            assert job.metadata.name.startswith("unity-task-run-")
+            assert job.metadata.name.startswith("unity-task-execution-")
             assert job.metadata.labels.get("task-id") == str(task_id)
             # Matches task_execution.OFFLINE_TASK_JOB_BACKOFF_LIMIT. Hardcoded
             # because this merge_gate suite does not install the unify SDK that

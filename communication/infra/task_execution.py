@@ -2,7 +2,7 @@
 
 This module owns Cloud Tasks materialization, Orchestra admin calls, and
 offline-run launches. An offline run is a plain one-shot Kubernetes Job
-(``unity-task-run-*``) carrying the full runner env: no AssistantSession,
+(``unity-task-execution-*``) carrying the full runner env: no AssistantSession,
 no controller binding, no wake-reason envelope. The Job name is derived
 from the run key, so dispatch retries and concurrent deliveries collapse
 into a single execution via Kubernetes name uniqueness. Live session
@@ -87,10 +87,10 @@ TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_EXECUTION_CURRENT_PATH = "/admin/task-execution/current"
 ORCHESTRA_TASK_EXECUTION_REPROJECT_PATH = "/admin/task-execution/reproject"
-ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
-ORCHESTRA_TASK_RUN_GET_PATH = "/admin/task-run/get"
-ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
-ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
+ORCHESTRA_TASK_EXECUTION_CREATE_OR_ADOPT_PATH = "/admin/task-execution/create-or-adopt"
+ORCHESTRA_TASK_EXECUTION_GET_PATH = "/admin/task-execution/get"
+ORCHESTRA_TASK_EXECUTION_LATEST_PATH = "/admin/task-execution/latest"
+ORCHESTRA_TASK_EXECUTION_UPDATE_PATH = "/admin/task-execution/update"
 ORCHESTRA_TASK_SOURCE_RELEASE_PATH = "/admin/task-source/release-active"
 OFFLINE_TASK_JOB_BACKOFF_LIMIT = 2
 # Above SmartLead's 60s HTTP client timeout so SIGTERM writeback can finish
@@ -119,7 +119,7 @@ def _get_precreated_task_run(
     }
     if source_task_log_id is not None:
         payload["source_task_log_id"] = source_task_log_id
-    body = _orchestra_admin_post(ORCHESTRA_TASK_RUN_GET_PATH, payload)
+    body = _orchestra_admin_post(ORCHESTRA_TASK_EXECUTION_GET_PATH, payload)
     run = body.get("run")
     return run if isinstance(run, dict) else None
 
@@ -708,7 +708,7 @@ def _lookup_latest_task_run(
     }
     if source_task_log_id is not None:
         payload["source_task_log_id"] = source_task_log_id
-    body = _orchestra_admin_post(ORCHESTRA_TASK_RUN_LATEST_PATH, payload)
+    body = _orchestra_admin_post(ORCHESTRA_TASK_EXECUTION_LATEST_PATH, payload)
     run = body.get("run")
     return run if isinstance(run, dict) else None
 
@@ -727,7 +727,7 @@ def _create_or_adopt_task_run(payload: dict[str, Any]) -> dict[str, Any]:
 
     request_payload = {"project_name": ORCHESTRA_TASK_MACHINE_PROJECT, **payload}
     return _orchestra_admin_post(
-        ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH,
+        ORCHESTRA_TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
         request_payload,
     )
 
@@ -741,7 +741,7 @@ def _update_task_run(
     """Apply a partial update to one task run row."""
 
     return _orchestra_admin_post(
-        ORCHESTRA_TASK_RUN_UPDATE_PATH,
+        ORCHESTRA_TASK_EXECUTION_UPDATE_PATH,
         {
             "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
             "assistant_id": assistant_id,
@@ -1252,7 +1252,7 @@ def _build_offline_task_job_name(
 
     seed = run_key if not retry_count else f"{run_key}:retry:{retry_count}"
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
-    base_name = f"unity-task-run-{digest}"
+    base_name = f"unity-task-execution-{digest}"
     suffix = SETTINGS.env_suffix.lstrip("-")
     return f"{base_name}-{suffix}" if suffix else base_name
 
@@ -1264,7 +1264,7 @@ def _create_or_replace_offline_env_secret(
     run_key: str,
     offline_env: dict[str, str],
 ) -> None:
-    """Write the per-run env Secret consumed by the task-run Job via envFrom.
+    """Write the per-run env Secret consumed by the task-execution Job via envFrom.
 
     The Secret shares the Job's name; after the Job is created it becomes the
     Secret's owner so both garbage-collect together. Keeping the runner env
@@ -1278,8 +1278,8 @@ def _create_or_replace_offline_env_secret(
         metadata=k8s_client.V1ObjectMeta(
             name=job_name,
             namespace=SETTINGS.default_namespace,
-            labels={"app": "unity-task-run"},
-            annotations={"unify.ai/task-run-key": run_key},
+            labels={"app": "unity-task-execution"},
+            annotations={"unify.ai/task-execution-key": run_key},
         ),
         type="Opaque",
         string_data={key: str(value) for key, value in offline_env.items()},
@@ -1359,7 +1359,7 @@ def _launch_offline_task_job(
         active_deadline_seconds=max_runtime_seconds,
         unity_status="offline",
         priority_class_name="unity-idle",
-        app_label="unity-task-run",
+        app_label="unity-task-execution",
         backoff_limit=OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         termination_grace_period_seconds=OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS,
         extra_labels={
@@ -1367,7 +1367,7 @@ def _launch_offline_task_job(
             "task-id": str(request.task_id),
         },
         extra_annotations={
-            "unify.ai/task-run-key": run_key,
+            "unify.ai/task-execution-key": run_key,
             "unify.ai/source-task-log-id": str(request.source_task_log_id),
         },
     )
@@ -1391,7 +1391,7 @@ def _launch_offline_task_job(
             annotations = (
                 getattr(getattr(existing, "metadata", None), "annotations", None) or {}
             )
-        existing_run_key = annotations.get("unify.ai/task-run-key")
+        existing_run_key = annotations.get("unify.ai/task-execution-key")
         if existing_run_key != run_key:
             raise ProviderEventDispatchValidationError(
                 "offline_job_run_key_mismatch",
@@ -2221,7 +2221,7 @@ async def delete_scheduled_task_execution(
 async def terminalize_offline_task_job(
     request: OfflineTaskJobTerminalRequest,
 ):
-    """Mirror a terminal ``unity-task-run`` Job onto Orchestra Tasks/Executions.
+    """Mirror a terminal ``unity-task-execution`` Job onto Orchestra Tasks/Executions.
 
     Called by the job-watcher when a Job reaches Complete or Failed. Idempotent:
     already-terminal Runs are left alone, and release-active no-ops when the

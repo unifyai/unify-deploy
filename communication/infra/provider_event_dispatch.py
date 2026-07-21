@@ -99,7 +99,7 @@ def validate_provider_event_dispatch_request(
 def offline_launch_identity(*, run_key: str, job_name: str) -> str:
     """Return the deterministic offline sink identity for one operation."""
 
-    return job_name or f"unity-task-run:{run_key}"
+    return job_name or f"unity-task-execution:{run_key}"
 
 
 def _orchestra_admin_headers() -> dict[str, str]:

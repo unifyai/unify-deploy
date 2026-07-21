@@ -222,7 +222,7 @@ class OfflineTaskDispatchRequest(BaseModel):
 
 
 class OfflineTaskJobTerminalRequest(BaseModel):
-    """Terminalize Orchestra Tasks/Executions after a unity-task-run Job ends."""
+    """Terminalize Orchestra Tasks/Executions after a unity-task-execution Job ends."""
 
     assistant_id: str
     run_key: str
