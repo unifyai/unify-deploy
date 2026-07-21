@@ -343,7 +343,7 @@ def test_extra_annotations_appear_on_both_job_and_pod_template() -> None:
 
 
 def test_app_label_override_for_offline_and_dashboard_jobs() -> None:
-    """`task_activation` and `dashboard_actions` use distinct
+    """`task_execution` and `dashboard_actions` use distinct
     ``app`` labels so the controller's idle-pool selector
     (``app=unity``) doesn't accidentally pick up those one-shot Jobs.
     """

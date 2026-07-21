@@ -89,16 +89,16 @@ def _job_event(
         )
     annotations = {}
     if run_key is not None:
-        annotations["unify.ai/task-run-key"] = run_key
+        annotations["unify.ai/task-execution-key"] = run_key
     if source_task_log_id is not None:
         annotations["unify.ai/source-task-log-id"] = source_task_log_id
-    labels = {"app": "unity-task-run"}
+    labels = {"app": "unity-task-execution"}
     if assistant_id is not None:
         labels["assistant-id"] = assistant_id
     return {
         "object": {
             "metadata": {
-                "name": "unity-task-run-abc",
+                "name": "unity-task-execution-abc",
                 "labels": labels,
                 "annotations": annotations,
             },
@@ -120,7 +120,7 @@ def test_offline_handler_posts_terminal_on_failed(watcher_module):
         assistant_id="1406",
         run_key="offline:rk",
         source_task_log_id=555,
-        job_name="unity-task-run-abc",
+        job_name="unity-task-execution-abc",
         terminal_type="Failed",
     )
 
@@ -176,7 +176,7 @@ def test_notify_offline_task_job_terminal_posts_comms(monkeypatch):
             assistant_id="1406",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Failed",
         )
 

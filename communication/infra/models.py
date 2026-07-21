@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import datetime
 
-from unify.task_scheduler.types.run_source import RunSource
+from unify.task_scheduler.types.execution import Wake
 
 
 class VMReadyRequest(BaseModel):
@@ -164,38 +164,38 @@ class PoolReleaseRequest(BaseModel):
     release_generation: Optional[int] = None
 
 
-class ScheduledTaskActivationUpsertRequest(BaseModel):
-    """Idempotent request to materialize one scheduled activation."""
+class ScheduledTaskExecutionUpsertRequest(BaseModel):
+    """Idempotent request to materialize one scheduled execution."""
 
     assistant_id: str
     destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
-    activation_revision: str
+    revision: str
     scheduled_for: datetime
-    execution_mode: Literal["live", "offline"] = "live"
+    delivery: Literal["live", "offline"] = "live"
     requires_filesystem: bool = False
     requires_computer: bool = False
     entrypoint: Optional[int] = None
-    source_type: Literal["scheduled"] = "scheduled"
+    wake: Literal["scheduled"] = "scheduled"
     task_label: Optional[str] = None
     task_summary: Optional[str] = None
     visibility_policy: str = "silent_by_default"
     recurrence_hint: str = "one_off"
-    previous_activation_revision: Optional[str] = None
+    previous_revision: Optional[str] = None
     previous_scheduled_for: Optional[datetime] = None
-    previous_execution_mode: Optional[Literal["live", "offline"]] = None
+    previous_delivery: Optional[Literal["live", "offline"]] = None
 
 
-class ScheduledTaskActivationDeleteRequest(BaseModel):
-    """Delete one previously materialized scheduled activation."""
+class ScheduledTaskExecutionDeleteRequest(BaseModel):
+    """Delete one previously materialized scheduled execution."""
 
     assistant_id: str
     destination: Optional[str] = None
     task_id: int
-    activation_revision: str
+    revision: str
     scheduled_for: datetime
-    execution_mode: Literal["live", "offline"] = "live"
+    delivery: Literal["live", "offline"] = "live"
 
 
 class OfflineTaskDispatchRequest(BaseModel):
@@ -205,13 +205,13 @@ class OfflineTaskDispatchRequest(BaseModel):
     destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
-    activation_revision: str
-    execution_mode: Literal["offline"] = "offline"
+    revision: str
+    delivery: Literal["offline"] = "offline"
     requires_filesystem: bool = False
     requires_computer: bool = False
     entrypoint: Optional[int] = None
     max_runtime_seconds: Optional[int] = None
-    source_type: RunSource = RunSource.scheduled
+    wake: Wake = Wake.scheduled
     scheduled_for: Optional[datetime] = None
     source_ref: Optional[str] = None
     source_medium: Optional[str] = None
@@ -222,7 +222,7 @@ class OfflineTaskDispatchRequest(BaseModel):
 
 
 class OfflineTaskJobTerminalRequest(BaseModel):
-    """Terminalize Orchestra Tasks/Runs after a unity-task-run Job ends."""
+    """Terminalize Orchestra Tasks/Executions after a unity-task-execution Job ends."""
 
     assistant_id: str
     run_key: str
@@ -231,8 +231,8 @@ class OfflineTaskJobTerminalRequest(BaseModel):
     terminal_type: Literal["Complete", "Failed"]
 
 
-class TaskActivationDiagnosticRequest(BaseModel):
-    """Inspect task activation materialization for one assistant task."""
+class TaskExecutionDiagnosticRequest(BaseModel):
+    """Inspect task execution materialization for one assistant task."""
 
     assistant_id: str
     task_id: int

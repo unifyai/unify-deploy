@@ -15,9 +15,9 @@ def _payload(**overrides):
         "assistant_id": "assistant-123",
         "task_id": 101,
         "source_task_log_id": 555,
-        "activation_revision": "rev-123",
-        "execution_mode": "offline",
-        "source_type": "scheduled",
+        "revision": "rev-123",
+        "delivery": "offline",
+        "wake": "scheduled",
         "scheduled_for": "2026-04-10T09:00:00+00:00",
     }
     payload.update(overrides)
@@ -26,12 +26,12 @@ def _payload(**overrides):
 
 def _activation(**overrides):
     activation = {
-        "activation_kind": "scheduled",
-        "execution_mode": "offline",
-        "activation_revision": "rev-123",
+        "wake": "scheduled",
+        "delivery": "offline",
+        "revision": "rev-123",
         "source_task_log_id": 555,
         "entrypoint": 777,
-        "next_due_at": "2026-04-10T09:00:00+00:00",
+        "scheduled_for": "2026-04-10T09:00:00+00:00",
         "task_name": "Daily summary",
         "task_description": "Send the daily summary email.",
     }
@@ -70,7 +70,7 @@ def _default_no_latest_run_for_source_flight():
     """Avoid Orchestra HTTP from source single-flight checks in unit tests."""
 
     with patch(
-        "communication.infra.task_activation._lookup_latest_task_run",
+        "communication.infra.task_execution._lookup_latest_task_run",
         return_value=None,
     ):
         yield
@@ -82,11 +82,11 @@ def test_offline_dispatch_skips_stale_activation():
     client = _client()
 
     with patch(
-        "communication.infra.task_activation._lookup_current_task_activation",
-        return_value=_activation(activation_revision="rev-new"),
+        "communication.infra.task_execution._lookup_current_task_execution",
+        return_value=_activation(revision="rev-new"),
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -94,18 +94,18 @@ def test_offline_dispatch_skips_stale_activation():
     assert response.json() == {
         "success": True,
         "status": "skipped",
-        "reason": "activation_revision_mismatch",
+        "reason": "revision_mismatch",
     }
 
 
-def test_explicit_offline_dispatch_skips_orchestra_activation_lookup():
+def test_explicit_offline_dispatch_skips_orchestra_execution_lookup():
     """Explicit REST triggers must not re-fetch the activation Orchestra just resolved."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(
-            source_type="explicit",
+            wake="explicit",
             scheduled_for=None,
             source_ref="req-rest-skip-lookup",
             source_medium="api",
@@ -116,34 +116,33 @@ def test_explicit_offline_dispatch_skips_orchestra_activation_lookup():
     )
 
     with patch(
-        "communication.infra.task_activation._lookup_current_task_activation",
+        "communication.infra.task_execution._lookup_current_task_execution",
     ) as mock_lookup:
-        activation = task_activation._resolve_offline_dispatch_activation(request)
+        activation = task_execution._resolve_offline_dispatch_execution(request)
 
     mock_lookup.assert_not_called()
     assert activation is not None
-    assert activation["activation_revision"] == "rev-123"
+    assert activation["revision"] == "rev-123"
     assert activation["entrypoint"] == 777
     assert activation["source_task_log_id"] == 555
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
 def test_scheduled_offline_dispatch_still_looks_up_current_activation():
     """Delayed scheduled deliveries still re-check the current Orchestra activation."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     current = _activation()
 
     with patch(
-        "communication.infra.task_activation._lookup_current_task_activation",
+        "communication.infra.task_execution._lookup_current_task_execution",
         return_value=current,
     ) as mock_lookup:
-        activation = task_activation._resolve_offline_dispatch_activation(request)
+        activation = task_execution._resolve_offline_dispatch_execution(request)
 
     mock_lookup.assert_called_once_with(
         assistant_id="assistant-123",
@@ -156,34 +155,34 @@ def test_scheduled_offline_dispatch_still_looks_up_current_activation():
 def test_offline_task_job_name_is_deterministic_and_retry_salted():
     """Job names must be a stable function of run_key, salted per retry."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     run_key = "offline:scheduled:assistant-123:101:abc123def456:once"
-    first = task_activation._build_offline_task_job_name(run_key)
-    second = task_activation._build_offline_task_job_name(run_key)
-    retry = task_activation._build_offline_task_job_name(run_key, retry_count=1)
+    first = task_execution._build_offline_task_job_name(run_key)
+    second = task_execution._build_offline_task_job_name(run_key)
+    retry = task_execution._build_offline_task_job_name(run_key, retry_count=1)
 
     assert first == second
-    assert first.startswith("unity-task-run-")
+    assert first.startswith("unity-task-execution-")
     assert retry != first
-    assert retry.startswith("unity-task-run-")
+    assert retry.startswith("unity-task-execution-")
 
 
 def test_launch_offline_task_job_builds_one_shot_manifest():
     """The Job is a self-contained one-shot; runner env rides a per-run Secret."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
     core_api = MagicMock()
 
-    created = task_activation._launch_offline_task_job(
+    created = task_execution._launch_offline_task_job(
         batch_api=batch_api,
         core_api=core_api,
         request=request,
         run_key="offline:scheduled:assistant-123:101:abc123def456:once",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={
             "UNITY_OFFLINE_TASK_MODE": "actor",
             "ASSISTANT_ID": "123",
@@ -194,17 +193,17 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
 
     assert created is True
     manifest = batch_api.create_namespaced_job.call_args.kwargs["body"]
-    assert manifest["metadata"]["name"] == "unity-task-run-abc123def456"
-    assert manifest["metadata"]["labels"]["app"] == "unity-task-run"
+    assert manifest["metadata"]["name"] == "unity-task-execution-abc123def456"
+    assert manifest["metadata"]["labels"]["app"] == "unity-task-execution"
     assert manifest["metadata"]["labels"]["unity-status"] == "offline"
     assert manifest["metadata"]["labels"]["task-id"] == "101"
-    assert manifest["metadata"]["annotations"]["unify.ai/task-run-key"] == (
+    assert manifest["metadata"]["annotations"]["unify.ai/task-execution-key"] == (
         "offline:scheduled:assistant-123:101:abc123def456:once"
     )
     assert manifest["metadata"]["annotations"]["unify.ai/source-task-log-id"] == "555"
     assert (
         manifest["spec"]["backoffLimit"]
-        == task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT
+        == task_execution.OFFLINE_TASK_JOB_BACKOFF_LIMIT
     )
     assert manifest["spec"]["backoffLimit"] > 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
@@ -214,13 +213,13 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     # writeback can finish before kubelet SIGKILLs the runner.
     assert (
         manifest["spec"]["template"]["spec"]["terminationGracePeriodSeconds"]
-        == task_activation.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS
+        == task_execution.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS
     )
-    assert task_activation.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS > 60
+    assert task_execution.OFFLINE_TASK_TERMINATION_GRACE_PERIOD_SECONDS > 60
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [
-        {"secretRef": {"name": "unity-task-run-abc123def456"}},
+        {"secretRef": {"name": "unity-task-execution-abc123def456"}},
     ]
     # Credentials must never appear inline in the pod spec.
     inline_env_names = {var["name"] for var in container["env"]}
@@ -228,7 +227,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     assert "UNITY_OFFLINE_TASK_MODE" not in inline_env_names
 
     secret_body = core_api.create_namespaced_secret.call_args.kwargs["body"]
-    assert secret_body.metadata.name == "unity-task-run-abc123def456"
+    assert secret_body.metadata.name == "unity-task-execution-abc123def456"
     assert secret_body.string_data["UNIFY_KEY"] == "secret-key"
     assert secret_body.string_data["UNITY_OFFLINE_TASK_MODE"] == "actor"
 
@@ -243,32 +242,32 @@ def test_launch_offline_task_job_adopts_existing_job_with_matching_run_key():
 
     from kubernetes.client.rest import ApiException
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
     core_api = MagicMock()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
     batch_api.read_namespaced_job.return_value = {
         "metadata": {
-            "annotations": {"unify.ai/task-run-key": "rk"},
+            "annotations": {"unify.ai/task-execution-key": "rk"},
         },
     }
 
-    created = task_activation._launch_offline_task_job(
+    created = task_execution._launch_offline_task_job(
         batch_api=batch_api,
         core_api=core_api,
         request=request,
         run_key="rk",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={},
         max_runtime_seconds=None,
     )
 
     assert created is False
     batch_api.read_namespaced_job.assert_called_once_with(
-        name="unity-task-run-abc123def456",
-        namespace=task_activation.SETTINGS.default_namespace,
+        name="unity-task-execution-abc123def456",
+        namespace=task_execution.SETTINGS.default_namespace,
     )
     core_api.patch_namespaced_secret.assert_not_called()
 
@@ -278,28 +277,28 @@ def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key()
 
     from kubernetes.client.rest import ApiException
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
     from communication.infra.provider_event_dispatch import (
         ProviderEventDispatchValidationError,
     )
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
     core_api = MagicMock()
     batch_api.create_namespaced_job.side_effect = ApiException(status=409)
     batch_api.read_namespaced_job.return_value = {
         "metadata": {
-            "annotations": {"unify.ai/task-run-key": "other-run-key"},
+            "annotations": {"unify.ai/task-execution-key": "other-run-key"},
         },
     }
 
     with pytest.raises(ProviderEventDispatchValidationError) as exc:
-        task_activation._launch_offline_task_job(
+        task_execution._launch_offline_task_job(
             batch_api=batch_api,
             core_api=core_api,
             request=request,
             run_key="rk",
-            job_name="unity-task-run-abc123def456",
+            job_name="unity-task-execution-abc123def456",
             offline_env={},
             max_runtime_seconds=None,
         )
@@ -310,18 +309,18 @@ def test_launch_offline_task_job_rejects_name_conflict_with_mismatched_run_key()
 def test_launch_offline_task_job_applies_per_task_runtime_bound():
     """A task's max_runtime_seconds becomes the Job's activeDeadlineSeconds."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     batch_api = MagicMock()
     core_api = MagicMock()
 
-    task_activation._launch_offline_task_job(
+    task_execution._launch_offline_task_job(
         batch_api=batch_api,
         core_api=core_api,
         request=request,
         run_key="rk",
-        job_name="unity-task-run-abc123def456",
+        job_name="unity-task-execution-abc123def456",
         offline_env={},
         max_runtime_seconds=7200,
     )
@@ -337,31 +336,31 @@ def test_offline_dispatch_launches_job_for_current_activation():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ) as mock_launch,
         patch(
-            "communication.infra.task_activation._update_task_run",
+            "communication.infra.task_execution._update_task_run",
         ) as mock_update_run,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -371,12 +370,12 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert body["status"] == "launched_job"
     run_key = mock_create_run.call_args.args[0]["run_key"]
     assert body["run_key"] == run_key
-    from communication.infra.task_activation import _build_offline_task_job_name
+    from communication.infra.task_execution import _build_offline_task_job_name
 
     assert body["job_name"] == _build_offline_task_job_name(run_key)
     assert mock_launch.call_args.kwargs["run_key"] == run_key
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_RUN_KEY"] == run_key
+    assert offline_env["UNITY_OFFLINE_RUN_KEY"] == run_key
     assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == body["job_name"]
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
@@ -396,31 +395,31 @@ def test_offline_dispatch_reports_already_dispatched_on_job_conflict():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ),
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=False,
         ),
         patch(
-            "communication.infra.task_activation._update_task_run",
+            "communication.infra.task_execution._update_task_run",
         ) as mock_update_run,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -436,19 +435,19 @@ def test_offline_dispatch_retries_failed_terminal_run():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={
                 "run": {
                     "state": "failed",
-                    "job_name": "unity-task-run-old",
+                    "job_name": "unity-task-execution-old",
                     "error": "boom",
                     "retry_count": 1,
                 },
@@ -456,23 +455,23 @@ def test_offline_dispatch_retries_failed_terminal_run():
             },
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ) as mock_launch,
         patch(
-            "communication.infra.task_activation._update_task_run",
+            "communication.infra.task_execution._update_task_run",
         ) as mock_update_run,
         patch(
-            "communication.infra.task_activation._release_active_task_source",
+            "communication.infra.task_execution._release_active_task_source",
             return_value={"updated": True, "mode": "reopen"},
         ) as mock_release,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -480,7 +479,7 @@ def test_offline_dispatch_retries_failed_terminal_run():
     assert response.json()["status"] == "launched_job"
     run_key = mock_create_run.call_args.args[0]["run_key"]
     assert response.json()["run_key"] == run_key
-    from communication.infra.task_activation import _build_offline_task_job_name
+    from communication.infra.task_execution import _build_offline_task_job_name
 
     expected_job_name = _build_offline_task_job_name(run_key, retry_count=2)
     assert response.json()["job_name"] == expected_job_name
@@ -503,46 +502,49 @@ def test_offline_dispatch_retries_stale_inflight_run():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={
                 "run": {
                     "state": "running",
                     "run_key": "offline:scheduled:assistant-123:101:rev-123",
-                    "job_name": "unity-task-run-missing",
+                    "job_name": "unity-task-execution-missing",
                 },
                 "created": False,
             },
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._classify_offline_job_status",
-            return_value={"status": "missing", "job_name": "unity-task-run-missing"},
+            "communication.infra.task_execution._classify_offline_job_status",
+            return_value={
+                "status": "missing",
+                "job_name": "unity-task-execution-missing",
+            },
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ) as mock_launch,
         patch(
-            "communication.infra.task_activation._update_task_run",
+            "communication.infra.task_execution._update_task_run",
         ) as mock_update_run,
         patch(
-            "communication.infra.task_activation._release_active_task_source",
+            "communication.infra.task_execution._release_active_task_source",
             return_value={"updated": True, "mode": "reopen"},
         ) as mock_release,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -550,7 +552,7 @@ def test_offline_dispatch_retries_stale_inflight_run():
     assert response.json()["status"] == "launched_job"
     run_key = mock_create_run.call_args.args[0]["run_key"]
     assert response.json()["run_key"] == run_key
-    from communication.infra.task_activation import _build_offline_task_job_name
+    from communication.infra.task_execution import _build_offline_task_job_name
 
     expected_job_name = _build_offline_task_job_name(run_key, retry_count=1)
     offline_env = mock_launch.call_args.kwargs["offline_env"]
@@ -575,15 +577,15 @@ def test_offline_dispatch_adopts_inflight_source_for_different_run_key():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={
                 "run": {
                     "state": "pending",
@@ -593,56 +595,56 @@ def test_offline_dispatch_adopts_inflight_source_for_different_run_key():
             },
         ),
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._adopt_inflight_source_conflict",
+            "communication.infra.task_execution._adopt_inflight_source_conflict",
             return_value={
                 "success": True,
                 "status": "adopted_inflight_source",
                 "run_key": "offline:scheduled:assistant-123:101:rev-123",
-                "job_name": "unity-task-run-owner",
+                "job_name": "unity-task-execution-owner",
                 "run_state": "running",
                 "job_status": {"status": "active"},
                 "source_task_log_id": 555,
             },
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
         ) as mock_launch,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
-            json=_payload(source_type="explicit", source_ref="ref-new"),
+            "/infra/task-execution/offline-dispatch",
+            json=_payload(wake="explicit", source_ref="ref-new"),
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "adopted_inflight_source"
-    assert body["job_name"] == "unity-task-run-owner"
+    assert body["job_name"] == "unity-task-execution-owner"
     mock_launch.assert_not_called()
 
 
 def test_adopt_inflight_source_conflict_detects_active_foreign_job():
-    from communication.infra import task_activation as mod
+    from communication.infra import task_execution as mod
     from communication.infra.models import OfflineTaskDispatchRequest
 
     request = OfflineTaskDispatchRequest(
-        **_payload(source_type="explicit", source_ref="b"),
+        **_payload(wake="explicit", source_ref="b"),
     )
     with (
         patch(
-            "communication.infra.task_activation._lookup_latest_task_run",
+            "communication.infra.task_execution._lookup_latest_task_run",
             return_value={
                 "run_key": "offline:scheduled:assistant-123:101:rev-123",
                 "state": "running",
-                "job_name": "unity-task-run-owner",
+                "job_name": "unity-task-execution-owner",
             },
         ),
         patch(
-            "communication.infra.task_activation._classify_offline_job_status",
-            return_value={"status": "active", "job_name": "unity-task-run-owner"},
+            "communication.infra.task_execution._classify_offline_job_status",
+            return_value={"status": "active", "job_name": "unity-task-execution-owner"},
         ),
     ):
         conflict = mod._adopt_inflight_source_conflict(
@@ -653,7 +655,7 @@ def test_adopt_inflight_source_conflict_detects_active_foreign_job():
 
     assert conflict is not None
     assert conflict["status"] == "adopted_inflight_source"
-    assert conflict["job_name"] == "unity-task-run-owner"
+    assert conflict["job_name"] == "unity-task-execution-owner"
 
 
 def test_diagnose_classifies_missing_job_run_as_stale():
@@ -664,18 +666,18 @@ def test_diagnose_classifies_missing_job_run_as_stale():
         "success": True,
         "assistant_id": "assistant-123",
         "task_id": 101,
-        "activation": _activation(
-            next_due_at="2026-04-10T09:00:00+00:00",
+        "execution": _activation(
+            scheduled_for="2026-04-10T09:00:00+00:00",
         ),
         "materialization": {"cloud_task_status": "missing"},
         "queues": {},
         "latest_run": {
             "run_key": "offline:scheduled:assistant-123:101:rev-123",
             "state": "running",
-            "execution_mode": "offline",
+            "delivery": "offline",
             "job_name": "unity-offline-missing",
             "source_task_log_id": 555,
-            "activation_revision": "rev-123",
+            "revision": "rev-123",
             "scheduled_for": "2026-04-10T09:00:00+00:00",
         },
         "health": {"status": "fired_inflight", "repairable": False},
@@ -683,20 +685,20 @@ def test_diagnose_classifies_missing_job_run_as_stale():
 
     with (
         patch(
-            "communication.infra.task_activation._activation_materialization_diagnostic",
+            "communication.infra.task_execution._execution_materialization_diagnostic",
             return_value=diagnostic,
         ),
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             return_value=("batch-api", None, None, None),
         ),
         patch(
-            "communication.infra.task_activation._classify_offline_job_status",
+            "communication.infra.task_execution._classify_offline_job_status",
             return_value={"status": "missing", "job_name": "unity-offline-missing"},
         ),
     ):
         response = client.post(
-            "/infra/task-activation/diagnose",
+            "/infra/task-execution/diagnose",
             json={
                 "assistant_id": "assistant-123",
                 "task_id": 101,
@@ -712,7 +714,7 @@ def test_diagnose_classifies_missing_job_run_as_stale():
     assert body["blocking_conditions"][0]["type"] == "stale_running_run"
 
 
-def test_task_activation_health_summarizes_blocking_conditions():
+def test_task_execution_health_summarizes_blocking_conditions():
     """Health endpoint should return alertable lifecycle counters."""
 
     client = _client()
@@ -720,7 +722,7 @@ def test_task_activation_health_summarizes_blocking_conditions():
         "success": True,
         "assistant_id": "assistant-123",
         "task_id": 101,
-        "activation": _activation(),
+        "execution": _activation(),
         "materialization": {"cloud_task_status": "missing"},
         "queues": {},
         "latest_run": {"state": "running"},
@@ -729,11 +731,11 @@ def test_task_activation_health_summarizes_blocking_conditions():
     }
 
     with patch(
-        "communication.infra.task_activation.diagnose_task_activation",
+        "communication.infra.task_execution.diagnose_task_execution",
         new=AsyncMock(return_value=diagnostic),
     ):
         response = client.post(
-            "/infra/task-activation/health",
+            "/infra/task-execution/health",
             json={
                 "assistant_id": "assistant-123",
                 "task_id": 101,
@@ -760,7 +762,7 @@ def test_reconcile_current_repairs_only_repairable_diagnostics():
     client = _client()
     diagnostic = {
         "success": True,
-        "activation": _activation(),
+        "execution": _activation(),
         "health": {"status": "stale_running_run", "repairable": True},
         "blocking_conditions": [{"type": "stale_running_run"}],
     }
@@ -768,16 +770,16 @@ def test_reconcile_current_repairs_only_repairable_diagnostics():
 
     with (
         patch(
-            "communication.infra.task_activation.diagnose_task_activation",
+            "communication.infra.task_execution.diagnose_task_execution",
             new=AsyncMock(return_value=diagnostic),
         ),
         patch(
-            "communication.infra.task_activation.repair_current_task_activation",
+            "communication.infra.task_execution.repair_current_task_execution",
             new=AsyncMock(return_value=repair),
         ) as mock_repair,
     ):
         response = client.post(
-            "/infra/task-activation/reconcile-current",
+            "/infra/task-execution/reconcile-current",
             json={
                 "assistant_id": "assistant-123",
                 "task_id": 101,
@@ -797,22 +799,22 @@ def test_reconcile_current_noops_non_repairable_diagnostics():
     client = _client()
     diagnostic = {
         "success": True,
-        "activation": _activation(),
+        "execution": _activation(),
         "health": {"status": "armed_future", "repairable": False},
     }
 
     with (
         patch(
-            "communication.infra.task_activation.diagnose_task_activation",
+            "communication.infra.task_execution.diagnose_task_execution",
             new=AsyncMock(return_value=diagnostic),
         ),
         patch(
-            "communication.infra.task_activation.repair_current_task_activation",
+            "communication.infra.task_execution.repair_current_task_execution",
             new=AsyncMock(),
         ) as mock_repair,
     ):
         response = client.post(
-            "/infra/task-activation/reconcile-current",
+            "/infra/task-execution/reconcile-current",
             json={
                 "assistant_id": "assistant-123",
                 "task_id": 101,
@@ -833,30 +835,30 @@ def test_offline_dispatch_adopts_completed_terminal_run():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={
-                "run": {"state": "completed", "job_name": "unity-task-run-old"},
+                "run": {"state": "completed", "job_name": "unity-task-execution-old"},
                 "created": False,
             },
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
         ) as mock_launch,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(),
         )
 
@@ -874,14 +876,14 @@ def test_repair_current_retries_fired_failed_activation():
     """Repair should dispatch failed fired offline activations."""
 
     client = _client()
-    activation = _activation(
+    execution = _activation(
         assistant_id="assistant-123",
         task_id=101,
-        next_due_at="2026-04-10T09:00:00+00:00",
+        scheduled_for="2026-04-10T09:00:00+00:00",
     )
     diagnostic = {
         "success": True,
-        "activation": activation,
+        "execution": execution,
         "materialization": {"cloud_task_status": "missing"},
         "latest_run": {"state": "failed"},
         "health": {"status": "fired_failed_retryable", "repairable": True},
@@ -889,23 +891,23 @@ def test_repair_current_retries_fired_failed_activation():
 
     with (
         patch(
-            "communication.infra.task_activation._activation_materialization_diagnostic",
+            "communication.infra.task_execution._execution_materialization_diagnostic",
             return_value=diagnostic,
         ),
         patch(
-            "communication.infra.task_activation.dispatch_offline_task",
+            "communication.infra.task_execution.dispatch_offline_task",
             new=AsyncMock(return_value={"success": True, "status": "launched_job"}),
         ) as mock_dispatch,
     ):
         response = client.post(
-            "/infra/task-activation/repair-current",
+            "/infra/task-execution/repair-current",
             json={"assistant_id": "assistant-123", "task_id": 101},
         )
 
     assert response.status_code == 200
     assert response.json()["status"] == "retry_dispatched"
     dispatched_request = mock_dispatch.call_args.args[0]
-    assert dispatched_request.execution_mode == "offline"
+    assert dispatched_request.delivery == "offline"
     assert dispatched_request.entrypoint == 777
 
 
@@ -913,14 +915,14 @@ def test_repair_current_reprojects_completed_activation():
     """Completed runs should repair by reprojection, not duplicate dispatch."""
 
     client = _client()
-    activation = _activation(
+    execution = _activation(
         assistant_id="assistant-123",
         task_id=101,
-        next_due_at="2026-04-10T09:00:00+00:00",
+        scheduled_for="2026-04-10T09:00:00+00:00",
     )
     diagnostic = {
         "success": True,
-        "activation": activation,
+        "execution": execution,
         "materialization": {"cloud_task_status": "missing"},
         "latest_run": {"state": "completed"},
         "health": {"status": "completed_not_rearmed", "repairable": True},
@@ -928,20 +930,20 @@ def test_repair_current_reprojects_completed_activation():
 
     with (
         patch(
-            "communication.infra.task_activation._activation_materialization_diagnostic",
+            "communication.infra.task_execution._execution_materialization_diagnostic",
             return_value=diagnostic,
         ),
         patch(
-            "communication.infra.task_activation._reproject_task_activation",
+            "communication.infra.task_execution._reproject_task_execution",
             return_value={"upserted": 1, "deleted": 0},
         ) as mock_reproject,
         patch(
-            "communication.infra.task_activation.dispatch_offline_task",
+            "communication.infra.task_execution.dispatch_offline_task",
             new=AsyncMock(return_value={"success": True, "status": "launched_job"}),
         ) as mock_dispatch,
     ):
         response = client.post(
-            "/infra/task-activation/repair-current",
+            "/infra/task-execution/repair-current",
             json={"assistant_id": "assistant-123", "task_id": 101},
         )
 
@@ -957,89 +959,86 @@ def test_repair_current_reprojects_completed_activation():
 def test_offline_dispatch_allows_agentic_activation_without_entrypoint():
     """Offline delivery should not imply symbolic function execution."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
     activation = _activation(entrypoint=None)
 
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
 def test_explicit_offline_dispatch_accepts_scheduled_activation():
     """REST explicit triggers may fire scheduled offline activations."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(
-            source_type="explicit",
+            wake="explicit",
             scheduled_for=None,
             source_ref="req-rest-1",
             source_medium="api",
         ),
     )
-    activation = _activation(activation_kind="scheduled")
+    activation = _activation(wake="scheduled")
 
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
 def test_explicit_offline_dispatch_accepts_triggered_activation():
     """REST explicit triggers may also fire triggered offline activations."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(
-            source_type="explicit",
+            wake="explicit",
             scheduled_for=None,
             source_ref="req-rest-2",
         ),
     )
     activation = _activation(
-        activation_kind="triggered",
-        next_due_at=None,
+        wake="triggered",
+        scheduled_for=None,
     )
 
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
-def test_triggered_offline_dispatch_rejects_scheduled_activation_kind():
-    """Inbound triggered dispatch still requires activation_kind=triggered."""
+def test_triggered_offline_dispatch_rejects_scheduled_execution_kind():
+    """Inbound triggered dispatch still requires wake=triggered."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="triggered", scheduled_for=None),
+    request = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="triggered", scheduled_for=None),
     )
-    activation = _activation(activation_kind="scheduled")
+    activation = _activation(wake="scheduled")
 
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        == "activation_kind_changed"
+        task_execution._validate_current_offline_execution(request, activation)
+        == "wake_changed"
     )
 
 
 def test_offline_dispatch_rejects_stale_request_entrypoint():
     """A request cannot claim a function when the current activation is agentic."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(entrypoint=777),
     )
     activation = _activation(entrypoint=None)
 
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
+        task_execution._validate_current_offline_execution(request, activation)
         == "entrypoint_mismatch"
     )
 
@@ -1047,11 +1046,11 @@ def test_offline_dispatch_rejects_stale_request_entrypoint():
 def test_offline_runner_env_carries_agentic_execution_without_function_id():
     """The Unity job payload should preserve agentic offline execution."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    env = task_activation._build_offline_runner_env(
-        request=task_activation.OfflineTaskDispatchRequest(**_payload()),
-        activation=_activation(entrypoint=None),
+    env = task_execution._build_offline_runner_env(
+        request=task_execution.OfflineTaskDispatchRequest(**_payload()),
+        execution=_activation(entrypoint=None),
         assistant_data=_assistant_data(api_key="key"),
         run_key="offline:scheduled:assistant-123:101:rev:once",
         job_name="unity-assistant-abc",
@@ -1065,11 +1064,11 @@ def test_offline_runner_env_carries_agentic_execution_without_function_id():
 def test_offline_runner_env_carries_symbolic_function_id():
     """The Unity job payload should preserve symbolic offline execution."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    env = task_activation._build_offline_runner_env(
-        request=task_activation.OfflineTaskDispatchRequest(**_payload()),
-        activation=_activation(entrypoint=777),
+    env = task_execution._build_offline_runner_env(
+        request=task_execution.OfflineTaskDispatchRequest(**_payload()),
+        execution=_activation(entrypoint=777),
         assistant_data=_assistant_data(api_key="key"),
         run_key="offline:scheduled:assistant-123:101:rev:once",
         job_name="unity-assistant-abc",
@@ -1086,29 +1085,29 @@ def test_offline_dispatch_persists_authorized_destination_on_run_create():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(destination="team:7"),
         ) as mock_lookup,
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(team_ids=[7]),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ),
-        patch("communication.infra.task_activation._update_task_run"),
+        patch("communication.infra.task_execution._update_task_run"),
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(destination="team:7"),
         )
 
@@ -1128,22 +1127,22 @@ def test_offline_dispatch_skips_revoked_team_destination():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(destination="team:7"),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(team_ids=[8]),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
         ) as mock_launch,
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(destination="team:7"),
         )
 
@@ -1160,12 +1159,12 @@ def test_offline_dispatch_skips_revoked_team_destination():
 def test_offline_runner_env_marks_assistant_as_non_coordinator():
     """Headless task execution should never inherit the Coordinator role."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
-    env = task_activation._build_offline_runner_env(
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
+    env = task_execution._build_offline_runner_env(
         request=request,
-        activation=_activation(),
+        execution=_activation(),
         assistant_data=_assistant_data(api_key="test-api-key", is_coordinator=True),
         run_key="offline:scheduled:assistant-123:101",
         job_name="unity-assistant-abc",
@@ -1177,15 +1176,15 @@ def test_offline_runner_env_marks_assistant_as_non_coordinator():
 def test_offline_run_key_uses_canonical_trigger_provenance_shape():
     """Triggered offline runs should use the same provenance ingredients as live."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         assistant_id="assistant-123",
         task_id=101,
         source_task_log_id=555,
-        activation_revision="rev-123",
-        execution_mode="offline",
-        source_type="triggered",
+        revision="rev-123",
+        delivery="offline",
+        wake="triggered",
         source_medium="sms_message",
         source_ref="message-123",
         source_contact_id="77",
@@ -1193,13 +1192,13 @@ def test_offline_run_key_uses_canonical_trigger_provenance_shape():
     revision_digest = hashlib.sha256(b"rev-123").hexdigest()[:12]
     source_ref_digest = hashlib.sha256(b"message-123").hexdigest()[:12]
 
-    assert task_activation._build_offline_run_key(request) == (
+    assert task_execution._build_offline_run_key(request) == (
         f"offline:triggered:assistant-123:101:{revision_digest}:"
         f"contact-77-sms-message-{source_ref_digest}"
     )
 
     request.destination = "team:7"
-    assert task_activation._build_offline_run_key(request) == (
+    assert task_execution._build_offline_run_key(request) == (
         f"offline:triggered:assistant-123:team-7:101:{revision_digest}:"
         f"contact-77-sms-message-{source_ref_digest}"
     )
@@ -1208,13 +1207,13 @@ def test_offline_run_key_uses_canonical_trigger_provenance_shape():
 def test_offline_runner_env_carries_team_ids_as_csv():
     """Headless task runs receive membership ids through the env bridge."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
 
-    env = task_activation._build_offline_runner_env(
+    env = task_execution._build_offline_runner_env(
         request=request,
-        activation=_activation(),
+        execution=_activation(),
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
@@ -1253,15 +1252,15 @@ def test_offline_runner_env_carries_owner_team_id_for_team_owned():
     tables (Data, Tasks, …) resolve to Teams/{owner}/… instead of the
     personal root."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(destination="team:11"),
     )
 
-    env = task_activation._build_offline_runner_env(
+    env = task_execution._build_offline_runner_env(
         request=request,
-        activation=_activation(destination="team:11"),
+        execution=_activation(destination="team:11"),
         assistant_data={
             "assistant_id": "1406",
             "api_key": "test-api-key",
@@ -1278,15 +1277,15 @@ def test_offline_runner_env_carries_owner_team_id_for_team_owned():
 
 
 def test_offline_runner_env_rejects_invalid_owner_team_id():
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(destination="team:11"),
     )
     with pytest.raises(RuntimeError, match="invalid owner_team_id"):
-        task_activation._build_offline_runner_env(
+        task_execution._build_offline_runner_env(
             request=request,
-            activation=_activation(destination="team:11"),
+            execution=_activation(destination="team:11"),
             assistant_data={
                 "assistant_id": "1406",
                 "api_key": "test-api-key",
@@ -1302,15 +1301,15 @@ def test_offline_runner_env_rejects_invalid_owner_team_id():
 def test_offline_runner_env_carries_task_destination():
     """Shared offline task runs receive the destination for routed writes."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
+    request = task_execution.OfflineTaskDispatchRequest(
         **_payload(destination="team:7"),
     )
 
-    env = task_activation._build_offline_runner_env(
+    env = task_execution._build_offline_runner_env(
         request=request,
-        activation=_activation(destination="team:7"),
+        execution=_activation(destination="team:7"),
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
@@ -1328,13 +1327,13 @@ def test_offline_runner_env_carries_task_destination():
 def test_offline_runner_env_uses_empty_team_ids_for_solo_assistant():
     """Solo assistants keep the env value present but empty."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
 
-    env = task_activation._build_offline_runner_env(
+    env = task_execution._build_offline_runner_env(
         request=request,
-        activation=_activation(),
+        execution=_activation(),
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
@@ -1353,14 +1352,14 @@ def test_offline_runner_env_uses_empty_team_ids_for_solo_assistant():
 def test_offline_runner_env_requires_resolved_contact_ids():
     """Offline jobs fail before launching if assistant identity is incomplete."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    request = task_execution.OfflineTaskDispatchRequest(**_payload())
 
     with pytest.raises(RuntimeError, match="self_contact_id"):
-        task_activation._build_offline_runner_env(
+        task_execution._build_offline_runner_env(
             request=request,
-            activation=_activation(),
+            execution=_activation(),
             assistant_data={"assistant_id": "assistant-123", "api_key": "test-api-key"},
             run_key="run-123",
             job_name="unity-assistant-abc",
@@ -1374,34 +1373,34 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(
-                activation_kind="triggered",
-                next_due_at=None,
+                wake="triggered",
+                scheduled_for=None,
             ),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", None, None, None)),
         ),
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ),
-        patch("communication.infra.task_activation._update_task_run"),
+        patch("communication.infra.task_execution._update_task_run"),
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(
-                source_type="triggered",
+                wake="triggered",
                 scheduled_for=None,
                 source_medium="whatsapp",
                 source_ref="message-123",
@@ -1421,87 +1420,85 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
 
 
 def test_offline_dispatch_request_accepts_provider_event_source_type():
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="provider_event", scheduled_for=None),
+    request = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="provider_event", scheduled_for=None),
     )
-    assert request.source_type == "provider_event"
+    assert request.wake == "provider_event"
 
 
 def test_offline_dispatch_request_accepts_triggered_and_explicit():
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    explicit = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="explicit", scheduled_for=None),
+    explicit = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="explicit", scheduled_for=None),
     )
-    triggered = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="triggered", scheduled_for=None),
+    triggered = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="triggered", scheduled_for=None),
     )
-    assert explicit.source_type == "explicit"
-    assert triggered.source_type == "triggered"
+    assert explicit.wake == "explicit"
+    assert triggered.wake == "triggered"
 
 
 def test_explicit_offline_dispatch_accepts_scheduled_activation():
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="explicit", scheduled_for=None),
+    request = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="explicit", scheduled_for=None),
     )
-    activation = _activation(activation_kind="scheduled")
+    activation = _activation(wake="scheduled")
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
-def test_triggered_offline_dispatch_requires_triggered_activation_kind():
-    from communication.infra import task_activation
+def test_triggered_offline_dispatch_requires_triggered_wake():
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="triggered", scheduled_for=None),
+    request = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="triggered", scheduled_for=None),
     )
-    activation = _activation(activation_kind="scheduled")
+    activation = _activation(wake="scheduled")
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        == "activation_kind_changed"
+        task_execution._validate_current_offline_execution(request, activation)
+        == "wake_changed"
     )
 
 
-def test_provider_event_offline_dispatch_requires_provider_event_activation_kind():
-    from communication.infra import task_activation
+def test_provider_event_offline_dispatch_requires_provider_event_wake():
+    from communication.infra import task_execution
 
-    request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="provider_event", scheduled_for=None),
+    request = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="provider_event", scheduled_for=None),
     )
-    activation = _activation(activation_kind="provider_event", next_due_at=None)
+    activation = _activation(wake="provider_event", scheduled_for=None)
     assert (
-        task_activation._validate_current_offline_activation(request, activation)
-        is None
+        task_execution._validate_current_offline_execution(request, activation) is None
     )
 
 
 def test_legacy_triggered_and_explicit_still_pass_kind_matching():
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    legacy_triggered = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="triggered", scheduled_for=None),
+    legacy_triggered = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="triggered", scheduled_for=None),
     )
-    legacy_explicit = task_activation.OfflineTaskDispatchRequest(
-        **_payload(source_type="explicit", scheduled_for=None),
+    legacy_explicit = task_execution.OfflineTaskDispatchRequest(
+        **_payload(wake="explicit", scheduled_for=None),
     )
-    triggered_activation = _activation(activation_kind="triggered", next_due_at=None)
-    scheduled_activation = _activation(activation_kind="scheduled")
+    triggered_activation = _activation(wake="triggered", scheduled_for=None)
+    scheduled_activation = _activation(wake="scheduled")
 
     assert (
-        task_activation._validate_current_offline_activation(
+        task_execution._validate_current_offline_execution(
             legacy_triggered,
             triggered_activation,
         )
         is None
     )
     assert (
-        task_activation._validate_current_offline_activation(
+        task_execution._validate_current_offline_execution(
             legacy_explicit,
             scheduled_activation,
         )
@@ -1511,20 +1508,20 @@ def test_legacy_triggered_and_explicit_still_pass_kind_matching():
 
 def test_resolve_resource_flags_merges_request_and_activation():
     """Request and activation requires_* flags merge with OR semantics."""
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
-    assert task_activation._resolve_resource_flags({}) == (False, False)
-    assert task_activation._resolve_resource_flags(
+    assert task_execution._resolve_resource_flags({}) == (False, False)
+    assert task_execution._resolve_resource_flags(
         {"requires_filesystem": True},
     ) == (True, False)
-    assert task_activation._resolve_resource_flags(
+    assert task_execution._resolve_resource_flags(
         {"requires_computer": True},
     ) == (False, True)
-    assert task_activation._resolve_resource_flags(
+    assert task_execution._resolve_resource_flags(
         {},
         request_requires_computer=True,
     ) == (False, True)
-    assert task_activation._resolve_resource_flags(
+    assert task_execution._resolve_resource_flags(
         {"requires_filesystem": False},
         request_requires_filesystem=True,
         request_requires_computer=True,
@@ -1533,7 +1530,7 @@ def test_resolve_resource_flags_merges_request_and_activation():
 
 def test_assistant_desktop_browser_env_resolves_ready_binding():
     """Desktop-targeted workers receive only the current ready binding URL."""
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     session = {
         "spec": {"desiredState": "Running"},
@@ -1544,16 +1541,16 @@ def test_assistant_desktop_browser_env_resolves_ready_binding():
     }
     with (
         patch(
-            "communication.infra.task_activation.get_custom_objects_api",
+            "communication.infra.task_execution.get_custom_objects_api",
             return_value=MagicMock(),
         ),
         patch(
-            "communication.infra.task_activation.get_assistant_session",
+            "communication.infra.task_execution.get_assistant_session",
             return_value=session,
         ),
     ):
         env = asyncio.run(
-            task_activation._assistant_desktop_browser_env(
+            task_execution._assistant_desktop_browser_env(
                 "assistant-123",
                 assistant_data=_assistant_data(
                     desktop_mode="ubuntu",
@@ -1581,33 +1578,33 @@ def test_requires_computer_offline_dispatch_resolves_desktop_binding():
 
     with (
         patch(
-            "communication.infra.task_activation._lookup_current_task_activation",
+            "communication.infra.task_execution._lookup_current_task_execution",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.task_activation._get_assistant_data",
+            "communication.infra.task_execution._get_assistant_data",
             return_value=_assistant_data(api_key="key"),
         ),
         patch(
-            "communication.infra.task_activation._create_or_adopt_task_run",
+            "communication.infra.task_execution._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ),
         patch(
-            "communication.infra.task_activation._get_k8s_clients",
+            "communication.infra.task_execution._get_k8s_clients",
             new=AsyncMock(return_value=("batch-api", "core-api", None, None)),
         ),
         patch(
-            "communication.infra.task_activation._assistant_desktop_browser_env",
+            "communication.infra.task_execution._assistant_desktop_browser_env",
             new=AsyncMock(return_value=desktop_env),
         ) as mock_desktop,
         patch(
-            "communication.infra.task_activation._launch_offline_task_job",
+            "communication.infra.task_execution._launch_offline_task_job",
             return_value=True,
         ) as mock_launch,
-        patch("communication.infra.task_activation._update_task_run"),
+        patch("communication.infra.task_execution._update_task_run"),
     ):
         response = client.post(
-            "/infra/task-activation/offline-dispatch",
+            "/infra/task-execution/offline-dispatch",
             json=_payload(requires_computer=True),
         )
 
@@ -1620,11 +1617,11 @@ def test_requires_computer_offline_dispatch_resolves_desktop_binding():
 
 def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():
     """Desktop-eligible tasks retain the normal worker browser when disabled."""
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     assert (
         asyncio.run(
-            task_activation._assistant_desktop_browser_env(
+            task_execution._assistant_desktop_browser_env(
                 "assistant-123",
                 assistant_data=_assistant_data(
                     desktop_mode="none",
@@ -1639,24 +1636,24 @@ def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():
 def test_terminalize_offline_job_failed_updates_run_and_releases_source():
     """Failed Jobs fail inflight Runs and release-active with mode=fail."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     with (
         patch(
-            "communication.infra.task_activation._get_precreated_task_run",
+            "communication.infra.task_execution._get_precreated_task_run",
             return_value={"state": "running"},
         ),
-        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch("communication.infra.task_execution._update_task_run") as mock_update,
         patch(
-            "communication.infra.task_activation._release_active_task_source",
+            "communication.infra.task_execution._release_active_task_source",
             return_value={"updated": True, "reason": "released"},
         ) as mock_release,
     ):
-        result = task_activation._terminalize_offline_job_outcome(
+        result = task_execution._terminalize_offline_job_outcome(
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Failed",
         )
 
@@ -1671,30 +1668,30 @@ def test_terminalize_offline_job_failed_updates_run_and_releases_source():
         mode="fail",
         info=mock_release.call_args.kwargs["info"],
     )
-    assert "unity-task-run-abc" in mock_release.call_args.kwargs["info"]
+    assert "unity-task-execution-abc" in mock_release.call_args.kwargs["info"]
 
 
 def test_terminalize_offline_job_complete_marks_inflight_run_completed():
     """Complete Jobs heal Runs still stuck running/pending, then release."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     with (
         patch(
-            "communication.infra.task_activation._get_precreated_task_run",
+            "communication.infra.task_execution._get_precreated_task_run",
             return_value={"state": "running"},
         ),
-        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch("communication.infra.task_execution._update_task_run") as mock_update,
         patch(
-            "communication.infra.task_activation._release_active_task_source",
+            "communication.infra.task_execution._release_active_task_source",
             return_value={"updated": True, "reason": "released"},
         ) as mock_release,
     ):
-        result = task_activation._terminalize_offline_job_outcome(
+        result = task_execution._terminalize_offline_job_outcome(
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Complete",
         )
 
@@ -1707,31 +1704,31 @@ def test_terminalize_offline_job_complete_marks_inflight_run_completed():
 def test_terminalize_offline_job_idempotent_when_already_terminal():
     """Second call after success writeback must not re-fail a completed Run."""
 
-    from communication.infra import task_activation
+    from communication.infra import task_execution
 
     with (
         patch(
-            "communication.infra.task_activation._get_precreated_task_run",
+            "communication.infra.task_execution._get_precreated_task_run",
             return_value={"state": "completed"},
         ),
-        patch("communication.infra.task_activation._update_task_run") as mock_update,
+        patch("communication.infra.task_execution._update_task_run") as mock_update,
         patch(
-            "communication.infra.task_activation._release_active_task_source",
+            "communication.infra.task_execution._release_active_task_source",
             return_value={"updated": False, "reason": "not_active"},
         ) as mock_release,
     ):
-        first = task_activation._terminalize_offline_job_outcome(
+        first = task_execution._terminalize_offline_job_outcome(
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Complete",
         )
-        second = task_activation._terminalize_offline_job_outcome(
+        second = task_execution._terminalize_offline_job_outcome(
             assistant_id="assistant-123",
             run_key="rk",
             source_task_log_id=555,
-            job_name="unity-task-run-abc",
+            job_name="unity-task-execution-abc",
             terminal_type="Failed",
         )
 
@@ -1754,7 +1751,7 @@ def test_offline_task_job_terminal_endpoint():
     client.headers.update({"Authorization": "Bearer TEST-ADMIN-KEY"})
 
     with patch(
-        "communication.infra.task_activation._terminalize_offline_job_outcome",
+        "communication.infra.task_execution._terminalize_offline_job_outcome",
         return_value={"success": True, "run_updated": True},
     ) as mock_terminalize:
         response = client.post(
@@ -1763,7 +1760,7 @@ def test_offline_task_job_terminal_endpoint():
                 "assistant_id": "assistant-123",
                 "run_key": "rk",
                 "source_task_log_id": 555,
-                "job_name": "unity-task-run-abc",
+                "job_name": "unity-task-execution-abc",
                 "terminal_type": "Failed",
             },
         )

@@ -8,7 +8,7 @@ either the platform admin key (control-plane callers) or the assistant's own
 assistant pods make their own lifecycle/bundle calls without carrying the
 shared ``ORCHESTRA_ADMIN_KEY``.
 
-Kept as a standalone module so both ``views`` and ``task_activation`` can attach
+Kept as a standalone module so both ``views`` and ``task_execution`` can attach
 routes to the same router without import cycles.
 """
 

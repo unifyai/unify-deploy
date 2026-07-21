@@ -295,7 +295,7 @@ Local tests cannot exercise functions that hit a real `DataManager` ingest or
 the offline task activation lane. Against staging after a deploy/release that
 includes the affected integration, confirm FunctionManager registration for
 the package's callables, then exercise any scheduled offline task activations
-via the generic Communication task-activation lane.
+via the generic Communication task-execution lane.
 
 ## Current Caveat
 

@@ -32,7 +32,7 @@ from .runtime_clients import (
     get_pubsub_clients as _get_pubsub_clients,
     service_account_credentials as _service_account_credentials,
 )
-from .task_activation import router as task_activation_router
+from .task_execution import router as task_execution_router
 from .dashboard_actions import router as dashboard_actions_router
 from .assistant_sessions import (
     ACTIVE_PHASES,
@@ -234,7 +234,7 @@ async def _publish_desktop_ready(
 
 
 router = APIRouter()
-router.include_router(task_activation_router)
+router.include_router(task_execution_router)
 router.include_router(dashboard_actions_router)
 
 # Routes a pod may call for its OWN assistant are attached to
@@ -2805,7 +2805,7 @@ async def reconcile_assistant_static_ip_endpoint(
             location = get_pool_location(request.pool_location)
             if request.region and request.region != location.region:
                 raise ValueError(
-                    "Requested pool_location and region do not describe the same GCP location"
+                    "Requested pool_location and region do not describe the same GCP location",
                 )
             placement = await _resolve_dynamic_vm_placement(
                 request.assistant_timezone,
@@ -2813,14 +2813,16 @@ async def reconcile_assistant_static_ip_endpoint(
             )
             if placement.location.id != location.id:
                 raise ValueError(
-                    f"Pool location {location.id} is not currently capable for assistant VMs"
+                    f"Pool location {location.id} is not currently capable for assistant VMs",
                 )
         else:
             placement = await _resolve_dynamic_vm_placement(
                 request.assistant_timezone,
             )
         result = await asyncio.to_thread(
-            reserve_assistant_static_ip, request.assistant_id, region=placement.region
+            reserve_assistant_static_ip,
+            request.assistant_id,
+            region=placement.region,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -2919,13 +2921,14 @@ async def repair_assistant_static_ip_owners_endpoint(
 
     try:
         placement = placement_from_ref(
-            {"poolLocation": pool_location, "region": region, "zone": zone}
+            {"poolLocation": pool_location, "region": region, "zone": zone},
         )
         if placement is None:
             raise ValueError("A complete regional placement is required")
         with vm_placement_scope(placement):
             retired = await asyncio.to_thread(
-                reclaim_stale_assistant_ip_owners, assistant_id
+                reclaim_stale_assistant_ip_owners,
+                assistant_id,
             )
         return {"assistant_id": assistant_id, "retired_vm_names": retired}
     except (AssistantDiskInUseError, ValueError) as exc:
@@ -3026,7 +3029,7 @@ def _run_static_ip_operation_at_placement(
             "poolLocation": request.pool_location or request.region,
             "region": request.region,
             "zone": request.zone,
-        }
+        },
     )
     with vm_placement_scope(placement):
         return operation(**kwargs)

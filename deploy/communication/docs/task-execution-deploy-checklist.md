@@ -1,6 +1,6 @@
-# Task Activation Deployment Checklist
+# Task Execution Deployment Checklist
 
-Task activation depends on Orchestra projection, Communication materialization,
+Task execution depends on Orchestra projection, Communication materialization,
 Cloud Tasks delivery, and the live/offline callback targets. Run these checks
 after deploying Communication, Orchestra, or adapters changes that affect
 scheduled tasks.
@@ -25,13 +25,13 @@ Production queues:
 
 - `unity-task-due`
 - `unity-task-offline`
-- `unity-task-activation-repair`
+- `unity-task-execution-repair`
 
 Staging queues:
 
 - `unity-task-due-staging`
 - `unity-task-offline-staging`
-- `unity-task-activation-repair-staging`
+- `unity-task-execution-repair-staging`
 
 Communication lazily creates missing queues during materialization, so the
 runtime identity needs queue create permission before the first scheduled task
@@ -44,7 +44,7 @@ Validate queue access and callback targets:
 ```bash
 curl -fsS \
   -H "Authorization: Bearer ${ORCHESTRA_ADMIN_KEY}" \
-  "https://<comms-host>/infra/task-activation/validate" | jq .
+  "https://<comms-host>/infra/task-execution/validate" | jq .
 ```
 
 Every queue should report `status: "ok"`. A `permission_denied` status means
@@ -57,7 +57,7 @@ Diagnose one projected task:
 curl -fsS -X POST \
   -H "Authorization: Bearer ${ORCHESTRA_ADMIN_KEY}" \
   -H "Content-Type: application/json" \
-  "https://<comms-host>/infra/task-activation/diagnose" \
+  "https://<comms-host>/infra/task-execution/diagnose" \
   -d '{"assistant_id":"<assistant-id>","task_id":<task-id>}' | jq .
 ```
 
@@ -66,8 +66,8 @@ For a healthy scheduled activation, `activation` is present and
 
 ## Recovery Order
 
-1. Fix Cloud Tasks IAM and rerun `/infra/task-activation/validate`.
+1. Fix Cloud Tasks IAM and rerun `/infra/task-execution/validate`.
 2. Reproject the affected task through Orchestra's admin repair endpoint.
-3. Rerun `/infra/task-activation/diagnose` and verify the Cloud Task is present.
+3. Rerun `/infra/task-execution/diagnose` and verify the Cloud Task is present.
 4. Manually execute any missed occurrence once through Unity with the original
    scheduled timestamp in the request context.

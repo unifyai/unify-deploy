@@ -71,7 +71,7 @@ pytest tests/communication/infra/integration/test_cleanup_safety.py -v
 pytest tests/communication/infra/integration/test_vm_lifecycle.py -v -s
 
 # Just task activation user flows (~8-10 minutes)
-pytest tests/communication/infra/integration/test_task_activation_flows.py -v -s
+pytest tests/communication/infra/integration/test_task_execution_flows.py -v -s
 ```
 
 Note: `TEST_ORCHESTRA_URL` must be set to the staging Orchestra URL (not localhost):
@@ -94,7 +94,7 @@ Or add it to your `.env` file.
 | `test_stale_state.py` | 3 | Stale AssistantJobs records, is_job_running dead zone | INV-13 |
 | `test_concurrency.py` | 4 | Burst startups, cleanup TOCTOU, pool exhaustion, rapid restart | INV-1,5,8 |
 | `test_cross_service_contracts.py` | 3 | Label string contract, inventory accuracy, live count | INV-2,6 |
-| `test_task_activation_flows.py` | 4 | Scheduled cold start, scheduled live delivery, trigger surfacing, offline invisibility | Product flow |
+| `test_task_execution_flows.py` | 4 | Scheduled cold start, scheduled live delivery, trigger surfacing, offline invisibility | Product flow |
 
 ## How Tests Work
 

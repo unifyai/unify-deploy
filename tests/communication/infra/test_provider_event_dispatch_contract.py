@@ -26,7 +26,7 @@ def _fixture_payload(**overrides) -> dict:
             encoding="utf-8",
         ),
     )
-    payload["dispatch_mode"] = "offline"
+    payload["delivery"] = "offline"
     payload["audience"] = PROVIDER_EVENT_DISPATCH_AUDIENCE
     payload.update(overrides)
     return payload
@@ -37,7 +37,7 @@ def test_provider_event_dispatch_request_v1_forbids_extra_and_rejects_raw_payloa
 ):
     request = ProviderEventDispatchRequest.model_validate(_fixture_payload())
     assert request.contract_version == "1"
-    assert request.dispatch_mode == "offline"
+    assert request.delivery == "offline"
 
     with pytest.raises(ValueError):
         ProviderEventDispatchRequest.model_validate(
@@ -65,12 +65,12 @@ def test_provider_event_dispatch_validator_rejects_invalid_audience_mode_and_ttl
     with pytest.raises(ProviderEventDispatchValidationError) as exc:
         validate_provider_event_dispatch_request(
             ProviderEventDispatchRequest.model_validate(
-                _fixture_payload(dispatch_mode="live"),
+                _fixture_payload(delivery="live"),
             ),
             ttl_seconds=300,
             now=now,
         )
-    assert exc.value.reason_code == "invalid_dispatch_mode"
+    assert exc.value.reason_code == "invalid_delivery"
 
     with pytest.raises(ProviderEventDispatchValidationError) as exc:
         validate_provider_event_dispatch_request(

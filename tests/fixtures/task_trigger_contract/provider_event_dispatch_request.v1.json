@@ -7,9 +7,9 @@
   "task_id": 3,
   "binding_id": "binding-a",
   "receipt_id": "receipt-b",
-  "accepted_activation_revision": "rev-fixture-1",
-  "source_type": "provider_event",
-  "dispatch_mode": "live",
+  "accepted_revision": "rev-fixture-1",
+  "wake": "provider_event",
+  "delivery": "live",
   "event_context_ref": "blob://binding-a/receipt-b",
   "issued_at": "2026-07-13T12:00:00+00:00",
   "audience": "unity:provider-event-dispatch"

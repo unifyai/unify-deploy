@@ -59,10 +59,10 @@ def _task_context_name(assistant_data: dict[str, Any]) -> str:
     return f"{assistant_data['user_id']}/{assistant_data['assistant_id']}/Tasks"
 
 
-def _activation_context_name(assistant_data: dict[str, Any]) -> str:
-    """Return the assistant-scoped activation context name."""
+def _execution_context_name(assistant_data: dict[str, Any]) -> str:
+    """Return the assistant-scoped Tasks/Executions context name."""
 
-    return f"{_task_context_name(assistant_data)}/Activations"
+    return f"{_task_context_name(assistant_data)}/Executions"
 
 
 def _with_mutable_explicit_types(entries: dict[str, Any]) -> dict[str, Any]:
@@ -126,7 +126,7 @@ def _create_remote_task_assistant(batch_api) -> dict[str, Any]:
         cleanup_assistant_jobs(
             batch_api,
             [assistant_id],
-            context="task-activation-setup",
+            context="task-execution-setup",
         )
     except Exception:
         # The assistant already exists on Orchestra; delete it before
@@ -295,7 +295,7 @@ def _get_activation(
     assistant_id = str(assistant_data["assistant_id"])
     logs = _get_context_logs(
         assistant_data,
-        _activation_context_name(assistant_data),
+        _execution_context_name(assistant_data),
         limit=50,
     )
     for log in logs:
@@ -330,7 +330,7 @@ def _wait_for_activation(
             "tasks_context": _task_context_name(assistant_data),
             "activation_logs": _get_context_logs(
                 assistant_data,
-                _activation_context_name(assistant_data),
+                _execution_context_name(assistant_data),
                 limit=50,
             ),
         },
@@ -407,7 +407,7 @@ def _assert_no_outbound_messages(
     )
 
 
-class TestTaskActivationFlows:
+class TestTaskExecutionFlows:
     """Real staging user-flow tests for scheduled, triggered, and offline tasks."""
 
     @pytest.mark.merge_gate
@@ -468,10 +468,10 @@ class TestTaskActivationFlows:
                 "type": "task_due",
                 "task_id": task_id,
                 "source_task_log_id": log_id,
-                "activation_revision": activation["activation_revision"],
-                "scheduled_for": activation["next_due_at"],
-                "execution_mode": "live",
-                "source_type": "scheduled",
+                "revision": activation["revision"],
+                "scheduled_for": activation["scheduled_for"],
+                "delivery": "live",
+                "wake": "scheduled",
                 "task_label": f"Integration scheduled task {task_id}",
                 "task_summary": "Quietly start this work when it becomes due.",
                 "visibility_policy": "silent_by_default",
@@ -519,7 +519,7 @@ class TestTaskActivationFlows:
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
-                context="task-activation-e2e-scheduled-cold",
+                context="task-execution-e2e-scheduled-cold",
             )
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)
@@ -633,7 +633,7 @@ class TestTaskActivationFlows:
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
-                context="task-activation-e2e-scheduled-live",
+                context="task-execution-e2e-scheduled-live",
             )
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)
@@ -698,8 +698,8 @@ class TestTaskActivationFlows:
             )
             live_activation = _wait_for_activation(assistant, live_task_id)
             offline_activation = _wait_for_activation(assistant, offline_task_id)
-            assert live_activation["execution_mode"] == "live"
-            assert offline_activation["execution_mode"] == "offline"
+            assert live_activation["delivery"] == "live"
+            assert offline_activation["delivery"] == "offline"
 
             token = f"TASK_TRIGGER_ACK_{int(time.time())}"
             msg_body = (
@@ -747,7 +747,7 @@ class TestTaskActivationFlows:
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
-                context="task-activation-e2e-triggered",
+                context="task-execution-e2e-triggered",
             )
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)
@@ -758,7 +758,7 @@ class TestTaskActivationFlows:
         batch_api,
         comms,
     ):
-        """Offline scheduled tasks launch one-shot ``unity-task-run`` Jobs.
+        """Offline scheduled tasks launch one-shot ``unity-task-execution`` Jobs.
 
         Offline execution must never touch the interactive-session machinery:
         no AssistantSession is created, and the run executes inside a
@@ -774,7 +774,9 @@ class TestTaskActivationFlows:
         def _find_task_run_jobs() -> list[Any]:
             jobs = batch_api.list_namespaced_job(
                 namespace=NAMESPACE,
-                label_selector=(f"app=unity-task-run,assistant-id={assistant_id}"),
+                label_selector=(
+                    f"app=unity-task-execution,assistant-id={assistant_id}"
+                ),
             )
             return list(jobs.items or [])
 
@@ -796,24 +798,24 @@ class TestTaskActivationFlows:
                 ),
             )
             activation = _wait_for_activation(assistant, task_id)
-            assert activation["execution_mode"] == "offline"
+            assert activation["delivery"] == "offline"
 
             task_run_jobs = poll_until(
                 _find_task_run_jobs,
                 timeout=TASK_DUE_LEAD_SECONDS + TASK_FLOW_TIMEOUT_SECONDS,
                 interval=5,
                 description=(
-                    f"unity-task-run Job for offline task {task_id} "
+                    f"unity-task-execution Job for offline task {task_id} "
                     f"on assistant {assistant_id}"
                 ),
             )
-            assert task_run_jobs, "Expected a dedicated unity-task-run Job"
+            assert task_run_jobs, "Expected a dedicated unity-task-execution Job"
             job = task_run_jobs[0]
-            assert job.metadata.name.startswith("unity-task-run-")
+            assert job.metadata.name.startswith("unity-task-execution-")
             assert job.metadata.labels.get("task-id") == str(task_id)
-            # Matches task_activation.OFFLINE_TASK_JOB_BACKOFF_LIMIT. Hardcoded
+            # Matches task_execution.OFFLINE_TASK_JOB_BACKOFF_LIMIT. Hardcoded
             # because this merge_gate suite does not install the unify SDK that
-            # importing task_activation would require.
+            # importing task_execution would require.
             assert job.spec.backoff_limit == 2
             assert job.spec.ttl_seconds_after_finished is not None
             # Runtime bound is per-task: the seeded task sets
@@ -844,7 +846,7 @@ class TestTaskActivationFlows:
             cleanup_assistant_jobs(
                 batch_api,
                 [assistant_id],
-                context="task-activation-e2e-offline",
+                context="task-execution-e2e-offline",
             )
             replenish_pool()
             _delete_test_assistant(assistant_id, batch_api)

@@ -1538,12 +1538,12 @@ class ScheduledTaskDuePayload(BaseModel):
     destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
-    activation_revision: str
+    revision: str
     scheduled_for: datetime
-    execution_mode: str = "live"
+    delivery: str = "live"
     requires_filesystem: bool = False
     requires_computer: bool = False
-    source_type: str = "scheduled"
+    wake: str = "scheduled"
     task_label: str = ""
     task_summary: str = ""
     visibility_policy: str = "silent_by_default"
@@ -2661,12 +2661,12 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
         "type": "task_due",
         "task_id": payload.task_id,
         "source_task_log_id": payload.source_task_log_id,
-        "activation_revision": payload.activation_revision,
+        "revision": payload.revision,
         "scheduled_for": payload.scheduled_for.astimezone(timezone.utc).isoformat(),
-        "execution_mode": payload.execution_mode,
+        "delivery": payload.delivery,
         "requires_filesystem": payload.requires_filesystem,
         "requires_computer": payload.requires_computer,
-        "source_type": payload.source_type,
+        "wake": payload.wake,
         "task_label": payload.task_label,
         "task_summary": payload.task_summary,
         "visibility_policy": payload.visibility_policy,
