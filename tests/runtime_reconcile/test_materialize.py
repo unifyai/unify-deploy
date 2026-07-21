@@ -599,3 +599,99 @@ def test_materialize_continues_when_custom_function_sync_partially_fails(
     note = runtime_reconcile_prompt_note(status)
     assert note is not None
     assert "failed to sync" in note
+
+
+def test_materialize_continues_when_parallel_custom_data_sync_fails(monkeypatch):
+    """A broken custom-data phase must soft-fail without aborting reconcile."""
+
+    from unify_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+
+    class _FailingDataManager(_FakeDataManager):
+        def sync_custom(self, *, source_tables=None) -> bool:
+            super().sync_custom(source_tables=source_tables)
+            raise RuntimeError(
+                "Field is immutable and cannot be modified: "
+                "Field 'authoring_assistant_id' is immutable",
+            )
+
+    fake_fm = _FakeFunctionManager()
+    fake_gm = _FakeGuidanceManager()
+    fake_cm = _FakeContactManager()
+    fake_sm = _FakeSecretManager()
+    fake_km = _FakeKnowledgeManager()
+    fake_dm = _FailingDataManager()
+    fake_dash = _FakeDashboardManager()
+    fake_ts = _FakeTaskScheduler()
+    fake_file_mgr = _FakeFileManager()
+    fake_bm = _FakeBlacklistManager()
+    status = RuntimeReconcileStatusHandle()
+
+    _install_materialize_fakes(
+        monkeypatch,
+        function_collector=lambda _dirs: {"ok_fn": {"custom_hash": "ok"}},
+        venv_collector=lambda _dirs: {},
+        guidance_collector=lambda _dirs: {},
+        contacts_collector=lambda _dirs: {},
+        secrets_collector=lambda _dirs: {},
+        secrets_model_collector=lambda _secrets: {},
+        knowledge_collector=lambda _dirs: {},
+        data_collector=lambda _dirs: {
+            "Data/GTM/OutboundBindings": {
+                "rows": {"stargazer-v1": {"campaign_slug": "stargazer-v1"}},
+            },
+        },
+        dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
+        tasks_collector=lambda _dirs: {"campaign_runtime": {"enabled": True}},
+        files_collector=lambda _dirs: {},
+        integration_registry_collector=lambda _rows: {},
+        integration_registry_sync=_FakeIntegrationRegistrySync(),
+        blacklist_collector=lambda _dirs: {},
+        function_manager=fake_fm,
+        guidance_manager=fake_gm,
+        contact_manager=fake_cm,
+        secret_manager=fake_sm,
+        knowledge_manager=fake_km,
+        data_manager=fake_dm,
+        dashboard_manager=fake_dash,
+        task_scheduler=fake_ts,
+        file_manager=fake_file_mgr,
+        blacklist_manager=fake_bm,
+    )
+    monkeypatch.setattr(
+        materialize,
+        "_enabled_integration_source_dirs",
+        lambda: ([], [], []),
+    )
+
+    result = materialize.materialize_runtime_state(
+        SimpleNamespace(
+            function_dirs=[],
+            venv_dirs=[],
+            guidance_dirs=[],
+            contacts_dirs=[],
+            knowledge_dirs=[],
+            custom_data_dirs=[],
+            dashboards_dirs=[],
+            tasks_dirs=[],
+            files_dirs=[],
+            integration_registry=[],
+            secrets_dirs=[],
+            secrets=[],
+            blacklist_dirs=[],
+        ),
+        RuntimeIdentity(assistant_id="1406", user_id="user-1"),
+        revision="test-revision-data-fail",
+        status=status,
+    )
+
+    snap = status.snapshot()
+    assert result.custom_changed is True
+    assert result.tasks_changed is True
+    assert fake_ts.calls
+    assert snap.phase == "complete"
+    assert snap.resources["functions"] == "ready"
+    assert snap.resources["data"] == "failed"
+    assert snap.resources["tasks"] == "ready"
+    assert snap.data_freshness == "partial"
+    assert "authoring_assistant_id" in (snap.error or "")
+    assert "syncing_custom_data" in (snap.error or "")

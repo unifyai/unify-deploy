@@ -247,17 +247,44 @@ def _parallel_sync_wave(
     *,
     assistant_id: str,
     jobs: list[tuple[str, Any]],
-) -> dict[str, tuple[Any, float]]:
-    """Run independent sync callables concurrently; return phase→(result, duration)."""
+) -> tuple[dict[str, tuple[Any, float]], list[tuple[str, BaseException]]]:
+    """Run independent sync callables concurrently.
+
+    Returns ``(phase→(result, duration), soft-failed phases)``. A failure in
+    one phase does not abort the wave or raise — callers surface errors in
+    status and continue offline/live setup.
+    """
 
     import contextvars
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    from unify.common.sync_lease import SyncLeaseBusy
+
     if not jobs:
-        return {}
+        return {}, []
     if len(jobs) == 1:
         phase, fn = jobs[0]
-        return {phase: _run_named_phase(assistant_id=assistant_id, phase=phase, fn=fn)}
+        try:
+            return (
+                {
+                    phase: _run_named_phase(
+                        assistant_id=assistant_id,
+                        phase=phase,
+                        fn=fn,
+                    ),
+                },
+                [],
+            )
+        except Exception as exc:
+            if isinstance(exc, SyncLeaseBusy):
+                raise
+            logger.error(
+                "Runtime reconcile parallel wave soft-failing for assistant=%s "
+                "failed_phases=%s; continuing with successful phases",
+                assistant_id,
+                [phase],
+            )
+            return {}, [(phase, exc)]
 
     results: dict[str, tuple[Any, float]] = {}
     errors: list[tuple[str, BaseException]] = []
@@ -267,11 +294,12 @@ def _parallel_sync_wave(
         assistant_id,
         [phase for phase, _ in jobs],
     )
-    ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        # One Context copy per job — a single Context cannot be entered from
+        # multiple threads at once (`ctx.run` raises "already entered").
         future_to_phase = {
             executor.submit(
-                ctx.run,
+                contextvars.copy_context().run,
                 _run_named_phase,
                 assistant_id=assistant_id,
                 phase=phase,
@@ -294,11 +322,17 @@ def _parallel_sync_wave(
         len(errors),
     )
     if errors:
-        phase, exc = errors[0]
-        raise RuntimeError(
-            f"Runtime reconcile phase {phase!r} failed: {exc}",
-        ) from exc
-    return results
+        # Soft-fail: one broken phase (e.g. custom data / guidance) must not
+        # abort the rest of offline/live setup. Failures are already logged
+        # with traceback inside `_run_named_phase`.
+        failed_phases = [phase for phase, _ in errors]
+        logger.error(
+            "Runtime reconcile parallel wave soft-failing for assistant=%s "
+            "failed_phases=%s; continuing with successful phases",
+            assistant_id,
+            failed_phases,
+        )
+    return results, errors
 
 
 def _enabled_integration_source_dirs() -> (
@@ -757,7 +791,7 @@ def materialize_runtime_state(
         ],
     )
 
-    wave = _parallel_sync_wave(
+    wave, wave_errors = _parallel_sync_wave(
         assistant_id=identity.assistant_id,
         jobs=jobs,
     )
@@ -779,6 +813,28 @@ def materialize_runtime_state(
     files_changed = _changed("syncing_custom_files")
     secrets_changed = _changed("syncing_custom_secrets")
     blacklist_changed = _changed("syncing_custom_blacklist")
+
+    wave_failed_phases = {phase for phase, _ in wave_errors}
+    wave_error_text = (
+        "; ".join(f"{phase}: {type(exc).__name__}: {exc}" for phase, exc in wave_errors)
+        if wave_errors
+        else ""
+    )
+    combined_sync_error = "; ".join(
+        part for part in (functions_sync_error, wave_error_text) if part
+    )
+
+    phase_to_resource = {
+        "syncing_custom_guidance": "guidance",
+        "syncing_custom_contacts": "contacts",
+        "syncing_custom_knowledge": "knowledge",
+        "syncing_custom_data": "data",
+        "syncing_custom_dashboards": "dashboards",
+        "syncing_custom_tasks": "tasks",
+        "syncing_custom_files": "files",
+        "syncing_custom_secrets": "secrets",
+        "syncing_custom_blacklist": "blacklist",
+    }
 
     for phase_name, changed_flag, timing_key in (
         ("syncing_custom_guidance", guidance_changed, "sync_custom_guidance"),
@@ -804,33 +860,39 @@ def materialize_runtime_state(
 
     if status is not None:
         functions_ready = functions_resource_state == "ready"
+        resource_states = {
+            "contacts": "ready",
+            "guidance": "ready",
+            "knowledge": "ready",
+            "data": "ready",
+            "dashboards": "ready",
+            "tasks": "ready",
+            "files": "ready",
+            "secrets": "ready",
+            "functions": functions_resource_state,
+        }
+        for phase_name in wave_failed_phases:
+            resource_name = phase_to_resource.get(phase_name)
+            if resource_name is not None:
+                resource_states[resource_name] = "failed"
+        setup_ready = functions_ready and not wave_failed_phases
         status.update(
             phase="complete",
             message=(
                 "Background assistant setup is complete. Deployment-defined "
                 "data, guidance, secrets, and custom tools are ready."
-                if functions_ready
+                if setup_ready
                 else (
-                    "Background assistant setup finished with a custom-function "
-                    f"sync problem: {functions_sync_error or functions_resource_state}. "
-                    "Other deployment-defined data and tools are ready; failed "
-                    "functions will be retried on the next reconcile."
+                    "Background assistant setup finished with sync problems: "
+                    f"{combined_sync_error or 'partial failure'}. "
+                    "Successful phases remain ready; failed ones retry on the "
+                    "next reconcile."
                 )
             ),
-            error=functions_sync_error or None,
+            error=combined_sync_error or None,
             blocking_resources=(),
-            resources={
-                "contacts": "ready",
-                "guidance": "ready",
-                "knowledge": "ready",
-                "data": "ready",
-                "dashboards": "ready",
-                "tasks": "ready",
-                "files": "ready",
-                "secrets": "ready",
-                "functions": functions_resource_state,
-            },
-            data_freshness="ready" if functions_ready else "partial",
+            resources=resource_states,
+            data_freshness="ready" if setup_ready else "partial",
         )
     logger.info(
         "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s tasks_changed=%s files_changed=%s secrets_changed=%s blacklist_changed=%s",
