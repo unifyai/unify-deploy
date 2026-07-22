@@ -137,6 +137,13 @@ class Settings:
             "NATIVE_GOOGLE_WEBHOOK_SECRET",
             "",
         )
+        # Microsoft Graph native trigger bridge (HTTPS notify -> Orchestra
+        # native_microsoft ingress). Same secret Orchestra uses for HMAC verify
+        # and Graph clientState (env:NATIVE_MICROSOFT_WEBHOOK_SECRET).
+        self.native_microsoft_webhook_secret: str = os.environ.get(
+            "NATIVE_MICROSOFT_WEBHOOK_SECRET",
+            "",
+        )
         self.workspace_events_push_auth_service_account: str = os.environ.get(
             "UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA",
             f"comm-sa@{self.gcp_project_id}.iam.gserviceaccount.com",

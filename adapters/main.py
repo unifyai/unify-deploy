@@ -14,6 +14,7 @@ from email.utils import parseaddr
 from urllib.parse import quote
 from typing import Any, Optional
 from fastapi import (
+    BackgroundTasks,
     Body,
     Depends,
     FastAPI,
@@ -191,6 +192,13 @@ from .workspace_events_bridge import (
     map_pubsub_push_to_delivery,
     post_native_google_delivery,
     verify_workspace_events_push_oidc,
+)
+from .microsoft_graph_bridge import (
+    MicrosoftGraphBridgeAuthError,
+    MicrosoftGraphBridgeMappingError,
+    map_graph_notification_to_delivery,
+    post_native_microsoft_delivery,
+    verify_graph_client_state,
 )
 from .helpers import (
     cleanup_idle_pool,
@@ -3448,6 +3456,120 @@ async def workspace_events_bridge_meet_named_path(request: Request):
     """
 
     return await workspace_events_bridge(request)
+
+
+# =============================================================================
+# Microsoft Graph native triggers
+# =============================================================================
+
+
+def _forward_native_microsoft_deliveries(
+    deliveries: list,
+    *,
+    orchestra_url: str,
+    signing_secret: str,
+) -> None:
+    """Best-effort Orchestra forward after Graph has already been acked."""
+
+    for delivery in deliveries:
+        try:
+            orchestra_response = post_native_microsoft_delivery(
+                delivery,
+                orchestra_url=orchestra_url,
+                signing_secret=signing_secret,
+            )
+        except requests.RequestException:
+            logger.exception(
+                "Microsoft Graph bridge: Orchestra POST failed "
+                "external_trigger_id=%s",
+                delivery.external_trigger_id,
+            )
+            continue
+        if orchestra_response.status_code >= 300:
+            logger.warning(
+                "Microsoft Graph bridge: Orchestra returned %s for "
+                "external_trigger_id=%s",
+                orchestra_response.status_code,
+                delivery.external_trigger_id,
+            )
+
+
+@app.post("/microsoft/native-triggers")
+async def microsoft_native_triggers_bridge(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Bridge Microsoft Graph change/lifecycle notifications into Orchestra.
+
+    Orchestra provisions Graph subscriptions with this URL as both
+    ``notificationUrl`` and ``lifecycleNotificationUrl``. This handler:
+
+    1. echoes Graph ``validationToken`` challenges as plain text;
+    2. verifies each notification ``clientState`` against
+       ``NATIVE_MICROSOFT_WEBHOOK_SECRET``;
+    3. maps change/lifecycle items to the Unify native delivery shape;
+    4. acks Graph with ``202 Accepted`` within the webhook deadline, then
+       signs and POSTs each delivery to unrouted ``native_microsoft`` ingress
+       in a background task (Orchestra resolves by ``subscriptionId``).
+
+    Graph requires a 2xx within a few seconds; waiting on Orchestra would drop
+    notifications under load. Auth/mapping failures still reject without
+    waking a task.
+    """
+
+    validation_token = request.query_params.get("validationToken")
+    if validation_token:
+        return Response(content=validation_token, media_type="text/plain")
+
+    signing_secret = SETTINGS.native_microsoft_webhook_secret
+    if not signing_secret:
+        logger.error(
+            "Microsoft Graph bridge: NATIVE_MICROSOFT_WEBHOOK_SECRET is not "
+            "configured; cannot verify/sign delivery. Returning 503 for retry.",
+        )
+        return Response(
+            content="Microsoft Graph bridge not configured",
+            status_code=503,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(content="Bad Request: invalid JSON", status_code=400)
+    if not isinstance(body, dict):
+        return Response(content="Bad Request: expected JSON object", status_code=400)
+
+    notifications = body.get("value")
+    if not isinstance(notifications, list) or not notifications:
+        return Response(content="Bad Request: missing notifications", status_code=400)
+
+    deliveries = []
+    for notification in notifications:
+        if not isinstance(notification, dict):
+            return Response(
+                content="Bad Request: notification is not an object",
+                status_code=400,
+            )
+        try:
+            verify_graph_client_state(
+                notification,
+                webhook_secret=signing_secret,
+            )
+            deliveries.append(map_graph_notification_to_delivery(notification))
+        except MicrosoftGraphBridgeAuthError as exc:
+            logger.warning("Microsoft Graph bridge auth failed: %s", exc)
+            return Response(content="Unauthorized", status_code=401)
+        except MicrosoftGraphBridgeMappingError as exc:
+            logger.warning("Microsoft Graph bridge mapping failed: %s", exc)
+            return Response(content=str(exc), status_code=400)
+
+    background_tasks.add_task(
+        _forward_native_microsoft_deliveries,
+        deliveries,
+        orchestra_url=SETTINGS.orchestra_url,
+        signing_secret=signing_secret,
+    )
+    return Response(content="Accepted", status_code=202)
 
 
 # =============================================================================
