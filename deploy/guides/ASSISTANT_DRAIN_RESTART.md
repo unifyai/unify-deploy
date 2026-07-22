@@ -51,9 +51,14 @@ namespace (per-assistant JSON under `data`).
 ## Ops scripts
 
 ```bash
-# One assistant
-ORCHESTRA_ADMIN_KEY=… UNITY_COMMS_URL=https://comms.unify.ai \
+# One assistant (prod Cloud Run default)
+ORCHESTRA_ADMIN_KEY=… \
   deploy/scripts/dev/restart_assistant.sh 1406 graceful   # or force
+
+# Staging
+ORCHESTRA_ADMIN_KEY=… \
+  UNITY_COMMS_URL=https://service.a.run.app \
+  deploy/scripts/dev/restart_assistant.sh 7367 graceful
 
 # Every assistant mapped to a client bundle
 ORCHESTRA_ADMIN_KEY=… \
@@ -62,12 +67,19 @@ ORCHESTRA_ADMIN_KEY=… \
 
 `unify_company` → assistant **1406** (production) / **7367** (staging).
 
+Canonical hosts:
+
+- prod: `https://service.a.run.app`
+- staging: `https://service.a.run.app`
+
 ## Deploy overlay
 
 Brain `scripts/publish_client_bundle.sh` (after writing `latest.txt`) calls
 `POST /infra/assistants/drain-bundle` when `ORCHESTRA_ADMIN_KEY` is set.
-GitHub Actions needs repo secrets `ORCHESTRA_ADMIN_KEY` (and optional
-`UNITY_COMMS_URL`); without them publish still succeeds and drain is skipped.
+GitHub Actions needs repo secret `ORCHESTRA_ADMIN_KEY`; without it publish
+still succeeds and drain is skipped. Do **not** pin `UNITY_COMMS_URL` to
+prod on the brain repo — the script selects staging vs prod from
+`ENVIRONMENT`.
 
 Backup (not in v1): a long-lived runtime that self-compares its loaded
 bundle SHA to `latest.txt` and self-arms drain when behind. Until that

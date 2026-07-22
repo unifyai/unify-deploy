@@ -6,7 +6,7 @@
 #   deploy/scripts/dev/drain_bundle_assistants.sh unify_company staging <SHA>
 #
 # Env:
-#   UNITY_COMMS_URL / COMMS_URL — default https://comms.unify.ai (prod)
+#   UNITY_COMMS_URL / COMMS_URL — Cloud Run defaults below
 #   ORCHESTRA_ADMIN_KEY — required (comms /infra admin auth)
 set -euo pipefail
 
@@ -22,9 +22,9 @@ fi
 COMMS_URL="${UNITY_COMMS_URL:-${COMMS_URL:-}}"
 if [[ -z "${COMMS_URL}" ]]; then
   if [[ "${ENVIRONMENT}" == "staging" ]]; then
-    COMMS_URL="https://internal.example.com"
+    COMMS_URL="https://service.a.run.app"
   else
-    COMMS_URL="https://comms.unify.ai"
+    COMMS_URL="https://service.a.run.app"
   fi
 fi
 COMMS_URL="${COMMS_URL%/}"
