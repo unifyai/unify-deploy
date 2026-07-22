@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import asyncio
 import hashlib
+import os
 import uuid
 from typing import Any
 
@@ -133,12 +134,15 @@ def _build_dashboard_action_env(
         "UNITY_OFFLINE_TASK_REQUEST": action_metadata.get(
             "request",
             f"Execute dashboard action: {request.action_name}",
-        ),
+        )
+        or f"Execute dashboard action: {request.action_name}",
+        "UNITY_OFFLINE_TASK_CALL_KWARGS": json.dumps(request.payload or {}),
         "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": "0",
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": "0",
-        "UNITY_OFFLINE_TASK_EXECUTION_REVISION": "",
+        "UNITY_OFFLINE_TASK_REVISION": "",
+        "UNITY_OFFLINE_TASK_WAKE": "explicit",
         "UNITY_OFFLINE_TASK_SOURCE_TYPE": "dashboard_action",
         "UNITY_OFFLINE_TASK_NAME": request.action_name,
         "UNITY_OFFLINE_TASK_DESCRIPTION": f"Dashboard action: {request.action_name}",
@@ -146,6 +150,8 @@ def _build_dashboard_action_env(
         "UNITY_OFFLINE_TASK_SOURCE_REF": "",
         "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": "",
         "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": "",
+        "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM": "0",
+        "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER": "0",
         "EVENTBUS_PUBLISHING_ENABLED": "false",
         "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
@@ -206,6 +212,51 @@ def _build_dashboard_action_job_name(run_key: str) -> str:
     base_name = f"unity-dashboard-action-{digest}"
     suffix = SETTINGS.env_suffix.lstrip("-")
     return f"{base_name}-{suffix}" if suffix else base_name
+
+
+def _dashboard_action_transport() -> str:
+    """Return ``local`` or ``k8s`` for dashboard-action execution transport."""
+
+    raw = (
+        os.environ.get("UNITY_DASHBOARD_ACTION_TRANSPORT")
+        or getattr(SETTINGS, "dashboard_action_transport", None)
+        or "k8s"
+    )
+    return str(raw).strip().lower() or "k8s"
+
+
+def _launch_dashboard_action_local(
+    *,
+    request: DashboardActionDispatchRequest,
+    action_metadata: dict[str, Any],
+    assistant_data: dict[str, Any],
+    run_key: str,
+) -> tuple[str, bool]:
+    """Spawn the offline runner as a local subprocess (self-host / local stack)."""
+
+    import subprocess
+    import sys
+
+    job_name = _build_dashboard_action_job_name(run_key)
+    env = {
+        **os.environ,
+        **_build_dashboard_action_env(
+            request=request,
+            action_metadata=action_metadata,
+            assistant_data=assistant_data,
+            run_key=run_key,
+            job_name=job_name,
+        ),
+        "PYTHONUNBUFFERED": "1",
+    }
+    subprocess.Popen(  # noqa: S603
+        [sys.executable, "-m", "unify.task_scheduler.offline_runner"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return job_name, True
 
 
 def _launch_dashboard_action_job(
@@ -278,15 +329,24 @@ async def dispatch_dashboard_action(request: DashboardActionDispatchRequest):
             _build_dashboard_action_run_payload(request, run_key, action_metadata),
         )
 
-        batch_api, _, _, _ = await _get_k8s_clients()
-        job_name, job_created = await asyncio.to_thread(
-            _launch_dashboard_action_job,
-            batch_api=batch_api,
-            request=request,
-            action_metadata=action_metadata,
-            assistant_data=assistant_data,
-            run_key=run_key,
-        )
+        if _dashboard_action_transport() == "local":
+            job_name, job_created = await asyncio.to_thread(
+                _launch_dashboard_action_local,
+                request=request,
+                action_metadata=action_metadata,
+                assistant_data=assistant_data,
+                run_key=run_key,
+            )
+        else:
+            batch_api, _, _, _ = await _get_k8s_clients()
+            job_name, job_created = await asyncio.to_thread(
+                _launch_dashboard_action_job,
+                batch_api=batch_api,
+                request=request,
+                action_metadata=action_metadata,
+                assistant_data=assistant_data,
+                run_key=run_key,
+            )
 
         await asyncio.to_thread(
             _update_task_run,
@@ -313,4 +373,5 @@ async def dispatch_dashboard_action(request: DashboardActionDispatchRequest):
         "status": "launched",
         "run_key": run_key,
         "job_name": job_name,
+        "job_created": job_created,
     }

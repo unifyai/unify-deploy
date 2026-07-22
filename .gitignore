@@ -27,6 +27,11 @@ deploy/selfhost/comms_twilio.env
 CLAUDE.md
 __pypackages__/
 
+# One-time GCP Pub/Sub / IAM setup scripts — keep local, never commit.
+# Run for staging/production ops; durable resource names live in deploy docs.
+deploy/scripts/provision-*-pubsub.sh
+deploy/scripts/provision-workspace-events-pubsub.sh
+
 # Cursor local scratch files
 /.cursor/projects/
 /.cursor/plans/

@@ -37,4 +37,8 @@ if [ ! -f "${DEST}/unify_deploy/__init__.py" ]; then
   exit 1
 fi
 
+# The pod-facing _impl mirror is generated, not committed — derive it so the
+# embedded clients/unify_company symlink resolves the full function tree.
+python3 "${DEST}/scripts/sync_impl_mirror.py"
+
 echo "third_party/brain → $(git -C "${DEST}" rev-parse --short HEAD) (${REF})"

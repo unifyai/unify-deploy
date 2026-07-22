@@ -55,7 +55,7 @@ GOOGLE_BASE_SCOPES = [
 MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
     "email": ["Mail.Read", "Mail.Send", "Mail.ReadWrite"],
     "calendar": ["Calendars.Read", "Calendars.ReadWrite"],
-    "drive": ["Files.Read", "Files.ReadWrite"],
+    "drive": ["Files.Read", "Files.ReadWrite", "Files.Read.All"],
     "contacts": ["Contacts.Read"],
     "teams": [
         "Chat.Read",
@@ -68,12 +68,43 @@ MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
         "Channel.Create",
         "TeamMember.Read.All",
         "OnlineMeetings.ReadWrite",
+        "OnlineMeetingTranscript.Read.All",
     ],
     "sharepoint": ["Sites.Read.All", "Sites.ReadWrite.All"],
     "tasks": ["Tasks.Read", "Tasks.ReadWrite"],
 }
 
 MICROSOFT_BASE_SCOPES = ["User.Read", "offline_access"]
+
+# Keep in sync with orchestra.web.api.assistant.scopes — delegated Graph
+# change-notification families used by native Microsoft trigger facades.
+MICROSOFT_OUTLOOK_EVENT_SCOPES = frozenset(
+    {
+        "Mail.Read",
+        "Mail.ReadWrite",
+        "Calendars.Read",
+        "Calendars.ReadWrite",
+        "Contacts.Read",
+    },
+)
+MICROSOFT_ONEDRIVE_EVENT_SCOPES = frozenset(
+    {
+        "Files.Read",
+        "Files.ReadWrite",
+        "Files.Read.All",
+        "Files.ReadWrite.All",
+    },
+)
+MICROSOFT_TEAMS_EVENT_SCOPES = frozenset(
+    {
+        "OnlineMeetingTranscript.Read.All",
+    },
+)
+MICROSOFT_TODO_EVENT_SCOPES = frozenset(
+    {
+        "Tasks.ReadWrite",
+    },
+)
 
 _BUNDLES = {
     "google": GOOGLE_SCOPE_BUNDLES,

@@ -1,6 +1,6 @@
-"""Contract tests for the ``POST /meet/workspace-events`` bridge.
+"""Contract tests for the ``POST /workspace-events`` bridge.
 
-Google delivers Meet Workspace Events only through Cloud Pub/Sub, formatted as
+Google delivers Workspace Events only through Cloud Pub/Sub, formatted as
 CloudEvents. These tests drive the real FastAPI endpoint and only stub the two
 genuine external boundaries — the Google OIDC verification (a cert fetch) and
 the outbound HTTP POST to Orchestra — so the CloudEvent mapping, Unify HMAC
@@ -28,8 +28,12 @@ ORCHESTRA_URL = "http://orchestra.test/v0"
 INGRESS_URL = f"{ORCHESTRA_URL}/webhooks/integrations/native_google"
 
 SUBSCRIPTION_NAME = "subscriptions/AbCdEf123456"
-CE_ID = "conferenceRecords/CR1/transcripts/T1/event-1"
-CE_TYPE = "google.workspace.meet.transcript.v2.fileGenerated"
+MEET_CE_ID = "conferenceRecords/CR1/transcripts/T1/event-1"
+MEET_CE_TYPE = "google.workspace.meet.transcript.v2.fileGenerated"
+DRIVE_CE_ID = "files/FILE1/event-1"
+DRIVE_CE_TYPE = "google.workspace.drive.file.v3.created"
+CHAT_CE_ID = "spaces/SPACE1/messages/MSG1/event-1"
+CHAT_CE_TYPE = "google.workspace.chat.message.v1.created"
 
 
 @pytest.fixture(scope="module")
@@ -50,18 +54,21 @@ def client(app_module):
 
 def _push_envelope(
     *,
-    ce_id: str = CE_ID,
+    ce_id: str = MEET_CE_ID,
     ce_source: str | None = f"//workspaceevents.googleapis.com/{SUBSCRIPTION_NAME}",
-    ce_type: str | None = CE_TYPE,
+    ce_type: str | None = MEET_CE_TYPE,
+    ce_subject: str = "//meet.googleapis.com/conferenceRecords/CR1",
+    resource: dict | None = None,
 ) -> dict:
-    """Build a CloudEvents binary-mode Meet transcript Pub/Sub push."""
+    """Build a CloudEvents binary-mode Workspace Events Pub/Sub push."""
 
-    resource = {"transcript": {"name": "conferenceRecords/CR1/transcripts/T1"}}
+    if resource is None:
+        resource = {"transcript": {"name": "conferenceRecords/CR1/transcripts/T1"}}
     attributes = {
         "ce-id": ce_id,
         "ce-specversion": "1.0",
         "ce-time": "2026-07-21T12:00:00Z",
-        "ce-subject": "//meet.googleapis.com/conferenceRecords/CR1",
+        "ce-subject": ce_subject,
         "ce-datacontenttype": "application/json",
     }
     if ce_source is not None:
@@ -74,7 +81,7 @@ def _push_envelope(
             "data": base64.b64encode(json.dumps(resource).encode()).decode(),
             "messageId": "pubsub-message-1",
         },
-        "subscription": "projects/p/subscriptions/meet-workspace-events-push",
+        "subscription": "projects/p/subscriptions/workspace-events-push",
     }
 
 
@@ -88,27 +95,69 @@ def _recompute_signature(headers: dict, raw_body: bytes) -> str:
     return f"v1,{base64.b64encode(digest).decode()}"
 
 
-def test_bridge_forwards_signed_native_google_delivery_and_acks_on_2xx(
+@pytest.mark.parametrize(
+    ("ce_id", "ce_type", "ce_subject", "resource", "expected_slug"),
+    [
+        (
+            MEET_CE_ID,
+            MEET_CE_TYPE,
+            "//meet.googleapis.com/conferenceRecords/CR1",
+            {"transcript": {"name": "conferenceRecords/CR1/transcripts/T1"}},
+            MEET_CE_TYPE,
+        ),
+        (
+            DRIVE_CE_ID,
+            DRIVE_CE_TYPE,
+            "//drive.googleapis.com/files/FILE1",
+            {"file": {"name": "files/FILE1"}},
+            DRIVE_CE_TYPE,
+        ),
+        (
+            CHAT_CE_ID,
+            CHAT_CE_TYPE,
+            "//chat.googleapis.com/spaces/SPACE1",
+            {"message": {"name": "spaces/SPACE1/messages/MSG1"}},
+            CHAT_CE_TYPE,
+        ),
+    ],
+)
+def test_bridge_forwards_signed_native_google_delivery_for_workspace_families(
     app_module,
     client,
+    ce_id,
+    ce_type,
+    ce_subject,
+    resource,
+    expected_slug,
 ):
-    """A valid Meet push is mapped, signed, and acked once Orchestra accepts."""
+    """Meet/Drive/Chat ce-types map, sign, and ack once Orchestra accepts."""
 
     orchestra_response = MagicMock(status_code=200, text='{"status":"accepted"}')
     with (
         patch("adapters.main.SETTINGS.native_google_webhook_secret", SECRET),
-        patch("adapters.main.SETTINGS.meet_push_auth_service_account", SA_EMAIL),
+        patch(
+            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
+            SA_EMAIL,
+        ),
         patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
         patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
         ),
         patch(
-            "adapters.meet_bridge.requests.post",
+            "adapters.workspace_events_bridge.requests.post",
             return_value=orchestra_response,
         ) as mock_post,
     ):
-        response = client.post("/meet/workspace-events", json=_push_envelope())
+        response = client.post(
+            "/workspace-events",
+            json=_push_envelope(
+                ce_id=ce_id,
+                ce_type=ce_type,
+                ce_subject=ce_subject,
+                resource=resource,
+            ),
+        )
 
     assert response.status_code == 200
     mock_post.assert_called_once()
@@ -119,11 +168,11 @@ def test_bridge_forwards_signed_native_google_delivery_and_acks_on_2xx(
 
     raw_body = kwargs["data"]
     body = json.loads(raw_body)
-    assert body["event_id"] == CE_ID
-    assert body["provider_trigger_slug"] == CE_TYPE
+    assert body["event_id"] == ce_id
+    assert body["provider_trigger_slug"] == expected_slug
     assert body["external_trigger_id"] == SUBSCRIPTION_NAME
-    assert body["data"]["event_id"] == CE_ID
-    assert body["data"]["transcript"]["name"].startswith("conferenceRecords/")
+    assert body["data"]["event_id"] == ce_id
+    assert body["data"]["resource"] == ce_subject
 
     headers = {k.lower(): v for k, v in kwargs["headers"].items()}
     assert headers["x-unify-webhook-signature"] == _recompute_signature(
@@ -138,18 +187,21 @@ def test_bridge_returns_503_when_orchestra_is_not_durable(client):
     orchestra_response = MagicMock(status_code=500, text="boom")
     with (
         patch("adapters.main.SETTINGS.native_google_webhook_secret", SECRET),
-        patch("adapters.main.SETTINGS.meet_push_auth_service_account", SA_EMAIL),
+        patch(
+            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
+            SA_EMAIL,
+        ),
         patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
         patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
         ),
         patch(
-            "adapters.meet_bridge.requests.post",
+            "adapters.workspace_events_bridge.requests.post",
             return_value=orchestra_response,
         ),
     ):
-        response = client.post("/meet/workspace-events", json=_push_envelope())
+        response = client.post("/workspace-events", json=_push_envelope())
 
     assert response.status_code == 503
 
@@ -161,6 +213,7 @@ def test_bridge_returns_503_when_orchestra_is_not_durable(client):
         "forged_issuer",
         "missing_event_id",
         "missing_subscription",
+        "missing_ce_type",
         "secret_unset",
     ],
 )
@@ -173,7 +226,7 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         expected_status = 401
         envelope = _push_envelope()
         oidc = patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             side_effect=ValueError("bad token"),
         )
         secret_value = SECRET
@@ -183,7 +236,7 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         expected_status = 401
         envelope = _push_envelope()
         oidc = patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             side_effect=google_auth_exceptions.GoogleAuthError("wrong issuer"),
         )
         secret_value = SECRET
@@ -191,7 +244,7 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         expected_status = 400
         envelope = _push_envelope(ce_id="")
         oidc = patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
         )
         secret_value = SECRET
@@ -199,7 +252,15 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         expected_status = 400
         envelope = _push_envelope(ce_source=None)
         oidc = patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
+            return_value={"email": SA_EMAIL, "email_verified": True},
+        )
+        secret_value = SECRET
+    elif scenario == "missing_ce_type":
+        expected_status = 400
+        envelope = _push_envelope(ce_type=None)
+        oidc = patch(
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
         )
         secret_value = SECRET
@@ -207,19 +268,22 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         expected_status = 503
         envelope = _push_envelope()
         oidc = patch(
-            "adapters.meet_bridge.google_id_token.verify_oauth2_token",
+            "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
         )
         secret_value = ""
 
     with (
         patch("adapters.main.SETTINGS.native_google_webhook_secret", secret_value),
-        patch("adapters.main.SETTINGS.meet_push_auth_service_account", SA_EMAIL),
+        patch(
+            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
+            SA_EMAIL,
+        ),
         patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
         oidc,
-        patch("adapters.meet_bridge.requests.post") as mock_post,
+        patch("adapters.workspace_events_bridge.requests.post") as mock_post,
     ):
-        response = client.post("/meet/workspace-events", json=envelope)
+        response = client.post("/workspace-events", json=envelope)
 
     assert response.status_code == expected_status
     mock_post.assert_not_called()
@@ -228,12 +292,12 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
 def test_duplicate_redeliveries_map_to_a_stable_event_id_and_body():
     """Retry-stable identity: the same CloudEvent maps to the same delivery."""
 
-    from adapters import meet_bridge
+    from adapters import workspace_events_bridge
 
     envelope = _push_envelope()
-    first = meet_bridge.map_pubsub_push_to_delivery(envelope)
-    second = meet_bridge.map_pubsub_push_to_delivery(envelope)
+    first = workspace_events_bridge.map_pubsub_push_to_delivery(envelope)
+    second = workspace_events_bridge.map_pubsub_push_to_delivery(envelope)
 
-    assert first.event_id == CE_ID == second.event_id
+    assert first.event_id == MEET_CE_ID == second.event_id
     assert first.external_trigger_id == SUBSCRIPTION_NAME == second.external_trigger_id
     assert first.payload == second.payload

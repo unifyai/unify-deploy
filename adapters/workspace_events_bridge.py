@@ -1,9 +1,8 @@
-"""Bridge Google Meet Workspace Events Pub/Sub pushes into Orchestra ingress.
+"""Bridge Google Workspace Events Pub/Sub pushes into Orchestra ingress.
 
-Google delivers Meet Workspace Events (e.g.
-``google.workspace.meet.transcript.v2.fileGenerated``) only through Cloud
+Google delivers Workspace Events (Meet, Drive, Chat, …) only through Cloud
 Pub/Sub, formatted as CloudEvents. A push subscription targets the Adapters
-``POST /meet/workspace-events`` endpoint. This module owns the translation from
+``POST /workspace-events`` endpoint. This module owns the translation from
 that Pub/Sub push into a Unify-shaped, HMAC-signed request that Orchestra's
 ``native_google`` webhook ingress accepts.
 
@@ -13,8 +12,8 @@ Responsibilities, kept out of the request handler so they stay unit-testable:
   service-account email);
 - decode the Pub/Sub envelope and its embedded CloudEvent into the native
   delivery fields Orchestra normalize requires (retry-stable ``event_id``,
-  ``provider_trigger_slug``, ``external_trigger_id`` = Workspace Events
-  subscription name, transcript reference metadata);
+  ``provider_trigger_slug`` from ``ce-type``, ``external_trigger_id`` =
+  Workspace Events subscription name, resource reference metadata);
 - sign the outbound body with the shared ``NATIVE_GOOGLE_WEBHOOK_SECRET`` using
   the same scheme Orchestra verifies (``v1,`` base64 HMAC-SHA256 over
   ``{id}.{timestamp}.{body}``);
@@ -41,11 +40,6 @@ from google.oauth2 import id_token as google_id_token
 
 logger = logging.getLogger(__name__)
 
-# Default event type for the first Meet vertical. The bridge forwards whatever
-# ``ce-type`` the CloudEvent carries and only falls back to this when the
-# attribute is absent, so the ingress stays provider/event neutral.
-MEET_TRANSCRIPT_SLUG = "google.workspace.meet.transcript.v2.fileGenerated"
-
 # Workspace Events stamps ``ce-source`` as
 # ``//workspaceevents.googleapis.com/subscriptions/<id>``. Stripping this prefix
 # yields the ``subscriptions/<id>`` name that live provision persists as the
@@ -63,24 +57,24 @@ _ORCHESTRA_POST_TIMEOUT_SECONDS = 30
 _OIDC_REQUEST = google_auth_requests.Request()
 
 
-class MeetPushAuthError(Exception):
+class WorkspaceEventsPushAuthError(Exception):
     """The Pub/Sub push could not be authenticated as a Google-signed OIDC."""
 
 
-class MeetBridgeMappingError(Exception):
-    """The Pub/Sub envelope was not a mappable Meet Workspace Events push."""
+class WorkspaceEventsBridgeMappingError(Exception):
+    """The Pub/Sub envelope was not a mappable Workspace Events push."""
 
 
 @dataclass(frozen=True)
-class NativeMeetDelivery:
-    """A Meet CloudEvent mapped to the Orchestra native_google body."""
+class NativeGoogleDelivery:
+    """A Workspace Events CloudEvent mapped to the Orchestra native_google body."""
 
     event_id: str
     external_trigger_id: str
     payload: dict[str, Any]
 
 
-def verify_meet_push_oidc(
+def verify_workspace_events_push_oidc(
     bearer_token: str,
     *,
     audience: str,
@@ -94,12 +88,14 @@ def verify_meet_push_oidc(
     additionally pins the token's ``email`` to the expected push identity so a
     forged request from another principal is rejected.
 
-    Raises ``MeetPushAuthError`` on any failure so the caller can reject the
-    push without waking a task.
+    Raises ``WorkspaceEventsPushAuthError`` on any failure so the caller can
+    reject the push without waking a task.
     """
 
     if not bearer_token:
-        raise MeetPushAuthError("missing bearer token on Meet Pub/Sub push")
+        raise WorkspaceEventsPushAuthError(
+            "missing bearer token on Workspace Events Pub/Sub push",
+        )
 
     # ``verify_oauth2_token`` raises ``ValueError`` for a bad signature, expiry,
     # or audience and ``GoogleAuthError`` for a non-Google issuer (a forged
@@ -113,16 +109,21 @@ def verify_meet_push_oidc(
             audience=audience,
         )
     except Exception as exc:
-        raise MeetPushAuthError(f"invalid Meet push OIDC token: {exc}") from exc
+        raise WorkspaceEventsPushAuthError(
+            f"invalid Workspace Events push OIDC token: {exc}",
+        ) from exc
 
     if service_account_email:
         token_email = claims.get("email")
         if token_email != service_account_email:
-            raise MeetPushAuthError(
-                "Meet push OIDC email does not match expected push identity",
+            raise WorkspaceEventsPushAuthError(
+                "Workspace Events push OIDC email does not match expected "
+                "push identity",
             )
         if not claims.get("email_verified", False):
-            raise MeetPushAuthError("Meet push OIDC email is not verified")
+            raise WorkspaceEventsPushAuthError(
+                "Workspace Events push OIDC email is not verified",
+            )
 
     return claims
 
@@ -146,14 +147,18 @@ def _decode_cloud_event_data(raw_data: str | None) -> dict[str, Any]:
     try:
         decoded = base64.b64decode(raw_data).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
-        logger.warning("Meet bridge: CloudEvent data was not valid base64/UTF-8")
+        logger.warning(
+            "Workspace Events bridge: CloudEvent data was not valid base64/UTF-8",
+        )
         return {}
     if not decoded.strip():
         return {}
     try:
         parsed = json.loads(decoded)
     except json.JSONDecodeError:
-        logger.warning("Meet bridge: CloudEvent data was not valid JSON")
+        logger.warning(
+            "Workspace Events bridge: CloudEvent data was not valid JSON",
+        )
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -172,7 +177,7 @@ def _external_trigger_id_from_source(*candidates: str | None) -> str:
     return ""
 
 
-def map_pubsub_push_to_delivery(envelope: Mapping[str, Any]) -> NativeMeetDelivery:
+def map_pubsub_push_to_delivery(envelope: Mapping[str, Any]) -> NativeGoogleDelivery:
     """Map a Pub/Sub push envelope + CloudEvent to the native_google body.
 
     Google's Workspace Events pushes arrive in CloudEvents binary content mode:
@@ -180,23 +185,25 @@ def map_pubsub_push_to_delivery(envelope: Mapping[str, Any]) -> NativeMeetDelive
     ``ce-source``, ``ce-type``, ``ce-time``, ``ce-subject``) and the resource
     reference is a base64 JSON blob under ``message.data``.
 
-    Raises ``MeetBridgeMappingError`` when the push is not a Meet Workspace
-    Events delivery or is missing the retry-stable identity / subscription name
-    the ingress needs, so the caller rejects it without waking a task.
+    Raises ``WorkspaceEventsBridgeMappingError`` when the push is missing the
+    retry-stable identity, ``ce-type``, or subscription name the ingress needs,
+    so the caller rejects it without waking a task.
     """
 
     if not isinstance(envelope, Mapping):
-        raise MeetBridgeMappingError("push body is not a JSON object")
+        raise WorkspaceEventsBridgeMappingError("push body is not a JSON object")
     message = envelope.get("message")
     if not isinstance(message, Mapping):
-        raise MeetBridgeMappingError("push body has no Pub/Sub message")
+        raise WorkspaceEventsBridgeMappingError("push body has no Pub/Sub message")
 
     attributes = message.get("attributes")
     attributes = attributes if isinstance(attributes, Mapping) else {}
 
     event_id = str(attributes.get("ce-id") or "").strip()
     if not event_id:
-        raise MeetBridgeMappingError("Meet CloudEvent is missing ce-id")
+        raise WorkspaceEventsBridgeMappingError(
+            "Workspace Events CloudEvent is missing ce-id",
+        )
 
     # Workspace Events sets both ``ce-source`` and the Pub/Sub ``orderingKey``
     # to ``//workspaceevents.googleapis.com/subscriptions/<id>``; the latter is
@@ -206,17 +213,21 @@ def map_pubsub_push_to_delivery(envelope: Mapping[str, Any]) -> NativeMeetDelive
         message.get("orderingKey"),
     )
     if not external_trigger_id:
-        raise MeetBridgeMappingError(
-            "Meet CloudEvent is missing a Workspace Events subscription name",
+        raise WorkspaceEventsBridgeMappingError(
+            "Workspace Events CloudEvent is missing a subscription name",
         )
 
-    slug = str(attributes.get("ce-type") or "").strip() or MEET_TRANSCRIPT_SLUG
+    slug = str(attributes.get("ce-type") or "").strip()
+    if not slug:
+        raise WorkspaceEventsBridgeMappingError(
+            "Workspace Events CloudEvent is missing ce-type",
+        )
     occurred_at = str(attributes.get("ce-time") or "").strip()
     subject = str(attributes.get("ce-subject") or "").strip()
 
-    # Reference metadata only (transcript resource name / file id), never the
-    # transcript bytes. ``includeResource=false`` subscriptions still carry the
-    # transcript resource name in the CloudEvent data.
+    # Reference metadata only (resource name / file id), never artifact bytes.
+    # ``includeResource=false`` subscriptions still carry the resource name in
+    # the CloudEvent data or ``ce-subject``.
     data: dict[str, Any] = dict(_decode_cloud_event_data(message.get("data")))
     if subject and "resource" not in data:
         data["resource"] = subject
@@ -233,7 +244,7 @@ def map_pubsub_push_to_delivery(envelope: Mapping[str, Any]) -> NativeMeetDelive
     if occurred_at:
         payload["occurred_at"] = occurred_at
 
-    return NativeMeetDelivery(
+    return NativeGoogleDelivery(
         event_id=event_id,
         external_trigger_id=external_trigger_id,
         payload=payload,
@@ -271,7 +282,7 @@ def sign_native_webhook_headers(
 
 
 def post_native_google_delivery(
-    delivery: NativeMeetDelivery,
+    delivery: NativeGoogleDelivery,
     *,
     orchestra_url: str,
     signing_secret: str,

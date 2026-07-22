@@ -14,6 +14,7 @@ from email.utils import parseaddr
 from urllib.parse import quote
 from typing import Any, Optional
 from fastapi import (
+    BackgroundTasks,
     Body,
     Depends,
     FastAPI,
@@ -184,13 +185,20 @@ from common.task_destination import assistant_has_task_destination
 # communication package at runtime.
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
-from .meet_bridge import (
-    MeetBridgeMappingError,
-    MeetPushAuthError,
+from .workspace_events_bridge import (
+    WorkspaceEventsBridgeMappingError,
+    WorkspaceEventsPushAuthError,
     bearer_token_from_authorization,
     map_pubsub_push_to_delivery,
     post_native_google_delivery,
-    verify_meet_push_oidc,
+    verify_workspace_events_push_oidc,
+)
+from .microsoft_graph_bridge import (
+    MicrosoftGraphBridgeAuthError,
+    MicrosoftGraphBridgeMappingError,
+    map_graph_notification_to_delivery,
+    post_native_microsoft_delivery,
+    verify_graph_client_state,
 )
 from .helpers import (
     cleanup_idle_pool,
@@ -3327,22 +3335,21 @@ async def assistant_update_webhook(request: Request):
 
 
 # =============================================================================
-# Google Meet Workspace Events
+# Google Workspace Events (Meet / Drive / Chat)
 # =============================================================================
 
 
-@app.post("/meet/workspace-events")
-async def meet_workspace_events_bridge(request: Request):
-    """Bridge Google Meet Workspace Events Pub/Sub pushes into Orchestra.
+@app.post("/workspace-events")
+async def workspace_events_bridge(request: Request):
+    """Bridge Google Workspace Events Pub/Sub pushes into Orchestra.
 
-    Google delivers Meet events (e.g.
-    ``google.workspace.meet.transcript.v2.fileGenerated``) through Cloud
-    Pub/Sub, formatted as CloudEvents. The push subscription for the shared
-    ``meet-workspace-events`` topic targets this path. This handler:
+    Google delivers Meet, Drive, and Chat events through Cloud Pub/Sub,
+    formatted as CloudEvents. The push subscription for the shared
+    ``workspace-events`` topic targets this path. This handler:
 
     1. verifies the Pub/Sub push OIDC token (Google-signed, correct audience
        and push service-account email);
-    2. maps the CloudEvent to the Unify native delivery shape;
+    2. maps the CloudEvent (any ``ce-type``) to the Unify native delivery shape;
     3. signs it with ``NATIVE_GOOGLE_WEBHOOK_SECRET`` and POSTs it to the
        unrouted ``native_google`` ingress, where Orchestra resolves the binding
        by ``external_trigger_id`` (the Workspace Events subscription name).
@@ -3362,38 +3369,47 @@ async def meet_workspace_events_bridge(request: Request):
     signing_secret = SETTINGS.native_google_webhook_secret
     if not signing_secret:
         logger.error(
-            "Meet bridge: NATIVE_GOOGLE_WEBHOOK_SECRET is not configured; "
-            "cannot sign delivery. Returning 503 for Pub/Sub retry.",
+            "Workspace Events bridge: NATIVE_GOOGLE_WEBHOOK_SECRET is not "
+            "configured; cannot sign delivery. Returning 503 for Pub/Sub retry.",
         )
-        return Response(content="Meet bridge not configured", status_code=503)
+        return Response(
+            content="Workspace Events bridge not configured",
+            status_code=503,
+        )
 
     bearer_token = bearer_token_from_authorization(
         request.headers.get("Authorization"),
     )
     try:
-        verify_meet_push_oidc(
+        verify_workspace_events_push_oidc(
             bearer_token,
             audience=SETTINGS.adapters_url.rstrip("/"),
-            service_account_email=SETTINGS.meet_push_auth_service_account,
+            service_account_email=SETTINGS.workspace_events_push_auth_service_account,
         )
-    except MeetPushAuthError as exc:
-        logger.warning("Meet bridge: rejected unauthenticated push: %s", exc)
+    except WorkspaceEventsPushAuthError as exc:
+        logger.warning(
+            "Workspace Events bridge: rejected unauthenticated push: %s",
+            exc,
+        )
         return Response(content="Unauthorized", status_code=401)
 
     try:
         envelope = await request.json()
     except (ValueError, json.JSONDecodeError):
-        logger.warning("Meet bridge: rejected push with non-JSON body")
+        logger.warning("Workspace Events bridge: rejected push with non-JSON body")
         return Response(content="Bad Request: invalid JSON", status_code=400)
 
     try:
         delivery = map_pubsub_push_to_delivery(envelope)
-    except MeetBridgeMappingError as exc:
-        logger.warning("Meet bridge: rejected unmappable push: %s", exc)
+    except WorkspaceEventsBridgeMappingError as exc:
+        logger.warning(
+            "Workspace Events bridge: rejected unmappable push: %s",
+            exc,
+        )
         return Response(content=f"Bad Request: {exc}", status_code=400)
 
     logger.info(
-        "Meet bridge: forwarding event_id=%s subscription=%s slug=%s",
+        "Workspace Events bridge: forwarding event_id=%s subscription=%s slug=%s",
         delivery.event_id,
         delivery.external_trigger_id,
         delivery.payload.get("provider_trigger_slug"),
@@ -3406,25 +3422,154 @@ async def meet_workspace_events_bridge(request: Request):
             signing_secret=signing_secret,
         )
     except requests.RequestException as exc:
-        logger.error("Meet bridge: Orchestra ingress request failed: %s", exc)
+        logger.error(
+            "Workspace Events bridge: Orchestra ingress request failed: %s",
+            exc,
+        )
         return Response(content="Upstream request failed", status_code=503)
 
     if orchestra_response.status_code // 100 == 2:
         logger.info(
-            "Meet bridge: Orchestra durable outcome for event_id=%s: %s",
+            "Workspace Events bridge: Orchestra durable outcome for " "event_id=%s: %s",
             delivery.event_id,
             orchestra_response.text[:256],
         )
         return Response(content="OK", status_code=200)
 
     logger.warning(
-        "Meet bridge: Orchestra non-durable response %s for event_id=%s: %s; "
-        "returning 503 for Pub/Sub retry.",
+        "Workspace Events bridge: Orchestra non-durable response %s for "
+        "event_id=%s: %s; returning 503 for Pub/Sub retry.",
         orchestra_response.status_code,
         delivery.event_id,
         orchestra_response.text[:256],
     )
     return Response(content="Upstream not durable", status_code=503)
+
+
+@app.post("/meet/workspace-events")
+async def workspace_events_bridge_meet_named_path(request: Request):
+    """Accept Pub/Sub pushes still configured for the Meet-named path.
+
+    The shared route is ``POST /workspace-events``. This path remains so
+    Meet-only push subscriptions keep delivering until they are retargeted at
+    the shared endpoint.
+    """
+
+    return await workspace_events_bridge(request)
+
+
+# =============================================================================
+# Microsoft Graph native triggers
+# =============================================================================
+
+
+def _forward_native_microsoft_deliveries(
+    deliveries: list,
+    *,
+    orchestra_url: str,
+    signing_secret: str,
+) -> None:
+    """Best-effort Orchestra forward after Graph has already been acked."""
+
+    for delivery in deliveries:
+        try:
+            orchestra_response = post_native_microsoft_delivery(
+                delivery,
+                orchestra_url=orchestra_url,
+                signing_secret=signing_secret,
+            )
+        except requests.RequestException:
+            logger.exception(
+                "Microsoft Graph bridge: Orchestra POST failed "
+                "external_trigger_id=%s",
+                delivery.external_trigger_id,
+            )
+            continue
+        if orchestra_response.status_code >= 300:
+            logger.warning(
+                "Microsoft Graph bridge: Orchestra returned %s for "
+                "external_trigger_id=%s",
+                orchestra_response.status_code,
+                delivery.external_trigger_id,
+            )
+
+
+@app.post("/microsoft/native-triggers")
+async def microsoft_native_triggers_bridge(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Bridge Microsoft Graph change/lifecycle notifications into Orchestra.
+
+    Orchestra provisions Graph subscriptions with this URL as both
+    ``notificationUrl`` and ``lifecycleNotificationUrl``. This handler:
+
+    1. echoes Graph ``validationToken`` challenges as plain text;
+    2. verifies each notification ``clientState`` against
+       ``NATIVE_MICROSOFT_WEBHOOK_SECRET``;
+    3. maps change/lifecycle items to the Unify native delivery shape;
+    4. acks Graph with ``202 Accepted`` within the webhook deadline, then
+       signs and POSTs each delivery to unrouted ``native_microsoft`` ingress
+       in a background task (Orchestra resolves by ``subscriptionId``).
+
+    Graph requires a 2xx within a few seconds; waiting on Orchestra would drop
+    notifications under load. Auth/mapping failures still reject without
+    waking a task.
+    """
+
+    validation_token = request.query_params.get("validationToken")
+    if validation_token:
+        return Response(content=validation_token, media_type="text/plain")
+
+    signing_secret = SETTINGS.native_microsoft_webhook_secret
+    if not signing_secret:
+        logger.error(
+            "Microsoft Graph bridge: NATIVE_MICROSOFT_WEBHOOK_SECRET is not "
+            "configured; cannot verify/sign delivery. Returning 503 for retry.",
+        )
+        return Response(
+            content="Microsoft Graph bridge not configured",
+            status_code=503,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(content="Bad Request: invalid JSON", status_code=400)
+    if not isinstance(body, dict):
+        return Response(content="Bad Request: expected JSON object", status_code=400)
+
+    notifications = body.get("value")
+    if not isinstance(notifications, list) or not notifications:
+        return Response(content="Bad Request: missing notifications", status_code=400)
+
+    deliveries = []
+    for notification in notifications:
+        if not isinstance(notification, dict):
+            return Response(
+                content="Bad Request: notification is not an object",
+                status_code=400,
+            )
+        try:
+            verify_graph_client_state(
+                notification,
+                webhook_secret=signing_secret,
+            )
+            deliveries.append(map_graph_notification_to_delivery(notification))
+        except MicrosoftGraphBridgeAuthError as exc:
+            logger.warning("Microsoft Graph bridge auth failed: %s", exc)
+            return Response(content="Unauthorized", status_code=401)
+        except MicrosoftGraphBridgeMappingError as exc:
+            logger.warning("Microsoft Graph bridge mapping failed: %s", exc)
+            return Response(content=str(exc), status_code=400)
+
+    background_tasks.add_task(
+        _forward_native_microsoft_deliveries,
+        deliveries,
+        orchestra_url=SETTINGS.orchestra_url,
+        signing_secret=signing_secret,
+    )
+    return Response(content="Accepted", status_code=202)
 
 
 # =============================================================================
@@ -6261,8 +6406,8 @@ if __name__ == "__main__":
     logger.info("  Unify:")
     logger.info("    - POST /unify/chat")
     logger.info("    - POST /unify/meet")
-    logger.info("  Meet:")
-    logger.info("    - POST /meet/workspace-events")
+    logger.info("  Workspace Events:")
+    logger.info("    - POST /workspace-events")
     logger.info("  Unity:")
     logger.info("    - POST /unity/system-event")
     logger.info("    - POST /unity/pre-hire")
