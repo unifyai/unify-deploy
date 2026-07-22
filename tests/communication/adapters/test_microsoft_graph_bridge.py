@@ -185,4 +185,4 @@ def test_fallback_event_id_includes_etag_for_distinct_updates() -> None:
     base["resourceData"]["@odata.etag"] = 'W/"2"'
     second = map_graph_notification_to_delivery(base)
     assert first.event_id != second.event_id
-    assert "W/\"1\"" in first.event_id
+    assert 'W/"1"' in first.event_id

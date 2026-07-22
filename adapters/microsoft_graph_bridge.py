@@ -42,7 +42,11 @@ _GRAPH_CLIENT_STATE_MAX_LEN = 128
 # curated native Microsoft provider_trigger_slug. Keep aligned with
 # orchestra's native_microsoft_graph_subscriptions.json delegated entries.
 _RESOURCE_CHANGE_TO_SLUG: tuple[tuple[str, str, str], ...] = (
-    ("communications/onlineMeetings/", "created", "microsoft.graph.callTranscript.created.meeting"),
+    (
+        "communications/onlineMeetings/",
+        "created",
+        "microsoft.graph.callTranscript.created.meeting",
+    ),
     ("me/messages", "created", "microsoft.graph.mailMessage.created"),
     ("me/messages", "updated", "microsoft.graph.mailMessage.updated"),
     ("/messages", "created", "microsoft.graph.mailMessage.created"),
