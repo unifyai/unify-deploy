@@ -34,6 +34,8 @@ from .runtime_clients import (
 )
 from .task_execution import router as task_execution_router
 from .dashboard_actions import router as dashboard_actions_router
+from .drain import router as drain_router
+from .drain import admission_blocked as assistant_admission_blocked
 from .assistant_sessions import (
     ACTIVE_PHASES,
     AssistantSessionTerminatingError,
@@ -236,6 +238,7 @@ async def _publish_desktop_ready(
 router = APIRouter()
 router.include_router(task_execution_router)
 router.include_router(dashboard_actions_router)
+router.include_router(drain_router)
 
 # Routes a pod may call for its OWN assistant are attached to
 # ``assistant_self_router`` (defined in ``self_router`` to avoid import cycles).
@@ -1396,6 +1399,16 @@ async def start_job(
             raise HTTPException(
                 status_code=409,
                 detail="AssistantSession stop is in progress",
+            )
+        drain_intent = assistant_admission_blocked(assistant_id)
+        if drain_intent is not None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Assistant drain/restart is in progress "
+                    f"(state={drain_intent.state}, mode={drain_intent.mode}); "
+                    "retry after restart completes"
+                ),
             )
         existing_phase = (
             str(existing_session.get("status", {}).get("phase", ""))
