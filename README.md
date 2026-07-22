@@ -439,6 +439,7 @@ The full all-repo local stack (local Orchestra + Console + Coordinator + gateway
 | CI deploy reads empty COMMS/ADAPTERS URL | Secret name split (#4) | Org has `UNITY_*`; workflow reads `UNITY_*` |
 | Cloud Build fails instantly, no steps | Stale trigger on `repositories/unity[-deploy]` (#6) | Recreate trigger against `unity`/`unity-deploy` |
 | Hiring 500 / "Rate Limit Exceeded" | GCE `instances.insert` rate limit | `gcloud logging read` in the VM project for 403s |
+| Bundle publish landed but live brain_operator still on old code | Never-idle session / overlapping offline Jobs | Arm graceful drain: [`ASSISTANT_DRAIN_RESTART.md`](deploy/guides/ASSISTANT_DRAIN_RESTART.md); check ConfigMap `unity-assistant-drain-intents` |
 
 ---
 
@@ -446,6 +447,7 @@ The full all-repo local stack (local Orchestra + Console + Coordinator + gateway
 
 | Guide | Topic |
 |---|---|
+| [`deploy/guides/ASSISTANT_DRAIN_RESTART.md`](deploy/guides/ASSISTANT_DRAIN_RESTART.md) | Graceful/force assistant drain, admission close, publish fan-out |
 | [`deploy/guides/UNITY_CLUSTER_SECRETS.md`](deploy/guides/UNITY_CLUSTER_SECRETS.md) | ESO bootstrap, `unity-secrets` rotation, break-glass |
 | [`deploy/guides/GKE_EPHEMERAL_STORAGE.md`](deploy/guides/GKE_EPHEMERAL_STORAGE.md) | 10Gi Autopilot cap, `emptyDir` `/tmp`, HF/Docling caches |
 | [`deploy/guides/TELEMETRY.md`](deploy/guides/TELEMETRY.md) | Prometheus / Cloud Monitoring metrics pipeline |

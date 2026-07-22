@@ -2284,6 +2284,19 @@ async def dispatch_offline_task(
 
     _validate_offline_dispatch_request(request)
 
+    from communication.infra.drain import admission_blocked
+
+    drain_intent = admission_blocked(request.assistant_id)
+    if drain_intent is not None:
+        # 503 so Cloud Tasks retries after the drain clears / pod recycles.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Assistant drain/restart is in progress "
+                f"(state={drain_intent.state}); offline dispatch deferred"
+            ),
+        )
+
     stage = "accepted"
     run_key: str | None = None
     job_name: str | None = None
