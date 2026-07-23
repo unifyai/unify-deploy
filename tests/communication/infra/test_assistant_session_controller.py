@@ -1298,6 +1298,7 @@ def test_failed_recovery_remints_interactive_session(monkeypatch):
     body["status"]["phase"] = "Failed"
     body["status"]["binding"] = None
     body["status"]["signals"] = {}
+    body["status"]["lastError"] = "ghosted"
     patch_status = MagicMock()
     patch_spec = MagicMock()
 
@@ -1320,6 +1321,8 @@ def test_failed_recovery_remints_interactive_session(monkeypatch):
 
     patch_spec.assert_not_called()
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["binding"]["id"]
+    assert patch_status.call_args.kwargs["last_error"] == "ghosted"
 
 
 def test_reconcile_restarts_terminal_job(monkeypatch):
@@ -2048,12 +2051,36 @@ def test_reconcile_restarts_after_vm_ownership_loss(monkeypatch):
     )
 
 
-def test_reconcile_recovers_failed_running_session_without_binding(monkeypatch):
+@pytest.mark.parametrize(
+    ("phase", "bootstrap_retries", "vm_retries"),
+    [
+        ("Failed", controller.MAX_BOOTSTRAP_RETRIES, 0),
+        ("Failed", 0, controller.MAX_VM_READINESS_RETRIES),
+        ("Releasing", controller.MAX_BOOTSTRAP_RETRIES, 0),
+        ("Releasing", 0, controller.MAX_VM_READINESS_RETRIES),
+    ],
+)
+def test_reconcile_leaves_failed_running_session_without_binding_failed_when_retry_budget_exhausted(
+    monkeypatch,
+    phase,
+    bootstrap_retries,
+    vm_retries,
+):
+    """Exhausted bootstrap/VM budgets stay Failed instead of reminting forever.
+
+    Includes the Releasing + no-binding intermediate that Failed recovery can
+    leave while cleanup finishes, so that path cannot fall through to remint.
+    """
+
     body = _base_session()
-    body["status"]["phase"] = "Failed"
-    body["status"]["lastError"] = "ghosted"
+    body["status"]["phase"] = phase
+    body["status"]["binding"] = None
+    body["status"]["lastError"] = "Container did not become ready within 90s"
+    body["status"]["bootstrapRetries"] = bootstrap_retries
+    body["status"]["vmRetries"] = vm_retries
     patch_status = MagicMock()
     patch_spec = MagicMock()
+    emit_event = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
@@ -2069,14 +2096,35 @@ def test_reconcile_recovers_failed_running_session_without_binding(monkeypatch):
     )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
     monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+    monkeypatch.setattr(controller, "emit_observability_event", emit_event)
 
     controller._update_status_for_session(deepcopy(body))
 
-    patch_status.assert_called_once()
-    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
-    assert patch_status.call_args.kwargs["binding"]["id"]
-    assert patch_status.call_args.kwargs["last_error"] == "ghosted"
     patch_spec.assert_not_called()
+    if phase == "Failed":
+        patch_status.assert_not_called()
+    else:
+        assert patch_status.call_args.kwargs["phase"] == "Failed"
+        assert patch_status.call_args.kwargs["binding"] is None
+        assert patch_status.call_args.kwargs["bootstrap_retries"] == bootstrap_retries
+        assert patch_status.call_args.kwargs["vm_retries"] == vm_retries
+        conditions = patch_status.call_args.kwargs["conditions"]
+        assert any(
+            condition.get("reason") == "RetryBudgetExhausted"
+            for condition in conditions
+        )
+    exhausted_calls = [
+        call
+        for call in emit_event.call_args_list
+        if call.args
+        and call.args[0] == "controller.failed_running_no_binding_exhausted"
+    ]
+    assert len(exhausted_calls) == 1
+    assert exhausted_calls[0].kwargs["bootstrap_retries"] == bootstrap_retries
+    assert exhausted_calls[0].kwargs["vm_retries"] == vm_retries
+    assert exhausted_calls[0].kwargs["last_error"] == (
+        "Container did not become ready within 90s"
+    )
 
 
 def test_reconcile_stops_failed_running_session_without_binding_with_stop_intent(

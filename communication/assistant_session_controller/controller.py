@@ -2008,6 +2008,15 @@ def _assistant_release_state_without_binding(
     return "Releasing", releasing_conditions, last_error
 
 
+def _retry_budget_exhausted(*, bootstrap_retries: int, vm_retries: int) -> bool:
+    """Whether bootstrap or VM readiness retries have already hit their ceiling."""
+
+    return (
+        bootstrap_retries >= MAX_BOOTSTRAP_RETRIES
+        or vm_retries >= MAX_VM_READINESS_RETRIES
+    )
+
+
 def _recover_failed_running_session_without_binding(
     *,
     body: dict,
@@ -2018,8 +2027,13 @@ def _recover_failed_running_session_without_binding(
     bootstrap_retries: int,
     vm_retries: int,
     last_error: str,
+    phase: str,
 ) -> None:
-    """Recover or stop a failed running session that no longer has a binding."""
+    """Recover or stop a failed/releasing running session that has no binding.
+
+    Remints a binding only while bootstrap/VM retry budgets remain. Exhausted
+    budgets park as Failed so a broken runtime image cannot thrash the Job pool.
+    """
 
     release_phase, release_conditions, release_error = (
         _assistant_release_state_without_binding(
@@ -2058,6 +2072,51 @@ def _recover_failed_running_session_without_binding(
             assistant_id=assistant_id,
             activation_id=activation_id,
             suspend_intent=persisted_suspend_intent,
+        )
+        return
+
+    # Bootstrap / VM readiness budgets are owned by _restart_binding_decision.
+    # Once either budget is exhausted the session must stay Failed with no
+    # binding; reminting here (or from a Releasing intermediate) would claim
+    # another Job forever (bad image, missing hosted backend, etc.). Park as
+    # Failed until a new activation or an explicit stop.
+    if _retry_budget_exhausted(
+        bootstrap_retries=bootstrap_retries,
+        vm_retries=vm_retries,
+    ):
+        parked_error = release_error or last_error
+        if phase != "Failed":
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="Failed",
+                observed_activation_id=activation_id,
+                binding=None,
+                last_error=parked_error,
+                source="controller.reconcile",
+                conditions=_condition_state(
+                    release_conditions,
+                    "Failed",
+                    desktop_required,
+                    container_assigned=False,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="RetryBudgetExhausted",
+                    message=parked_error or "Retry budget exhausted",
+                ),
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+            )
+        emit_observability_event(
+            "controller.failed_running_no_binding_exhausted",
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            suspend_intent=persisted_suspend_intent or SUSPEND_INTENT_UNKNOWN,
+            last_error=parked_error,
         )
         return
 
@@ -2253,10 +2312,13 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     if (
-        phase == "Failed"
+        phase in {"Failed", "Releasing"}
         and not current_binding_id
         and observed_activation_id == activation_id
     ):
+        # Failed recovery can leave Releasing + binding=None while cleanup
+        # finishes. Keep that intermediate on the same path so an exhausted
+        # budget cannot fall through to the generic remint below.
         _recover_failed_running_session_without_binding(
             body=body,
             assistant_id=assistant_id,
@@ -2266,6 +2328,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             bootstrap_retries=bootstrap_retries,
             vm_retries=vm_retries,
             last_error=persisted_last_error,
+            phase=phase,
         )
         return
 
@@ -3443,6 +3506,10 @@ def _is_terminally_released(body: dict) -> bool:
     active arrives as a create/update watch event (handled by ``on_session_change``)
     which reconciles immediately, and stale released CRs are removed by the
     ``/sessions/prune-terminal`` job, so the periodic timer can safely skip these.
+
+    Exhausted Failed sessions are intentionally not skipped here: they may still
+    need ``_assistant_release_state_without_binding`` to finish cleanup after a
+    direct Failed transition from ``_restart_binding_decision``.
     """
     snapshot = SessionSnapshot.from_body(body)
     return (
