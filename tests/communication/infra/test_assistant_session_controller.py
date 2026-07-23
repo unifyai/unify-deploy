@@ -2127,6 +2127,36 @@ def test_reconcile_leaves_failed_running_session_without_binding_failed_when_ret
     )
 
 
+def test_reconcile_resets_retry_budgets_when_reminting_new_activation(monkeypatch):
+    """A new activation remint must not inherit a spent retry budget."""
+
+    body = _base_session()
+    body["spec"]["activationId"] = "act-2"
+    body["status"]["phase"] = "Released"
+    body["status"]["binding"] = None
+    body["status"]["observedActivationId"] = "act-1"
+    body["status"]["bootstrapRetries"] = controller.MAX_BOOTSTRAP_RETRIES
+    body["status"]["vmRetries"] = controller.MAX_VM_READINESS_RETRIES
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["observed_activation_id"] == "act-2"
+    assert patch_status.call_args.kwargs["binding"]["id"]
+    assert patch_status.call_args.kwargs["bootstrap_retries"] == 0
+    assert patch_status.call_args.kwargs["vm_retries"] == 0
+
+
 def test_reconcile_stops_failed_running_session_without_binding_with_stop_intent(
     monkeypatch,
 ):

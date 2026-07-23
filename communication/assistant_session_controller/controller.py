@@ -2426,6 +2426,18 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
 
     if not current_binding_id:
         next_binding = _mint_binding_payload()
+        # A new activation must not inherit an exhausted (or half-spent) retry
+        # budget from the prior attempt, or the first timeout fails immediately.
+        remint_bootstrap_retries = (
+            0
+            if observed_activation_id and observed_activation_id != activation_id
+            else bootstrap_retries
+        )
+        remint_vm_retries = (
+            0
+            if observed_activation_id and observed_activation_id != activation_id
+            else vm_retries
+        )
         pending_job_context = (
             bind_causal_context(
                 child_causal_context(
@@ -2445,8 +2457,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 phase="PendingJob",
                 binding=next_binding,
                 desktop_required=desktop_required,
-                bootstrap_retries=bootstrap_retries,
-                vm_retries=vm_retries,
+                bootstrap_retries=remint_bootstrap_retries,
+                vm_retries=remint_vm_retries,
                 stage="mint_binding",
                 stage_state="completed",
                 previous_phase=phase or None,
@@ -2461,8 +2473,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 binding=next_binding,
                 last_error=pending_binding_last_error,
                 source="controller.reconcile",
-                bootstrap_retries=bootstrap_retries,
-                vm_retries=vm_retries,
+                bootstrap_retries=remint_bootstrap_retries,
+                vm_retries=remint_vm_retries,
                 desktop_probe_failures=0,
                 conditions=_condition_state(
                     [],
