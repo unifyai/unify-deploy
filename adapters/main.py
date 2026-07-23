@@ -588,8 +588,8 @@ async def twilio_call_webhook(request: Request):
             room_name,
             assistant_id,
             user_id,
-            call_session_id=provider_call_sid if is_shared_phone_route else "",
-            provider_call_sid=provider_call_sid if is_shared_phone_route else "",
+            call_session_id=provider_call_sid,
+            provider_call_sid=provider_call_sid,
             conference_name=conference_name,
         )
     except Exception as e:
