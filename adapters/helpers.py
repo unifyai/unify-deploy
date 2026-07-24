@@ -739,6 +739,25 @@ def ensure_ms_teams_bot_pending_install(activity: dict) -> dict | None:
     )
 
 
+def claim_ms_teams_bot_welcome(install_id: int, conversation_id: str) -> bool:
+    """Claim the one-shot install welcome for a conversation via Orchestra.
+
+    The bot-add ``conversationUpdate`` is redelivered by Teams / the Bot
+    Connector, so gating the greeting on a server-side claim keyed by
+    ``(install_id, conversation_id)`` is what stops the welcome from repeating.
+    Returns ``True`` only when this call won the claim and should send the
+    welcome; ``False`` on an already-welcomed conversation or any transport
+    failure — failing closed keeps a flaky call from re-spamming the greeting.
+    """
+    resp = _post_ms_teams_bot(
+        "/admin/ms-teams-bot/welcome-claim",
+        {"install_id": install_id, "conversation_id": conversation_id},
+    )
+    if not resp:
+        return False
+    return bool(resp.get("claimed"))
+
+
 # The Azure bot is a *single-tenant* registration in Unify's home tenant
 # (``MS365_ADMIN_TENANT_ID``), so Connector tokens are minted from that
 # tenant's authority — not the shared ``botframework.com`` authority. One
