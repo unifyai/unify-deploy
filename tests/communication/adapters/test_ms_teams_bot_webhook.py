@@ -149,7 +149,8 @@ class TestMsTeamsBotDisconnect:
 
 class TestMsTeamsBotInstallWelcome:
     def test_personal_add_welcomes(self, app_module, client):
-        # A personal-scope bot-add greets in the 1:1 conversation.
+        # A personal-scope bot-add greets in the 1:1 conversation once the
+        # per-conversation welcome claim is won.
         install = {"id": 7, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
@@ -158,6 +159,11 @@ class TestMsTeamsBotInstallWelcome:
                 "ensure_ms_teams_bot_pending_install",
                 return_value=install,
             ) as ensure,
+            patch.object(
+                app_module,
+                "claim_ms_teams_bot_welcome",
+                return_value=True,
+            ) as claim,
             patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
             patch.object(app_module, "revoke_ms_teams_bot_install") as revoke,
         ):
@@ -167,6 +173,8 @@ class TestMsTeamsBotInstallWelcome:
             )
         assert resp.status_code == 200
         ensure.assert_called_once()
+        # The welcome is claimed per (install, conversation) before sending.
+        claim.assert_called_once_with(7, "conv-1")
         welcome.assert_called_once()
         # The DM helper receives the install Orchestra returned.
         assert welcome.call_args.args[1] == install
@@ -176,7 +184,7 @@ class TestMsTeamsBotInstallWelcome:
         # Regression for the Teams Store failure "welcome not triggered in team
         # scope": a team-channel bot-add lands on an already-registered tenant
         # (``created`` false), yet must still welcome — the welcome is keyed on
-        # the per-conversation bot-add, not on the per-tenant install row.
+        # the per-conversation claim, not on the per-tenant install row.
         install = {"id": 7, "created": False, "connect_url": "https://console/x"}
         with (
             patch.object(app_module, "verify_ms_teams_bot_token"),
@@ -185,6 +193,11 @@ class TestMsTeamsBotInstallWelcome:
                 "ensure_ms_teams_bot_pending_install",
                 return_value=install,
             ) as ensure,
+            patch.object(
+                app_module,
+                "claim_ms_teams_bot_welcome",
+                return_value=True,
+            ) as claim,
             patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
         ):
             resp = client.post(
@@ -193,8 +206,36 @@ class TestMsTeamsBotInstallWelcome:
             )
         assert resp.status_code == 200
         ensure.assert_called_once()
+        claim.assert_called_once_with(7, "channel-1")
         welcome.assert_called_once()
         assert welcome.call_args.args[1] == install
+
+    def test_redelivered_add_does_not_rewelcome(self, app_module, client):
+        # Teams / the Bot Connector redeliver the bot-add for a conversation
+        # that has already been welcomed. The claim comes back False, so the
+        # bot must stay silent (Store "no repeating welcome messages" rule).
+        install = {"id": 7, "connect_url": "https://console/x"}
+        with (
+            patch.object(app_module, "verify_ms_teams_bot_token"),
+            patch.object(
+                app_module,
+                "ensure_ms_teams_bot_pending_install",
+                return_value=install,
+            ),
+            patch.object(
+                app_module,
+                "claim_ms_teams_bot_welcome",
+                return_value=False,
+            ) as claim,
+            patch.object(app_module, "send_ms_teams_bot_install_welcome") as welcome,
+        ):
+            resp = client.post(
+                "/ms-teams-bot/messages",
+                json=_added_conversation_update(),
+            )
+        assert resp.status_code == 200
+        claim.assert_called_once_with(7, "conv-1")
+        welcome.assert_not_called()
 
     def test_install_add_registers_without_welcome(self, app_module, client):
         # ``installationUpdate`` add only registers the tenant; the welcome flows

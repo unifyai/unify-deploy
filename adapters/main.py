@@ -231,6 +231,7 @@ from .helpers import (
     slack_message_already_seen,
     resolve_ms_teams_bot_inbound,
     ensure_ms_teams_bot_pending_install,
+    claim_ms_teams_bot_welcome,
     send_ms_teams_bot_install_welcome,
     send_ms_teams_bot_pending_reply,
     revoke_ms_teams_bot_install,
@@ -1823,23 +1824,32 @@ async def ms_teams_bot_messages_webhook(request: Request):
         recipient_id = (activity.get("recipient") or {}).get("id") or ""
         if any(m.get("id") == recipient_id for m in members_added):
             # Bot added to a conversation (personal 1:1 or a team channel).
-            # This fires once per conversation, so it is the right place to
-            # welcome: the personal chat and each team channel are distinct
+            # The personal chat and each team channel are distinct
             # conversations and each must get its own welcome (Teams Store
             # certification checks personal *and* team scope). ``ensure_*``
-            # still records the tenant and returns the connect link the card
-            # uses. Welcome is keyed on the bot-add event, not the tenant, so
-            # a second-scope add on an already-registered tenant still greets.
+            # records the tenant and returns the connect link the card uses.
+            # Teams and the Bot Connector redeliver this bot-add event, so the
+            # greeting is gated on a server-side claim keyed by
+            # ``(install_id, conversation_id)``: the first delivery for a
+            # conversation welcomes, redeliveries stay silent (avoids the
+            # "repeating welcome messages" certification failure).
             install = await asyncio.to_thread(
                 ensure_ms_teams_bot_pending_install,
                 activity,
             )
-            if install:
-                await asyncio.to_thread(
-                    send_ms_teams_bot_install_welcome,
-                    activity,
-                    install,
+            conversation_id = (activity.get("conversation") or {}).get("id") or ""
+            if install and conversation_id:
+                claimed = await asyncio.to_thread(
+                    claim_ms_teams_bot_welcome,
+                    install.get("id"),
+                    conversation_id,
                 )
+                if claimed:
+                    await asyncio.to_thread(
+                        send_ms_teams_bot_install_welcome,
+                        activity,
+                        install,
+                    )
         elif any(m.get("id") == recipient_id for m in members_removed):
             await asyncio.to_thread(revoke_ms_teams_bot_install, activity)
         return {"status": 200}
