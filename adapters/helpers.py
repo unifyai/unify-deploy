@@ -815,18 +815,19 @@ _MS_TEAMS_BOT_APP_NAME = "Unify T-W1N"
 # progressive enhancement, not the sole carrier of the message.
 _MS_TEAMS_BOT_WELCOME_TEXT = (
     f"Hi! Thanks for adding {_MS_TEAMS_BOT_APP_NAME}. I'm your AI teammate "
-    "here in Teams. One quick step to finish setup: connect this workspace to "
-    "your Unify account or organization using the button below. You only do "
-    "this once. You can also say **Hi**, **Hello**, or **Help** anytime."
+    "here in Microsoft Teams. One quick step to finish setup: connect this "
+    "workspace to your Unify account or organization using the button below. "
+    "You only do this once. You can also say **Hi**, **Hello**, or **Help** "
+    "anytime."
 )
 
 # Canned reply when a message lands on an install that isn't bound to a Unify
 # owner yet. Keeps the bot responsive (Store certification: the bot must reply
 # to commands) instead of silently dropping the activity.
 _MS_TEAMS_BOT_PENDING_REPLY_TEXT = (
-    "Thanks for the message! This Teams workspace isn't connected to a Unify "
-    "account yet, so I can't act on requests here just yet. Tap **Connect to "
-    "Unify** below to finish setup, then I'll be able to help."
+    "Thanks for the message! This Microsoft Teams workspace isn't connected to "
+    "a Unify account yet, so I can't act on requests here just yet. Tap "
+    "**Connect to Unify** below to finish setup, then I'll be able to help."
 )
 
 
@@ -845,7 +846,7 @@ def _ms_teams_bot_connect_card(text: str, connect_url: str) -> dict:
                 "type": "TextBlock",
                 "size": "Medium",
                 "weight": "Bolder",
-                "text": f"Connect {_MS_TEAMS_BOT_APP_NAME} to Teams",
+                "text": f"Connect {_MS_TEAMS_BOT_APP_NAME} to Microsoft Teams",
             },
             {
                 "type": "TextBlock",
