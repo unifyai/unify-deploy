@@ -459,6 +459,13 @@ def build_unity_job_manifest(
                 else f"unity-pipeline-artifacts-{deploy_env}"
             ),
         },
+        # Signed-in browser session for Google Meet joins: the CM hydrates
+        # gs://{bucket}/{state}.json into the meet browser so it joins as the
+        # per-env twin account instead of an anonymous guest (which Meet
+        # rejects when no host is present). Absent blob -> graceful anonymous
+        # fallback.
+        {"name": "MEET_BROWSER_STATE_BUCKET", "value": "unity-browser-states"},
+        {"name": "MEET_GOOGLE_STORAGE_STATE", "value": f"twin-session-{deploy_env}"},
     ]
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)
