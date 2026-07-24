@@ -801,15 +801,23 @@ def _mint_ms_teams_bot_connector_token() -> str | None:
     return token
 
 
+# Canonical Teams app name. Must match the app title/short name in the Teams
+# manifest and Partner Center listing, and the Bot Framework registration, so
+# the bot identifies itself consistently in every response (Teams Store
+# certification requires the welcome/bot copy to name the app exactly as the
+# manifest does). This is the *app* name; "Unify" on its own still refers to the
+# Unify account/platform the workspace connects to, which is a distinct noun.
+_MS_TEAMS_BOT_APP_NAME = "Unify T-W1N"
+
 # Plain-text welcome sent alongside the connect card. Teams Store certification
 # requires a visible welcome on add, and some surfaces render only the top-level
 # text (not the card), so the greeting must live in ``text`` too — the card is a
 # progressive enhancement, not the sole carrier of the message.
 _MS_TEAMS_BOT_WELCOME_TEXT = (
-    "Hi! Thanks for adding Unify. I'm your AI teammate here in Teams. "
-    "One quick step to finish setup: connect this workspace to your Unify "
-    "account or organization using the button below. You only do this once. "
-    "You can also say **Hi**, **Hello**, or **Help** anytime."
+    f"Hi! Thanks for adding {_MS_TEAMS_BOT_APP_NAME}. I'm your AI teammate "
+    "here in Teams. One quick step to finish setup: connect this workspace to "
+    "your Unify account or organization using the button below. You only do "
+    "this once. You can also say **Hi**, **Hello**, or **Help** anytime."
 )
 
 # Canned reply when a message lands on an install that isn't bound to a Unify
@@ -837,7 +845,7 @@ def _ms_teams_bot_connect_card(text: str, connect_url: str) -> dict:
                 "type": "TextBlock",
                 "size": "Medium",
                 "weight": "Bolder",
-                "text": "Connect Unify to Teams",
+                "text": f"Connect {_MS_TEAMS_BOT_APP_NAME} to Teams",
             },
             {
                 "type": "TextBlock",
