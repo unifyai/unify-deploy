@@ -71,7 +71,7 @@ WORKDIR /app
 # Copy source and install unity with all dependencies.  The git credential
 # rewrite (set above) must stay active through this install: `uv pip install .`
 # builds the unillm git dependency, which carries a private submodule
-# (.cursor/rules/global-rules -> github.com/unifyai/global-cursor-rules).
+# (.agents/global-rules -> github.com/unifyai/global-agent-rules).
 # `git submodule update --init` clones that over HTTPS and fails with
 # "could not read Username" if the token rewrite has already been unset.
 # The credentials are scrubbed immediately after the install (still before the

@@ -24,7 +24,6 @@ comm-sa.json
 cert-manager-dns-key.json
 deploy/selfhost/comms_sa.json
 deploy/selfhost/comms_twilio.env
-CLAUDE.md
 __pypackages__/
 
 # One-time GCP Pub/Sub / IAM setup scripts — keep local, never commit.

@@ -425,6 +425,63 @@ class TestOrgChat:
         assert fanout_frame["event"]["thread_id"] == 51
         assert fanout_frame["event"]["contact_id"] == 1
 
+    def test_assistant_peer_dm_publishes_to_both_topics_and_fans_out(self, client):
+        response = client.post(
+            "/unify/chat",
+            json={
+                "kind": "assistant_peer_dm",
+                "organization_id": 9,
+                "thread_id": 88,
+                "assistant_id": 100,
+                "peer_assistant_id": 200,
+                "message": {
+                    "id": 5,
+                    "thread_id": 88,
+                    "kind": "assistant_peer_dm",
+                    "assistant_id": 100,
+                    "peer_assistant_id": 200,
+                    "assistant_ids": [100, 200],
+                    "sender_kind": "assistant",
+                    "sender_assistant_id": 100,
+                    "sender_name": "Alpha",
+                    "content": "hey peer",
+                    "timestamp": "2026-07-07T12:00:00+00:00",
+                },
+                "fanout_assistant_ids": [200],
+                "assistant_event": {
+                    "thread_id": 88,
+                    "thread_kind": "assistant_peer_dm",
+                    "chat_message_id": 5,
+                    "body": "hey peer",
+                    "sender_kind": "assistant",
+                    "sender_assistant_id": 100,
+                    "sender_name": "Alpha",
+                },
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["fanned_out"] == 1
+
+        publish_calls = client._mock_pubsub.publish.call_args_list
+        # Two Console frames (one per peer topic) + one runtime fan-out.
+        assert len(publish_calls) == 3
+        frame_topics = {call[0][0] for call in publish_calls[:2]}
+        assert any(t.endswith("/topics/unity-100") for t in frame_topics)
+        assert any(t.endswith("/topics/unity-200") for t in frame_topics)
+        for call in publish_calls[:2]:
+            frame = json.loads(call[0][1].decode("utf-8"))
+            assert frame["thread"] == "chat_message"
+            assert frame["event"]["content"] == "hey peer"
+            assert call[1]["kind"] == "assistant_peer_dm"
+
+        fanout_call = publish_calls[2]
+        # build_webhook_context is mocked to assistant 777 in this suite.
+        assert fanout_call[0][0].endswith("/topics/unity-777")
+        fanout_frame = json.loads(fanout_call[0][1].decode("utf-8"))
+        assert fanout_frame["thread"] == "unify_message"
+        assert fanout_frame["event"]["thread_id"] == 88
+        assert fanout_frame["event"]["sender_assistant_id"] == 100
+
     def test_reaction_publishes_frame_and_runtime_envelope(self, client):
         response = client.post(
             "/unify/chat",

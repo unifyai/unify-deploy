@@ -19,6 +19,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -177,6 +178,10 @@ from common.livekit import (
 from common.oauth import OAuthStateError, verify_oauth_state
 from common.int_list_codec import normalize_int_list
 from common.team_summaries_codec import normalize_team_summaries
+from common.adapter_auth import (
+    require_admin_or_user_key,
+    require_assistant_ownership,
+)
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -2020,14 +2025,18 @@ def sanitize_filename(filename: str) -> str:
     return basename if basename else "attachment"
 
 
-@app.post("/unify/attachment", dependencies=[Depends(require_admin_key)])
+@app.post("/unify/attachment", dependencies=[Depends(require_admin_or_user_key)])
 async def unify_attachment_upload(
     request: Request,
     file: UploadFile = File(...),
-    assistant_id: str = None,
+    assistant_id: str = Form(default=None),
 ):
     """
     Upload a file attachment for use in Unify messages.
+
+    Accepts ``ORCHESTRA_ADMIN_KEY`` (Orchestra / control plane) or the
+    assistant's own ``UNIFY_KEY`` (pod outbound attachments). User-key
+    callers may only upload under an assistant_id they own.
 
     The file is stored in GCS and both permanent (gs://) and signed URLs are returned.
     The returned attachment object can be included in /unify/chat sends.
@@ -2047,10 +2056,11 @@ async def unify_attachment_upload(
     """
     logger.info("unify_attachment_upload function started")
 
-    # Get assistant_id from form data if not provided as query param
     if not assistant_id:
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id", "unknown")
+
+    await require_assistant_ownership(request, assistant_id)
 
     try:
         # Read file content
@@ -2311,12 +2321,19 @@ async def unify_chat_webhook(request: Request):
             media_type="application/json",
         )
 
-    if kind not in ("assistant_dm", "dm", "team", "group", "reaction"):
+    if kind not in (
+        "assistant_dm",
+        "assistant_peer_dm",
+        "dm",
+        "team",
+        "group",
+        "reaction",
+    ):
         return Response(
             status_code=400,
             content=(
-                "kind must be 'assistant_dm', 'dm', 'team', 'group', "
-                "'reaction', or 'call'"
+                "kind must be 'assistant_dm', 'assistant_peer_dm', 'dm', "
+                "'team', 'group', 'reaction', or 'call'"
             ),
         )
     if not message:
@@ -2325,7 +2342,14 @@ async def unify_chat_webhook(request: Request):
     frame_thread = "chat_reaction" if kind == "reaction" else "chat_message"
     thread_kind = str(payload.get("thread_kind") or kind)
     attributes = {"thread": frame_thread}
-    for key in ("organization_id", "thread_id", "team_id", "group_id", "assistant_id"):
+    for key in (
+        "organization_id",
+        "thread_id",
+        "team_id",
+        "group_id",
+        "assistant_id",
+        "peer_assistant_id",
+    ):
         value = payload.get(key) or message.get(key)
         if value is not None:
             attributes[key] = str(value)
@@ -2356,6 +2380,37 @@ async def unify_chat_webhook(request: Request):
                 SETTINGS.assistant_topic(str(frame_assistant_id)),
             )
             pubsub_client.publish(assistant_topic_path, frame_bytes, **attributes)
+        elif thread_kind == "assistant_peer_dm":
+            # Peer DMs publish a Console frame on each peer's assistant topic
+            # (Console currently ignores this kind; runtimes are delivered via
+            # fanout_assistant_ids below).
+            peer_ids = [
+                str(a)
+                for a in (
+                    message.get("assistant_ids")
+                    or [
+                        payload.get("assistant_id") or message.get("assistant_id"),
+                        payload.get("peer_assistant_id")
+                        or message.get("peer_assistant_id"),
+                    ]
+                )
+                if a is not None
+            ]
+            if len(peer_ids) < 2:
+                return Response(
+                    status_code=400,
+                    content="assistant_peer_dm frames require both assistant ids",
+                )
+            for peer_id in peer_ids:
+                peer_topic_path = pubsub_client.topic_path(
+                    SETTINGS.gcp_project_id,
+                    SETTINGS.assistant_topic(peer_id),
+                )
+                pubsub_client.publish(
+                    peer_topic_path,
+                    frame_bytes,
+                    **{**attributes, "assistant_id": peer_id},
+                )
         else:
             if not organization_id:
                 return Response(

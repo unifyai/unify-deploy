@@ -201,9 +201,45 @@ class TestAttachmentUploadCurrentBehavior:
         client.headers["Authorization"] = "Bearer wrong-key"
         files = {"file": ("test.txt", io.BytesIO(b"content"), "text/plain")}
 
-        response = client.post("/unify/attachment", files=files)
+        with patch(
+            "common.adapter_auth.authenticate_user_api_key",
+            side_effect=__import__("fastapi").HTTPException(
+                status_code=401,
+                detail="Invalid API key.",
+            ),
+        ):
+            response = client.post("/unify/attachment", files=files)
 
-        assert response.status_code == 403
+        assert response.status_code == 401
+
+    def test_upload_accepts_owner_user_key(
+        self,
+        client,
+        app_module,
+    ):
+        """Assistant pods may upload with their own UNIFY_KEY."""
+        client.headers["Authorization"] = "Bearer assistant-user-key"
+        files = {"file": ("robot.png", io.BytesIO(b"PNG"), "image/png")}
+
+        async def _auth(api_key: str):
+            assert api_key == "assistant-user-key"
+            return {"user_id": "u1"}
+
+        async def _owned(request, assistant_id):
+            assert str(assistant_id) == "1406"
+
+        with (
+            patch("common.adapter_auth.authenticate_user_api_key", _auth),
+            patch.object(app_module, "require_assistant_ownership", _owned),
+        ):
+            response = client.post(
+                "/unify/attachment",
+                files=files,
+                data={"assistant_id": "1406"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["filename"] == "robot.png"
 
     def test_upload_generates_unique_ids(self, client):
         """Each upload gets a unique ID."""
