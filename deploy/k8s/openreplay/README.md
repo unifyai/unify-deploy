@@ -1,8 +1,8 @@
-# Self-hosted OpenReplay (session replay) for Console
+# Self-hosted OpenReplay (session replay)
 
 Short-term path: **dedicated GCE VM** (OpenReplay's supported GCP install) with
-**recordings on GCS**. Console sends events via `@openreplay/tracker` to
-`https://openreplay[-staging].unify.ai/ingest`.
+**recordings on GCS**. Console and the marketing site send events via
+`@openreplay/tracker` to `https://openreplay[-staging].unify.ai/ingest`.
 
 This is intentionally **not** on GKE Autopilot — OpenReplay's helm charts need
 RWX/hostPath-style volumes that fight Autopilot. A single `n2-standard-2` VM
@@ -22,18 +22,15 @@ Already provisioned:
 | HMAC secrets | `OPENREPLAY_GCS_HMAC_ACCESS_ID_STAGING`, `OPENREPLAY_GCS_HMAC_SECRET_STAGING` |
 | TLS | Let's Encrypt via cert-manager (`openreplay-ssl` Ready) |
 | OpenReplay | v1.27.x, `use_tls: true`, s3 → GCS |
+| Projects | `my first project` (Console), `landing-page` (marketing site) |
 
-**You still need to:**
+**Console staging:** Cloud Build trigger `unify-console-redesign` has
+`_OPENREPLAY_PROJECT_KEY` set; tracker lives in
+`console/src/components/Integrations/OpenReplayTracker.tsx` (no cookie banner).
 
-1. Open https://openreplay.example.com and create the first admin account
-   (no users exist until that signup).
-2. Preferences → Projects → copy the **project key**.
-3. Set Console Cloud Build substitution `_OPENREPLAY_PROJECT_KEY` on the
-   staging trigger (ingest URL already defaults to
-   `https://openreplay.example.com/ingest`).
-4. Redeploy Console staging so the tracker starts sending.
-
-SSH to the VM (IAP — port 22 is not open to the public internet):
+**Landing staging:** Cloud Build trigger `landing-page-staging` should have
+`_OPENREPLAY_PROJECT_KEY` for the `landing-page` OpenReplay project; tracker is
+consent-gated in `landing-page/src/components/integrations/OpenReplayTracker.tsx`.
 
 ```bash
 gcloud compute ssh unity-openreplay-staging \
