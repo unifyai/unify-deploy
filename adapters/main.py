@@ -19,6 +19,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -177,6 +178,10 @@ from common.livekit import (
 from common.oauth import OAuthStateError, verify_oauth_state
 from common.int_list_codec import normalize_int_list
 from common.team_summaries_codec import normalize_team_summaries
+from common.adapter_auth import (
+    require_admin_or_user_key,
+    require_assistant_ownership,
+)
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -2020,14 +2025,18 @@ def sanitize_filename(filename: str) -> str:
     return basename if basename else "attachment"
 
 
-@app.post("/unify/attachment", dependencies=[Depends(require_admin_key)])
+@app.post("/unify/attachment", dependencies=[Depends(require_admin_or_user_key)])
 async def unify_attachment_upload(
     request: Request,
     file: UploadFile = File(...),
-    assistant_id: str = None,
+    assistant_id: str = Form(default=None),
 ):
     """
     Upload a file attachment for use in Unify messages.
+
+    Accepts ``ORCHESTRA_ADMIN_KEY`` (Orchestra / control plane) or the
+    assistant's own ``UNIFY_KEY`` (pod outbound attachments). User-key
+    callers may only upload under an assistant_id they own.
 
     The file is stored in GCS and both permanent (gs://) and signed URLs are returned.
     The returned attachment object can be included in /unify/chat sends.
@@ -2047,10 +2056,11 @@ async def unify_attachment_upload(
     """
     logger.info("unify_attachment_upload function started")
 
-    # Get assistant_id from form data if not provided as query param
     if not assistant_id:
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id", "unknown")
+
+    await require_assistant_ownership(request, assistant_id)
 
     try:
         # Read file content
