@@ -1,0 +1,38 @@
+# Example OpenReplay vars.yaml fragment for Unify (GCS-backed recordings).
+#
+# After `openreplay -i <domain>`, edit the live vars with `openreplay -e`
+# (or edit /var/lib/openreplay/vars.yaml) and merge the `s3:` block below,
+# then `openreplay -R`.
+#
+# Create buckets + HMAC first:
+#   ./deploy/scripts/dev/setup_openreplay_infra.sh staging
+#   gcloud storage hmac-keys create openreplay-gcs@PROJECT --project=PROJECT
+#
+# Staging bucket names use the -staging suffix; production omits it.
+
+domainName: openreplay.example.com
+
+# Keep OpenReplay's bundled Postgres/Redis on the VM for short-term simplicity.
+# Point only object storage at GCS.
+
+s3:
+  endpoint: "https://storage.googleapis.com"
+  region: "us-central1"
+  accessKey: "<HMAC_ACCESS_ID>"
+  secretKey: "<HMAC_SECRET>"
+  assetsBucket: "unity-openreplay-assets-staging"
+  recordingsBucket: "unity-openreplay-recordings-staging"
+  sourcemapsBucket: "unity-openreplay-sourcemaps-staging"
+  # spotsBucket optional on newer versions:
+  # spotsBucket: "unity-openreplay-assets-staging"
+
+# Production example:
+# domainName: openreplay.unify.ai
+# s3:
+#   endpoint: "https://storage.googleapis.com"
+#   region: "us-central1"
+#   accessKey: "<HMAC_ACCESS_ID>"
+#   secretKey: "<HMAC_SECRET>"
+#   assetsBucket: "unity-openreplay-assets"
+#   recordingsBucket: "unity-openreplay-recordings"
+#   sourcemapsBucket: "unity-openreplay-sourcemaps"
