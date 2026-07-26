@@ -2311,12 +2311,19 @@ async def unify_chat_webhook(request: Request):
             media_type="application/json",
         )
 
-    if kind not in ("assistant_dm", "dm", "team", "group", "reaction"):
+    if kind not in (
+        "assistant_dm",
+        "assistant_peer_dm",
+        "dm",
+        "team",
+        "group",
+        "reaction",
+    ):
         return Response(
             status_code=400,
             content=(
-                "kind must be 'assistant_dm', 'dm', 'team', 'group', "
-                "'reaction', or 'call'"
+                "kind must be 'assistant_dm', 'assistant_peer_dm', 'dm', "
+                "'team', 'group', 'reaction', or 'call'"
             ),
         )
     if not message:
@@ -2325,7 +2332,14 @@ async def unify_chat_webhook(request: Request):
     frame_thread = "chat_reaction" if kind == "reaction" else "chat_message"
     thread_kind = str(payload.get("thread_kind") or kind)
     attributes = {"thread": frame_thread}
-    for key in ("organization_id", "thread_id", "team_id", "group_id", "assistant_id"):
+    for key in (
+        "organization_id",
+        "thread_id",
+        "team_id",
+        "group_id",
+        "assistant_id",
+        "peer_assistant_id",
+    ):
         value = payload.get(key) or message.get(key)
         if value is not None:
             attributes[key] = str(value)
@@ -2356,6 +2370,37 @@ async def unify_chat_webhook(request: Request):
                 SETTINGS.assistant_topic(str(frame_assistant_id)),
             )
             pubsub_client.publish(assistant_topic_path, frame_bytes, **attributes)
+        elif thread_kind == "assistant_peer_dm":
+            # Peer DMs publish a Console frame on each peer's assistant topic
+            # (Console currently ignores this kind; runtimes are delivered via
+            # fanout_assistant_ids below).
+            peer_ids = [
+                str(a)
+                for a in (
+                    message.get("assistant_ids")
+                    or [
+                        payload.get("assistant_id") or message.get("assistant_id"),
+                        payload.get("peer_assistant_id")
+                        or message.get("peer_assistant_id"),
+                    ]
+                )
+                if a is not None
+            ]
+            if len(peer_ids) < 2:
+                return Response(
+                    status_code=400,
+                    content="assistant_peer_dm frames require both assistant ids",
+                )
+            for peer_id in peer_ids:
+                peer_topic_path = pubsub_client.topic_path(
+                    SETTINGS.gcp_project_id,
+                    SETTINGS.assistant_topic(peer_id),
+                )
+                pubsub_client.publish(
+                    peer_topic_path,
+                    frame_bytes,
+                    **{**attributes, "assistant_id": peer_id},
+                )
         else:
             if not organization_id:
                 return Response(
