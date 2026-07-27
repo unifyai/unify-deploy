@@ -71,7 +71,7 @@ def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     """CM and offline Jobs inherit scoped Orchestra EventBus persistence.
 
     Publishing + Pub/Sub stay on for Live Actions; Orchestra Events/* is
-    narrowed to execute_code / execute_function only.
+    narrowed to the CodeAct root plus execute_code / execute_function.
     """
     manifest = build_unity_job_manifest(job_name="eventbus-persist-staging")
     env = _env_by_name(manifest)
@@ -80,7 +80,7 @@ def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     assert env["EVENTBUS_ORCHESTRA_PERSIST_MODE"]["value"] == "allowlist"
     assert (
         env["EVENTBUS_ORCHESTRA_PERSIST_TOOLS"]["value"]
-        == "execute_code,execute_function"
+        == "act,execute_code,execute_function"
     )
 
 
