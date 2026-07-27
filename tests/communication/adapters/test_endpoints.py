@@ -982,7 +982,10 @@ def test_livekit_recording_webhook_happy_path(test_client):
             "egressInfo": {
                 "egressId": "eg-test-123",
                 "roomName": room_name,
-                "status": 0,
+                # EGRESS_COMPLETE. LiveKit never reports egress_ended while
+                # still EGRESS_STARTING, and the handler only links recordings
+                # from a completed egress.
+                "status": 3,
                 "fileResults": [
                     {
                         "filename": f"staging/{assistant_id}/{room_name}.mp3",
