@@ -1,22 +1,24 @@
-"""Shared LiveKit utilities for adapters and communication services."""
+"""Shared LiveKit utilities for adapters and communication services.
+
+Call recording is deliberately absent here. Egress lives in exactly one
+place -- ``unify.gateway.common.livekit`` -- reached over
+``/phone/start-recording``. A second copy in this module drifted out of sync
+with the gateway during the phone-channel migration and silently stopped
+recording every dispatched call for months, so the duplication is not
+reintroduced: adapters observe recordings (via the completion webhook) but
+never start them.
+"""
 
 import json
 import os
-from datetime import datetime, timezone
-from urllib.parse import quote_plus, urlencode
-
-from common.settings import SETTINGS
+from urllib.parse import urlencode
 
 from livekit.api import (
     CreateAgentDispatchRequest,
     CreateSIPDispatchRuleRequest,
-    EncodedFileOutput,
-    GCPUpload,
     LiveKitAPI,
-    RoomCompositeEgressRequest,
     SIPDispatchRuleInfo,
     TokenVerifier,
-    WebhookConfig,
     WebhookReceiver,
 )
 from livekit.protocol.sip import (
@@ -55,18 +57,8 @@ async def create_room_and_dispatch_agent(
     room_name: str,
     agent_name: str,
     metadata: dict = None,
-    *,
-    record: bool = False,
-    assistant_id: str = "",
-    user_id: str = "",
 ):
-    """Create a LiveKit room, dispatch an agent, and optionally start recording.
-
-    When *record* is True, a Room Composite Egress (audio-only, MP3) is
-    started for the room. The recording is uploaded to GCS by LiveKit and a
-    completion webhook notifies this service so it can publish a
-    recording_ready Pub/Sub event.
-    """
+    """Create a LiveKit room and dispatch an agent into it."""
     livekit_api = get_livekit_api()
 
     try:
@@ -81,103 +73,12 @@ async def create_room_and_dispatch_agent(
             f"LiveKit agent '{agent_name}'",
         )
         print(f"Dispatch ID: {dispatch.id}")
-
-        if record:
-            await _start_room_egress(livekit_api, room_name, assistant_id, user_id)
-
         return dispatch
     except Exception as e:
         print(f"Error creating room and dispatching LiveKit agent: {str(e)}")
         raise
     finally:
         await livekit_api.aclose()
-
-
-async def start_room_egress(
-    room_name: str,
-    assistant_id: str,
-    user_id: str = "",
-    *,
-    call_session_id: str = "",
-    provider_call_sid: str = "",
-    conference_name: str = "",
-):
-    """Start an audio-only Room Composite Egress on an existing room.
-
-    Use this when the room was created externally (e.g. by a SIP trunk)
-    and you just need to start recording.
-    """
-    livekit_api = get_livekit_api()
-    try:
-        await _start_room_egress(
-            livekit_api,
-            room_name,
-            assistant_id,
-            user_id,
-            call_session_id=call_session_id,
-            provider_call_sid=provider_call_sid,
-            conference_name=conference_name,
-        )
-    except Exception as e:
-        print(f"[Egress] Failed to start egress for room '{room_name}': {e}")
-    finally:
-        await livekit_api.aclose()
-
-
-async def _start_room_egress(
-    livekit_api: LiveKitAPI,
-    room_name: str,
-    assistant_id: str,
-    user_id: str,
-    *,
-    call_session_id: str = "",
-    provider_call_sid: str = "",
-    conference_name: str = "",
-):
-    """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
-    gcs_credentials = os.getenv("GCP_SA_KEY", "")
-    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
-    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
-    api_key = os.getenv("LIVEKIT_API_KEY", "")
-    prefix = SETTINGS.deploy_env
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
-
-    webhook_url = (
-        f"{adapters_url}/livekit/recording-complete"
-        f"?assistant_id={quote_plus(str(assistant_id))}"
-        f"&user_id={quote_plus(user_id)}"
-        f"&room_name={quote_plus(room_name)}"
-    )
-    if call_session_id:
-        webhook_url += f"&call_session_id={quote_plus(call_session_id)}"
-    if provider_call_sid:
-        webhook_url += f"&provider_call_sid={quote_plus(provider_call_sid)}"
-    if conference_name:
-        webhook_url += f"&conference_name={quote_plus(conference_name)}"
-
-    egress_request = RoomCompositeEgressRequest(
-        room_name=room_name,
-        audio_only=True,
-        file_outputs=[
-            EncodedFileOutput(
-                file_type=3,  # MP3
-                filepath=filepath,
-                gcp=GCPUpload(
-                    credentials=gcs_credentials,
-                    bucket=gcs_bucket,
-                ),
-            ),
-        ],
-        webhooks=[
-            WebhookConfig(url=webhook_url, signing_key=api_key),
-        ],
-    )
-    info = await livekit_api.egress.start_room_composite_egress(egress_request)
-    print(
-        f"[Egress] Started room composite egress {info.egress_id} "
-        f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
-    )
 
 
 def make_sip_uri(phone_number: str) -> str:

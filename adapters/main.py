@@ -164,6 +164,8 @@ def _store_refreshed_oauth_secrets(
 
 from common.metrics import setup_metrics
 
+from livekit.protocol.egress import EgressStatus
+
 from common.livekit import (
     delete_sip_dispatch_rule,
     ensure_phone_dispatch_rule,
@@ -171,7 +173,6 @@ from common.livekit import (
     make_call_scoped_sip_uri,
     make_room_name,
     make_sip_uri,
-    start_room_egress,
     verify_livekit_webhook,
 )
 
@@ -587,19 +588,11 @@ async def twilio_call_webhook(request: Request):
         logger.error(f"Error during conference setup: {e}")
         return Response(content="Error setting up conference", status_code=500)
 
-    # Start LiveKit Egress recording on the room (fire-and-forget).
-    try:
-        user_id = context["assistant"]["user_id"]
-        await start_room_egress(
-            room_name,
-            assistant_id,
-            user_id,
-            call_session_id=provider_call_sid,
-            provider_call_sid=provider_call_sid,
-            conference_name=conference_name,
-        )
-    except Exception as e:
-        logger.error(f"[Egress] Non-fatal: failed to start egress for call: {e}")
+    # Recording is not started here: at this point Twilio is still dialing the
+    # SIP leg, so the LiveKit room has no publishing participant and an egress
+    # started now dies with "Start signal not received" having produced no
+    # file. The runtime starts it from the call-started path instead, once the
+    # session is live (see /phone/start-recording on the gateway).
 
     logger.info("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
@@ -717,8 +710,29 @@ async def livekit_recording_complete(request: Request):
         f"'{egress_info.room_name}' status={egress_info.status}",
     )
 
+    # A failed or aborted egress still ends, and can still carry a file result
+    # naming an object that was never written. Publishing that would attach a
+    # dead URL to the transcript, which reads downstream as a recording that
+    # exists but will not play. Only a completed egress with real bytes counts.
+    if egress_info.status != EgressStatus.EGRESS_COMPLETE:
+        logger.warning(
+            f"[Recording] Egress {egress_info.egress_id} for room "
+            f"'{egress_info.room_name}' did not complete "
+            f"(status={egress_info.status}, error={egress_info.error!r}); "
+            "no recording to link",
+        )
+        return Response(status_code=200)
+
     if not egress_info.file_results:
         logger.info("[Recording] No file results in egress info, skipping")
+        return Response(status_code=200)
+
+    if not egress_info.file_results[0].size:
+        logger.warning(
+            f"[Recording] Egress {egress_info.egress_id} for room "
+            f"'{egress_info.room_name}' produced an empty file "
+            f"({egress_info.file_results[0].filename}); no recording to link",
+        )
         return Response(status_code=200)
 
     assistant_id = request.query_params.get("assistant_id", "")
@@ -1408,21 +1422,9 @@ async def twilio_whatsapp_call_webhook(request: Request):
         logger.error(f"Error during WhatsApp call conference setup: {e}")
         return Response(content="Error setting up conference", status_code=500)
 
-    # Recording via LiveKit Egress (fire-and-forget)
-    try:
-        user_id = assistant_data["user_id"]
-        await start_room_egress(
-            room_name,
-            assistant_id,
-            user_id,
-            call_session_id=provider_call_sid,
-            provider_call_sid=provider_call_sid,
-            conference_name=conference_name,
-        )
-    except Exception as e:
-        logger.error(
-            f"[Egress] Non-fatal: failed to start egress for WhatsApp call: {e}",
-        )
+    # Recording is started by the runtime once the session is live, not here --
+    # the SIP leg has only just been created, so the room carries no audio yet.
+    # See the equivalent note on the phone-call webhook.
 
     logger.info("Returning TwiML response for WhatsApp call")
     return Response(content=str(resp_user), media_type="text/xml")
