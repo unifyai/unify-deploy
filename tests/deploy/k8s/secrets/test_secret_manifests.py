@@ -49,3 +49,24 @@ def test_tavily_key_maps_from_secret_manager() -> None:
     ]
     assert len(tavily_entries) == 1
     assert tavily_entries[0]["remoteRef"]["key"] == "TAVILY_API_KEY"
+
+
+def test_meet_twin_credentials_are_environment_scoped() -> None:
+    """Each environment signs Meet in as its own twin account.
+
+    Staging and production share the secret *names* inside the pod but must
+    resolve to different Secret Manager entries — a production pod warming the
+    staging twin's cookies would sign the assistant in as the wrong identity.
+    """
+    for filename, suffix in (
+        ("unity-secrets-external-secret_staging.yaml", "staging"),
+        ("unity-secrets-external-secret_production.yaml", "production"),
+    ):
+        entries = _load_yaml(filename)["spec"]["data"]
+        data = {item["secretKey"]: item for item in entries}
+        for secret_key, remote_stem in (
+            ("MEET_TWIN_EMAIL", "meet-twin-email"),
+            ("MEET_TWIN_PASSWORD", "meet-twin-password"),
+        ):
+            assert secret_key in data, f"{secret_key} missing from {filename}"
+            assert data[secret_key]["remoteRef"]["key"] == f"{remote_stem}-{suffix}"
