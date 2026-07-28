@@ -195,6 +195,28 @@ def _function_name_to_ids(fm: Any) -> dict[str, int]:
     }
 
 
+def _sync_custom_tasks_with_log(
+    task_scheduler: Any,
+    *,
+    source_tasks: dict[str, dict[str, Any]],
+    function_name_to_id: dict[str, int],
+    assistant_id: str,
+) -> bool:
+    """Synchronize authored task definitions and expose the result in pod logs."""
+
+    changed = task_scheduler.sync_custom(
+        source_tasks=source_tasks,
+        function_name_to_id=function_name_to_id,
+    )
+    logger.info(
+        "Runtime reconcile custom task sync: assistant=%s changed=%s task_count=%d",
+        assistant_id,
+        changed,
+        len(source_tasks),
+    )
+    return bool(changed)
+
+
 def _run_named_phase(
     *,
     assistant_id: str,
@@ -719,6 +741,12 @@ def materialize_runtime_state(
     source_tasks = collect_tasks_from_directories(
         _dedupe_paths(resolved.tasks_dirs),
     )
+    logger.info(
+        "Runtime reconcile collected %d custom task definition(s) for assistant=%s: %s",
+        len(source_tasks),
+        identity.assistant_id,
+        sorted(source_tasks),
+    )
     source_files = collect_files_from_directories(
         _dedupe_paths(resolved.files_dirs),
     )
@@ -766,13 +794,12 @@ def materialize_runtime_state(
                 "syncing_custom_dashboards",
                 lambda: dbm.sync_custom(source_entities=source_dashboards),
             ),
-            (
-                "syncing_custom_tasks",
-                lambda: tm.sync_custom(
-                    source_tasks=source_tasks,
-                    function_name_to_id=function_name_to_id,
-                ),
-            ),
+            ("syncing_custom_tasks", lambda: _sync_custom_tasks_with_log(
+                tm,
+                source_tasks=source_tasks,
+                function_name_to_id=function_name_to_id,
+                assistant_id=identity.assistant_id,
+            )),
             (
                 "syncing_custom_files",
                 lambda: file_mgr.sync_custom(source_files=source_files),

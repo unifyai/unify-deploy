@@ -2516,7 +2516,7 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
     """List all pool VMs, optionally filtered by type."""
     client = compute_v1.InstancesClient()
 
-    label_filter = f"labels.pool-role:*"
+    label_filter = "labels.pool-role:*"
     if vm_type:
         label_filter += f" AND labels.vm-type={vm_type}"
 
