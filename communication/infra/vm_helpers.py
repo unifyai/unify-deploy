@@ -4132,13 +4132,20 @@ def _is_job_non_terminal(job) -> bool:
     return True
 
 
-def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]:
+def reconcile_orphaned_vms(
+    batch_api,
+    vm_type: str = "ubuntu",
+    *,
+    all_regions: bool = False,
+) -> Dict[str, Any]:
     """Release VMs assigned to assistants that no longer have live K8s Jobs.
 
     When a K8s pod crashes or is force-deleted, release_pool_vm is never
     called, leaving the VM stuck in pool-role=assigned. This reconciler
     detects such orphans by cross-referencing the K8s Job list and releases
-    them back to the pool.
+    them back to the pool. A live job for a *different* binding does not keep
+    an older binding alive: this matters when a session is re-created while
+    its prior VM still owns the persistent disk.
 
     Uses the same non-terminal job semantics as the AssistantSession
     controller so that pods in restart-backoff are not mistaken for
@@ -4146,6 +4153,29 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
 
     Idempotent and safe to call on a cron schedule.
     """
+    if all_regions:
+        by_location: dict[str, Dict[str, Any]] = {}
+        for location_id, zone in SETTINGS.vm_provisioned_locations.items():
+            placement = VmPlacement(
+                location=get_pool_location(location_id),
+                zone=zone,
+                source_timezone="",
+                resolution="orphan-reconcile",
+            )
+            with vm_placement_scope(placement):
+                by_location[location_id] = reconcile_orphaned_vms(
+                    batch_api,
+                    vm_type,
+                )
+        return {
+            "by_location": by_location,
+            "checked": sum(item["checked"] for item in by_location.values()),
+            "released": [
+                row for item in by_location.values() for row in item["released"]
+            ],
+            "kept": [row for item in by_location.values() for row in item["kept"]],
+        }
+
     client = compute_v1.InstancesClient()
     assigned_request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
@@ -4185,11 +4215,29 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
             )
             continue
 
-        if not live_jobs:
+        normalized_binding_id = str(binding_id).lower().replace("_", "-")
+        live_binding_ids = {
+            str((job.metadata.labels or {}).get(BINDING_ID_LABEL, ""))
+            .lower()
+            .replace("_", "-")
+            for job in live_jobs
+            if (job.metadata.labels or {}).get(BINDING_ID_LABEL)
+        }
+        has_legacy_live_job = any(
+            not (job.metadata.labels or {}).get(BINDING_ID_LABEL)
+            for job in live_jobs
+        )
+        binding_is_live = (
+            has_legacy_live_job
+            or (bool(normalized_binding_id) and normalized_binding_id in live_binding_ids)
+        )
+
+        if not binding_is_live:
             logger.info(
-                "Orphaned VM %s assigned to %s (no live K8s Job) — releasing",
+                "Orphaned VM %s assigned to %s (binding %s has no live K8s Job) — releasing",
                 vm.name,
                 aid,
+                binding_id,
             )
             try:
                 if not binding_id:
@@ -4216,7 +4264,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
                     e,
                 )
         else:
-            kept.append({"vm_name": vm.name, "assistant_id": aid})
+            kept.append({"vm_name": vm.name, "assistant_id": aid, "binding_id": binding_id})
 
     now = datetime.now(timezone.utc)
     for vm in releasing_vms:

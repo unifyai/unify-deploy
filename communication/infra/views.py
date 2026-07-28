@@ -4111,7 +4111,12 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
     from .vm_helpers import reconcile_orphaned_vms
 
     batch_api, _, _, _ = await _get_k8s_clients()
-    result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
+    result = await asyncio.to_thread(
+        reconcile_orphaned_vms,
+        batch_api,
+        vm_type,
+        all_regions=True,
+    )
     return result
 
 
