@@ -436,12 +436,17 @@ def test_twilio_whatsapp_completed_status_cleans_rule_without_publish(monkeypatc
     assert published.published == []
 
 
+# 2026-07-27T12:48:26Z in nanoseconds, matching LiveKit's EgressInfo.started_at.
+EGRESS_STARTED_AT_NS = 1785156506000000000
+
+
 def _egress_ended_event(
     *,
     status=EgressStatus.EGRESS_COMPLETE,
     size=1234,
     error="",
     file_results=None,
+    started_at=EGRESS_STARTED_AT_NS,
 ):
     """An ``egress_ended`` webhook event shaped like LiveKit's.
 
@@ -456,6 +461,7 @@ def _egress_ended_event(
         status=status,
         error=error,
         file_results=file_results,
+        started_at=started_at,
     )
     return SimpleNamespace(event="egress_ended", egress_info=egress_info)
 
@@ -506,6 +512,40 @@ def test_recording_complete_updates_session_and_publishes_session_fields(monkeyp
     assert payload["event"]["conference_name"] == "unity_wa_conf_CA111"
     assert payload["event"]["room_name"] == "unity_wa_room_101_CA111"
     assert payload["event"]["livekit_room"] == "unity_wa_room_101_CA111"
+    # t=0 of the audio, so consumers can time-align utterances against the file
+    # rather than against the call-started event a few seconds earlier.
+    assert payload["event"]["recording_started_at"] == "2026-07-27T12:48:26+00:00"
+
+
+def test_recording_complete_omits_the_anchor_when_livekit_does_not_report_it(
+    monkeypatch,
+):
+    """No start time is better than a wrong one: consumers fall back."""
+    event = _egress_ended_event(started_at=0)
+    monkeypatch.setattr(main, "verify_livekit_webhook", lambda _body, _auth: event)
+    monkeypatch.setattr(
+        main,
+        "build_webhook_context",
+        lambda *_args, **_kwargs: {
+            "assistant": {"assistant_id": "101"},
+            "contacts": [],
+            "is_job_running": False,
+        },
+    )
+    monkeypatch.setattr(main, "update_whatsapp_call_session", lambda payload: payload)
+    published = _FakePubSub()
+    monkeypatch.setattr(main, "get_pubsub_client", lambda: published)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/livekit/recording-complete?assistant_id=101&provider_call_sid=CA111",
+            content="{}",
+            headers={"Authorization": "Bearer test"},
+        )
+
+    assert response.status_code == 200
+    payload = json.loads(published.published[0][1].decode("utf-8"))
+    assert payload["event"]["recording_started_at"] == ""
 
 
 def _assert_recording_complete_drops(monkeypatch, event):

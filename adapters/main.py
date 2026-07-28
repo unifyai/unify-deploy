@@ -779,6 +779,16 @@ async def livekit_recording_complete(request: Request):
         f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
     )
 
+    # When the compositor actually began writing audio, i.e. t=0 of the file.
+    # Call-lifecycle events fire a few seconds earlier, so anchoring transcript
+    # offsets to them leaves every utterance sitting ahead of its audio.
+    recording_started_at = ""
+    if egress_info.started_at:
+        recording_started_at = datetime.fromtimestamp(
+            egress_info.started_at / 1_000_000_000,
+            tz=timezone.utc,
+        ).isoformat()
+
     if provider_call_sid:
         call_session_update = {
             "provider": "twilio",
@@ -820,6 +830,7 @@ async def livekit_recording_complete(request: Request):
                         "room_name": room_name,
                         "livekit_room": room_name,
                         "recording_url": recording_url,
+                        "recording_started_at": recording_started_at,
                     },
                 },
             ).encode("utf-8"),
