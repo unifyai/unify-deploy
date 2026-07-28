@@ -388,6 +388,7 @@ def build_unity_job_manifest(
         "MEET_TWIN_EMAIL",
         "MEET_TWIN_PASSWORD",
         "MEET_TWIN_TOTP_SECRET",
+        "RECALL_API_KEY",
     }
     unity_secret_env = []
     for key in (
@@ -412,6 +413,7 @@ def build_unity_job_manifest(
         # stays on controllers / Cloud Run / reconcile jobs only.
         # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
         # writes go through /infra/assistant-jobs/* (admin key on comms).
+        "RECALL_API_KEY",
         "TAVILY_API_KEY",
         "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
@@ -486,6 +488,20 @@ def build_unity_job_manifest(
         # the cookies have already lapsed. Flip to "false" to make renewal
         # keep-warm only (it then alerts an operator instead of signing in).
         {"name": "BRAIN_MEET_AUTOLOGIN", "value": "true"},
+        # Which backend joins Google Meet / Teams. "agent_service" drives the
+        # pod-local Playwright browser above; "recall" dispatches a hosted
+        # Recall.ai bot that loads MEET_BRIDGE_PAGE_URL as its media surface.
+        # Both keep the same brain-facing join/leave/present tools, so this is
+        # the cutover switch and the rollback in one value.
+        {"name": "MEET_PROVIDER", "value": "agent_service"},
+        # The page a Recall bot renders as its camera/screenshare. It joins the
+        # LiveKit room as an ordinary participant, so meeting audio reaches the
+        # fast brain over the same transport phone and unify_meet already use.
+        # Unused while MEET_PROVIDER is "agent_service".
+        {
+            "name": "MEET_BRIDGE_PAGE_URL",
+            "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",
+        },
     ]
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)

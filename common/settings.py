@@ -125,6 +125,13 @@ class Settings:
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
 
+        # Recall.ai realtime relay. Recall opens the websocket outbound to us
+        # and authenticates with a query-parameter token (it cannot present a
+        # header), so this shared secret is the only credential on that socket.
+        # Empty disables the relay outright rather than accepting anonymous
+        # connections that could publish into any assistant's LiveKit room.
+        self.recall_relay_secret: str = os.environ.get("RECALL_RELAY_SECRET", "")
+
         # Google Workspace Events bridge (Pub/Sub push -> Orchestra
         # native_google ingress). Google delivers Meet/Drive/Chat events only
         # via Cloud Pub/Sub; the push subscription attaches an OIDC token

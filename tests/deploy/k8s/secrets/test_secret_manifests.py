@@ -70,3 +70,25 @@ def test_meet_twin_credentials_are_environment_scoped() -> None:
         ):
             assert secret_key in data, f"{secret_key} missing from {filename}"
             assert data[secret_key]["remoteRef"]["key"] == f"{remote_stem}-{suffix}"
+
+
+def test_recall_api_key_is_environment_scoped() -> None:
+    """Staging and production must hold separate Recall workspaces/keys.
+
+    Bot hours bill per key, so a shared one makes staging spend
+    indistinguishable from production -- and a staging key that could read
+    production recordings is a data-boundary problem, not just an accounting
+    one. Note the UPPER_SNAKE_ENV remote naming: this follows the Cloud Run
+    secrets (SLACK_SIGNING_SECRET_PROD), not the lower-kebab twin keys above.
+    """
+    for filename, remote_key in (
+        ("unity-secrets-external-secret_staging.yaml", "RECALL_API_KEY_STAGING"),
+        ("unity-secrets-external-secret_production.yaml", "RECALL_API_KEY_PROD"),
+    ):
+        entries = [
+            item
+            for item in _load_yaml(filename)["spec"]["data"]
+            if item["secretKey"] == "RECALL_API_KEY"
+        ]
+        assert len(entries) == 1, f"RECALL_API_KEY missing from {filename}"
+        assert entries[0]["remoteRef"]["key"] == remote_key

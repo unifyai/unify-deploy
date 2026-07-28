@@ -338,6 +338,42 @@ def test_meet_autologin_enabled_by_default() -> None:
         assert _env_by_name(manifest)["BRAIN_MEET_AUTOLOGIN"]["value"] == "true"
 
 
+def test_meet_provider_defaults_to_agent_service() -> None:
+    """Mounting the Recall wiring must not itself change how meets are joined.
+
+    The pod keeps driving the local Playwright browser until an operator flips
+    this to "recall", so deploying the bridge page and the API key is inert.
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert _env_by_name(manifest)["MEET_PROVIDER"]["value"] == "agent_service"
+
+
+def test_meet_bridge_page_url_is_served_by_comms() -> None:
+    """The Recall bot loads this page, so it must be the public comms host.
+
+    A bot renders the page from Recall's cloud; a cluster-internal or
+    pod-local URL would resolve to nothing and the bot would join mute.
+    """
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
+    env = _env_by_name(manifest)
+    comms_url = env["UNITY_COMMS_URL"]["value"].rstrip("/")
+    assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
+
+
+def test_recall_api_key_is_an_optional_secret_key() -> None:
+    """An environment with no Recall account provisioned must still boot.
+
+    Same contract as the Meet twin credentials: absent key means the pod comes
+    up and stays on the agent-service provider rather than failing to start.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="recall-staging"))
+    secret_ref = env["RECALL_API_KEY"]["valueFrom"]["secretKeyRef"]
+    assert secret_ref["name"] == "unity-secrets"
+    assert secret_ref["key"] == "RECALL_API_KEY"
+    assert secret_ref["optional"] is True
+
+
 # ---------------------------------------------------------------------------
 # Top-level metadata + labels + spec
 # ---------------------------------------------------------------------------
