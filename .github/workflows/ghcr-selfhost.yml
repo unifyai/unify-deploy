@@ -152,9 +152,14 @@ jobs:
         UNISDK_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
         UNILLM_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
         MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/unity-modifications" | cut -f1)"
+        # The canvas stage clones branding, whose clone command is static text, so
+        # without this the layer is served from cache indefinitely and the image
+        # keeps shipping whatever component kit it was first built with.
+        BRANDING_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" "refs/heads/${dep_branch}" | cut -f1)"
         echo "DEP_REPOS_SHA=${UNISDK_SHA}-${UNILLM_SHA}" >> "$GITHUB_ENV"
         echo "MAGNITUDE_SHA=${MAGNITUDE_SHA}" >> "$GITHUB_ENV"
-        echo "Dependency SHAs: unisdk=${UNISDK_SHA:0:8} unillm=${UNILLM_SHA:0:8} magnitude=${MAGNITUDE_SHA:0:8}"
+        echo "CANVAS_BRANDING_SHA=${BRANDING_SHA}" >> "$GITHUB_ENV"
+        echo "Dependency SHAs: unisdk=${UNISDK_SHA:0:8} unillm=${UNILLM_SHA:0:8} magnitude=${MAGNITUDE_SHA:0:8} branding=${BRANDING_SHA:0:8}"
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -179,6 +184,7 @@ jobs:
           BRANCH=${{ needs.resolve.outputs.channel_tag }}
           DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}
           MAGNITUDE_SHA=${{ env.MAGNITUDE_SHA }}
+          CANVAS_BRANDING_SHA=${{ env.CANVAS_BRANDING_SHA }}
         cache-from: type=gha,scope=unity-selfhost-${{ matrix.arch_tag }}
         cache-to: type=gha,mode=max,scope=unity-selfhost-${{ matrix.arch_tag }}
 
