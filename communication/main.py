@@ -55,6 +55,8 @@ from communication.infra.views import (
     tunnel_router,
     vm_self_router,
 )
+from communication.meet_bridge import router as meet_bridge_router
+from communication.meet_events import router as meet_events_router
 from unify.gateway.app import ExtraRouter, create_app
 from unify.gateway.context import GatewayContext, default_public_url_provider
 from unify.gateway.credentials import EnvCredentialStore
@@ -185,6 +187,14 @@ app = create_app(
         # Self-scoped assistant routes perform their own admin-or-assistant
         # authorization per route, so no blanket admin dependency here.
         ExtraRouter(assistant_self_router, prefix="/infra"),
+        # Deliberately unauthenticated: a Recall bot's browser loads this page
+        # from their cloud with no credential of ours. It carries no secret and
+        # does nothing until handed a short-TTL, room-scoped LiveKit token.
+        ExtraRouter(meet_bridge_router, prefix="/meet"),
+        # Recall opens this websocket outbound and cannot set headers, so the
+        # route authenticates its own query-parameter token rather than taking
+        # a router-level admin dependency.
+        ExtraRouter(meet_events_router, prefix="/meet"),
     ],
     extra_setup_hooks=[setup_kubernetes_client, _get_pubsub_clients],
     gateway_context=gateway_context,

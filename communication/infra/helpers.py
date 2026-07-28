@@ -380,41 +380,59 @@ def build_unity_job_manifest(
                 },
             },
         )
-    unity_secret_env = [
-        {
-            "name": key,
-            "valueFrom": {
-                "secretKeyRef": {
-                    "name": "unity-secrets",
-                    "key": key,
+    # Meet twin credentials are per-environment and may be absent (an env whose
+    # twin account is not yet provisioned). Marking them optional keeps the pod
+    # bootable in that case; Meet then degrades to an anonymous guest join
+    # instead of the whole assistant failing to start.
+    optional_unity_secret_keys = {
+        "MEET_TWIN_EMAIL",
+        "MEET_TWIN_PASSWORD",
+        "MEET_TWIN_TOTP_SECRET",
+        "RECALL_API_KEY",
+    }
+    unity_secret_env = []
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "CARTESIA_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ELEVEN_API_KEY",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_SIP_URI",
+        "LIVEKIT_URL",
+        "MEET_TWIN_EMAIL",
+        "MEET_TWIN_PASSWORD",
+        "MEET_TWIN_TOTP_SECRET",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
+        # authenticate to Orchestra and the hosted gateway with their own
+        # per-assistant UNIFY_KEY against ownership-scoped routes, so a
+        # compromised pod can only act as itself. The platform admin key
+        # stays on controllers / Cloud Run / reconcile jobs only.
+        # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
+        # writes go through /infra/assistant-jobs/* (admin key on comms).
+        "RECALL_API_KEY",
+        "TAVILY_API_KEY",
+        "VERTEXAI_CREDENTIALS",
+        "_UNITY_STARTUP_HOOK_GROUP",
+        "_UNITY_STARTUP_HOOK_PACKAGE",
+    ):
+        secret_ref = {
+            "name": "unity-secrets",
+            "key": key,
+        }
+        if key in optional_unity_secret_keys:
+            secret_ref["optional"] = True
+        unity_secret_env.append(
+            {
+                "name": key,
+                "valueFrom": {
+                    "secretKeyRef": secret_ref,
                 },
             },
-        }
-        for key in (
-            "ANTHROPIC_API_KEY",
-            "CARTESIA_API_KEY",
-            "DEEPGRAM_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "ELEVEN_API_KEY",
-            "LIVEKIT_API_KEY",
-            "LIVEKIT_API_SECRET",
-            "LIVEKIT_SIP_URI",
-            "LIVEKIT_URL",
-            "OPENAI_API_KEY",
-            "OPENROUTER_API_KEY",
-            # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
-            # authenticate to Orchestra and the hosted gateway with their own
-            # per-assistant UNIFY_KEY against ownership-scoped routes, so a
-            # compromised pod can only act as itself. The platform admin key
-            # stays on controllers / Cloud Run / reconcile jobs only.
-            # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
-            # writes go through /infra/assistant-jobs/* (admin key on comms).
-            "TAVILY_API_KEY",
-            "VERTEXAI_CREDENTIALS",
-            "_UNITY_STARTUP_HOOK_GROUP",
-            "_UNITY_STARTUP_HOOK_PACKAGE",
         )
-    ]
 
     env_vars = [
         {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
@@ -432,12 +450,12 @@ def build_unity_job_manifest(
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
         {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
         {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
-        # Orchestra Events/*: keep only CodeAct execution rows. Pub/Sub Live
-        # Actions streaming above stays full-fidelity (stream_filters only).
+        # Orchestra Events/*: keep the CodeAct root and execution rows. Pub/Sub
+        # Live Actions streaming above stays full-fidelity (stream_filters only).
         {"name": "EVENTBUS_ORCHESTRA_PERSIST_MODE", "value": "allowlist"},
         {
             "name": "EVENTBUS_ORCHESTRA_PERSIST_TOOLS",
-            "value": "execute_code,execute_function",
+            "value": "act,execute_code,execute_function",
         },
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
@@ -466,6 +484,24 @@ def build_unity_job_manifest(
         # fallback.
         {"name": "MEET_BROWSER_STATE_BUCKET", "value": "unity-browser-states"},
         {"name": "MEET_GOOGLE_STORAGE_STATE", "value": f"twin-session-{deploy_env}"},
+        # Lets the renewal tick re-log in with the twin credentials above when
+        # the cookies have already lapsed. Flip to "false" to make renewal
+        # keep-warm only (it then alerts an operator instead of signing in).
+        {"name": "BRAIN_MEET_AUTOLOGIN", "value": "true"},
+        # Which backend joins Google Meet / Teams. "agent_service" drives the
+        # pod-local Playwright browser above; "recall" dispatches a hosted
+        # Recall.ai bot that loads MEET_BRIDGE_PAGE_URL as its media surface.
+        # Both keep the same brain-facing join/leave/present tools, so this is
+        # the cutover switch and the rollback in one value.
+        {"name": "MEET_PROVIDER", "value": "agent_service"},
+        # The page a Recall bot renders as its camera/screenshare. It joins the
+        # LiveKit room as an ordinary participant, so meeting audio reaches the
+        # fast brain over the same transport phone and unify_meet already use.
+        # Unused while MEET_PROVIDER is "agent_service".
+        {
+            "name": "MEET_BRIDGE_PAGE_URL",
+            "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",
+        },
     ]
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)

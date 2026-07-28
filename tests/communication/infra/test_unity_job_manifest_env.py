@@ -71,7 +71,7 @@ def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     """CM and offline Jobs inherit scoped Orchestra EventBus persistence.
 
     Publishing + Pub/Sub stay on for Live Actions; Orchestra Events/* is
-    narrowed to execute_code / execute_function only.
+    narrowed to the CodeAct root plus execute_code / execute_function.
     """
     manifest = build_unity_job_manifest(job_name="eventbus-persist-staging")
     env = _env_by_name(manifest)
@@ -80,7 +80,7 @@ def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     assert env["EVENTBUS_ORCHESTRA_PERSIST_MODE"]["value"] == "allowlist"
     assert (
         env["EVENTBUS_ORCHESTRA_PERSIST_TOOLS"]["value"]
-        == "execute_code,execute_function"
+        == "act,execute_code,execute_function"
     )
 
 
@@ -285,6 +285,93 @@ def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
     manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
     bucket = _env_by_name(manifest)["UNITY_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
     assert bucket == "unity-pipeline-artifacts-staging"
+
+
+# ---------------------------------------------------------------------------
+# Google Meet signed-in browser session
+# ---------------------------------------------------------------------------
+
+
+def test_meet_browser_state_blob_is_environment_scoped() -> None:
+    """Both environments read the same bucket but a different blob.
+
+    The bucket is shared; the blob is what carries the twin identity, so
+    staging and production must never resolve to the same object.
+    """
+    staging = _env_by_name(build_unity_job_manifest(job_name="x", deploy_env="staging"))
+    production = _env_by_name(
+        build_unity_job_manifest(job_name="x", deploy_env="production"),
+    )
+    assert staging["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
+    assert production["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
+    assert staging["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-staging"
+    assert production["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-production"
+
+
+def test_meet_twin_credentials_are_optional_secret_keys() -> None:
+    """An environment whose twin account isn't provisioned yet must still boot.
+
+    Without ``optional``, a missing key in ``unity-secrets`` blocks the pod from
+    starting at all; with it, Meet simply degrades to an anonymous guest join.
+    ``MEET_TWIN_TOTP_SECRET`` relies on this today: the twin is exempt from 2SV,
+    so no ``ExternalSecret`` supplies that key and login skips the TOTP step.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="meet-twin-staging"))
+    for key in ("MEET_TWIN_EMAIL", "MEET_TWIN_PASSWORD", "MEET_TWIN_TOTP_SECRET"):
+        secret_ref = env[key]["valueFrom"]["secretKeyRef"]
+        assert secret_ref["name"] == "unity-secrets"
+        assert secret_ref["key"] == key
+        assert secret_ref["optional"] is True
+
+    # The rest of unity-secrets stays required -- optionality is opt-in.
+    for required_key in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY"):
+        ref = env[required_key]["valueFrom"]["secretKeyRef"]
+        assert ref.get("optional") is not True
+
+
+def test_meet_autologin_enabled_by_default() -> None:
+    """Renewal may re-authenticate unattended; flipping this off makes it
+    keep-warm only (it then alerts an operator instead of signing in).
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert _env_by_name(manifest)["BRAIN_MEET_AUTOLOGIN"]["value"] == "true"
+
+
+def test_meet_provider_defaults_to_agent_service() -> None:
+    """Mounting the Recall wiring must not itself change how meets are joined.
+
+    The pod keeps driving the local Playwright browser until an operator flips
+    this to "recall", so deploying the bridge page and the API key is inert.
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert _env_by_name(manifest)["MEET_PROVIDER"]["value"] == "agent_service"
+
+
+def test_meet_bridge_page_url_is_served_by_comms() -> None:
+    """The Recall bot loads this page, so it must be the public comms host.
+
+    A bot renders the page from Recall's cloud; a cluster-internal or
+    pod-local URL would resolve to nothing and the bot would join mute.
+    """
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
+    env = _env_by_name(manifest)
+    comms_url = env["UNITY_COMMS_URL"]["value"].rstrip("/")
+    assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
+
+
+def test_recall_api_key_is_an_optional_secret_key() -> None:
+    """An environment with no Recall account provisioned must still boot.
+
+    Same contract as the Meet twin credentials: absent key means the pod comes
+    up and stays on the agent-service provider rather than failing to start.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="recall-staging"))
+    secret_ref = env["RECALL_API_KEY"]["valueFrom"]["secretKeyRef"]
+    assert secret_ref["name"] == "unity-secrets"
+    assert secret_ref["key"] == "RECALL_API_KEY"
+    assert secret_ref["optional"] is True
 
 
 # ---------------------------------------------------------------------------

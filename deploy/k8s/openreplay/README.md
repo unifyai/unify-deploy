@@ -60,6 +60,11 @@ Domains:
 | staging | `openreplay.example.com` | `unity-openreplay-staging` |
 | production | `openreplay.unify.ai` | `unity-openreplay` |
 
+The script applies the five governance labels the Vanta GCE required-labels test
+checks (`environment`, `owner=platform`, `project=unity`,
+`dataclassification=confidential`, `application=openreplay`) at creation, and
+re-applies them when the VM already exists.
+
 After install, patch GCS into `vars.yaml` using `vars.yaml.example`, enable
 `use_tls: true`, install cert-manager (`certmanager.sh` / ClusterIssuer), then
 `openreplay -R`.

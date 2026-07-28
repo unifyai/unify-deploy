@@ -24,13 +24,23 @@ ZONE="${UNITY_OPENREPLAY_ZONE:-us-central1-a}"
 if [[ "${ENV}" == "production" ]]; then
   VM_NAME="unity-openreplay"
   DOMAIN_HINT="openreplay.unify.ai"
+  ENVIRONMENT_LABEL="production"
 else
   VM_NAME="unity-openreplay-staging"
   DOMAIN_HINT="openreplay.example.com"
+  ENVIRONMENT_LABEL="staging"
 fi
 
 MACHINE_TYPE="${UNITY_OPENREPLAY_MACHINE_TYPE:-n2-standard-2}"
 DISK_SIZE_GB="${UNITY_OPENREPLAY_DISK_GB:-100}"
+
+# Governance labels required by the Vanta "GCE instances have required labels"
+# test; every instance must be created with all five. dataclassification is
+# confidential because OpenReplay stores session replays of Console and the
+# marketing site — a system takes the highest classification of data it can
+# process.
+LABELS="environment=${ENVIRONMENT_LABEL},owner=platform,project=unity"
+LABELS+=",dataclassification=confidential,application=openreplay"
 
 echo "=== OpenReplay VM (env=${ENV}) ==="
 echo "Project: ${PROJECT_ID}"
@@ -41,7 +51,11 @@ echo ""
 if gcloud compute instances describe "${VM_NAME}" \
   --project="${PROJECT_ID}" \
   --zone="${ZONE}" >/dev/null 2>&1; then
-  echo "VM already exists."
+  echo "VM already exists; reconciling governance labels."
+  gcloud compute instances add-labels "${VM_NAME}" \
+    --project="${PROJECT_ID}" \
+    --zone="${ZONE}" \
+    --labels="${LABELS}"
 else
   echo "Creating VM..."
   gcloud compute instances create "${VM_NAME}" \
@@ -53,6 +67,7 @@ else
     --image-family=ubuntu-2204-lts \
     --image-project=ubuntu-os-cloud \
     --tags=openreplay,https-server,http-server \
+    --labels="${LABELS}" \
     --scopes=cloud-platform
 fi
 
