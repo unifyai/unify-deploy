@@ -794,12 +794,15 @@ def materialize_runtime_state(
                 "syncing_custom_dashboards",
                 lambda: dbm.sync_custom(source_entities=source_dashboards),
             ),
-            ("syncing_custom_tasks", lambda: _sync_custom_tasks_with_log(
-                tm,
-                source_tasks=source_tasks,
-                function_name_to_id=function_name_to_id,
-                assistant_id=identity.assistant_id,
-            )),
+            (
+                "syncing_custom_tasks",
+                lambda: _sync_custom_tasks_with_log(
+                    tm,
+                    source_tasks=source_tasks,
+                    function_name_to_id=function_name_to_id,
+                    assistant_id=identity.assistant_id,
+                ),
+            ),
             (
                 "syncing_custom_files",
                 lambda: file_mgr.sync_custom(source_files=source_files),
