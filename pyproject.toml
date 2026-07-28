@@ -130,3 +130,6 @@ env = [
     "GRPC_VERBOSITY=ERROR",
     "GRPC_POLL_STRATEGY=poll",
 ]
+
+[tool.black]
+target-version = ["py312"]

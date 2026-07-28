@@ -4224,12 +4224,10 @@ def reconcile_orphaned_vms(
             if (job.metadata.labels or {}).get(BINDING_ID_LABEL)
         }
         has_legacy_live_job = any(
-            not (job.metadata.labels or {}).get(BINDING_ID_LABEL)
-            for job in live_jobs
+            not (job.metadata.labels or {}).get(BINDING_ID_LABEL) for job in live_jobs
         )
-        binding_is_live = (
-            has_legacy_live_job
-            or (bool(normalized_binding_id) and normalized_binding_id in live_binding_ids)
+        binding_is_live = has_legacy_live_job or (
+            bool(normalized_binding_id) and normalized_binding_id in live_binding_ids
         )
 
         if not binding_is_live:
@@ -4264,7 +4262,9 @@ def reconcile_orphaned_vms(
                     e,
                 )
         else:
-            kept.append({"vm_name": vm.name, "assistant_id": aid, "binding_id": binding_id})
+            kept.append(
+                {"vm_name": vm.name, "assistant_id": aid, "binding_id": binding_id},
+            )
 
     now = datetime.now(timezone.utc)
     for vm in releasing_vms:
