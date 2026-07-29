@@ -1145,7 +1145,7 @@ async def cmd_submit(args: argparse.Namespace) -> None:
     from unify_deploy.assistant_deployments.scripts.ingest_utils import (
         load_pipeline_config,
     )
-    from unify_deploy.assistant_deployments.types.pipeline_config import (
+    from unify.common.pipeline.config import (
         build_table_config_for_source_file,
     )
 

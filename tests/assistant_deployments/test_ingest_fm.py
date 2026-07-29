@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from unify_deploy.assistant_deployments.scripts import ingest_fm
-from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+from unify.common.pipeline.config import PipelineConfig
 
 
 def test_dispatch_fm_passes_table_config_and_document_only_files(monkeypatch):
