@@ -762,11 +762,16 @@ def _release_active_task_source(
     source_task_log_id: int,
     mode: str,
     info: str | None = None,
+    run_key: str | None = None,
 ) -> dict[str, Any]:
-    """Release a Tasks row left ``active`` after its offline worker vanished.
+    """Terminalize executions left running after their offline worker vanished.
 
     ``mode="reopen"`` is used before retrying the same ``source_task_log_id``.
     ``mode="fail"`` is for terminal crash writeback without an immediate retry.
+
+    Pass ``run_key`` whenever the caller knows which run it is finishing.
+    Unscoped, this releases every running execution under the definition,
+    including a successor occurrence that recurrence has already started.
     """
 
     payload: dict[str, Any] = {
@@ -777,6 +782,8 @@ def _release_active_task_source(
     }
     if info:
         payload["info"] = info
+    if run_key:
+        payload["run_key"] = run_key
     return _orchestra_admin_post(ORCHESTRA_TASK_SOURCE_RELEASE_PATH, payload)
 
 
@@ -960,6 +967,7 @@ def _terminalize_offline_job_outcome(
             source_task_log_id=source_task_log_id,
             mode="fail",
             info=info,
+            run_key=run_key,
         )
     else:
         if run_state in _INFLIGHT_RUN_STATES:
@@ -974,14 +982,13 @@ def _terminalize_offline_job_outcome(
                 ),
             )
             run_updated = True
-        # Always attempt release: Orchestra no-ops when the Tasks row is not
-        # active (e.g. runner already wrote success).
-        release = _release_active_task_source(
-            assistant_id=assistant_id,
-            source_task_log_id=source_task_log_id,
-            mode="fail",
-            info=info,
-        )
+        # No release on the success path. The run this Job owns was just
+        # terminalized by run_key, and release is scoped to the definition:
+        # it fails *every* running execution under it. Recurrence projects the
+        # next occurrence at dispatch, so by the time a Job completes its
+        # successor is often already running, and releasing here would kill it
+        # — one healthy run silently ending the series.
+        release = None
 
     return {
         "success": True,
