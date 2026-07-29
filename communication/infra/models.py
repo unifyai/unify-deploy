@@ -173,6 +173,7 @@ class ScheduledTaskExecutionUpsertRequest(BaseModel):
     source_task_log_id: int
     revision: str
     scheduled_for: datetime
+    dispatch_offset_seconds: float = 0.0
     delivery: Literal["live", "offline"] = "live"
     requires_filesystem: bool = False
     requires_computer: bool = False
@@ -195,6 +196,7 @@ class ScheduledTaskExecutionDeleteRequest(BaseModel):
     task_id: int
     revision: str
     scheduled_for: datetime
+    dispatch_offset_seconds: float = 0.0
     delivery: Literal["live", "offline"] = "live"
 
 

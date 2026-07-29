@@ -446,7 +446,12 @@ def _scheduled_execution_target(
 ) -> tuple[str, str, datetime]:
     """Choose the queue, callback URL, and checkpoint time for this execution."""
 
-    scheduled_for = request.scheduled_for.astimezone(timezone.utc)
+    # `scheduled_for` is the canonical occurrence; jitter is a dispatch-time
+    # offset so the recorded time stays usable as an identity and as the
+    # anchor for deriving the next slot.
+    scheduled_for = request.scheduled_for.astimezone(timezone.utc) + timedelta(
+        seconds=request.dispatch_offset_seconds or 0.0,
+    )
     horizon_cutoff = datetime.now(timezone.utc) + timedelta(
         days=SETTINGS.task_execution_horizon_days,
     )
