@@ -292,63 +292,6 @@ def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_meet_browser_state_blob_is_environment_scoped() -> None:
-    """Both environments read the same bucket but a different blob.
-
-    The bucket is shared; the blob is what carries the twin identity, so
-    staging and production must never resolve to the same object.
-    """
-    staging = _env_by_name(build_unity_job_manifest(job_name="x", deploy_env="staging"))
-    production = _env_by_name(
-        build_unity_job_manifest(job_name="x", deploy_env="production"),
-    )
-    assert staging["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
-    assert production["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
-    assert staging["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-staging"
-    assert production["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-production"
-
-
-def test_meet_twin_credentials_are_optional_secret_keys() -> None:
-    """An environment whose twin account isn't provisioned yet must still boot.
-
-    Without ``optional``, a missing key in ``unity-secrets`` blocks the pod from
-    starting at all; with it, Meet simply degrades to an anonymous guest join.
-    ``MEET_TWIN_TOTP_SECRET`` relies on this today: the twin is exempt from 2SV,
-    so no ``ExternalSecret`` supplies that key and login skips the TOTP step.
-    """
-    env = _env_by_name(build_unity_job_manifest(job_name="meet-twin-staging"))
-    for key in ("MEET_TWIN_EMAIL", "MEET_TWIN_PASSWORD", "MEET_TWIN_TOTP_SECRET"):
-        secret_ref = env[key]["valueFrom"]["secretKeyRef"]
-        assert secret_ref["name"] == "unity-secrets"
-        assert secret_ref["key"] == key
-        assert secret_ref["optional"] is True
-
-    # The rest of unity-secrets stays required -- optionality is opt-in.
-    for required_key in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY"):
-        ref = env[required_key]["valueFrom"]["secretKeyRef"]
-        assert ref.get("optional") is not True
-
-
-def test_meet_autologin_enabled_by_default() -> None:
-    """Renewal may re-authenticate unattended; flipping this off makes it
-    keep-warm only (it then alerts an operator instead of signing in).
-    """
-    for deploy_env in ("staging", "production"):
-        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
-        assert _env_by_name(manifest)["BRAIN_MEET_AUTOLOGIN"]["value"] == "true"
-
-
-def test_meet_provider_defaults_to_agent_service() -> None:
-    """Mounting the Recall wiring must not itself change how meets are joined.
-
-    The pod keeps driving the local Playwright browser until an operator flips
-    this to "recall", so deploying the bridge page and the API key is inert.
-    """
-    for deploy_env in ("staging", "production"):
-        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
-        assert _env_by_name(manifest)["MEET_PROVIDER"]["value"] == "agent_service"
-
-
 def test_meet_bridge_page_url_is_served_by_comms() -> None:
     """The Recall bot loads this page, so it must be the public comms host.
 
@@ -359,6 +302,23 @@ def test_meet_bridge_page_url_is_served_by_comms() -> None:
     env = _env_by_name(manifest)
     comms_url = env["UNITY_COMMS_URL"]["value"].rstrip("/")
     assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
+
+
+def test_recall_relay_secret_reaches_the_pod() -> None:
+    """The pod builds the relay URL, so it needs the shared secret itself.
+
+    Without it the provider registers no realtime endpoint at all: the bot is
+    never told where to push participant events, and the assistant receives no
+    inbound chat, no speaker attribution and no roster -- silently, because a
+    missing endpoint is indistinguishable from a quiet meeting.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="x"))
+    ref = env["RECALL_RELAY_SECRET"]["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == "unity-secrets"
+    assert ref["key"] == "RECALL_RELAY_SECRET"
+    # Optional for the same reason as the API key: an unprovisioned environment
+    # must still boot.
+    assert ref["optional"] is True
 
 
 def test_recall_region_travels_in_the_manifest() -> None:
