@@ -343,7 +343,7 @@ steps:
       --memory=512Mi \
       --update-env-vars=ORCHESTRA_URL=${_ORCHESTRA_URL} \
       --service-account=link-tracker-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-      --set-secrets=UNIFY_KEY=UNIFY_KEY:latest,LINK_TRACKER_IP_HASH_SALT=LINK_TRACKER_IP_HASH_SALT:latest \
+      --set-secrets=UNIFY_KEY=LINK_TRACKER_UNIFY_KEY:latest,LINK_TRACKER_IP_HASH_SALT=LINK_TRACKER_IP_HASH_SALT:latest \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID} \
       --quiet
     run_cloud_run_with_retry route_canonical_traffic ${_LINK_TRACKER_SERVICE} ${_REGION} ${BUILD_ID}
