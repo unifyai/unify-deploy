@@ -494,6 +494,11 @@ def build_unity_job_manifest(
         # Both keep the same brain-facing join/leave/present tools, so this is
         # the cutover switch and the rollback in one value.
         {"name": "MEET_PROVIDER", "value": "agent_service"},
+        # Which Recall deployment to talk to. Each region is a separate
+        # installation and a key is valid in exactly one, so this travelling in
+        # the manifest keeps a mismatch visible to an operator rather than
+        # buried in a code default -- and lets environments differ.
+        {"name": "RECALL_REGION", "value": "eu-central-1"},
         # The page a Recall bot renders as its camera/screenshare. It joins the
         # LiveKit room as an ordinary participant, so meeting audio reaches the
         # fast brain over the same transport phone and unify_meet already use.

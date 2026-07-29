@@ -361,6 +361,18 @@ def test_meet_bridge_page_url_is_served_by_comms() -> None:
     assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
 
 
+def test_recall_region_travels_in_the_manifest() -> None:
+    """A key is valid in exactly one Recall deployment.
+
+    The pod would otherwise fall back to a code default, so a region mismatch
+    would surface as an authentication failure with nothing in the manifest to
+    point at it.
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert _env_by_name(manifest)["RECALL_REGION"]["value"] == "eu-central-1"
+
+
 def test_recall_api_key_is_an_optional_secret_key() -> None:
     """An environment with no Recall account provisioned must still boot.
 
