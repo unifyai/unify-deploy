@@ -609,31 +609,57 @@ def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _deploy_step_args(filename: str, step_id: str) -> str:
+    """The shell body of one Cloud Build step, by id.
+
+    Scoped per step because the staging and production deploys were
+    consolidated into a single orchestrator (``deploy/cloudbuild*.yaml``): a
+    whole-file grep now spans every service, so an assertion about one of them
+    would match another's arguments.
+    """
+    import yaml
+
+    doc = yaml.safe_load((ROOT / filename).read_text())
+    for step in doc["steps"]:
+        if step.get("id") == step_id:
+            return "\n".join(step.get("args") or [])
+    raise AssertionError(f"no step {step_id!r} in {filename}")
+
+
 def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
-    text = (ROOT / "cloudbuild/unity-comms-app-staging.yaml").read_text()
+    """The comms revision must carry the staging service URLs, not inherit stale ones."""
+    body = _deploy_step_args("deploy/cloudbuild-staging.yaml", "deploy-comms")
+    for assignment in (
+        "DEPLOY_ENV=staging",
+        "ORCHESTRA_URL=${_ORCHESTRA_URL}",
+        "UNITY_COMMS_URL=https://${_COMMS_HOST}",
+        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}",
+    ):
+        assert assignment in body, assignment
 
-    canonical_runtime_env = (
-        "--update-env-vars=DEPLOY_ENV=staging,"
-        "ORCHESTRA_URL=${_ORCHESTRA_URL},"
-        "UNITY_COMMS_URL=https://${_COMMS_HOST},"
-        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
-    )
-
-    assert canonical_runtime_env in text
+    text = (ROOT / "deploy/cloudbuild-staging.yaml").read_text()
     assert "_ORCHESTRA_URL: 'https://internal.example.com/v0'" in text
     assert "_COMMS_HOST: 'service.a.run.app'" in text
     assert "_ADAPTERS_HOST: 'service.a.run.app'" in text
 
 
 def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
-    """Adapter services keep their public URL env vars secret-backed in Cloud Run.
+    """A URL cannot be a literal on a service where it is secret-backed.
 
-    Setting those names as literals in the deploy command makes Cloud Run reject
-    the revision because the env var already exists with a different type.
+    Cloud Run rejects the revision when an env var already exists with a
+    different type. ``UNITY_ADAPTERS_URL`` is secret-backed on the adapters
+    service, so it must never appear as a literal there. ``UNITY_COMMS_URL`` is
+    not, so setting it literally is correct -- which is why this asserts against
+    the secret list rather than banning both names outright.
     """
-    staging_text = (ROOT / "cloudbuild/adapters-staging.yaml").read_text()
-    production_text = (ROOT / "cloudbuild/adapters.yaml").read_text()
-
-    assert "UNITY_ADAPTERS_URL=https://" not in staging_text
-    assert "UNITY_ADAPTERS_URL=https://" not in production_text
-    assert "UNITY_COMMS_URL=https://" not in production_text
+    for filename in ("deploy/cloudbuild-staging.yaml", "deploy/cloudbuild.yaml"):
+        body = _deploy_step_args(filename, "deploy-adapters")
+        secret_backed = {
+            entry.split("=", 1)[0]
+            for chunk in body.split("--set-secrets=")[1:]
+            for entry in chunk.split(" ")[0].split(",")
+            if "=" in entry
+        }
+        for name in secret_backed:
+            assert f"{name}=https://" not in body, f"{name} retyped in {filename}"
+        assert "UNITY_ADAPTERS_URL" in secret_backed, filename
