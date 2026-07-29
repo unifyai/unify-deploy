@@ -13,6 +13,7 @@ This document is the ground truth for how voice calls and Unify Meets are record
 - [Per-Utterance Timing](#per-utterance-timing)
 - [End-to-End Walkthrough: Phone Call](#end-to-end-walkthrough-phone-call)
 - [End-to-End Walkthrough: Unify Meet](#end-to-end-walkthrough-unify-meet)
+- [How Google Meet and Teams Meet Are Recorded](#how-google-meet-and-teams-meet-are-recorded)
 - [Repos and Files Involved](#repos-and-files-involved)
 - [Environment Variables](#environment-variables)
 - [Infrastructure Prerequisites](#infrastructure-prerequisites)
@@ -26,7 +27,7 @@ This document is the ground truth for how voice calls and Unify Meets are record
 
 2. **Egress starts when the room is live — never at dispatch.** Room Composite Egress needs a publishing participant. Started at SIP-bridge setup or agent dispatch it races the join, and LiveKit aborts the job with `Start signal not received` after producing **no file at all**. Recording is therefore requested from the runtime's call-started path (`PhoneCallStarted` / `WhatsAppCallStarted` / `UnifyMeetStarted`) via `POST /phone/start-recording`.
 
-3. **Not every channel can be recorded this way.** Browser meets (Google Meet, Teams) bridge caller audio through the agent-service PortAudio device; **that audio never enters the LiveKit room**, so the compositor has nothing to mix. Rooms ending in `_gmeet` / `_teams` are refused by `start_room_egress`. Recording those channels requires a capture point on the bridge and is not implemented.
+3. **Every channel that reaches LiveKit is recorded the same way.** Browser meets (Google Meet, Teams) once were not: their audio was bridged through a pod-local audio device and never entered the LiveKit room, so the compositor had nothing to mix and every attempt aborted. The Recall.ai bridge page now joins the room with publish rights and relays the meeting in as an ordinary track, so a room composite captures it like any other call. There is no per-channel refusal left.
 
 4. **Starting a recording is idempotent.** `start_room_egress` checks for an already-running egress on the room and no-ops if one exists, so a retried or duplicated call-started event cannot record a room twice into two files.
 
@@ -110,7 +111,6 @@ The egress is started via `start_room_egress()` in `unify/gateway/common/livekit
 
 | Refusal | Why |
 |---|---|
-| Room ends in `_gmeet` / `_teams` | Channel audio never reaches the LiveKit room, so the job can only abort with no file |
 | `assistant_id` is empty | The object path is `{env}/{assistant_id}/{room}.mp3`; an empty id collapses the prefix and strands the file |
 | An egress is already active on the room | Two starters would record the room twice, into two separate billed files |
 
@@ -123,7 +123,7 @@ Recording is requested **once the session is live**, from the runtime, for every
 | **Phone call** (Twilio, inbound + outbound) | `PhoneCallStarted` handler | `unify/conversation_manager/domains/event_handlers.py` → `_start_session_recording` |
 | **WhatsApp call** | `WhatsAppCallStarted` handler | same |
 | **Unify Meet** | `UnifyMeetStarted` handler | same |
-| **Google Meet / Teams Meet** | Not recorded — see Design Principle 3 | — |
+| **Google Meet / Teams Meet** | `GoogleMeetStarted` / `TeamsMeetStarted` handler | same, keyed on the meet session id (browser meets carry no telephony identifiers) |
 
 The handler calls `start_call_recording()` (`unify/conversation_manager/utils.py`), which POSTs to `{COMMS_URL}/phone/start-recording` on the gateway. Neither the adapters' Twilio webhooks nor `/dispatch-livekit-agent` start egress.
 
@@ -312,13 +312,32 @@ Per-utterance timestamps enable precise time-alignment of transcript text to aud
 
 ---
 
-## Why Google Meet and Teams Meet Are Not Recorded
+## How Google Meet and Teams Meet Are Recorded
 
-A browser meet runs a headless browser on the agent-service and bridges audio through a PortAudio device. The assistant's own speech is published into the LiveKit room, but **remote participant audio is never published there** — `Assistant.stt_node` in `medium_scripts/call.py` feeds the recogniser from `audio_bridge.capture_q` precisely because the LiveKit room carries no caller audio on these channels.
+A browser meet is joined by a Recall.ai bot, one per meeting. The bot loads a
+bridge page we host, and that page joins the assistant's LiveKit room with
+`can_publish=True` and relays the meeting audio in as an ordinary published
+track. From the compositor's point of view the meeting is just another
+participant, so a room composite captures both sides with no special handling.
 
-Room Composite Egress therefore has nothing meaningful to mix. Requesting it produces a compositor that waits for a track that never arrives, stays alive for as long as the room does, and finally aborts with `Start signal not received` and no file — while consuming an egress slot the whole time. `start_room_egress` refuses `_gmeet` / `_teams` rooms for this reason.
+This was not always true, and the history matters because the failure was
+silent. While the meeting was bridged through a pod-local audio device, the
+LiveKit room carried no remote track: `Assistant.stt_node` fed the recogniser
+from the bridge queue precisely because the room had no caller audio. Egress
+requested on such a room waited for a track that never arrived, held a
+compositor slot for as long as the room lived, and aborted with
+`Start signal not received` and no file. `start_room_egress` refused
+`_gmeet` / `_teams` rooms for that reason.
 
-Recording these channels requires capturing at the bridge (or using the provider's own recording) and is deliberately out of scope.
+That refusal has been removed. It must stay removed: the runtime asks for a
+recording on every browser meet, so reinstating the guard drops those requests
+without an error anywhere.
+
+Two limits still apply. LiveKit ends an egress session at **3 hours**
+(`EGRESS_LIMIT_REACHED`), which browser meets are the most likely calls to hit.
+And Recall itself is configured with `recording_config: {retention: None}` — it
+stores nothing; the recording in GCS is ours alone, and it captures external
+attendees of a meeting we joined.
 
 ---
 
@@ -345,7 +364,7 @@ Consequence: the self-host path still starts egress at Twilio-webhook time and s
 
 | File | Role |
 |------|------|
-| `unify/gateway/common/livekit.py` | **The** egress implementation: `start_room_egress()`, `room_supports_egress()`, `has_active_egress()`, plus `create_room_and_dispatch_agent()` (dispatch only) |
+| `unify/gateway/common/livekit.py` | **The** egress implementation: `start_room_egress()`, `has_active_egress()`, plus `create_room_and_dispatch_agent()` (dispatch only) |
 | `unify/gateway/channels/phone/views.py` | `/phone/start-recording` (starts egress) and `/phone/dispatch-livekit-agent` (dispatch only) |
 | `unify/conversation_manager/utils.py` | `start_call_recording()` and `dispatch_livekit_agent()` — the runtime's two calls into the gateway |
 | `unify/conversation_manager/events.py` | `RecordingReady` event dataclass |
@@ -418,7 +437,7 @@ All egress-related code is wrapped in exception handlers. If any prerequisite is
 
 ## Current Limitations and Known Gaps
 
-1. **Browser meets are not recorded at all.** Google Meet and Teams Meet produce no recording — see "Why Google Meet and Teams Meet Are Not Recorded". Supporting them needs a capture point on the agent-service audio bridge, or the provider's own recording.
+1. **An egress session ends at 3 hours.** LiveKit stops it with `EGRESS_LIMIT_REACHED`, so a longer call is captured only up to that point. Browser meets are the most likely to reach it.
 
 2. **No signed URL generation in the recording flow.** The `recording_url` stored on exchange metadata is a raw GCS public URL. Playback goes through Orchestra's `/v0/storage/signed-url` (or the Console's `/api/media/get`); direct API consumers must sign it themselves.
 
