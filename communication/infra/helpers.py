@@ -380,15 +380,12 @@ def build_unity_job_manifest(
                 },
             },
         )
-    # Meet twin credentials are per-environment and may be absent (an env whose
-    # twin account is not yet provisioned). Marking them optional keeps the pod
-    # bootable in that case; Meet then degrades to an anonymous guest join
-    # instead of the whole assistant failing to start.
+    # An environment with no Recall workspace provisioned must still boot.
+    # Marking these optional keeps the pod up; browser meetings are simply
+    # unavailable there rather than the whole assistant failing to start.
     optional_unity_secret_keys = {
-        "MEET_TWIN_EMAIL",
-        "MEET_TWIN_PASSWORD",
-        "MEET_TWIN_TOTP_SECRET",
         "RECALL_API_KEY",
+        "RECALL_RELAY_SECRET",
     }
     unity_secret_env = []
     for key in (
@@ -401,9 +398,6 @@ def build_unity_job_manifest(
         "LIVEKIT_API_SECRET",
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
-        "MEET_TWIN_EMAIL",
-        "MEET_TWIN_PASSWORD",
-        "MEET_TWIN_TOTP_SECRET",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
@@ -414,6 +408,10 @@ def build_unity_job_manifest(
         # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
         # writes go through /infra/assistant-jobs/* (admin key on comms).
         "RECALL_API_KEY",
+        # Without this the pod builds no relay URL, so the bot is never told
+        # where to push participant events and the assistant receives none --
+        # no inbound chat, no speaker attribution, no roster.
+        "RECALL_RELAY_SECRET",
         "TAVILY_API_KEY",
         "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
@@ -477,27 +475,14 @@ def build_unity_job_manifest(
                 else f"unity-pipeline-artifacts-{deploy_env}"
             ),
         },
-        # Signed-in browser session for Google Meet joins: the CM hydrates
-        # gs://{bucket}/{state}.json into the meet browser so it joins as the
-        # per-env twin account instead of an anonymous guest (which Meet
-        # rejects when no host is present). Absent blob -> graceful anonymous
-        # fallback.
-        {"name": "MEET_BROWSER_STATE_BUCKET", "value": "unity-browser-states"},
-        {"name": "MEET_GOOGLE_STORAGE_STATE", "value": f"twin-session-{deploy_env}"},
-        # Lets the renewal tick re-log in with the twin credentials above when
-        # the cookies have already lapsed. Flip to "false" to make renewal
-        # keep-warm only (it then alerts an operator instead of signing in).
-        {"name": "BRAIN_MEET_AUTOLOGIN", "value": "true"},
-        # Which backend joins Google Meet / Teams. "agent_service" drives the
-        # pod-local Playwright browser above; "recall" dispatches a hosted
-        # Recall.ai bot that loads MEET_BRIDGE_PAGE_URL as its media surface.
-        # Both keep the same brain-facing join/leave/present tools, so this is
-        # the cutover switch and the rollback in one value.
-        {"name": "MEET_PROVIDER", "value": "agent_service"},
+        # Which Recall deployment to talk to. Each region is a separate
+        # installation and a key is valid in exactly one, so this travelling in
+        # the manifest keeps a mismatch visible to an operator rather than
+        # buried in a code default -- and lets environments differ.
+        {"name": "RECALL_REGION", "value": "eu-central-1"},
         # The page a Recall bot renders as its camera/screenshare. It joins the
         # LiveKit room as an ordinary participant, so meeting audio reaches the
         # fast brain over the same transport phone and unify_meet already use.
-        # Unused while MEET_PROVIDER is "agent_service".
         {
             "name": "MEET_BRIDGE_PAGE_URL",
             "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",

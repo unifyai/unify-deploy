@@ -292,63 +292,6 @@ def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_meet_browser_state_blob_is_environment_scoped() -> None:
-    """Both environments read the same bucket but a different blob.
-
-    The bucket is shared; the blob is what carries the twin identity, so
-    staging and production must never resolve to the same object.
-    """
-    staging = _env_by_name(build_unity_job_manifest(job_name="x", deploy_env="staging"))
-    production = _env_by_name(
-        build_unity_job_manifest(job_name="x", deploy_env="production"),
-    )
-    assert staging["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
-    assert production["MEET_BROWSER_STATE_BUCKET"]["value"] == "unity-browser-states"
-    assert staging["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-staging"
-    assert production["MEET_GOOGLE_STORAGE_STATE"]["value"] == "twin-session-production"
-
-
-def test_meet_twin_credentials_are_optional_secret_keys() -> None:
-    """An environment whose twin account isn't provisioned yet must still boot.
-
-    Without ``optional``, a missing key in ``unity-secrets`` blocks the pod from
-    starting at all; with it, Meet simply degrades to an anonymous guest join.
-    ``MEET_TWIN_TOTP_SECRET`` relies on this today: the twin is exempt from 2SV,
-    so no ``ExternalSecret`` supplies that key and login skips the TOTP step.
-    """
-    env = _env_by_name(build_unity_job_manifest(job_name="meet-twin-staging"))
-    for key in ("MEET_TWIN_EMAIL", "MEET_TWIN_PASSWORD", "MEET_TWIN_TOTP_SECRET"):
-        secret_ref = env[key]["valueFrom"]["secretKeyRef"]
-        assert secret_ref["name"] == "unity-secrets"
-        assert secret_ref["key"] == key
-        assert secret_ref["optional"] is True
-
-    # The rest of unity-secrets stays required -- optionality is opt-in.
-    for required_key in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "TAVILY_API_KEY"):
-        ref = env[required_key]["valueFrom"]["secretKeyRef"]
-        assert ref.get("optional") is not True
-
-
-def test_meet_autologin_enabled_by_default() -> None:
-    """Renewal may re-authenticate unattended; flipping this off makes it
-    keep-warm only (it then alerts an operator instead of signing in).
-    """
-    for deploy_env in ("staging", "production"):
-        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
-        assert _env_by_name(manifest)["BRAIN_MEET_AUTOLOGIN"]["value"] == "true"
-
-
-def test_meet_provider_defaults_to_agent_service() -> None:
-    """Mounting the Recall wiring must not itself change how meets are joined.
-
-    The pod keeps driving the local Playwright browser until an operator flips
-    this to "recall", so deploying the bridge page and the API key is inert.
-    """
-    for deploy_env in ("staging", "production"):
-        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
-        assert _env_by_name(manifest)["MEET_PROVIDER"]["value"] == "agent_service"
-
-
 def test_meet_bridge_page_url_is_served_by_comms() -> None:
     """The Recall bot loads this page, so it must be the public comms host.
 
@@ -359,6 +302,35 @@ def test_meet_bridge_page_url_is_served_by_comms() -> None:
     env = _env_by_name(manifest)
     comms_url = env["UNITY_COMMS_URL"]["value"].rstrip("/")
     assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
+
+
+def test_recall_relay_secret_reaches_the_pod() -> None:
+    """The pod builds the relay URL, so it needs the shared secret itself.
+
+    Without it the provider registers no realtime endpoint at all: the bot is
+    never told where to push participant events, and the assistant receives no
+    inbound chat, no speaker attribution and no roster -- silently, because a
+    missing endpoint is indistinguishable from a quiet meeting.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="x"))
+    ref = env["RECALL_RELAY_SECRET"]["valueFrom"]["secretKeyRef"]
+    assert ref["name"] == "unity-secrets"
+    assert ref["key"] == "RECALL_RELAY_SECRET"
+    # Optional for the same reason as the API key: an unprovisioned environment
+    # must still boot.
+    assert ref["optional"] is True
+
+
+def test_recall_region_travels_in_the_manifest() -> None:
+    """A key is valid in exactly one Recall deployment.
+
+    The pod would otherwise fall back to a code default, so a region mismatch
+    would surface as an authentication failure with nothing in the manifest to
+    point at it.
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert _env_by_name(manifest)["RECALL_REGION"]["value"] == "eu-central-1"
 
 
 def test_recall_api_key_is_an_optional_secret_key() -> None:
@@ -597,31 +569,57 @@ def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _deploy_step_args(filename: str, step_id: str) -> str:
+    """The shell body of one Cloud Build step, by id.
+
+    Scoped per step because the staging and production deploys were
+    consolidated into a single orchestrator (``deploy/cloudbuild*.yaml``): a
+    whole-file grep now spans every service, so an assertion about one of them
+    would match another's arguments.
+    """
+    import yaml
+
+    doc = yaml.safe_load((ROOT / filename).read_text())
+    for step in doc["steps"]:
+        if step.get("id") == step_id:
+            return "\n".join(step.get("args") or [])
+    raise AssertionError(f"no step {step_id!r} in {filename}")
+
+
 def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
-    text = (ROOT / "cloudbuild/unity-comms-app-staging.yaml").read_text()
+    """The comms revision must carry the staging service URLs, not inherit stale ones."""
+    body = _deploy_step_args("deploy/cloudbuild-staging.yaml", "deploy-comms")
+    for assignment in (
+        "DEPLOY_ENV=staging",
+        "ORCHESTRA_URL=${_ORCHESTRA_URL}",
+        "UNITY_COMMS_URL=https://${_COMMS_HOST}",
+        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}",
+    ):
+        assert assignment in body, assignment
 
-    canonical_runtime_env = (
-        "--update-env-vars=DEPLOY_ENV=staging,"
-        "ORCHESTRA_URL=${_ORCHESTRA_URL},"
-        "UNITY_COMMS_URL=https://${_COMMS_HOST},"
-        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
-    )
-
-    assert canonical_runtime_env in text
+    text = (ROOT / "deploy/cloudbuild-staging.yaml").read_text()
     assert "_ORCHESTRA_URL: 'https://internal.example.com/v0'" in text
     assert "_COMMS_HOST: 'service.a.run.app'" in text
     assert "_ADAPTERS_HOST: 'service.a.run.app'" in text
 
 
 def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
-    """Adapter services keep their public URL env vars secret-backed in Cloud Run.
+    """A URL cannot be a literal on a service where it is secret-backed.
 
-    Setting those names as literals in the deploy command makes Cloud Run reject
-    the revision because the env var already exists with a different type.
+    Cloud Run rejects the revision when an env var already exists with a
+    different type. ``UNITY_ADAPTERS_URL`` is secret-backed on the adapters
+    service, so it must never appear as a literal there. ``UNITY_COMMS_URL`` is
+    not, so setting it literally is correct -- which is why this asserts against
+    the secret list rather than banning both names outright.
     """
-    staging_text = (ROOT / "cloudbuild/adapters-staging.yaml").read_text()
-    production_text = (ROOT / "cloudbuild/adapters.yaml").read_text()
-
-    assert "UNITY_ADAPTERS_URL=https://" not in staging_text
-    assert "UNITY_ADAPTERS_URL=https://" not in production_text
-    assert "UNITY_COMMS_URL=https://" not in production_text
+    for filename in ("deploy/cloudbuild-staging.yaml", "deploy/cloudbuild.yaml"):
+        body = _deploy_step_args(filename, "deploy-adapters")
+        secret_backed = {
+            entry.split("=", 1)[0]
+            for chunk in body.split("--set-secrets=")[1:]
+            for entry in chunk.split(" ")[0].split(",")
+            if "=" in entry
+        }
+        for name in secret_backed:
+            assert f"{name}=https://" not in body, f"{name} retyped in {filename}"
+        assert "UNITY_ADAPTERS_URL" in secret_backed, filename
