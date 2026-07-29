@@ -45,6 +45,10 @@ dependencies = [
 comms = [
     "unillm",
 ]
+link-tracker = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+]
 adapters = [
     "azure-identity>=1.14.0",
     "fastapi>=0.104.0",
