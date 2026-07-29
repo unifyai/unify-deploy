@@ -109,3 +109,15 @@ def test_ip_is_hashed_not_stored(monkeypatch) -> None:
     monkeypatch.setenv("LINK_TRACKER_IP_HASH_SALT", "pepper")
     hashed = link_tracker._hash_ip("1.2.3.4")
     assert hashed and "1.2.3.4" not in hashed
+
+
+def test_click_rows_carry_a_timestamp() -> None:
+    """A click with no time cannot be attributed to a campaign window.
+
+    brain's model defaults this, but the default only applies when brain writes
+    the row — this service posts entries straight to Orchestra.
+    """
+
+    stamp = link_tracker._utc_now()
+    assert stamp.endswith("Z")
+    assert "+00:00" not in stamp

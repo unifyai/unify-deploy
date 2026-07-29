@@ -21,6 +21,7 @@ import hashlib
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -90,6 +91,22 @@ def build_redirect_url(
     )
 
 
+def _utc_now() -> str:
+    """Second-resolution UTC stamp, matching ``brain``'s ``utc_now``.
+
+    The model defaults this field, but a default only applies when brain writes
+    the row; this service posts entries straight to Orchestra, so an omitted
+    stamp lands as null and the click cannot be placed in time.
+    """
+
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 def _hash_ip(ip: str | None) -> str | None:
     """Hash a visitor IP with the deployment salt, or drop it when unsalted.
 
@@ -132,6 +149,7 @@ def record_click(shortlink: dict[str, Any], request: Request) -> None:
     """Write one ``LinkClicks`` row. Never raises."""
 
     entries = {
+        "occurred_at": _utc_now(),
         "short_id": shortlink.get("short_id"),
         "canonical_url": shortlink.get("canonical_url"),
         "contact_id": shortlink.get("contact_id"),
