@@ -150,8 +150,10 @@ def record_click(shortlink: dict[str, Any], request: Request) -> None:
     )
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
+# Not `/healthz`: Google's frontend answers that path itself with its own 404
+# and the request never reaches the container.
+@app.get("/_health")
+def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
