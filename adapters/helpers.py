@@ -217,9 +217,16 @@ def is_twin_alias_email_address(email_address: str | None) -> bool:
 def resolve_twin_alias_recipient(last_message: dict) -> str | None:
     """The twin alias address an inbound catch-all delivery was sent to.
 
-    Recipient routing: the alias in To/Cc identifies the twin outright, with
-    no sender lookup. Returns the first alias-domain address found.
+    Recipient routing: the alias identifies the twin outright, with no
+    sender lookup. X-Gm-Original-To (stamped by the catch-all routing rule)
+    is authoritative — it survives BCC deliveries, where To/Cc never carried
+    the alias. To/Cc remain as the fallback for messages that predate the
+    header option or arrive through paths that strip it.
     """
+    original_to = parseaddr(last_message.get("x_gm_original_to") or "")[1]
+    original_to = original_to.strip().lower()
+    if is_twin_alias_email_address(original_to):
+        return original_to
     for field in ("to", "cc"):
         for raw in last_message.get(field) or []:
             addr = parseaddr(raw)[1].strip().lower()
@@ -3069,6 +3076,10 @@ def _gmail_thread_to_conversation(thread):
                     else []
                 ),
                 "subject": _header(headers, "Subject").replace("Re: ", ""),
+                # Original envelope recipient, preserved by the catch-all
+                # routing rule. The only surviving copy of a twin alias when
+                # the twin was BCC'd (To/Cc never contained it).
+                "x_gm_original_to": _header(headers, "X-Gm-Original-To"),
                 "content": _payload_text(payload),
             },
         )
