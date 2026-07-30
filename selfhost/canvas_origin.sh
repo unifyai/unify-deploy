@@ -7,9 +7,25 @@
 # it. Production gets that from `canvas.unify.ai`; self-host gets it from a port,
 # which is part of an origin and therefore just as real to the browser.
 #
-# Sourced by stack.sh. Every function is a no-op when the runtime host has not been
-# installed, because `setup.sh` deliberately does not gate on the canvas build —
-# the rest of the stack works without it, and only canvas is unavailable.
+# Sourced by stack.sh, and runnable on its own:
+#
+#     bash selfhost/canvas_origin.sh {start|stop|status}
+#
+# Standalone matters because the canvas origin is the *only* backing service a
+# mock-mode Console needs. Nothing else — no Orchestra, no Postgres, no Coordinator
+# — so requiring the whole stack just to look at a canvas would be a false cost.
+#
+# Every function is a no-op when the runtime host has not been installed, because
+# `setup.sh` deliberately does not gate on the canvas build — the rest of the stack
+# works without it, and only canvas is unavailable.
+
+# Provided by stack.sh when sourced; defined here so standalone use works too.
+if ! declare -F log_info >/dev/null 2>&1; then
+    log_info() { echo "[INFO] $*"; }
+    log_success() { echo "[OK] $*"; }
+    log_warn() { echo "[WARN] $*"; }
+    log_error() { echo "[ERROR] $*"; }
+fi
 
 CANVAS_HOST_DIR="${CANVAS_HOST_DIR:-$HOME/.unity/canvas-host}"
 CANVAS_PORT="${CANVAS_PORT:-3100}"
@@ -108,3 +124,17 @@ canvas_origin_status_line() {
         printf 'Canvas origin: stopped\n'
     fi
 }
+
+# When run rather than sourced, act as a small CLI. Guarded on BASH_SOURCE so
+# sourcing from stack.sh defines the functions and does nothing else.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    case "${1:-status}" in
+        start) canvas_origin_start ;;
+        stop) canvas_origin_stop && log_success "Canvas origin stopped" ;;
+        status) canvas_origin_status_line ;;
+        *)
+            echo "Usage: bash $(basename "${BASH_SOURCE[0]}") {start|stop|status}" >&2
+            exit 2
+            ;;
+    esac
+fi
