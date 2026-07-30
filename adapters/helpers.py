@@ -214,6 +214,58 @@ def is_twin_alias_email_address(email_address: str | None) -> bool:
     )
 
 
+def send_twin_moved_notice(
+    gmail_service,
+    *,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    twin_name: str,
+    alias_email: str,
+) -> None:
+    """Reply from the retired shared address with the twin's new coordinates.
+
+    Sent only to the verified owner during the post-flip grace window (the
+    resolver guarantees both), so this cannot loop with strangers or other
+    automations: one notice per inbound message, addressed to a human.
+    """
+    import base64 as _base64
+    from email.mime.text import MIMEText as _MIMEText
+
+    name = twin_name or "Your assistant"
+    lines = [
+        f"{name} has moved to its own email address: {alias_email}",
+        "",
+        "This shared address no longer reaches it. Please update your",
+        f"contacts and resend your message to {alias_email}.",
+        "",
+        "You can also add a dedicated phone or WhatsApp number for it under",
+        "its Contact Details page in the Console.",
+    ]
+    msg = _MIMEText("\n".join(lines))
+    msg["to"] = to_email
+    msg["from"] = mailbox
+    subject = (original_subject or "").strip()
+    msg["subject"] = f"Re: {subject}" if subject else f"{name} has a new address"
+    try:
+        gmail_service.users().messages().send(
+            userId="me",
+            body={"raw": _base64.urlsafe_b64encode(msg.as_bytes()).decode()},
+        ).execute()
+
+        def _redact(addr: str) -> str:
+            local, _, domain = addr.partition("@")
+            return f"{local[:2]}***@{domain}" if domain else "***"
+
+        logger.info(
+            "Sent twin-moved notice to %s (alias %s)",
+            _redact(to_email),
+            _redact(alias_email),
+        )
+    except Exception as exc:
+        logger.error("Failed to send twin-moved notice: %s", exc)
+
+
 def resolve_twin_alias_recipient(last_message: dict) -> str | None:
     """The twin alias address an inbound catch-all delivery was sent to.
 
