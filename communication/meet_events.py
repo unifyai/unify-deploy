@@ -24,7 +24,7 @@ import json
 import logging
 import secrets
 from collections import Counter
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from livekit.api import SendDataRequest
@@ -32,6 +32,7 @@ from livekit.protocol.models import DataPacket
 
 from common.livekit import get_livekit_api
 from common.settings import SETTINGS
+from communication.meet_screenshare import ScreenshareRelay
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,20 @@ RECALL_EVENT_TOPIC = "recall_meeting_events"
 # Policy violation: the socket authenticated but must not stay open.
 _WS_CLOSE_POLICY_VIOLATION = 1008
 
+# Named because the relay acts on them as well as forwarding them: they are what
+# orders several presenters so the frame store knows whose screen is focused.
+EVENT_SCREENSHARE_ON = "participant_events.screenshare_on"
+EVENT_SCREENSHARE_OFF = "participant_events.screenshare_off"
+
 # Events worth the round trip. Recall emits a wider set (webcam on/off,
 # recording permission, breakout rooms) that no consumer reads today; relaying
 # them would put unattributed traffic on the room's data channel for the whole
 # call. Add to this set when a consumer actually needs one.
+#
+# MIRRORED: ``SUBSCRIBED_EVENTS`` in unify's
+# ``conversation_manager/domains/recall/events.py`` is what a bot is told to
+# send. Anything absent from this copy is subscribed and then silently dropped
+# in transit. Change both together.
 _RELAYED_EVENTS = frozenset(
     {
         "participant_events.join",
@@ -55,8 +66,17 @@ _RELAYED_EVENTS = frozenset(
         "participant_events.speech_on",
         "participant_events.speech_off",
         "participant_events.chat_message",
+        EVENT_SCREENSHARE_ON,
+        EVENT_SCREENSHARE_OFF,
     },
 )
+
+# Per-participant video frames. Handled here rather than relayed: the frames go
+# to GCS for the assistant pod to poll (see ``meet_screenshare.py``), because a
+# 360p JPEG does not belong on a reliable data channel. Screenshare and webcam
+# frames share this one event and are told apart only by ``type``.
+_VIDEO_FRAME_EVENT = "video_separate_png.data"
+_VIDEO_FRAME_TYPE_SCREENSHARE = "screenshare"
 
 
 def _authorized(token: str | None) -> bool:
@@ -93,10 +113,11 @@ async def recall_meeting_events(
     skipped: Counter[str] = Counter()
     relayed = 0
     first_seen: set[str] = set()
+    screenshare = ScreenshareRelay(room=room)
     try:
         while True:
             raw = await websocket.receive_text()
-            payload, event_name, skip_reason = _classify_event(raw)
+            payload, event_name, skip_reason, message = _classify_event(raw)
             received[event_name] += 1
 
             # One line per event *type*, not per frame: enough to see the shape
@@ -108,11 +129,29 @@ async def recall_meeting_events(
                         "event": "recall_relay_first_frame",
                         "room": room,
                         "recall_event": event_name,
-                        "data_keys": sorted(skip_reason_data_keys(raw)),
+                        **frame_shape(raw),
                         "forwarded": payload is not None,
                         "skip_reason": skip_reason or None,
                     },
                 )
+
+            # Video frames leave by their own route: too large for the data
+            # channel, and only the focused sharer's are kept.
+            if event_name == _VIDEO_FRAME_EVENT and message is not None:
+                frame = screenshare_frame(message)
+                if frame is not None:
+                    screenshare.handle_frame(
+                        participant_id=frame[0],
+                        participant_name=frame[1],
+                        png_b64=frame[2],
+                    )
+
+            # Sharers are tracked as well as relayed: focus order is what tells
+            # the store whose frames to keep when several people present.
+            if event_name == EVENT_SCREENSHARE_OFF and message is not None:
+                screenshare.screenshare_off(participant_id_of(message))
+            elif event_name == EVENT_SCREENSHARE_ON and message is not None:
+                screenshare.screenshare_on(participant_id_of(message))
 
             if payload is None:
                 skipped[skip_reason] += 1
@@ -148,25 +187,49 @@ async def recall_meeting_events(
         await livekit.aclose()
 
 
-def skip_reason_data_keys(raw: str) -> list[str]:
-    """Top-level keys of a frame's ``data``, for the first-frame log line.
+def frame_shape(raw: str) -> dict[str, list[str]]:
+    """Key names at the two nesting levels that have actually mattered.
 
-    Shape is the thing worth seeing once per event type: a payload nested a
-    level deeper than expected reads as "no events arrived" everywhere
-    downstream, which is indistinguishable from a dead transport.
+    Recall wraps the payload twice: ``data`` carries artifact references
+    (bot/recording/endpoint) and ``data.data`` carries the event itself. Every
+    integration bug here so far has been reading one of those levels wrong, and
+    a payload one level off reads as "no events arrived" everywhere downstream
+    -- indistinguishable from a dead transport. Logging both once per event
+    type is what makes the shape observable instead of inferred.
     """
     try:
         message = json.loads(raw)
     except ValueError:
-        return []
+        return {}
     if not isinstance(message, dict):
-        return []
+        return {}
     data = message.get("data")
-    return list(data) if isinstance(data, dict) else []
+    if not isinstance(data, dict):
+        return {}
+    inner = data.get("data")
+    return {
+        "data_keys": sorted(data),
+        "inner_keys": sorted(inner) if isinstance(inner, dict) else [],
+    }
 
 
-def _classify_event(raw: str) -> tuple[dict[str, Any] | None, str, str]:
-    """Return ``(payload_or_None, event_name, skip_reason)`` for one frame.
+class ClassifiedEvent(NamedTuple):
+    """One frame, sorted into what the relay should do with it.
+
+    ``payload`` is set only for events that go onto the data channel. ``message``
+    is the parsed frame whatever the verdict, so a consumer that handles an event
+    some other way -- video frames go to GCS, not to LiveKit -- does not parse
+    the largest payloads on the socket a second time.
+    """
+
+    payload: dict[str, Any] | None
+    name: str
+    skip_reason: str
+    message: dict[str, Any] | None = None
+
+
+def _classify_event(raw: str) -> ClassifiedEvent:
+    """Sort one frame into relay / handle-elsewhere / skip.
 
     Reports the event name even when skipping, so the caller can tally what
     Recall actually sent rather than only what was forwarded. A malformed or
@@ -178,19 +241,66 @@ def _classify_event(raw: str) -> tuple[dict[str, Any] | None, str, str]:
     try:
         message = json.loads(raw)
     except ValueError:
-        return None, "<bad_json>", "bad_json"
+        return ClassifiedEvent(None, "<bad_json>", "bad_json")
     if not isinstance(message, dict):
-        return None, "<not_an_object>", "not_an_object"
+        return ClassifiedEvent(None, "<not_an_object>", "not_an_object")
 
     event = message.get("event")
     if not isinstance(event, str) or not event:
-        return None, "<no_event_field>", "no_event_field"
+        return ClassifiedEvent(None, "<no_event_field>", "no_event_field", message)
+    if event == _VIDEO_FRAME_EVENT:
+        return ClassifiedEvent(None, event, "video_frame", message)
     if event not in _RELAYED_EVENTS:
-        return None, event, "not_subscribed"
+        return ClassifiedEvent(None, event, "not_subscribed", message)
 
     data = message.get("data")
-    return (
+    return ClassifiedEvent(
         {"event": event, "data": data if isinstance(data, dict) else {}},
         event,
         "",
+        message,
     )
+
+
+def screenshare_frame(message: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return ``(participant_id, participant_name, png_b64)`` for a shared screen.
+
+    None for a webcam frame or anything unreadable. Screenshare and webcam
+    frames arrive on one event distinguished only by ``type``, so this check is
+    what stops somebody's face being stored as their shared screen.
+    """
+
+    outer = message.get("data")
+    inner = outer.get("data") if isinstance(outer, dict) else None
+    if not isinstance(inner, dict):
+        return None
+    if inner.get("type") != _VIDEO_FRAME_TYPE_SCREENSHARE:
+        return None
+    buffer = inner.get("buffer")
+    if not isinstance(buffer, str) or not buffer:
+        return None
+    participant = inner.get("participant")
+    participant = participant if isinstance(participant, dict) else {}
+    participant_id = participant.get("id")
+    if participant_id is None:
+        return None
+    # ``id`` is an int over the websocket and a string over REST; normalised so
+    # 7 and "7" are not two different presenters.
+    return (
+        str(participant_id),
+        str(participant.get("name") or ""),
+        buffer,
+    )
+
+
+def participant_id_of(message: dict[str, Any]) -> str:
+    """The participant id on a ``screenshare_on`` / ``screenshare_off`` frame."""
+
+    outer = message.get("data")
+    inner = outer.get("data") if isinstance(outer, dict) else None
+    if not isinstance(inner, dict):
+        return ""
+    participant = inner.get("participant")
+    participant = participant if isinstance(participant, dict) else {}
+    participant_id = participant.get("id")
+    return "" if participant_id is None else str(participant_id)

@@ -20,7 +20,7 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
-    "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
+    "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
     "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"

@@ -227,8 +227,10 @@ from .helpers import (
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
+    is_twin_alias_mailbox,
     is_unity_coordinator_email_address,
     parse_teams_resource_id,
+    resolve_twin_alias_recipient,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     resolve_email_route,
@@ -3703,11 +3705,14 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         is_shared_coordinator_email = is_unity_coordinator_email_address(
             assistant_email_address,
         )
+        is_alias_mailbox = is_twin_alias_mailbox(assistant_email_address)
 
         # Build Gmail API client.  BYOD accounts have a GOOGLE_ACCESS_TOKEN
         # secret; platform-managed accounts use service-account delegation.
+        # The shared coordinator mailbox and the twin alias catch-all are
+        # platform mailboxes with no assistant of their own to prefetch.
         google_token = None
-        if not is_shared_coordinator_email:
+        if not is_shared_coordinator_email and not is_alias_mailbox:
             assistant_data_prefetch = get_assistant(
                 email_address=assistant_email_address,
             )
@@ -3757,7 +3762,30 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         logger.info(f"from_email: {_redact_email(from_email)}")
 
         # shared context
-        if is_shared_coordinator_email:
+        if is_alias_mailbox:
+            # Recipient routing: the alias address in To/Cc identifies the
+            # multiplayer twin outright — no sender lookup, any sender welcome.
+            alias_address = resolve_twin_alias_recipient(last_message)
+            alias_assistant = (
+                get_assistant(email_address=alias_address) if alias_address else {}
+            )
+            alias_assistant_id = (alias_assistant or {}).get("assistant_id") or (
+                alias_assistant or {}
+            ).get("agent_id")
+            if not alias_assistant_id:
+                logger.info(
+                    "Twin alias delivery with no resolvable recipient (%s)",
+                    _redact_email(alias_address or ""),
+                )
+                return Response(content="OK", status_code=200)
+            context = build_webhook_context(
+                "email",
+                alias_address,
+                from_email,
+                assistant_id=str(alias_assistant_id),
+                validate_contact=False,
+            )
+        elif is_shared_coordinator_email:
             route = resolve_email_route(assistant_email_address, from_email)
             if not route or route.get("action"):
                 logger.info(
@@ -3809,7 +3837,9 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             contacts,
             gmail_message_id,
             shared_mailbox=(
-                assistant_email_address if is_shared_coordinator_email else None
+                assistant_email_address
+                if (is_shared_coordinator_email or is_alias_mailbox)
+                else None
             ),
         )
         return Response(content="OK", status_code=200)
@@ -5796,6 +5826,28 @@ def scheduled_email_watches(payload: ScheduledPayload):
             logger.info(f"Renewed shared coordinator mailbox: {response}")
         except Exception as e:
             logger.error(f"Error renewing shared coordinator mailbox: {e}")
+
+    # Renew the twin alias catch-all mailbox (multiplayer twin inbound).
+    if not payload.test:
+        try:
+            response = requests.post(
+                f"{SETTINGS.comms_url}/gmail/watch",
+                json={
+                    "primary_email": SETTINGS.unity_twin_alias_mailbox,
+                    "topic_name": SETTINGS.unity_coordinator_email_watch_topic,
+                },
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=30,
+            ).json()
+            results["gmail"].append(
+                {
+                    "email": SETTINGS.unity_twin_alias_mailbox,
+                    **response,
+                },
+            )
+            logger.info(f"Renewed twin alias mailbox: {response}")
+        except Exception as e:
+            logger.error(f"Error renewing twin alias mailbox: {e}")
 
     # Renew policy assistant (Gmail-based, skip only in test mode)
     if not payload.test:

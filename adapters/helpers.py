@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from functools import partial
 import json
 import os
@@ -193,6 +194,38 @@ def is_unity_coordinator_email_address(email_address: str | None) -> bool:
     if not email_address:
         return False
     return email_address.strip().lower() == SETTINGS.unity_coordinator_email_address
+
+
+def is_twin_alias_mailbox(email_address: str | None) -> bool:
+    """Whether this is the catch-all mailbox receiving twin alias mail."""
+    if not email_address:
+        return False
+    return email_address.strip().lower() == SETTINGS.unity_twin_alias_mailbox
+
+
+def is_twin_alias_email_address(email_address: str | None) -> bool:
+    """Whether an address lives on the multiplayer twin alias domain."""
+    if not email_address:
+        return False
+    return (
+        email_address.strip()
+        .lower()
+        .endswith(f"@{SETTINGS.unity_twin_alias_email_domain}")
+    )
+
+
+def resolve_twin_alias_recipient(last_message: dict) -> str | None:
+    """The twin alias address an inbound catch-all delivery was sent to.
+
+    Recipient routing: the alias in To/Cc identifies the twin outright, with
+    no sender lookup. Returns the first alias-domain address found.
+    """
+    for field in ("to", "cc"):
+        for raw in last_message.get(field) or []:
+            addr = parseaddr(raw)[1].strip().lower()
+            if is_twin_alias_email_address(addr):
+                return addr
+    return None
 
 
 def resolve_email_route(mailbox: str, sender: str) -> dict | None:
@@ -1902,6 +1935,7 @@ def _build_start_job_request_data(
     desktop_mode = _resolve_desktop_mode(assistant)
     user_desktops = assistant.get("user_desktops", [])
     is_coordinator = assistant.get("is_coordinator", False)
+    is_multiplayer = assistant.get("is_multiplayer", False)
     voice_provider, voice_id = resolve_runtime_voice(
         is_coordinator=is_coordinator,
         voice_provider=assistant.get("voice_provider"),
@@ -1954,6 +1988,7 @@ def _build_start_job_request_data(
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         "is_coordinator": ("true" if is_coordinator else "false"),
+        "is_multiplayer": ("true" if is_multiplayer else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
         "team_summaries": encode_team_summaries_for_form(
             assistant.get("team_summaries") or [],

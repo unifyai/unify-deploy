@@ -246,6 +246,23 @@ class Settings:
             "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
             self.gmail_topic,
         )
+        # Multiplayer twin alias email: catch-all domain plus the Workspace
+        # mailbox its deliveries land in. Inbound routes by the recipient
+        # alias; Gmail operations delegate to the mailbox.
+        self.unity_twin_alias_email_domain: str = (
+            (
+                os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+                or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+                or "twins.unify.ai"
+            )
+            .strip()
+            .lower()
+        )
+        self.unity_twin_alias_mailbox: str = (
+            (os.environ.get("UNITY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai")
+            .strip()
+            .lower()
+        )
         self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
         self.client_bundle_bucket: str = os.environ.get(
             "UNITY_CLIENT_BUNDLE_BUCKET",
@@ -287,6 +304,15 @@ class Settings:
         )
         self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
         self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
+
+        # Shared screens captured from browser meetings. GCS rather than process
+        # memory because the Cloud Run instance holding a bot's websocket is not
+        # the one an assistant pod's poll reaches. One overwritten object per
+        # room; provision with a short lifecycle rule.
+        self.meet_screenshare_bucket: str = os.environ.get(
+            "UNITY_MEET_SCREENSHARE_BUCKET",
+            f"unity-meet-screenshare{self.env_suffix}",
+        )
 
         # AssistantSession control plane
         self.assistant_session_group: str = "infra.unify.ai"
