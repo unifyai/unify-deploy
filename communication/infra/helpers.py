@@ -386,6 +386,10 @@ def build_unity_job_manifest(
     optional_unity_secret_keys = {
         "RECALL_API_KEY",
         "RECALL_RELAY_SECRET",
+        # Only the tenants that pin browser egress to a region configure these.
+        "UNITY_EGRESS_PROXY_SERVER",
+        "UNITY_EGRESS_PROXY_USERNAME",
+        "UNITY_EGRESS_PROXY_PASSWORD",
     }
     unity_secret_env = []
     for key in (
@@ -413,6 +417,12 @@ def build_unity_job_manifest(
         # no inbound chat, no speaker attribution, no roster.
         "RECALL_RELAY_SECRET",
         "TAVILY_API_KEY",
+        # Read by the agent-service (Node), which entrypoint.sh starts before
+        # Python's SecretManager syncs anything, so these cannot come from the
+        # Orchestra Secrets path the way brain's own settings do.
+        "UNITY_EGRESS_PROXY_SERVER",
+        "UNITY_EGRESS_PROXY_USERNAME",
+        "UNITY_EGRESS_PROXY_PASSWORD",
         "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",
