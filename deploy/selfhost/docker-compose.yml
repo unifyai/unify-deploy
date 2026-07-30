@@ -379,6 +379,70 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # Parse and ingest run as separate containers, mirroring the hosted split.
+  #
+  # The split is why these exist at all rather than the assistant doing the work
+  # itself: parsing is CPU-heavy and loads files and models into whatever process
+  # runs it, so keeping it out of unity-cm means an oversized document cannot take
+  # the assistant down with it. Ingest is high-I/O instead, and separating the two
+  # lets each scale on its own pressure.
+  #
+  # Both mount the artifacts volume, which is how a parse worker hands a job to an
+  # ingest worker -- the same handoff the hosted stack makes through a bucket.
+  ingestion-parse:
+    <<: *unity_image
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/ingestion-worker-entrypoint.sh"]
+    command: ["parse"]
+    env_file:
+    - ./coordinator.env
+    environment: &ingestion_worker_env
+      SELF_HOST: "1"
+      HOME: /runtime
+      ORCHESTRA_URL: http://orchestra:8000/v0
+      ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
+      PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
+      UNITY_SELFHOST_ARTIFACT_ROOT: /artifacts
+      UNITY_LOCAL_ROOT: /Unity/Local
+      HF_HOME: /opt/hf-cache
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      UNIFY_MODEL: ${UNIFY_MODEL:-}
+    volumes:
+    - runtime:/runtime
+    - pipeline-artifacts:/artifacts
+    # Workspace mounted read-only: a worker reads the files it was given and
+    # writes only artifacts, so it has no reason to modify the user's files.
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
+    - ./ingestion-worker-entrypoint.sh:/app/deploy/selfhost/ingestion-worker-entrypoint.sh:ro
+    depends_on:
+      orchestra:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+    restart: unless-stopped
+
+  ingestion-ingest:
+    <<: *unity_image
+    entrypoint: ["/bin/bash", "/app/deploy/selfhost/ingestion-worker-entrypoint.sh"]
+    command: ["ingest"]
+    env_file:
+    - ./coordinator.env
+    environment: *ingestion_worker_env
+    volumes:
+    - runtime:/runtime
+    - pipeline-artifacts:/artifacts
+    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
+    - ./ingestion-worker-entrypoint.sh:/app/deploy/selfhost/ingestion-worker-entrypoint.sh:ro
+    depends_on:
+      orchestra:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+    restart: unless-stopped
+
   desktop:
     image: ${DESKTOP_IMAGE:-ghcr.io/unifyai/unity-desktop-selfhost:staging}
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/desktop-entrypoint.sh"]
@@ -598,6 +662,10 @@ volumes:
   postgres-data:
   local-bucket:
   provider-event-blobs:
+  # Shared between the parse and ingest workers: the handoff surface a bucket
+  # provides in the hosted stack. Checkpoints and leases live here too, so an
+  # interrupted run resumes from the same place whichever worker picks it up.
+  pipeline-artifacts:
   runtime:
 
 secrets:
