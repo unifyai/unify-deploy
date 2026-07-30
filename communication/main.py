@@ -57,6 +57,7 @@ from communication.infra.views import (
 )
 from communication.meet_bridge import router as meet_bridge_router
 from communication.meet_events import router as meet_events_router
+from communication.meet_screenshare import router as meet_screenshare_router
 from unify.gateway.app import ExtraRouter, create_app
 from unify.gateway.context import GatewayContext, default_public_url_provider
 from unify.gateway.credentials import EnvCredentialStore
@@ -195,6 +196,10 @@ app = create_app(
         # route authenticates its own query-parameter token rather than taking
         # a router-level admin dependency.
         ExtraRouter(meet_events_router, prefix="/meet"),
+        # Read side of the same relay: the assistant pod polls a shared screen
+        # here. Authenticates the same query-parameter token, for the same
+        # reason its writer does.
+        ExtraRouter(meet_screenshare_router, prefix="/meet"),
     ],
     extra_setup_hooks=[setup_kubernetes_client, _get_pubsub_clients],
     gateway_context=gateway_context,

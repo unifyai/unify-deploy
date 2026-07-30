@@ -199,30 +199,51 @@ def test_classify_reports_why_a_frame_was_skipped() -> None:
         "[1, 2]": "not_an_object",
     }
     for raw, expected in cases.items():
-        payload, _, reason = _classify_event(raw)
-        assert payload is None
-        assert reason == expected, raw
+        classified = _classify_event(raw)
+        assert classified.payload is None
+        assert classified.skip_reason == expected, raw
 
-    payload, name, reason = _classify_event(
+    classified = _classify_event(
         _frame(
             "participant_events.chat_message",
             {"id": 7, "name": "Ada"},
             {"text": "hi", "to": "everyone"},
         ),
     )
-    assert payload is not None and reason == ""
-    assert name == "participant_events.chat_message"
+    assert classified.payload is not None and classified.skip_reason == ""
+    assert classified.name == "participant_events.chat_message"
+
+
+def test_screenshare_transitions_reach_the_room(livekit) -> None:
+    """The fast brain starts and stops polling for a shared screen off these.
+
+    Without them it either never looks for a frame, or keeps describing one long
+    after the presenter stopped.
+    """
+    url = f"/meet/events?room=unity_25_gmeet&token={RELAY_SECRET}"
+    with _client().websocket_connect(url) as ws:
+        ws.send_text(
+            _frame("participant_events.screenshare_on", {"id": 7, "name": "Ada"}),
+        )
+        ws.send_text(
+            _frame("participant_events.screenshare_off", {"id": 7, "name": "Ada"}),
+        )
+
+    assert [p["event"] for p in _sent_payloads(livekit)] == [
+        "participant_events.screenshare_on",
+        "participant_events.screenshare_off",
+    ]
 
 
 def test_unsubscribed_events_keep_their_real_name() -> None:
     """Tallying by name is what shows Recall sending something unexpected."""
     from communication.meet_events import _classify_event
 
-    _, name, reason = _classify_event(
-        '{"event": "participant_events.screenshare_on", "data": {}}',
+    classified = _classify_event(
+        '{"event": "participant_events.webcam_on", "data": {}}',
     )
-    assert name == "participant_events.screenshare_on"
-    assert reason == "not_subscribed"
+    assert classified.name == "participant_events.webcam_on"
+    assert classified.skip_reason == "not_subscribed"
 
 
 def test_close_tally_survives_an_abrupt_socket_death(livekit) -> None:
