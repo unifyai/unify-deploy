@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from collections import Counter
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -84,13 +85,39 @@ async def recall_meeting_events(
     logger.info({"event": "recall_relay_opened", "room": room})
 
     livekit = get_livekit_api()
+    # Tallied rather than logged per frame: at 2fps a video subscription would
+    # otherwise bury the log. Counting everything received -- not just what is
+    # forwarded -- is the point: a bare "relayed: 1" cannot tell "Recall sent
+    # one event" apart from "Recall sent forty and we dropped thirty-nine".
+    received: Counter[str] = Counter()
+    skipped: Counter[str] = Counter()
     relayed = 0
+    first_seen: set[str] = set()
     try:
         while True:
             raw = await websocket.receive_text()
-            payload = _parse_event(raw)
+            payload, event_name, skip_reason = _classify_event(raw)
+            received[event_name] += 1
+
+            # One line per event *type*, not per frame: enough to see the shape
+            # Recall actually sends without volume scaling with the call.
+            if event_name not in first_seen:
+                first_seen.add(event_name)
+                logger.info(
+                    {
+                        "event": "recall_relay_first_frame",
+                        "room": room,
+                        "recall_event": event_name,
+                        "data_keys": sorted(skip_reason_data_keys(raw)),
+                        "forwarded": payload is not None,
+                        "skip_reason": skip_reason or None,
+                    },
+                )
+
             if payload is None:
+                skipped[skip_reason] += 1
                 continue
+
             await livekit.room.send_data(
                 SendDataRequest(
                     room=room,
@@ -104,35 +131,66 @@ async def recall_meeting_events(
             )
             relayed += 1
     except WebSocketDisconnect:
-        logger.info(
-            {"event": "recall_relay_closed", "room": room, "relayed": relayed},
-        )
+        pass
     finally:
+        # In ``finally`` so the tally survives any exit path, not just a clean
+        # disconnect -- a socket killed by a request timeout took the old log
+        # line with it.
+        logger.info(
+            {
+                "event": "recall_relay_closed",
+                "room": room,
+                "relayed": relayed,
+                "received": dict(received),
+                "skipped": dict(skipped),
+            },
+        )
         await livekit.aclose()
 
 
-def _parse_event(raw: str) -> dict[str, Any] | None:
-    """Return the relayable payload for one Recall frame, or None to skip it.
+def skip_reason_data_keys(raw: str) -> list[str]:
+    """Top-level keys of a frame's ``data``, for the first-frame log line.
 
-    A malformed or unrecognised frame is skipped rather than raised: Recall
-    reconnects up to 30 times on a closed socket, so tearing the relay down
-    over one bad frame drops the events either side of it too.
+    Shape is the thing worth seeing once per event type: a payload nested a
+    level deeper than expected reads as "no events arrived" everywhere
+    downstream, which is indistinguishable from a dead transport.
+    """
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(message, dict):
+        return []
+    data = message.get("data")
+    return list(data) if isinstance(data, dict) else []
+
+
+def _classify_event(raw: str) -> tuple[dict[str, Any] | None, str, str]:
+    """Return ``(payload_or_None, event_name, skip_reason)`` for one frame.
+
+    Reports the event name even when skipping, so the caller can tally what
+    Recall actually sent rather than only what was forwarded. A malformed or
+    unrecognised frame is skipped rather than raised: Recall reconnects on a
+    closed socket, so tearing the relay down over one bad frame drops the
+    events either side of it too.
     """
 
     try:
         message = json.loads(raw)
     except ValueError:
-        logger.warning({"event": "recall_relay_bad_json"})
-        return None
+        return None, "<bad_json>", "bad_json"
     if not isinstance(message, dict):
-        return None
+        return None, "<not_an_object>", "not_an_object"
 
     event = message.get("event")
-    if not isinstance(event, str) or event not in _RELAYED_EVENTS:
-        return None
+    if not isinstance(event, str) or not event:
+        return None, "<no_event_field>", "no_event_field"
+    if event not in _RELAYED_EVENTS:
+        return None, event, "not_subscribed"
 
     data = message.get("data")
-    return {
-        "event": event,
-        "data": data if isinstance(data, dict) else {},
-    }
+    return (
+        {"event": event, "data": data if isinstance(data, dict) else {}},
+        event,
+        "",
+    )
