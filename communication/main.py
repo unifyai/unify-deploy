@@ -145,6 +145,7 @@ class CommunicationInfraRuntimeActivator:
             "desktop_url": assistant.get("desktop_url") or "",
             "user_desktops": json.dumps(assistant.get("user_desktops") or []),
             "is_coordinator": str(assistant.get("is_coordinator") or False).lower(),
+            "is_multiplayer": str(assistant.get("is_multiplayer") or False).lower(),
             "team_ids": ",".join(str(v) for v in assistant.get("team_ids") or []),
             "team_summaries": json.dumps(assistant.get("team_summaries") or []),
             "self_contact_id": assistant.get("self_contact_id") or 0,

@@ -246,6 +246,23 @@ class Settings:
             "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
             self.gmail_topic,
         )
+        # Multiplayer twin alias email: catch-all domain plus the Workspace
+        # mailbox its deliveries land in. Inbound routes by the recipient
+        # alias; Gmail operations delegate to the mailbox.
+        self.unity_twin_alias_email_domain: str = (
+            (
+                os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+                or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+                or "twins.unify.ai"
+            )
+            .strip()
+            .lower()
+        )
+        self.unity_twin_alias_mailbox: str = (
+            (os.environ.get("UNITY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai")
+            .strip()
+            .lower()
+        )
         self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
         self.client_bundle_bucket: str = os.environ.get(
             "UNITY_CLIENT_BUNDLE_BUCKET",
