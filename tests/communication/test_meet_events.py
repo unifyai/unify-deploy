@@ -129,3 +129,63 @@ def test_relay_closes_the_livekit_client_on_disconnect(livekit) -> None:
     with _client().websocket_connect(url):
         pass
     livekit.aclose.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_classify_reports_why_a_frame_was_skipped() -> None:
+    """A bare relayed count cannot tell "none sent" from "all dropped".
+
+    Both previous diagnoses of missing inbound chat stalled here: the log said
+    one event was forwarded and could not say whether Recall had sent one or
+    forty.
+    """
+    from communication.meet_events import _classify_event
+
+    cases = {
+        '{"event": "participant_events.webcam_on", "data": {}}': "not_subscribed",
+        "not json at all": "bad_json",
+        '{"data": {}}': "no_event_field",
+        "[1, 2]": "not_an_object",
+    }
+    for raw, expected in cases.items():
+        payload, _, reason = _classify_event(raw)
+        assert payload is None
+        assert reason == expected, raw
+
+    payload, name, reason = _classify_event(
+        '{"event": "participant_events.chat_message", "data": {"data": {"text": "hi"}}}',
+    )
+    assert payload is not None and reason == ""
+    assert name == "participant_events.chat_message"
+
+
+def test_unsubscribed_events_keep_their_real_name() -> None:
+    """Tallying by name is what shows Recall sending something unexpected."""
+    from communication.meet_events import _classify_event
+
+    _, name, reason = _classify_event(
+        '{"event": "participant_events.screenshare_on", "data": {}}',
+    )
+    assert name == "participant_events.screenshare_on"
+    assert reason == "not_subscribed"
+
+
+def test_close_tally_survives_an_abrupt_socket_death(livekit) -> None:
+    """Cloud Run kills the socket at its request deadline, not cleanly.
+
+    The tally is logged from ``finally`` so a timeout-killed connection still
+    reports what it saw -- the previous version logged only on a clean
+    WebSocketDisconnect.
+    """
+    import inspect
+
+    import communication.meet_events as module
+
+    source = inspect.getsource(module.recall_meeting_events)
+    finally_block = source.split("finally:", 1)[1]
+    assert "recall_relay_closed" in finally_block
+    assert '"received"' in finally_block
