@@ -111,10 +111,6 @@ async def test_parse_duplicate_live_lease_raises_duplicate_attempt(monkeypatch) 
         def run_ledger_factory(_run_id):
             return _Ledger()
 
-        @staticmethod
-        def cost_ledger_factory(_run_id):
-            return _Ledger()
-
     item = ReceivedWorkItem(
         message_id="parse-msg-1",
         topic="parse",
