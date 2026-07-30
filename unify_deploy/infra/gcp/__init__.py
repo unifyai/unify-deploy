@@ -1,6 +1,6 @@
 from .artifact_store import GcsArtifactStore
 from .deployment_stores import GcsDeploymentBundleStore, GcsDeploymentJobStore
-from .ledgers import GcsCostLedger, GcsRunLedger
+from .ledgers import GcsRunLedger
 from .settings import (
     GcpPipelineSettings,
     GcsArtifactStoreSettings,
@@ -12,7 +12,6 @@ __all__ = [
     "GcpPipelineSettings",
     "GcsArtifactStore",
     "GcsArtifactStoreSettings",
-    "GcsCostLedger",
     "GcsDeploymentBundleStore",
     "GcsDeploymentJobStore",
     "GcsRunLedger",

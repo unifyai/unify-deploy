@@ -1,4 +1,12 @@
-"""GCS-backed implementation of the ArtifactStore protocol."""
+"""GCS-backed implementation of the ArtifactStore protocol.
+
+Leases, checkpoints and the errors they raise are defined by the port in
+``unify.common.pipeline.artifact_store`` and imported here, not redeclared. The
+worker handlers are shared across bindings, so a duplicate definition would let
+this backend and the local one drift apart in exactly the semantics --
+monotonicity, generation fencing, takeover of an expired holder -- that make a
+run resumable.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +15,6 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -16,7 +23,13 @@ from urllib.parse import urlparse
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
-from unify.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
+from unify.common.pipeline.artifact_store import (
+    CONTENT_ROWS_TABLE_ID,
+    ArtifactNotFound,
+    LeaseNotAcquired,
+    LeaseRecord,
+    StaleLeaseError,
+)
 from unify.common.pipeline.retry_policy import ResilientRequestPolicy
 from unify.common.pipeline.row_streaming import iter_table_input_rows
 from unify.common.pipeline.types import (
@@ -28,34 +41,6 @@ from unify.common.pipeline.types import (
 from .settings import GcsArtifactStoreSettings
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class LeaseRecord:
-    """Persistent GCS lease state used to fence duplicate worker attempts."""
-
-    key: str
-    owner_id: str
-    attempt_id: str
-    stage: str
-    acquired_at: str
-    heartbeat_at: str
-    expires_at: str
-    generation: int | None
-    takeover_count: int = 0
-    previous_owner_id: str = ""
-
-
-class LeaseNotAcquired(RuntimeError):
-    """Raised when another live worker owns a persistent job lease."""
-
-    def __init__(self, message: str, *, lease: LeaseRecord | None = None):
-        super().__init__(message)
-        self.lease = lease
-
-
-class StaleLeaseError(RuntimeError):
-    """Raised when a worker tries to write with stale lease ownership."""
 
 
 class GcsArtifactStore:
@@ -467,10 +452,16 @@ class GcsArtifactStore:
     def get_json(self, key: str) -> Any:
         blob_key = self._full_key(key)
         blob = self.bucket.blob(blob_key)
-        content = self._with_retry(
-            lambda: blob.download_as_text(encoding="utf-8"),
-            operation=f"get_json({key})",
-        )
+        try:
+            content = self._with_retry(
+                lambda: blob.download_as_text(encoding="utf-8"),
+                operation=f"get_json({key})",
+            )
+        except NotFound as exc:
+            # Translated to the port's type so a caller distinguishing "absent"
+            # from "unreachable" -- reading a checkpoint that may not exist yet
+            # is the common one -- works the same against either binding.
+            raise ArtifactNotFound(f"Artifact not found: {key}") from exc
         return json.loads(content)
 
     def exists(self, key: str) -> bool:
@@ -627,9 +618,9 @@ class GcsArtifactStore:
         key = f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
         try:
             data = self.get_json(key)
-            return IngestCheckpoint.model_validate(data)
-        except NotFound:
+        except ArtifactNotFound:
             return None
+        return IngestCheckpoint.model_validate(data)
 
     # -- retry wrapper -------------------------------------------------------
 

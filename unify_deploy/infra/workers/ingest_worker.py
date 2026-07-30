@@ -32,26 +32,27 @@ import logging
 import os
 import tempfile
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 from unify.common.pipeline import (
-    ArtifactWorkItem,
     CancellationCheck,
+    CheckpointedIngest,
+    DuplicateLiveAttempt,
     IngestPlan,
     PipelineCancelled,
     PipelineInstrumentation,
-    ingest_artifacts,
+    TableWork,
+    incomplete_tables,
 )
+from unify.ingestion_manager.settings import IngestionSettings
 from unify.common.pipeline._utils import utc_now_iso
 from unify.common.pipeline.run_ledger import PipelineStageManifest
 from unify.common.pipeline.types import (
     AttachmentCallback,
     CsvFileHandle,
     IngestBinding,
-    IngestCheckpoint,
     IngestRequested,
     ObjectStoreArtifactHandle,
     TableInputHandle,
@@ -62,17 +63,12 @@ from unify.common.context_registry import ContextRegistry
 from unify.session_details import SESSION_DETAILS
 
 from .assistant_key_resolver import ResolvedAssistant, resolve_assistant
-from unify_deploy.infra.gcp.artifact_store import (
-    LeaseNotAcquired,
-    LeaseRecord,
-    StaleLeaseError,
-)
 from unify_deploy.infra.gcp.pipeline_observability import (
     PipelineJobEvent,
     make_receipt_hash,
     write_job_event,
 )
-from .worker_utils import DuplicateLiveAttempt, is_shutdown_requested
+from .worker_utils import is_shutdown_requested
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
@@ -89,79 +85,6 @@ _PRIVATE_INGEST_KEY = "_unity_ingest_key"
 # RetryWorkItem so the entrypoint nacks for immediate redelivery (mirrors the
 # retryable-lease-error -> DuplicateLiveAttempt re-raise).
 _SURRENDER_SENTINEL = "surrendering in-flight chunk"
-
-
-@dataclass
-class _ActiveIngestLease:
-    key: str
-    owner_id: str
-    attempt_id: str
-    generation: int | None
-
-
-# Module-level registry of GCS attempt-leases currently held by this worker
-# process. The per-table ingest path releases its lease on every exit, but this
-# registry lets the handle_ingest_message ``finally`` release any lease still
-# held (e.g. if an exception skipped the per-table cleanup) so a terminated pod
-# never strands a lease for a survivor to wait out (the orphaned-lease stall:
-# the survivor would otherwise defer ~TTL+grace before it could take over).
-_active_ingest_leases: dict[str, _ActiveIngestLease] = {}
-
-
-def _track_ingest_lease(lease: _ActiveIngestLease) -> None:
-    _active_ingest_leases[lease.key] = lease
-
-
-def _release_ingest_lease(
-    artifact_store: Any,
-    lease: _ActiveIngestLease,
-    *,
-    reason: str,
-) -> None:
-    """Best-effort release of a GCS attempt-lease held by this attempt.
-
-    Releasing promptly (instead of waiting for TTL expiry) lets a fresh
-    delivery acquire the lease and resume from checkpoint immediately. Ownership
-    is verified inside ``release_lease``; a lease already taken over by another
-    attempt raises :class:`StaleLeaseError` and is left untouched.
-    """
-    _active_ingest_leases.pop(lease.key, None)
-    try:
-        artifact_store.release_lease(
-            lease.key,
-            owner_id=lease.owner_id,
-            attempt_id=lease.attempt_id,
-            generation=lease.generation,
-        )
-        logger.info("[ingest] Released attempt lease key=%s (%s)", lease.key, reason)
-    except StaleLeaseError:
-        logger.info(
-            "[ingest] Attempt lease key=%s already taken over; skipping release",
-            lease.key,
-        )
-    except Exception:
-        logger.debug(
-            "[ingest] Best-effort lease release failed key=%s",
-            lease.key,
-            exc_info=True,
-        )
-
-
-def _release_tracked_job_leases(artifact_store: Any, job_id: str) -> None:
-    """Backstop release of any leases still tracked for ``job_id``.
-
-    No-op when the per-table ingest path already released everything (the common
-    case). Scoped by the job's lease-key prefix so it never touches another
-    in-flight job's lease.
-    """
-    prefix = f"jobs/{job_id}/leases/"
-    for key, lease in list(_active_ingest_leases.items()):
-        if key.startswith(prefix):
-            _release_ingest_lease(
-                artifact_store,
-                lease,
-                reason="handle_ingest_message finally backstop",
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -522,153 +445,6 @@ def _spawn_control_watcher(
 # ---------------------------------------------------------------------------
 
 
-def _make_checkpoint_callback(
-    artifact_store: Any,
-    job_id: str,
-    artifact_id: str,
-    *,
-    attempt_id: str = "",
-    lease: _ActiveIngestLease | None = None,
-    initial_rows: int = 0,
-    initial_chunks: int = 0,
-    total_rows: int | None = None,
-    file_path: str = "",
-    chunk_size: int | None = None,
-    log_every_chunks: int = 10,
-    is_cancelled: CancellationCheck | None = None,
-):
-    """Return an ``on_task_complete`` callback that writes GCS checkpoints.
-
-    The callback is fired by ``PipelineExecutor._notify()`` after each
-    pipeline task completes inside ``dm.ingest()``.  Only
-    ``insert_chunk_*`` tasks trigger a checkpoint write; other task types
-    (``create_table``, ``embed_*``, etc.) are ignored.
-
-    When *is_cancelled* is supplied, the callback polls it after each
-    chunk checkpoint and raises ``PipelineCancelled`` to unwind the
-    executor's pipeline, giving per-chunk cancellation granularity.
-    """
-    state = {
-        "rows": initial_rows,
-        "chunks": initial_chunks,
-        "last_rows": initial_rows,
-        "last_logged_at": time.perf_counter(),
-    }
-    log_every = max(int(log_every_chunks), 1)
-
-    def _on_task_complete(task, result):
-        if not getattr(task, "task_type", "").startswith("insert_chunk"):
-            return
-        value = getattr(result, "value", None) or {}
-        if isinstance(value, dict):
-            row_count = int(value.get("row_count", 0) or 0)
-        else:
-            row_count = 0
-        state["rows"] += row_count
-        state["chunks"] += 1
-        checkpoint = IngestCheckpoint(
-            job_id=job_id,
-            artifact_id=artifact_id,
-            chunks_committed=state["chunks"],
-            rows_committed=state["rows"],
-            last_updated=utc_now_iso(),
-            attempt_id=attempt_id,
-            lease_generation=lease.generation if lease is not None else None,
-        )
-        try:
-            checkpoint_started = time.perf_counter()
-            if lease is not None:
-                _refresh_ingest_lease(artifact_store, lease)
-            artifact_store.write_checkpoint(
-                job_id,
-                artifact_id,
-                checkpoint,
-                attempt_id=attempt_id,
-                lease_generation=lease.generation if lease is not None else None,
-            )
-            try:
-                write_job_event(
-                    artifact_store,
-                    PipelineJobEvent(
-                        event_type="checkpoint_progress",
-                        job_id=job_id,
-                        stage="ingest",
-                        table_id=artifact_id,
-                        attempt_id=attempt_id,
-                        rows_committed=checkpoint.rows_committed,
-                        chunks_committed=checkpoint.chunks_committed,
-                        next_action="continue",
-                        metadata={
-                            "file_path": file_path,
-                            "total_rows": total_rows,
-                            "chunk_size": chunk_size,
-                        },
-                    ),
-                )
-            except Exception:
-                logger.debug(
-                    "[ingest] Failed to write checkpoint event job=%s artifact=%s",
-                    job_id,
-                    artifact_id,
-                    exc_info=True,
-                )
-            checkpoint_write_ms = (time.perf_counter() - checkpoint_started) * 1000
-        except Exception:
-            checkpoint_write_ms = -1.0
-            logger.warning(
-                "[ingest] Failed to write checkpoint job=%s artifact=%s",
-                job_id,
-                artifact_id,
-                exc_info=True,
-            )
-            raise
-
-        should_log = (
-            state["chunks"] == initial_chunks + 1
-            or state["chunks"] % log_every == 0
-            or (total_rows is not None and state["rows"] >= total_rows)
-        )
-        if should_log:
-            now = time.perf_counter()
-            elapsed_since_log = max(now - state["last_logged_at"], 1e-6)
-            rows_since_log = max(state["rows"] - state["last_rows"], 0)
-            rows_per_second = rows_since_log / elapsed_since_log
-            remaining_rows = (
-                max(total_rows - state["rows"], 0) if total_rows is not None else None
-            )
-            eta_seconds = (
-                remaining_rows / rows_per_second
-                if remaining_rows is not None and rows_per_second > 0
-                else None
-            )
-            percent = (state["rows"] / total_rows) * 100 if total_rows else None
-            logger.info(
-                "[ingest][progress] job=%s file=%s table=%s chunks=%d rows=%d/%s "
-                "chunk_size=%s pct=%s rows_per_s=%.1f checkpoint_ms=%.1f eta_s=%s",
-                job_id,
-                file_path or "-",
-                artifact_id,
-                state["chunks"],
-                state["rows"],
-                total_rows if total_rows is not None else "?",
-                chunk_size if chunk_size is not None else "?",
-                f"{percent:.1f}" if percent is not None else "?",
-                rows_per_second,
-                checkpoint_write_ms,
-                f"{eta_seconds:.0f}" if eta_seconds is not None else "?",
-            )
-            state["last_logged_at"] = now
-            state["last_rows"] = state["rows"]
-
-        if is_cancelled and is_cancelled():
-            raise PipelineCancelled(
-                f"Job {job_id} cancelled during ingestion "
-                f"(after {state['chunks']} chunks, {state['rows']} rows)",
-            )
-
-    return _on_task_complete
-
-
 # ---------------------------------------------------------------------------
 # Per-message UNIFY_KEY lifecycle
 # ---------------------------------------------------------------------------
@@ -853,138 +629,6 @@ def _mark_ingest_running(
         logger.debug("Could not write ingest_attempt_started event for %s", msg.job_id)
 
 
-def _lease_key(job_id: str, table_id: str) -> str:
-    safe_table = str(table_id or "table").replace("/", "_")
-    return f"jobs/{job_id}/leases/ingest-{safe_table}.json"
-
-
-def _new_owner_id(stage: str) -> str:
-    pod = os.environ.get("HOSTNAME") or "unknown-pod"
-    return f"{stage}:{pod}:{uuid.uuid4().hex[:12]}"
-
-
-def _acquire_ingest_lease(
-    artifact_store: Any,
-    *,
-    job_id: str,
-    table_id: str,
-    attempt_id: str,
-) -> _ActiveIngestLease:
-    owner_id = _new_owner_id("ingest")
-    key = _lease_key(job_id, table_id)
-    try:
-        record: LeaseRecord = artifact_store.acquire_lease(
-            key,
-            owner_id=owner_id,
-            attempt_id=attempt_id,
-            stage="ingest",
-            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "480")),
-        )
-    except LeaseNotAcquired as exc:
-        lease = exc.lease
-        logger.info(
-            "[ingest] Duplicate live attempt for job=%s table=%s owner=%s "
-            "expires_at=%s; acking duplicate message",
-            job_id,
-            table_id,
-            lease.owner_id if lease else "?",
-            lease.expires_at if lease else "?",
-        )
-        raise DuplicateLiveAttempt(
-            str(exc),
-            stage="ingest",
-            lease=lease,
-        ) from exc
-    logger.info(
-        "[ingest] Acquired attempt lease job=%s table=%s owner=%s attempt=%s "
-        "generation=%s",
-        job_id,
-        table_id,
-        record.owner_id,
-        record.attempt_id,
-        record.generation,
-    )
-    return _ActiveIngestLease(
-        key=key,
-        owner_id=owner_id,
-        attempt_id=attempt_id,
-        generation=record.generation,
-    )
-
-
-def _refresh_ingest_lease(artifact_store: Any, lease: _ActiveIngestLease) -> None:
-    try:
-        renewed = artifact_store.refresh_lease(
-            lease.key,
-            owner_id=lease.owner_id,
-            attempt_id=lease.attempt_id,
-            generation=lease.generation,
-            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "480")),
-        )
-    except StaleLeaseError:
-        raise
-    lease.generation = renewed.generation
-
-
-def _is_retryable_lease_error(error: str | None) -> bool:
-    text = str(error or "")
-    return text.startswith("Lease ") and (
-        " is owned by " in text
-        or " owner changed " in text
-        or " generation changed " in text
-    )
-
-
-def _declared_table_totals(plan: IngestPlan) -> dict[str, int]:
-    """Map ``table_id -> declared row_count`` for a DM ingest plan.
-
-    Mirrors the strict row-count resolution used when building work items
-    (manifest ``meta.row_count``, falling back to the streaming handle's
-    ``row_count``). Tables without a resolvable count are omitted.
-    """
-    totals: dict[str, int] = {}
-    table_inputs = plan.table_inputs or {}
-    for meta in plan.tables_meta or []:
-        table_id = str(meta.table_id or "")
-        if not table_id:
-            continue
-        handle = table_inputs.get(table_id)
-        declared = (
-            meta.row_count
-            if meta.row_count is not None
-            else getattr(handle, "row_count", None)
-        )
-        if declared is None:
-            continue
-        totals[table_id] = int(declared)
-    return totals
-
-
-def _incomplete_dm_tables(
-    plan: IngestPlan,
-    artifact_store: Any,
-    job_id: str,
-) -> list[tuple[str, int, int]]:
-    """Return ``(table_id, rows_committed, declared_row_count)`` for any DM
-    table whose durable checkpoint is short of the parser-declared total.
-
-    This is the authoritative completion check used at finalization to
-    refuse a false ``success`` when ingestion returns without error but the
-    checkpoint never reached the declared total (e.g. a duplicate
-    redelivery acking from a stalled checkpoint).
-    """
-    shorts: list[tuple[str, int, int]] = []
-    for table_id, declared in _declared_table_totals(plan).items():
-        try:
-            ckpt = artifact_store.read_checkpoint(job_id, table_id)
-        except Exception:
-            ckpt = None
-        committed = int(getattr(ckpt, "rows_committed", 0) or 0) if ckpt else 0
-        if committed < declared:
-            shorts.append((table_id, committed, declared))
-    return shorts
-
-
 def _enforce_ingest_completion(
     *,
     plan: IngestPlan,
@@ -1007,14 +651,25 @@ def _enforce_ingest_completion(
     The job is kept non-terminal across resume attempts on purpose: a
     terminal status would be acked without work by the duplicate-terminal
     fast path at the top of :func:`handle_ingest_message`.
+
+    The shortfall itself is computed by the shared engine, so the fleet and
+    in-process execution measure completeness the same way. What is specific
+    here is the bounded resume-then-dead-letter policy, which needs the queue.
     """
-    shorts = _incomplete_dm_tables(plan, artifact_store, run_id)
+    shorts = incomplete_tables(
+        _table_work_from_plan(plan, msg=msg, default_target=msg.target_context),
+        artifact_store=artifact_store,
+        job_id=run_id,
+    )
     if not shorts:
         return
 
-    detail = "; ".join(f"{t}: {c}/{d}" for t, c, d in shorts)
-    max_retries = int(os.environ.get("UNITY_INGEST_INCOMPLETE_MAX_RETRIES", "5"))
-    retry_delay = int(os.environ.get("UNITY_INGEST_INCOMPLETE_RETRY_SECONDS", "15"))
+    detail = "; ".join(
+        f"{t.table_id}: {t.rows_committed}/{t.declared_rows}" for t in shorts
+    )
+    settings = IngestionSettings()
+    max_retries = settings.INCOMPLETE_MAX_RETRIES
+    retry_delay = settings.INCOMPLETE_RETRY_SECONDS
 
     attempt = 0
     exhausted = False
@@ -1026,8 +681,8 @@ def _enforce_ingest_completion(
             **(job.metadata or {}),
             "incomplete_retry_attempt": attempt,
             "incomplete_detail": detail,
-            "rows_expected": sum(d for _, _, d in shorts),
-            "rows_committed_short": sum(c for _, c, _ in shorts),
+            "rows_expected": sum(t.declared_rows for t in shorts),
+            "rows_committed_short": sum(t.rows_committed for t in shorts),
         }
         if exhausted and job.status not in ("cancelled", "paused"):
             # Bounded backstop: stop resuming and surface the shortfall.
@@ -1130,7 +785,6 @@ async def handle_ingest_message(
     work_queue = infra.work_queue
     job_store = infra.job_store
     run_ledger = infra.run_ledger_factory(run_id)
-    cost_ledger = infra.cost_ledger_factory(run_id)
 
     is_terminal, terminal_status = _is_terminal_job(job_store, run_id)
     if is_terminal:
@@ -1142,10 +796,8 @@ async def handle_ingest_message(
         if ack_receipt is not None:
             await ack_receipt()
             run_ledger.close()
-            cost_ledger.close()
             return True
         run_ledger.close()
-        cost_ledger.close()
         return False
 
     logger.info(
@@ -1263,11 +915,16 @@ async def handle_ingest_message(
                     "finalized_before_ack": overall_error is None,
                 }
                 if msg.ingestion_mode != "fm":
-                    declared_totals = _declared_table_totals(plan)
-                    if declared_totals:
-                        metadata_updates["rows_expected"] = sum(
-                            declared_totals.values(),
+                    declared = sum(
+                        entry.declared_rows
+                        for entry in _table_work_from_plan(
+                            plan,
+                            msg=msg,
+                            default_target=msg.target_context,
                         )
+                    )
+                    if declared:
+                        metadata_updates["rows_expected"] = declared
                 job.metadata = {
                     **(job.metadata or {}),
                     **metadata_updates,
@@ -1288,7 +945,6 @@ async def handle_ingest_message(
             logger.info("[ingest] Acked job=%s after success finalization", run_id)
 
         run_ledger.flush()
-        cost_ledger.flush()
 
         logger.info(
             "[ingest] Completed job=%s, %d rows in %.1fs",
@@ -1443,20 +1099,10 @@ async def handle_ingest_message(
             await watch.stop()
         except Exception:
             logger.debug("[ingest] control watcher stop failed for job=%s", run_id)
-        # Backstop: release any GCS attempt-lease still held for this job. The
-        # per-table ingest path already releases on its own exit, so this is a
-        # no-op in the common case; it only fires if an exception skipped that
-        # cleanup, preventing an orphaned lease from stalling a survivor pod.
-        try:
-            _release_tracked_job_leases(artifact_store, run_id)
-        except Exception:
-            logger.debug(
-                "[ingest] lease backstop release failed for job=%s",
-                run_id,
-                exc_info=True,
-            )
+        # No lease backstop here: CheckpointedIngest releases every lease it
+        # holds in its own ``finally``, including when an exception skips the
+        # per-table path, so an orphaned lease can no longer stall a survivor.
         run_ledger.close()
-        cost_ledger.close()
         scratch_dir_ctx.cleanup()
     return acked
 
@@ -1550,7 +1196,6 @@ async def _run_fm_mode_inner(
 
     total_rows = 0
     error: str | None = None
-    retryable_lease_error: str | None = None
     start = time.perf_counter()
     try:
         with instrumentation:
@@ -1771,7 +1416,18 @@ async def _run_dm_mode_inner(
     is_cancelled: CancellationCheck | None = None,
     should_surrender: Callable[[], bool] | None = None,
 ) -> tuple[int, str | None]:
-    """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
+    """Body of DM dispatch, run inside the per-message UNIFY_KEY scope.
+
+    The ingest itself is :class:`CheckpointedIngest`, which is the same engine
+    in-process ingestion uses. That is deliberate and load-bearing: leases,
+    checkpoints, the duplicate-delivery fast path and the completion check are
+    the guarantees that make a run resumable, and a second copy of them here
+    would let the two tiers drift apart in exactly those semantics.
+
+    What remains worker-specific is the surroundings -- resolving the plan's
+    tables into work, translating a surrender into a nack, and writing the stage
+    manifest.
+    """
     from unify.data_manager import DataManager
     from unify.file_manager.types.config import FilePipelineConfig
 
@@ -1793,323 +1449,61 @@ async def _run_dm_mode_inner(
         file_count=1,
     )
 
-    artifact_store = infra.artifact_store
-    gcs_client = infra.storage_client
-    attempt_id = uuid.uuid4().hex
+    work = _table_work_from_plan(plan, msg=msg, default_target=default_target)
 
-    work_items: list[ArtifactWorkItem] = []
-    missing_inputs: list[str] = []
-    for meta in plan.tables_meta:
-        table_id = str(meta.table_id or "")
-        handle = (plan.table_inputs or {}).get(table_id)
-        if handle is None:
-            missing_inputs.append(table_id or str(meta.label or "unknown"))
-            continue
-        columns = list(meta.columns or []) or list(
-            getattr(handle, "columns", []) or [],
-        )
-        declared_row_count = (
-            meta.row_count
-            if meta.row_count is not None
-            else getattr(handle, "row_count", None)
-        )
-        if declared_row_count is None:
-            raise RuntimeError(
-                f"Ingest manifest table={table_id} has no declared row_count; "
-                "strict row-count validation requires parser counts.",
-            )
-        row_count = int(declared_row_count)
-        target_context = meta.context or default_target
-
-        fields = (
-            {
-                name: {"description": desc}
-                for name, desc in meta.column_descriptions.items()
-            }
-            if meta.column_descriptions
-            else None
-        )
-        fields = dict(fields or {})
-        fields.setdefault(_PRIVATE_INGEST_KEY, "str")
-        unique_keys = {_PRIVATE_INGEST_KEY: "str"}
-
-        post_ingest_config = None
-        if meta.post_ingest:
-            from unify.data_manager.types.ingest import PostIngestConfig
-
-            post_ingest_config = PostIngestConfig.model_validate(meta.post_ingest)
-
-        ckpt = artifact_store.read_checkpoint(msg.job_id, table_id)
-        skip_rows = ckpt.rows_committed if ckpt else 0
-        initial_chunks = ckpt.chunks_committed if ckpt else 0
-        if ckpt:
-            logger.info(
-                "[ingest][dm] Resuming table=%s from checkpoint: "
-                "%d rows, %d chunks already committed",
-                table_id,
-                skip_rows,
-                initial_chunks,
-            )
-        work_items.append(
-            ArtifactWorkItem(
-                kind="table",
-                label=str(meta.label or table_id or "table"),
-                stage_name="ingest_table",
-                payload={
-                    "dm": dm,
-                    "context": target_context,
-                    "destination": dm_binding.destination,
-                    "handle": handle,
-                    "batch_size": meta.chunk_size or msg.batch_size,
-                    "description": meta.description,
-                    "fields": fields,
-                    "unique_keys": unique_keys,
-                    "embed_columns": meta.embed_columns,
-                    "embed_strategy": meta.embed_strategy,
-                    "post_ingest": post_ingest_config,
-                    "skip_rows": skip_rows,
-                    "initial_chunks": initial_chunks,
-                    "table_id": table_id,
-                    "storage_client": gcs_client,
-                    "attempt_id": attempt_id,
-                },
-                columns=columns,
-                row_count=row_count,
-                table_id=table_id or None,
-                stage_id=instrumentation.make_stage_id(
-                    file_path=plan.file_path,
-                    stage_name="ingest_table",
-                    discriminator=table_id or str(meta.label or ""),
-                ),
-                meta={
-                    "row_count": row_count,
-                    "table_label": meta.label,
-                    "column_count": len(columns),
-                    "source_handle_type": type(handle).__name__,
-                    "context": target_context,
-                },
-            ),
-        )
-    if missing_inputs:
-        raise RuntimeError(
-            f"Ingest manifest missing table input handles for {missing_inputs}; "
-            "refusing partial ingest.",
-        )
-    if not work_items and plan.tables_meta:
-        raise RuntimeError("Ingest manifest did not produce any table work items.")
-
-    def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
-        pl = item.payload
-        table_id = pl.get("table_id", "")
-
-        # Duplicate-delivery fast path: if this table is already fully committed
-        # per the durable checkpoint, a redelivered message has no work to do.
-        # Treat it as done (so the message acks) instead of acquiring a lease and
-        # raising DuplicateLiveAttempt, which would otherwise churn on short
-        # retries even though there is nothing left to ingest.
-        #
-        # Gated on a known declared total (item.row_count): we never short-circuit
-        # to "complete" when the total is unknown. A stalled checkpoint that has
-        # NOT reached row_count falls through to a real ingest, and the
-        # finalization gate (_enforce_ingest_completion) is the backstop that
-        # refuses success if the checkpoint is still short at the end.
-        if item.row_count is not None:
-            try:
-                existing_ckpt = artifact_store.read_checkpoint(msg.job_id, table_id)
-            except Exception:
-                existing_ckpt = None
-            if (
-                existing_ckpt is not None
-                and existing_ckpt.rows_committed >= item.row_count
-            ):
-                logger.info(
-                    "[ingest] Table already complete (rows_committed=%s >= "
-                    "total=%s); acking duplicate for job=%s table=%s",
-                    existing_ckpt.rows_committed,
-                    item.row_count,
-                    msg.job_id,
-                    table_id,
-                )
-                return {
-                    "row_count": int(existing_ckpt.rows_committed),
-                    "already_complete": True,
-                }
-
-        lease = _acquire_ingest_lease(
-            artifact_store,
-            job_id=msg.job_id,
-            table_id=table_id,
-            attempt_id=pl.get("attempt_id", ""),
-        )
-        pl["lease"] = lease
-        _track_ingest_lease(lease)
-
-        def _before_insert_chunk(**_kwargs) -> None:
-            if is_cancelled and is_cancelled():
-                raise PipelineCancelled(
-                    f"Job {msg.job_id} cancelled before next DM chunk",
-                )
-            # A SIGTERM (HPA scale-down / rollout) or the Pub/Sub lease-lifetime
-            # cap both mean we must stop owning this message. Unwind at this safe
-            # between-chunk boundary and raise RetryWorkItem (not a generic
-            # error) so the entrypoint nacks for immediate redelivery; the outer
-            # finally releases the GCS attempt-lease so a fresh pod resumes from
-            # the durable checkpoint with no orphaned lease to wait out.
-            if is_shutdown_requested():
-                raise RetryWorkItem(
-                    f"Job {msg.job_id} {_SURRENDER_SENTINEL}: worker shutting "
-                    "down; will resume from checkpoint",
-                    delay_seconds=float(
-                        os.environ.get("UNITY_INGEST_SURRENDER_RETRY_SECONDS", "30"),
-                    ),
-                )
-            if should_surrender and should_surrender():
-                raise RetryWorkItem(
-                    f"Job {msg.job_id} {_SURRENDER_SENTINEL}: lease lifetime cap "
-                    "reached; will resume from checkpoint",
-                    delay_seconds=float(
-                        os.environ.get("UNITY_INGEST_SURRENDER_RETRY_SECONDS", "30"),
-                    ),
-                )
-            _refresh_ingest_lease(artifact_store, lease)
-
-        on_complete = _make_checkpoint_callback(
-            artifact_store,
-            msg.job_id,
-            pl.get("table_id", ""),
-            attempt_id=pl.get("attempt_id", ""),
-            lease=lease,
-            initial_rows=pl.get("skip_rows", 0),
-            initial_chunks=pl.get("initial_chunks", 0),
-            total_rows=item.row_count,
-            file_path=plan.file_path,
-            chunk_size=pl["batch_size"],
-            is_cancelled=is_cancelled,
-        )
-        ingest_started = time.perf_counter()
-        logger.info(
-            "[ingest][dm] Starting table=%s file=%s total_rows=%s "
-            "chunk_size=%s skip_rows=%s initial_chunks=%s",
-            pl.get("table_id", ""),
-            plan.file_path,
-            item.row_count if item.row_count is not None else "?",
-            pl["batch_size"],
-            pl.get("skip_rows", 0),
-            pl.get("initial_chunks", 0),
-        )
-        try:
-            result = pl["dm"].ingest(
-                pl["context"],
-                None,
-                destination=pl.get("destination"),
-                table_input_handle=pl["handle"],
-                chunk_size=pl["batch_size"],
-                description=pl.get("description"),
-                fields=pl.get("fields"),
-                unique_keys=pl.get("unique_keys"),
-                embed_columns=pl.get("embed_columns"),
-                embed_strategy=pl.get("embed_strategy", "off"),
-                post_ingest=pl.get("post_ingest"),
-                on_task_complete=on_complete,
-                storage_client=pl.get("storage_client"),
-                skip_rows=pl.get("skip_rows", 0),
-                expected_total_rows=(
-                    item.row_count if item.row_count is not None else None
-                ),
-                private_ingest_key_column=_PRIVATE_INGEST_KEY,
-                private_ingest_key_prefix=(
-                    f"{msg.dispatch_id or 'dispatch'}:{msg.job_id}:"
-                    f"{pl.get('table_id', '')}"
-                ),
-                before_insert_chunk=_before_insert_chunk,
-            )
-        finally:
-            # Release on every exit (success, surrender/shutdown via
-            # RetryWorkItem, cancel, or error) so the next delivery resumes
-            # immediately instead of waiting out the lease TTL.
-            _release_ingest_lease(
-                artifact_store,
-                lease,
-                reason="table attempt ended",
-            )
-        elapsed = time.perf_counter() - ingest_started
-        rows_inserted = int(getattr(result, "rows_inserted", 0) or 0)
-        logger.info(
-            "[ingest][dm] Finished table=%s file=%s inserted_rows=%d "
-            "elapsed_s=%.1f rows_per_s=%.1f",
-            pl.get("table_id", ""),
-            plan.file_path,
-            rows_inserted,
-            elapsed,
-            rows_inserted / elapsed if elapsed > 0 else 0.0,
-        )
-        return {
-            "ingest_result": result,
-            "context": pl["context"],
-            "row_count": rows_inserted,
-        }
+    engine = CheckpointedIngest(
+        artifact_store=infra.artifact_store,
+        job_id=msg.job_id,
+        lease_ttl_seconds=int(
+            getattr(infra.settings, "lease_ttl_seconds", 900) or 900,
+        ),
+    )
 
     total_rows = 0
     error: str | None = None
-    retryable_lease_error: str | None = None
-    surrender_error: str | None = None
     start = time.perf_counter()
     try:
         with instrumentation:
-            artifact_results = ingest_artifacts(
-                work_items=work_items,
-                ingest_fn=_dm_ingest_fn,
-                instrumentation=instrumentation,
+            outcome = engine.run(
+                work,
+                dm=dm,
+                destination=dm_binding.destination,
                 source_path=plan.file_path,
-                max_workers=1,
-                retry_config=config.retry,
+                instrumentation=instrumentation,
                 is_cancelled=is_cancelled,
+                # A SIGTERM (HPA scale-down, rollout) or the queue's
+                # lease-lifetime cap both mean this attempt must stop owning the
+                # message. Surrendering between chunks leaves the checkpoint
+                # current and the lease released, so a replacement pod resumes
+                # having lost at most one chunk.
+                should_surrender=(
+                    should_surrender
+                    if should_surrender is not None
+                    else is_shutdown_requested
+                ),
+                retry_config=config.retry,
+                storage_client=infra.storage_client,
+                # Verified by the caller's bounded-resume gate rather than here,
+                # so a shortfall becomes a nack-and-resume before it becomes a
+                # failure. The gap is still reported on the outcome.
+                verify=False,
             )
-        for ar in artifact_results:
-            if ar.success:
-                total_rows += int(
-                    getattr(ar, "rows_inserted", 0)
-                    or (
-                        ar.value.get("row_count", 0)
-                        if isinstance(ar.value, dict)
-                        else 0
-                    ),
-                )
-            elif error is None:
-                error = ar.error or "ingest failed"
-            if retryable_lease_error is None and _is_retryable_lease_error(ar.error):
-                retryable_lease_error = ar.error
-            if surrender_error is None and _SURRENDER_SENTINEL in str(ar.error or ""):
-                surrender_error = ar.error
+        total_rows = outcome.rows_committed
+        failures = [table for table in outcome.failed if table.error]
+        if failures:
+            error = failures[0].error or "ingest failed"
     except RetryWorkItem:
-        # A surrender that propagated directly (e.g. run_with_retry bypassed):
-        # let it flow to the entrypoint for an immediate nack/redelivery.
+        # A surrender: let it reach the entrypoint for an immediate nack and
+        # resume-from-checkpoint, rather than finalizing a terminal error that
+        # would be acked and never retried.
         raise
     except PipelineCancelled:
         raise
     except DuplicateLiveAttempt:
         raise
     except Exception as exc:
-        error = str(exc) or "ingest_artifacts raised"
+        error = str(exc) or "checkpointed ingest raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
-
-    # A shutdown / lease-lifetime-cap surrender is captured by run_with_retry as
-    # an error string; re-raise it as RetryWorkItem so the entrypoint nacks for
-    # immediate redelivery and resume-from-checkpoint, instead of finalizing the
-    # job as a terminal error (which would be acked and never resumed).
-    if surrender_error is not None:
-        raise RetryWorkItem(
-            surrender_error,
-            delay_seconds=float(
-                os.environ.get("UNITY_INGEST_SURRENDER_RETRY_SECONDS", "30"),
-            ),
-        )
-
-    if retryable_lease_error is not None:
-        raise DuplicateLiveAttempt(
-            retryable_lease_error,
-            stage="ingest",
-        )
 
     run_ledger.write(
         PipelineStageManifest(
@@ -2122,12 +1516,87 @@ async def _run_dm_mode_inner(
             meta={
                 "ingestion_mode": "dm",
                 "default_target_context": default_target,
-                "table_count": len(work_items),
+                "table_count": len(work),
                 "total_rows": total_rows,
             },
         ),
     )
     return total_rows, error
+
+
+def _table_work_from_plan(
+    plan: IngestPlan,
+    *,
+    msg: IngestRequested,
+    default_target: str,
+) -> list[TableWork]:
+    """Resolve a plan's tables into work the shared engine can run.
+
+    A table whose row count cannot be resolved is refused rather than ingested
+    with an unknown total. The count is what the completion check holds the
+    durable checkpoint against, so ingesting without one would produce a run
+    that cannot be verified -- and an unverifiable ingest is how a shortfall
+    passes as success.
+    """
+    table_inputs = plan.table_inputs or {}
+    work: list[TableWork] = []
+    missing_inputs: list[str] = []
+
+    for meta in plan.tables_meta or []:
+        table_id = str(meta.table_id or "")
+        handle = table_inputs.get(table_id)
+        if handle is None:
+            missing_inputs.append(table_id or str(meta.label or "unknown"))
+            continue
+
+        declared = (
+            meta.row_count
+            if meta.row_count is not None
+            else getattr(handle, "row_count", None)
+        )
+        if declared is None:
+            raise RuntimeError(
+                f"Ingest manifest table={table_id} has no declared row_count; "
+                "strict row-count validation requires parser counts.",
+            )
+
+        post_ingest = None
+        if meta.post_ingest:
+            from unify.data_manager.types.ingest import PostIngestConfig
+
+            post_ingest = PostIngestConfig.model_validate(meta.post_ingest)
+
+        work.append(
+            TableWork(
+                table_id=table_id,
+                label=str(meta.label or table_id or "table"),
+                context=meta.context or default_target,
+                handle=handle,
+                declared_rows=int(declared),
+                columns=list(meta.columns or [])
+                or list(getattr(handle, "columns", []) or []),
+                chunk_size=meta.chunk_size or msg.batch_size,
+                description=meta.description,
+                column_descriptions=meta.column_descriptions,
+                embed_columns=meta.embed_columns,
+                embed_strategy=meta.embed_strategy,
+                post_ingest=post_ingest,
+                # Scoped to the dispatch as well as the job so two dispatches
+                # writing one context cannot collide on a row key.
+                ingest_key_prefix=(
+                    f"{msg.dispatch_id or 'dispatch'}:{msg.job_id}:{table_id}"
+                ),
+            ),
+        )
+
+    if missing_inputs:
+        raise RuntimeError(
+            f"Ingest manifest missing table input handles for {missing_inputs}; "
+            "refusing partial ingest.",
+        )
+    if not work and plan.tables_meta:
+        raise RuntimeError("Ingest manifest did not produce any table work items.")
+    return work
 
 
 # ---------------------------------------------------------------------------
