@@ -90,7 +90,6 @@ steps:
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       --build-arg MAGNITUDE_SHA=$$MAGNITUDE_SHA \
       --build-arg SYSTEM_REPOS_SHA=$$SYSTEM_SHA \
-      --build-arg UNITY_SHA=$$UNITY_SHA \
       -f /workspace/unity-src/deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \

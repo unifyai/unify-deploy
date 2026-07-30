@@ -66,6 +66,63 @@ memory_watchdog() {
     done
 }
 
+AGENT_SERVICE_PORT="${PORT:-3000}"
+
+# The agent-service is part of the shared desktop substrate, not an
+# interactive-only nicety: web sessions reach it over localhost regardless of
+# whether the pod is running the ConversationManager or a one-shot offline task
+# runner. It used to be started only by the CM's restart-on-key-change path,
+# which left offline pods with nothing listening — a browser-driven scheduled
+# task then failed to connect and looked like a scraper bug.
+#
+# Comes up with the container's own UNIFY_KEY. Interactive pods respawn it with
+# the user's key once session details land (see ``_restart_agent_service_with_key``);
+# offline pods already carry the assistant's own key, so this start is final.
+start_agent_service() {
+    local agent_dir="/app/agent-service"
+    if [ ! -d "$agent_dir" ]; then
+        echo "⬥ agent-service directory not found at $agent_dir, skipping"
+        return
+    fi
+
+    echo "⬥ Starting agent-service..."
+    if [ -f "$agent_dir/dist/index.js" ]; then
+        set -- node --no-deprecation "$agent_dir/dist/index.js"
+    else
+        set -- npx ts-node "$agent_dir/src/index.ts"
+    fi
+
+    (
+        cd "$agent_dir" || exit 0
+        PLAYWRIGHT_BROWSERS_PATH="/home/unity/.cache/ms-playwright" \
+            "$@" >>/var/log/unity/agent-service.log 2>&1 &
+        echo $! >/tmp/agent-service.pid
+    )
+    AGENT_PID=$(cat /tmp/agent-service.pid 2>/dev/null || true)
+}
+
+# Readiness is a TCP listen check rather than an HTTP probe: the service
+# exposes no unauthenticated health route, and every real caller only needs the
+# socket to be accepting. Bounded and non-fatal — a wedged start should surface
+# as a connect error from the caller, not a pod that never boots.
+wait_for_agent_service() {
+    [ -f /tmp/agent-service.pid ] || return 0
+    local deadline=$((SECONDS + 30))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if python3 -c "
+import socket, sys
+s = socket.socket()
+s.settimeout(1)
+sys.exit(0 if s.connect_ex(('127.0.0.1', $AGENT_SERVICE_PORT)) == 0 else 1)
+" 2>/dev/null; then
+            echo "⬥ agent-service listening on $AGENT_SERVICE_PORT (PID: ${AGENT_PID:-unknown})"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "⬥ agent-service not listening on $AGENT_SERVICE_PORT after 30s; browser sessions will fail"
+}
+
 stop_agent_service() {
     local pid_file="/tmp/agent-service.pid"
     local pid=""
@@ -150,7 +207,12 @@ echo "⬥ Starting virtual audio devices..."
 bash /app/deploy/desktop/device.sh &
 DEVICE_PID=$!
 
+# Spawned before the display settles so node's startup overlaps the wait below.
+start_agent_service
+
 sleep 3
+
+wait_for_agent_service
 
 start_conversation_manager() {
     echo "⬥ Starting convo manager..."
