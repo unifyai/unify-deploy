@@ -47,6 +47,37 @@ def _sent_payloads(livekit) -> list[dict]:
     ]
 
 
+def _frame(event: str, participant: dict, body: dict | None = None) -> str:
+    """One frame in the shape Recall actually sends.
+
+    Recall wraps the payload twice -- the participant is at
+    ``data.data.participant`` -- and a chat message wraps its body a third time
+    at ``data.data.data.text``. The relay itself does not care, forwarding
+    ``data`` verbatim, but a fixture that invents a shallower shape teaches the
+    wrong thing to whoever writes the consumer next: reading one level short
+    yields an empty participant, which is what a dead relay also looks like.
+    """
+    return json.dumps(
+        {
+            "event": event,
+            "data": {
+                "data": {
+                    "participant": participant,
+                    "timestamp": {
+                        "absolute": "2026-07-30T10:00:00Z",
+                        "relative": 12.5,
+                    },
+                    "data": body,
+                },
+                "realtime_endpoint": {"id": "endpoint-1", "metadata": {}},
+                "participant_events": {"id": "pe-1", "metadata": {}},
+                "recording": {"id": "rec-1", "metadata": {}},
+                "bot": {"id": "bot-1", "metadata": {}},
+            },
+        },
+    )
+
+
 def test_relay_rejects_a_missing_token(livekit) -> None:
     """An unauthenticated socket could publish into any assistant's room."""
     with pytest.raises(WebSocketDisconnect):
@@ -79,12 +110,7 @@ def test_relay_publishes_speech_events_into_the_room(livekit) -> None:
     url = f"/meet/events?room=unity_25_gmeet&token={RELAY_SECRET}"
     with _client().websocket_connect(url) as ws:
         ws.send_text(
-            json.dumps(
-                {
-                    "event": "participant_events.speech_on",
-                    "data": {"participant": {"id": 7, "name": "Ada"}},
-                },
-            ),
+            _frame("participant_events.speech_on", {"id": 7, "name": "Ada"}),
         )
 
     request = livekit.room.send_data.call_args.args[0]
@@ -95,7 +121,28 @@ def test_relay_publishes_speech_events_into_the_room(livekit) -> None:
     assert request.kind == DataPacket.Kind.RELIABLE
     payload = json.loads(request.data.decode("utf-8"))
     assert payload["event"] == "participant_events.speech_on"
-    assert payload["data"]["participant"]["name"] == "Ada"
+    assert payload["data"]["data"]["participant"]["name"] == "Ada"
+
+
+def test_relay_forwards_the_payload_without_reshaping_it(livekit) -> None:
+    """The consumer unwraps; the relay must not quietly flatten en route.
+
+    Trimming here would be a wire-contract change across two repos: the fast
+    brain reads ``data.data``, so a relay that forwarded only the inner object
+    would strand every event during a rolling deploy.
+    """
+    url = f"/meet/events?room=unity_25_gmeet&token={RELAY_SECRET}"
+    sent = _frame(
+        "participant_events.chat_message",
+        {"id": 7, "name": "Ada", "email": None},
+        {"text": "here is the link", "to": "everyone"},
+    )
+    with _client().websocket_connect(url) as ws:
+        ws.send_text(sent)
+
+    payload = _sent_payloads(livekit)[0]
+    assert payload["data"] == json.loads(sent)["data"]
+    assert payload["data"]["data"]["data"]["text"] == "here is the link"
 
 
 def test_relay_skips_events_no_consumer_reads(livekit) -> None:
@@ -157,7 +204,11 @@ def test_classify_reports_why_a_frame_was_skipped() -> None:
         assert reason == expected, raw
 
     payload, name, reason = _classify_event(
-        '{"event": "participant_events.chat_message", "data": {"data": {"text": "hi"}}}',
+        _frame(
+            "participant_events.chat_message",
+            {"id": 7, "name": "Ada"},
+            {"text": "hi", "to": "everyone"},
+        ),
     )
     assert payload is not None and reason == ""
     assert name == "participant_events.chat_message"
@@ -189,3 +240,44 @@ def test_close_tally_survives_an_abrupt_socket_death(livekit) -> None:
     finally_block = source.split("finally:", 1)[1]
     assert "recall_relay_closed" in finally_block
     assert '"received"' in finally_block
+
+
+def test_frame_shape_reports_both_nesting_levels() -> None:
+    """Both levels, because every bug here has been reading the wrong one.
+
+    Recall wraps the payload twice -- ``data`` holds artifact references and
+    ``data.data`` holds the event -- and a parser reading the wrong level looks
+    exactly like a transport that delivered nothing.
+    """
+    from communication.meet_events import frame_shape
+
+    frame = json.dumps(
+        {
+            "event": "participant_events.chat_message",
+            "data": {
+                "bot": {"id": "b"},
+                "recording": {"id": "r"},
+                "data": {
+                    "participant": {"name": "Julia"},
+                    "text": "hello",
+                    "timestamp": {},
+                },
+            },
+        },
+    )
+    assert frame_shape(frame) == {
+        "data_keys": ["bot", "data", "recording"],
+        "inner_keys": ["participant", "text", "timestamp"],
+    }
+
+
+def test_frame_shape_survives_unusable_input() -> None:
+    """It runs inside the receive loop; a throw here would kill the relay."""
+    from communication.meet_events import frame_shape
+
+    assert frame_shape("not json") == {}
+    assert frame_shape(json.dumps({"event": "x"})) == {}
+    assert frame_shape(json.dumps({"event": "x", "data": {"data": 5}})) == {
+        "data_keys": ["data"],
+        "inner_keys": [],
+    }

@@ -108,7 +108,7 @@ async def recall_meeting_events(
                         "event": "recall_relay_first_frame",
                         "room": room,
                         "recall_event": event_name,
-                        "data_keys": sorted(skip_reason_data_keys(raw)),
+                        **frame_shape(raw),
                         "forwarded": payload is not None,
                         "skip_reason": skip_reason or None,
                     },
@@ -148,21 +148,30 @@ async def recall_meeting_events(
         await livekit.aclose()
 
 
-def skip_reason_data_keys(raw: str) -> list[str]:
-    """Top-level keys of a frame's ``data``, for the first-frame log line.
+def frame_shape(raw: str) -> dict[str, list[str]]:
+    """Key names at the two nesting levels that have actually mattered.
 
-    Shape is the thing worth seeing once per event type: a payload nested a
-    level deeper than expected reads as "no events arrived" everywhere
-    downstream, which is indistinguishable from a dead transport.
+    Recall wraps the payload twice: ``data`` carries artifact references
+    (bot/recording/endpoint) and ``data.data`` carries the event itself. Every
+    integration bug here so far has been reading one of those levels wrong, and
+    a payload one level off reads as "no events arrived" everywhere downstream
+    -- indistinguishable from a dead transport. Logging both once per event
+    type is what makes the shape observable instead of inferred.
     """
     try:
         message = json.loads(raw)
     except ValueError:
-        return []
+        return {}
     if not isinstance(message, dict):
-        return []
+        return {}
     data = message.get("data")
-    return list(data) if isinstance(data, dict) else []
+    if not isinstance(data, dict):
+        return {}
+    inner = data.get("data")
+    return {
+        "data_keys": sorted(data),
+        "inner_keys": sorted(inner) if isinstance(inner, dict) else [],
+    }
 
 
 def _classify_event(raw: str) -> tuple[dict[str, Any] | None, str, str]:
