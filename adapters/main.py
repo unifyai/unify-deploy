@@ -238,10 +238,12 @@ from .helpers import (
     resolve_ms_teams_bot_inbound,
     ensure_ms_teams_bot_pending_install,
     claim_ms_teams_bot_welcome,
+    classify_ms_teams_bot_command,
     send_ms_teams_bot_install_welcome,
-    send_ms_teams_bot_pending_reply,
+    send_ms_teams_bot_command_reply,
     revoke_ms_teams_bot_install,
     verify_ms_teams_bot_token,
+    _MS_TEAMS_BOT_COMMAND_HELP,
     _strip_ms_teams_bot_mention,
     MsTeamsBotAuthError,
     resolve_whatsapp_route,
@@ -1808,8 +1810,12 @@ async def slack_events_webhook(request: Request):
 #   3. On ``message``, hand the activity to Orchestra's ms_teams_bot
 #      dispatcher, which consults installs, channel bindings, conversation
 #      routes, @mention+token addressing, and the coordinator fallback.
-#   4. Fetch assistant + contacts, best-effort wake the Unity job, and
-#      publish onto the assistant's Pub/Sub topic with
+#   4. Answer the generic bot commands here rather than in the assistant: an
+#      unbound workspace gets a greeting / help / didn't-understand card per
+#      the classified command, and ``help`` is answered deterministically even
+#      on a bound workspace so the command list is stable.
+#   5. Otherwise fetch assistant + contacts, best-effort wake the Unity job,
+#      and publish onto the assistant's Pub/Sub topic with
 #      ``thread="ms_teams_bot"`` for CommsManager to pick up.
 #
 # We always return HTTP 200 (even on routing misses) so the Bot Connector
@@ -1894,19 +1900,44 @@ async def ms_teams_bot_messages_webhook(request: Request):
     if activity_type != "message":
         return {"status": 200}
 
+    recipient = activity.get("recipient") or {}
+    _, addressed_text = _strip_ms_teams_bot_mention(
+        activity.get("text", "") or "",
+        activity.get("entities") or [],
+        recipient.get("id") or "",
+    )
+    command = classify_ms_teams_bot_command(addressed_text)
+
     data = await asyncio.to_thread(resolve_ms_teams_bot_inbound, activity)
     if data is None:
         return {"status": 200}
     if not data.get("handled"):
         # A message that lands on a still-pending (unbound) install must not be
-        # dropped silently — Store certification requires the bot to reply. Nudge
-        # the sender to connect instead of going dark.
+        # dropped silently — Store certification requires the bot to reply, and to
+        # answer greetings, help, and unrecognised input differently. Other
+        # unhandled states stay silent on purpose: a bound install returns
+        # ``handled=False`` for un-@mentioned channel chatter, which the bot must
+        # not answer at all.
         if data.get("install_state") == "pending":
             await asyncio.to_thread(
-                send_ms_teams_bot_pending_reply,
+                send_ms_teams_bot_command_reply,
                 activity,
+                command,
                 data.get("connect_url"),
             )
+        return {"status": 200}
+
+    # ``help`` is a bot meta-command, answered from the adapter even on a
+    # connected workspace so the supported-command list is stable and complete
+    # rather than whatever the assistant improvises. Classification is
+    # exact-phrase, so "help me draft this email" still reaches the assistant.
+    if command == _MS_TEAMS_BOT_COMMAND_HELP:
+        await asyncio.to_thread(
+            send_ms_teams_bot_command_reply,
+            activity,
+            command,
+            None,
+        )
         return {"status": 200}
 
     assistant_id = data.get("assistant_id")
@@ -1927,12 +1958,6 @@ async def ms_teams_bot_messages_webhook(request: Request):
     is_channel = conversation_type != "personal"
     channel_data = activity.get("channelData") or {}
     sender = activity.get("from") or {}
-    recipient = activity.get("recipient") or {}
-    _, addressed_text = _strip_ms_teams_bot_mention(
-        activity.get("text", "") or "",
-        activity.get("entities") or [],
-        recipient.get("id") or "",
-    )
 
     api_key = assistant_data.get("api_key", "") or ""
     user_id = assistant_data.get("user_id", "") or ""
