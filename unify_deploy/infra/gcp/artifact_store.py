@@ -483,6 +483,52 @@ class GcsArtifactStore:
         except NotFound:
             pass
 
+    def list_keys(self, prefix: str) -> list[str]:
+        """Every key under *prefix*, sorted, with the store's prefix stripped.
+
+        Returned in the caller's key space rather than the bucket's, so the same
+        code enumerating a job's checkpoints works against this store and the
+        filesystem one.
+        """
+        full_prefix = self._full_key(prefix)
+        strip = len(self._prefix) + 1 if self._prefix else 0
+        return sorted(
+            blob.name[strip:]
+            for blob in self.bucket.client.list_blobs(self.bucket, prefix=full_prefix)
+        )
+
+    # -- brokered uploads ----------------------------------------------------
+
+    def signed_upload_url(
+        self,
+        key: str,
+        *,
+        ttl_seconds: int = 900,
+    ) -> tuple[str, str]:
+        """Mint a short-lived PUT URL for *key*, with the URI it will resolve to.
+
+        This is what keeps an assistant pod credential-poor while still letting
+        it stage a large file: the control plane holds the bucket credentials
+        and signs a write for one object, and the bytes go straight from the pod
+        to the store. Proxying them through the control plane instead would put
+        every ingestion under an HTTP request-size ceiling and bill the plane's
+        bandwidth for data it has no reason to see.
+
+        The expiry is deliberately short. A signed URL is a bearer credential
+        for exactly one object, so its value to anyone who intercepts it should
+        expire before it is worth intercepting.
+        """
+        from datetime import timedelta
+
+        full_key = self._full_key(key)
+        blob = self.bucket.blob(full_key)
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(seconds=ttl_seconds),
+            method="PUT",
+        )
+        return url, f"gs://{self._bucket_name}/{full_key}"
+
     # -- local staging -------------------------------------------------------
 
     def download_to_local(
