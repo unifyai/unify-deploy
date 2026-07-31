@@ -397,6 +397,27 @@ def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
     return parsed
 
 
+def _decode_owner_team_id_form(owner_team_id: str) -> int | None:
+    """Decode the owning-team id carried by the start-job form."""
+
+    value = (owner_team_id or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"owner_team_id must be an integer, got {value!r}",
+        ) from exc
+    if parsed <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"owner_team_id must be positive, got {parsed}",
+        )
+    return parsed
+
+
 def _decode_team_ids_form(team_ids: str) -> list[int]:
     """Decode the shared-team membership list carried by the start-job form."""
 
@@ -662,6 +683,7 @@ def _build_startup_payload(
     is_multiplayer: str = "false",
     team_ids: str,
     team_summaries: str,
+    owner_team_id: str,
     self_contact_id: int,
     boss_contact_id: int,
     org_id: str,
@@ -712,6 +734,11 @@ def _build_startup_payload(
         "is_multiplayer": is_multiplayer.lower() == "true",
         "team_ids": _decode_team_ids_form(team_ids),
         "team_summaries": _decode_team_summaries_form(team_summaries),
+        # The live session resolves shared-scoped tables (Tasks, Data, …) to
+        # Teams/{owner}/… through this value. Omitting it silently routes the
+        # boot-time reconcile to the personal root — which is how a team-owned
+        # assistant's custom tasks got planted as personal duplicates.
+        "owner_team_id": _decode_owner_team_id_form(owner_team_id),
         "self_contact_id": self_contact_id,
         "boss_contact_id": boss_contact_id,
         "org_id": int(org_id) if org_id else None,
@@ -1233,6 +1260,7 @@ async def start_job(
     is_multiplayer: str = Form("false"),
     team_ids: str = Form(""),
     team_summaries: str = Form(""),
+    owner_team_id: str = Form(""),
     self_contact_id: int = Form(...),
     boss_contact_id: int = Form(...),
     org_id: str = Form(""),
@@ -1345,6 +1373,7 @@ async def start_job(
             is_coordinator=is_coordinator,
             is_multiplayer=is_multiplayer,
             team_ids=team_ids,
+            owner_team_id=owner_team_id,
             team_summaries=team_summaries,
             self_contact_id=self_contact_id,
             boss_contact_id=boss_contact_id,
