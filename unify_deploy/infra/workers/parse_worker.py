@@ -302,6 +302,7 @@ async def handle_parse_message(
                     ingestion_mode=msg.ingestion_mode,
                     fm_binding=msg.fm_binding,
                     dm_binding=msg.dm_binding,
+                    request_key=msg.request_key,
                     observability=msg.observability,
                 )
                 parse_lease = _refresh_parse_lease(

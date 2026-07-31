@@ -820,6 +820,7 @@ async def handle_ingest_message(
 
     overall_error: str | None = None
     total_rows = 0
+    written_contexts: list[str] = []
     file_path: str = ""
     scratch_dir_ctx = tempfile.TemporaryDirectory(prefix=f"ingest_{run_id}_")
     scratch_dir = Path(scratch_dir_ctx.name)
@@ -874,7 +875,7 @@ async def handle_ingest_message(
 
         if overall_error is None:
             if msg.ingestion_mode == "fm":
-                total_rows, overall_error = await _run_fm_mode(
+                total_rows, overall_error, written_contexts = await _run_fm_mode(
                     plan=plan,
                     msg=msg,
                     infra=infra,
@@ -883,7 +884,7 @@ async def handle_ingest_message(
                     journal=journal,
                 )
             else:
-                total_rows, overall_error = await _run_dm_mode(
+                total_rows, overall_error, written_contexts = await _run_dm_mode(
                     plan=plan,
                     msg=msg,
                     infra=infra,
@@ -926,6 +927,12 @@ async def handle_ingest_message(
                     "total_rows_inserted": total_rows,
                     "finalized_before_ack": overall_error is None,
                 }
+                if written_contexts:
+                    # The concrete paths this job wrote. What lets a canvas be
+                    # built over a dispatched ingestion without anyone
+                    # hardcoding the storage layout: the run says where its
+                    # output went, and status folds these per dispatch.
+                    metadata_updates["contexts"] = written_contexts
                 if msg.ingestion_mode != "fm":
                     declared = sum(
                         entry.declared_rows
@@ -1132,7 +1139,7 @@ async def _run_fm_mode(
     run_ledger,
     is_cancelled: CancellationCheck | None = None,
     journal: RunJournal | NullJournal = NullJournal(),
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, list[str]]:
     """Dispatch an ``IngestPlan`` through ``fm_process_plan``.
 
     Activates the Unify context described by ``msg.fm_binding``, builds
@@ -1171,7 +1178,7 @@ async def _run_fm_mode_inner(
     activate_unify_context,
     is_cancelled: CancellationCheck | None = None,
     journal: RunJournal | NullJournal = NullJournal(),
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, list[str]]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
     from unify.data_manager import DataManager
     from unify.file_manager.filesystem_adapters.local_adapter import (
@@ -1208,7 +1215,10 @@ async def _run_fm_mode_inner(
         adapter.name,
     )
 
-    config = _build_fm_config_from_plan(plan)
+    config = _build_fm_config_from_plan(
+        plan,
+        request=_load_staged_request(infra.artifact_store, msg),
+    )
     instrumentation = PipelineInstrumentation.from_config(
         config,
         run_id=msg.job_id,
@@ -1217,6 +1227,7 @@ async def _run_fm_mode_inner(
 
     total_rows = 0
     error: str | None = None
+    contexts: list[str] = []
     start = time.perf_counter()
     journal.event(
         stage="ingest",
@@ -1243,6 +1254,7 @@ async def _run_fm_mode_inner(
             if status != "success":
                 error = str(getattr(result, "error", "fm_process_plan failed") or "")
             total_rows = _extract_total_rows(result)
+            contexts = _result_contexts(result)
     except PipelineCancelled:
         raise
     except Exception as exc:
@@ -1275,7 +1287,7 @@ async def _run_fm_mode_inner(
             },
         ),
     )
-    return total_rows, error
+    return total_rows, error, contexts
 
 
 def _extract_total_rows(result: Any) -> int:
@@ -1292,7 +1304,37 @@ def _extract_total_rows(result: Any) -> int:
     return 0
 
 
-def _build_fm_config_from_plan(plan: IngestPlan):
+def _load_staged_request(artifact_store: Any, msg: IngestRequested):
+    """The caller's staged ``IngestionRequest``, or ``None`` for config submits.
+
+    The request is the caller's whole intent -- row identity, schema, embedding,
+    derived columns -- staged once at submit and read here rather than re-encoded
+    field by field onto the wire message. An unreadable request raises rather
+    than falling back to defaults: proceeding without it would silently drop the
+    caller's declared row identity, which is exactly the append-instead-of-upsert
+    failure the request exists to prevent. Operator-CLI submits carry no key and
+    keep their config-driven behaviour.
+    """
+    if not msg.request_key:
+        return None
+    from unify.ingestion_manager.types.request import IngestionRequest
+
+    return IngestionRequest.model_validate(artifact_store.get_json(msg.request_key))
+
+
+def _result_contexts(result: Any) -> list[str]:
+    """Concrete context paths one FM result wrote, content first."""
+    contexts: dict[str, None] = {}
+    content = getattr(result, "content_ref", None)
+    if content is not None and getattr(content, "context", ""):
+        contexts.setdefault(content.context, None)
+    for table in getattr(result, "tables_ref", None) or []:
+        if getattr(table, "context", ""):
+            contexts.setdefault(table.context, None)
+    return list(contexts)
+
+
+def _build_fm_config_from_plan(plan: IngestPlan, request: Any = None):
     """Build a ``FilePipelineConfig`` from ``TableMeta`` config fields.
 
     Synthesises ``EmbeddingsConfig`` and ``BusinessContextsConfig``
@@ -1363,9 +1405,26 @@ def _build_fm_config_from_plan(plan: IngestPlan):
             ],
         )
 
+    storage_id = None
+    table_ingest = True
+    if request is not None and request.target.kind == "collection":
+        # The caller's collection intent: a named collection shares one
+        # namespace, an unnamed one gives each file its own; extract_tables is
+        # whether inner tables become their own queryable contexts.
+        storage_id = request.target.name
+        table_ingest = request.target.extract_tables
+        if request.embed is not None:
+            embed_config = embed_config.model_copy(
+                update={"strategy": request.embed.strategy},
+            )
+
     return FilePipelineConfig(
         embed=embed_config,
-        ingest=IngestConfig(business_contexts=business_contexts),
+        ingest=IngestConfig(
+            business_contexts=business_contexts,
+            storage_id=storage_id,
+            table_ingest=table_ingest,
+        ),
     )
 
 
@@ -1405,7 +1464,7 @@ async def _run_dm_mode(
     is_cancelled: CancellationCheck | None = None,
     should_surrender: Callable[[], bool] | None = None,
     journal: RunJournal | NullJournal = NullJournal(),
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, list[str]]:
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
     Constructs one ``ArtifactWorkItem`` per table in the plan, then
@@ -1455,7 +1514,7 @@ async def _run_dm_mode_inner(
     is_cancelled: CancellationCheck | None = None,
     should_surrender: Callable[[], bool] | None = None,
     journal: RunJournal | NullJournal = NullJournal(),
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, list[str]]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope.
 
     The ingest itself is :class:`CheckpointedIngest`, which is the same engine
@@ -1489,7 +1548,12 @@ async def _run_dm_mode_inner(
         file_count=1,
     )
 
-    work = _table_work_from_plan(plan, msg=msg, default_target=default_target)
+    work = _table_work_from_plan(
+        plan,
+        msg=msg,
+        default_target=default_target,
+        request=_load_staged_request(infra.artifact_store, msg),
+    )
 
     engine = CheckpointedIngest(
         artifact_store=infra.artifact_store,
@@ -1589,7 +1653,7 @@ async def _run_dm_mode_inner(
             },
         ),
     )
-    return total_rows, error
+    return total_rows, error, sorted({entry.context for entry in work})
 
 
 def _table_work_from_plan(
@@ -1597,6 +1661,7 @@ def _table_work_from_plan(
     *,
     msg: IngestRequested,
     default_target: str,
+    request: Any = None,
 ) -> list[TableWork]:
     """Resolve a plan's tables into work the shared engine can run.
 
@@ -1634,6 +1699,16 @@ def _table_work_from_plan(
 
             post_ingest = PostIngestConfig.model_validate(meta.post_ingest)
 
+        # The staged request is the caller's declared intent and wins over
+        # anything parse-derived: unique keys are what make a re-submitted file
+        # an upsert rather than a second copy, and dropping them here is how a
+        # dispatched run would silently diverge from an inline one.
+        table_target = (
+            request.target
+            if request is not None and request.target.kind == "table"
+            else None
+        )
+        embed = request.embed if request is not None else None
         work.append(
             TableWork(
                 table_id=table_id,
@@ -1644,11 +1719,22 @@ def _table_work_from_plan(
                 columns=list(meta.columns or [])
                 or list(getattr(handle, "columns", []) or []),
                 chunk_size=meta.chunk_size or msg.batch_size,
-                description=meta.description,
+                description=(
+                    table_target.description if table_target else meta.description
+                ),
                 column_descriptions=meta.column_descriptions,
-                embed_columns=meta.embed_columns,
-                embed_strategy=meta.embed_strategy,
-                post_ingest=post_ingest,
+                unique_keys=table_target.unique_keys if table_target else None,
+                fields=table_target.fields if table_target else None,
+                embed_columns=(list(embed.columns) if embed else meta.embed_columns),
+                embed_strategy=(embed.strategy if embed else meta.embed_strategy),
+                post_ingest=(
+                    request.post_ingest
+                    if request is not None and request.post_ingest is not None
+                    else post_ingest
+                ),
+                infer_untyped_fields=(
+                    table_target.infer_untyped_fields if table_target else False
+                ),
                 # Scoped to the dispatch as well as the job so two dispatches
                 # writing one context cannot collide on a row key.
                 ingest_key_prefix=(

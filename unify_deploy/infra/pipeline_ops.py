@@ -319,6 +319,7 @@ def publish_submit(
             job_id=job_id,
             # Already staged by the caller's upload, so nothing is re-sent.
             source_gs_uri=source.object_uri,
+            request_key=request_key,
             observability=observability,
         )
         job_ids.append(result.job_id)
@@ -427,9 +428,18 @@ def dispatch_status(*, infra: Any, dispatch_id: str) -> dict[str, Any]:
             files_done += 1
         if job.error:
             errors.append(f"{job_id}: {job.error}")
-        context = str(metadata.get("target_context") or "")
-        if context:
-            contexts.setdefault(context, None)
+        # FM jobs write documents plus extracted tables wherever the file
+        # pipeline placed them, so the finished job records the concrete paths;
+        # target_context covers DM jobs and anything not yet finished.
+        written = metadata.get("contexts")
+        if isinstance(written, list) and written:
+            for context in written:
+                if context:
+                    contexts.setdefault(str(context), None)
+        else:
+            context = str(metadata.get("target_context") or "")
+            if context:
+                contexts.setdefault(context, None)
         # Rows come from the checkpoints rather than the job metadata: the
         # checkpoint is what a resume trusts, so reporting anything else would
         # let the two disagree about where the run got to.

@@ -69,6 +69,7 @@ def _stub_msg(**overrides):
             "dispatch_id": "dispatch-1",
             "batch_size": 100,
             "target_context": "ctx",
+            "request_key": "",
             **overrides,
         },
     )
@@ -384,7 +385,7 @@ async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -
     )
 
     async def _fake_run_dm_mode(**_kwargs):
-        return 1, None
+        return 1, None, ["ctx"]
 
     monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
 
@@ -551,7 +552,7 @@ async def _run_completion_gate_message(
 
     async def _fake_run_dm_mode(**_kwargs):
         # Ingest "succeeds" without error, but the checkpoint is short.
-        return committed_rows, None
+        return committed_rows, None, ["ctx"]
 
     monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
 
@@ -642,7 +643,7 @@ async def test_dm_mode_surfaces_an_engine_failure(monkeypatch) -> None:
     monkeypatch.setattr(checkpointed_ingest.CheckpointedIngest, "run", _boom)
 
     ledger = _StubLedger()
-    rows, error = await ingest_worker._run_dm_mode_inner(
+    rows, error, _contexts = await ingest_worker._run_dm_mode_inner(
         plan=_single_table_plan(),
         msg=_stub_msg(),
         infra=_StubInfra(),
@@ -1142,3 +1143,128 @@ async def _asyncio_sleep(seconds: float) -> None:
 # ---------------------------------------------------------------------------
 # _make_checkpoint_callback with cancellation
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# The staged request is the caller's intent, and a dispatched run honours it
+# ---------------------------------------------------------------------------
+
+
+def _staged_request(**target_overrides):
+    from unify.ingestion_manager.types.request import (
+        EmbedSpec,
+        FilesSource,
+        IngestionRequest,
+        TableTarget,
+    )
+
+    return IngestionRequest(
+        source=FilesSource(paths=["demo.csv"]),
+        target=TableTarget(
+            context="Data/Deals",
+            unique_keys={"deal_id": "str"},
+            fields={"deal_id": "str", "amount": "float"},
+            infer_untyped_fields=True,
+            **target_overrides,
+        ),
+        embed=EmbedSpec(columns=["notes"], strategy="after"),
+    )
+
+
+class TestStagedRequestOverlay:
+    def test_the_request_options_reach_the_table_work(self):
+        """Dropping these is the append-instead-of-upsert failure.
+
+        Files always dispatch when a fleet is reachable, so if the caller's
+        declared row identity does not survive the wire, re-submitting the same
+        spreadsheet to the same table quietly appends a full second copy while
+        the inline tier -- same request -- upserts. The two tiers must not
+        disagree about what a request means.
+        """
+        work = ingest_worker._table_work_from_plan(
+            _single_table_plan(),
+            msg=_stub_msg(),
+            default_target="ctx",
+            request=_staged_request(),
+        )
+        entry = work[0]
+        assert entry.unique_keys == {"deal_id": "str"}
+        assert entry.fields == {"deal_id": "str", "amount": "float"}
+        assert entry.embed_columns == ["notes"]
+        assert entry.embed_strategy == "after"
+        assert entry.infer_untyped_fields is True
+
+    def test_without_a_request_the_parse_derived_config_stands(self):
+        """Operator-CLI submits have no staged request and keep their behaviour."""
+        work = ingest_worker._table_work_from_plan(
+            _single_table_plan(),
+            msg=_stub_msg(),
+            default_target="ctx",
+            request=None,
+        )
+        entry = work[0]
+        assert entry.unique_keys is None
+        assert entry.fields is None
+        assert entry.infer_untyped_fields is False
+
+    def test_an_unreadable_staged_request_fails_rather_than_defaulting(self):
+        """Proceeding without the request would silently drop row identity —
+        the exact failure the request exists to prevent — so the message must
+        nack and retry once the store answers again."""
+        from unify.common.pipeline.artifact_store import ArtifactNotFound
+
+        class _Store:
+            def get_json(self, key):
+                raise ArtifactNotFound(key)
+
+        with pytest.raises(ArtifactNotFound):
+            ingest_worker._load_staged_request(
+                _Store(),
+                _stub_msg(request_key="jobs/run1/request.json"),
+            )
+
+    def test_a_missing_request_key_means_no_request(self):
+        assert (
+            ingest_worker._load_staged_request(object(), _stub_msg(request_key=""))
+            is None
+        )
+
+    def test_a_collection_request_shapes_the_fm_config(self):
+        """The caller's collection intent must survive dispatch: the shared
+        name is what lets related files land in one namespace, and
+        extract_tables=False is what keeps a report's layout tables from
+        becoming noise contexts."""
+        from unify.ingestion_manager.types.request import (
+            CollectionTarget,
+            FilesSource,
+            IngestionRequest,
+        )
+
+        request = IngestionRequest(
+            source=FilesSource(paths=["demo.pdf"]),
+            target=CollectionTarget(name="Quarterly Reports", extract_tables=False),
+        )
+        config = ingest_worker._build_fm_config_from_plan(
+            _single_table_plan(),
+            request=request,
+        )
+        assert config.ingest.storage_id == "Quarterly Reports"
+        assert config.ingest.table_ingest is False
+
+
+class TestResultContexts:
+    def test_content_and_table_contexts_are_collected_once_each(self):
+        result = SimpleNamespace(
+            content_ref=SimpleNamespace(context="u/1/Files/Local/7/Content"),
+            tables_ref=[
+                SimpleNamespace(context="u/1/Files/Local/7/Tables/Sheet1"),
+                SimpleNamespace(context="u/1/Files/Local/7/Tables/Sheet1"),
+            ],
+        )
+        assert ingest_worker._result_contexts(result) == [
+            "u/1/Files/Local/7/Content",
+            "u/1/Files/Local/7/Tables/Sheet1",
+        ]
+
+    def test_a_result_without_refs_reports_nothing(self):
+        assert ingest_worker._result_contexts(SimpleNamespace()) == []
