@@ -45,7 +45,7 @@ repos:
 
   - id: check-no-release-versioning
     name: no first-party release versioning
-    entry: uv run python scripts/check_no_release_versioning.py
+    entry: python3 scripts/check_no_release_versioning.py
     language: system
     pass_filenames: false
 

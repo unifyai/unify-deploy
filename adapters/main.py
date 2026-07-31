@@ -227,8 +227,11 @@ from .helpers import (
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
+    is_twin_alias_mailbox,
     is_unity_coordinator_email_address,
     parse_teams_resource_id,
+    resolve_twin_alias_recipient,
+    send_twin_moved_notice,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     resolve_email_route,
@@ -238,10 +241,12 @@ from .helpers import (
     resolve_ms_teams_bot_inbound,
     ensure_ms_teams_bot_pending_install,
     claim_ms_teams_bot_welcome,
+    classify_ms_teams_bot_command,
     send_ms_teams_bot_install_welcome,
-    send_ms_teams_bot_pending_reply,
+    send_ms_teams_bot_command_reply,
     revoke_ms_teams_bot_install,
     verify_ms_teams_bot_token,
+    _MS_TEAMS_BOT_COMMAND_HELP,
     _strip_ms_teams_bot_mention,
     MsTeamsBotAuthError,
     resolve_whatsapp_route,
@@ -1808,8 +1813,12 @@ async def slack_events_webhook(request: Request):
 #   3. On ``message``, hand the activity to Orchestra's ms_teams_bot
 #      dispatcher, which consults installs, channel bindings, conversation
 #      routes, @mention+token addressing, and the coordinator fallback.
-#   4. Fetch assistant + contacts, best-effort wake the Unity job, and
-#      publish onto the assistant's Pub/Sub topic with
+#   4. Answer the generic bot commands here rather than in the assistant: an
+#      unbound workspace gets a greeting / help / didn't-understand card per
+#      the classified command, and ``help`` is answered deterministically even
+#      on a bound workspace so the command list is stable.
+#   5. Otherwise fetch assistant + contacts, best-effort wake the Unity job,
+#      and publish onto the assistant's Pub/Sub topic with
 #      ``thread="ms_teams_bot"`` for CommsManager to pick up.
 #
 # We always return HTTP 200 (even on routing misses) so the Bot Connector
@@ -1894,19 +1903,44 @@ async def ms_teams_bot_messages_webhook(request: Request):
     if activity_type != "message":
         return {"status": 200}
 
+    recipient = activity.get("recipient") or {}
+    _, addressed_text = _strip_ms_teams_bot_mention(
+        activity.get("text", "") or "",
+        activity.get("entities") or [],
+        recipient.get("id") or "",
+    )
+    command = classify_ms_teams_bot_command(addressed_text)
+
     data = await asyncio.to_thread(resolve_ms_teams_bot_inbound, activity)
     if data is None:
         return {"status": 200}
     if not data.get("handled"):
         # A message that lands on a still-pending (unbound) install must not be
-        # dropped silently — Store certification requires the bot to reply. Nudge
-        # the sender to connect instead of going dark.
+        # dropped silently — Store certification requires the bot to reply, and to
+        # answer greetings, help, and unrecognised input differently. Other
+        # unhandled states stay silent on purpose: a bound install returns
+        # ``handled=False`` for un-@mentioned channel chatter, which the bot must
+        # not answer at all.
         if data.get("install_state") == "pending":
             await asyncio.to_thread(
-                send_ms_teams_bot_pending_reply,
+                send_ms_teams_bot_command_reply,
                 activity,
+                command,
                 data.get("connect_url"),
             )
+        return {"status": 200}
+
+    # ``help`` is a bot meta-command, answered from the adapter even on a
+    # connected workspace so the supported-command list is stable and complete
+    # rather than whatever the assistant improvises. Classification is
+    # exact-phrase, so "help me draft this email" still reaches the assistant.
+    if command == _MS_TEAMS_BOT_COMMAND_HELP:
+        await asyncio.to_thread(
+            send_ms_teams_bot_command_reply,
+            activity,
+            command,
+            None,
+        )
         return {"status": 200}
 
     assistant_id = data.get("assistant_id")
@@ -1927,12 +1961,6 @@ async def ms_teams_bot_messages_webhook(request: Request):
     is_channel = conversation_type != "personal"
     channel_data = activity.get("channelData") or {}
     sender = activity.get("from") or {}
-    recipient = activity.get("recipient") or {}
-    _, addressed_text = _strip_ms_teams_bot_mention(
-        activity.get("text", "") or "",
-        activity.get("entities") or [],
-        recipient.get("id") or "",
-    )
 
     api_key = assistant_data.get("api_key", "") or ""
     user_id = assistant_data.get("user_id", "") or ""
@@ -3348,12 +3376,22 @@ async def assistant_update_webhook(request: Request):
             assistant_data.get("team_summaries") or [],
             field_name="team_summaries",
         )
+        raw_wake_reasons = form_data.get("wake_reasons")
+        wake_reasons: list = []
+        if raw_wake_reasons:
+            try:
+                parsed = json.loads(raw_wake_reasons)
+                if isinstance(parsed, list):
+                    wake_reasons = [r for r in parsed if isinstance(r, dict)]
+            except (TypeError, ValueError):
+                logger.warning("Ignoring malformed wake_reasons on assistant update")
         assistant_event = _coerce_assistant_update_event(
             {
                 **assistant_data,
                 "team_ids": team_ids,
                 "team_summaries": team_summaries,
                 "update_kind": update_kind,
+                "wake_reasons": wake_reasons,
             },
         )
         logger.info(
@@ -3678,11 +3716,14 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         is_shared_coordinator_email = is_unity_coordinator_email_address(
             assistant_email_address,
         )
+        is_alias_mailbox = is_twin_alias_mailbox(assistant_email_address)
 
         # Build Gmail API client.  BYOD accounts have a GOOGLE_ACCESS_TOKEN
         # secret; platform-managed accounts use service-account delegation.
+        # The shared coordinator mailbox and the twin alias catch-all are
+        # platform mailboxes with no assistant of their own to prefetch.
         google_token = None
-        if not is_shared_coordinator_email:
+        if not is_shared_coordinator_email and not is_alias_mailbox:
             assistant_data_prefetch = get_assistant(
                 email_address=assistant_email_address,
             )
@@ -3732,8 +3773,44 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         logger.info(f"from_email: {_redact_email(from_email)}")
 
         # shared context
-        if is_shared_coordinator_email:
+        if is_alias_mailbox:
+            # Recipient routing: the alias address in To/Cc identifies the
+            # multiplayer twin outright — no sender lookup, any sender welcome.
+            alias_address = resolve_twin_alias_recipient(last_message)
+            alias_assistant = (
+                get_assistant(email_address=alias_address) if alias_address else {}
+            )
+            alias_assistant_id = (alias_assistant or {}).get("assistant_id") or (
+                alias_assistant or {}
+            ).get("agent_id")
+            if not alias_assistant_id:
+                logger.info(
+                    "Twin alias delivery with no resolvable recipient (%s)",
+                    _redact_email(alias_address or ""),
+                )
+                return Response(content="OK", status_code=200)
+            context = build_webhook_context(
+                "email",
+                alias_address,
+                from_email,
+                assistant_id=str(alias_assistant_id),
+                validate_contact=False,
+            )
+        elif is_shared_coordinator_email:
             route = resolve_email_route(assistant_email_address, from_email)
+            if route and route.get("action") == "coordinator_multiplayer_moved":
+                # The sender is this address's verified owner, but their twin
+                # left the shared pools for its own address. Within the grace
+                # window a redirect notice beats a silent drop.
+                send_twin_moved_notice(
+                    gmail_service,
+                    mailbox=assistant_email_address,
+                    to_email=from_email,
+                    original_subject=last_message.get("subject") or "",
+                    twin_name=route.get("twin_name") or "",
+                    alias_email=route.get("alias_email") or "",
+                )
+                return Response(content="OK", status_code=200)
             if not route or route.get("action"):
                 logger.info(
                     "Shared coordinator email route action for %s from %s: %s",
@@ -3784,7 +3861,9 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             contacts,
             gmail_message_id,
             shared_mailbox=(
-                assistant_email_address if is_shared_coordinator_email else None
+                assistant_email_address
+                if (is_shared_coordinator_email or is_alias_mailbox)
+                else None
             ),
         )
         return Response(content="OK", status_code=200)
@@ -5771,6 +5850,28 @@ def scheduled_email_watches(payload: ScheduledPayload):
             logger.info(f"Renewed shared coordinator mailbox: {response}")
         except Exception as e:
             logger.error(f"Error renewing shared coordinator mailbox: {e}")
+
+    # Renew the twin alias catch-all mailbox (multiplayer twin inbound).
+    if not payload.test:
+        try:
+            response = requests.post(
+                f"{SETTINGS.comms_url}/gmail/watch",
+                json={
+                    "primary_email": SETTINGS.unity_twin_alias_mailbox,
+                    "topic_name": SETTINGS.unity_coordinator_email_watch_topic,
+                },
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=30,
+            ).json()
+            results["gmail"].append(
+                {
+                    "email": SETTINGS.unity_twin_alias_mailbox,
+                    **response,
+                },
+            )
+            logger.info(f"Renewed twin alias mailbox: {response}")
+        except Exception as e:
+            logger.error(f"Error renewing twin alias mailbox: {e}")
 
     # Renew policy assistant (Gmail-based, skip only in test mode)
     if not payload.test:

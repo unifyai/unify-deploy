@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from functools import partial
 import json
 import os
@@ -193,6 +194,97 @@ def is_unity_coordinator_email_address(email_address: str | None) -> bool:
     if not email_address:
         return False
     return email_address.strip().lower() == SETTINGS.unity_coordinator_email_address
+
+
+def is_twin_alias_mailbox(email_address: str | None) -> bool:
+    """Whether this is the catch-all mailbox receiving twin alias mail."""
+    if not email_address:
+        return False
+    return email_address.strip().lower() == SETTINGS.unity_twin_alias_mailbox
+
+
+def is_twin_alias_email_address(email_address: str | None) -> bool:
+    """Whether an address lives on the multiplayer twin alias domain."""
+    if not email_address:
+        return False
+    return (
+        email_address.strip()
+        .lower()
+        .endswith(f"@{SETTINGS.unity_twin_alias_email_domain}")
+    )
+
+
+def send_twin_moved_notice(
+    gmail_service,
+    *,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    twin_name: str,
+    alias_email: str,
+) -> None:
+    """Reply from the retired shared address with the twin's new coordinates.
+
+    Sent only to the verified owner during the post-flip grace window (the
+    resolver guarantees both), so this cannot loop with strangers or other
+    automations: one notice per inbound message, addressed to a human.
+    """
+    import base64 as _base64
+    from email.mime.text import MIMEText as _MIMEText
+
+    name = twin_name or "Your assistant"
+    lines = [
+        f"{name} has moved to its own email address: {alias_email}",
+        "",
+        "This shared address no longer reaches it. Please update your",
+        f"contacts and resend your message to {alias_email}.",
+        "",
+        "You can also add a dedicated phone or WhatsApp number for it under",
+        "its Contact Details page in the Console.",
+    ]
+    msg = _MIMEText("\n".join(lines))
+    msg["to"] = to_email
+    msg["from"] = mailbox
+    subject = (original_subject or "").strip()
+    msg["subject"] = f"Re: {subject}" if subject else f"{name} has a new address"
+    try:
+        gmail_service.users().messages().send(
+            userId="me",
+            body={"raw": _base64.urlsafe_b64encode(msg.as_bytes()).decode()},
+        ).execute()
+
+        def _redact(addr: str) -> str:
+            local, _, domain = addr.partition("@")
+            return f"{local[:2]}***@{domain}" if domain else "***"
+
+        logger.info(
+            "Sent twin-moved notice to %s (alias %s)",
+            _redact(to_email),
+            _redact(alias_email),
+        )
+    except Exception as exc:
+        logger.error("Failed to send twin-moved notice: %s", exc)
+
+
+def resolve_twin_alias_recipient(last_message: dict) -> str | None:
+    """The twin alias address an inbound catch-all delivery was sent to.
+
+    Recipient routing: the alias identifies the twin outright, with no
+    sender lookup. X-Gm-Original-To (stamped by the catch-all routing rule)
+    is authoritative — it survives BCC deliveries, where To/Cc never carried
+    the alias. To/Cc remain as the fallback for messages that predate the
+    header option or arrive through paths that strip it.
+    """
+    original_to = parseaddr(last_message.get("x_gm_original_to") or "")[1]
+    original_to = original_to.strip().lower()
+    if is_twin_alias_email_address(original_to):
+        return original_to
+    for field in ("to", "cc"):
+        for raw in last_message.get(field) or []:
+            addr = parseaddr(raw)[1].strip().lower()
+            if is_twin_alias_email_address(addr):
+                return addr
+    return None
 
 
 def resolve_email_route(mailbox: str, sender: str) -> dict | None:
@@ -745,13 +837,19 @@ def claim_ms_teams_bot_welcome(install_id: int, conversation_id: str) -> bool:
     The bot-add ``conversationUpdate`` is redelivered by Teams / the Bot
     Connector, so gating the greeting on a server-side claim keyed by
     ``(install_id, conversation_id)`` is what stops the welcome from repeating.
-    Returns ``True`` only when this call won the claim and should send the
+    The id is normalized first: Teams appends ``;messageid=…`` to a channel
+    conversation id on some deliveries of the same bot-add, and the claim matches
+    on the exact string, so a raw id lets one install win two claims and greet
+    twice. Returns ``True`` only when this call won the claim and should send the
     welcome; ``False`` on an already-welcomed conversation or any transport
     failure — failing closed keeps a flaky call from re-spamming the greeting.
     """
     resp = _post_ms_teams_bot(
         "/admin/ms-teams-bot/welcome-claim",
-        {"install_id": install_id, "conversation_id": conversation_id},
+        {
+            "install_id": install_id,
+            "conversation_id": (conversation_id or "").split(";")[0],
+        },
     )
     if not resp:
         return False
@@ -837,44 +935,82 @@ _MS_TEAMS_BOT_HELP_URL = "https://docs.unify.ai"
 _MS_TEAMS_BOT_SUPPORT_URL = "https://unify.ai/contact"
 
 # AI-transparency disclosure. Certification requires content generated by AI to
-# be clearly indicated; the assistant's replies are model-generated, so every
-# proactive greeting/reply card carries this line.
+# be clearly indicated. It belongs on the onboarding surfaces that introduce the
+# assistant, and at most **once** per activity: live assistant replies are
+# labelled natively instead — ``unify.gateway.channels.ms_teams_bot`` attaches
+# the schema.org ``AIGeneratedContent`` entity on every send, which Teams renders
+# as its own "AI generated" caption. Repeating the sentence within a message (or
+# on every message) reads as duplicated copy to a reviewer.
 _MS_TEAMS_BOT_AI_DISCLOSURE = (
     "Responses are generated by AI and may be inaccurate — please review before "
     "relying on them."
 )
 
-# Plain-text welcome sent alongside the connect card. Teams Store certification
-# requires a visible welcome on add that states the app's value, the setup step,
-# the account dependency, and onboarding links — and some surfaces render only
-# the top-level text (not the card), so all of that must live in ``text`` too;
-# the card is a progressive enhancement, not the sole carrier of the message.
-_MS_TEAMS_BOT_WELCOME_TEXT = (
-    f"Hi! Thanks for adding {_MS_TEAMS_BOT_APP_NAME}. I'm your Unify AI "
-    "teammate, right here in Microsoft Teams — message me to ask questions, "
-    "hand off work, and get updates without leaving Teams.\n\n"
-    "To finish setup, connect this workspace to your Unify account or "
-    "organization using the button below. You only do this once, and you can "
-    "say **Hi**, **Hello**, or **Help** anytime.\n\n"
-    "Requires an active Unify account or organization. Until this workspace is "
-    "connected, I can only help you finish setup.\n\n"
-    f"Sign up / get started: {_MS_TEAMS_BOT_SIGNUP_URL}\n"
-    f"Help & docs: {_MS_TEAMS_BOT_HELP_URL}\n"
-    f"Contact support: {_MS_TEAMS_BOT_SUPPORT_URL}\n\n"
-    f"{_MS_TEAMS_BOT_AI_DISCLOSURE}"
+# Single statement of what the app is for, reused across the welcome and help
+# surfaces so the value proposition never drifts between them.
+_MS_TEAMS_BOT_VALUE_PROP = (
+    f"I'm {_MS_TEAMS_BOT_APP_NAME}, your AI teammate inside Microsoft Teams. "
+    "Ask me questions, hand off work, and get updates without leaving Teams."
 )
 
-# Canned reply when a message lands on an install that isn't bound to a Unify
-# owner yet. Keeps the bot responsive (Store certification: the bot must reply
-# to commands) instead of silently dropping the activity.
-_MS_TEAMS_BOT_PENDING_REPLY_TEXT = (
-    "Thanks for the message! This Microsoft Teams workspace isn't connected to "
-    "a Unify account yet, so I can't act on requests here just yet. Tap "
-    "**Connect to Unify** below to finish setup, then I'll be able to help.\n\n"
-    f"Help & docs: {_MS_TEAMS_BOT_HELP_URL}\n"
-    f"Contact support: {_MS_TEAMS_BOT_SUPPORT_URL}\n\n"
-    f"{_MS_TEAMS_BOT_AI_DISCLOSURE}"
+# One-line nudge for a workspace that has not been bound to a Unify owner yet.
+# Short by design: a message answering "hi" must not restate the whole welcome.
+_MS_TEAMS_BOT_CONNECT_NUDGE = (
+    "This workspace isn't connected to a Unify account yet, so I can only help "
+    "you finish setup — tap **Connect to Unify** below."
 )
+
+# The bot's deterministic command vocabulary. Certification requires the generic
+# commands to be answered *distinctly* — from each other and from unrecognised
+# input — and requires every reply to offer a way forward, so classification
+# drives which card gets sent rather than one canned response for all input.
+_MS_TEAMS_BOT_COMMAND_GREETING = "greeting"
+_MS_TEAMS_BOT_COMMAND_HELP = "help"
+_MS_TEAMS_BOT_COMMAND_OTHER = "other"
+
+_MS_TEAMS_BOT_GREETING_PHRASES = frozenset(
+    {
+        "hi",
+        "hii",
+        "hiya",
+        "hey",
+        "heya",
+        "hello",
+        "hi there",
+        "hey there",
+        "hello there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    },
+)
+
+_MS_TEAMS_BOT_HELP_PHRASES = frozenset(
+    {
+        "help",
+        "commands",
+        "command",
+        "what can you do",
+        "what can you do for me",
+    },
+)
+
+
+def classify_ms_teams_bot_command(text: str) -> str:
+    """Classify mention-stripped message text into the command vocabulary.
+
+    Exact-phrase matching only: ``help`` is the help command, while "help me
+    draft this email" is work for the assistant. That precision is what lets the
+    help command be answered deterministically even on a connected workspace
+    without stealing real requests from the assistant.
+    """
+    normalized = " ".join((text or "").split()).lower()
+    normalized = normalized.lstrip("/").strip(" !?.,;:'\"")
+    if normalized in _MS_TEAMS_BOT_GREETING_PHRASES:
+        return _MS_TEAMS_BOT_COMMAND_GREETING
+    if normalized in _MS_TEAMS_BOT_HELP_PHRASES:
+        return _MS_TEAMS_BOT_COMMAND_HELP
+    return _MS_TEAMS_BOT_COMMAND_OTHER
 
 
 def _ms_teams_bot_action_buttons(connect_url: str) -> list[dict]:
@@ -917,109 +1053,160 @@ def _ms_teams_bot_action_buttons(connect_url: str) -> list[dict]:
     return actions
 
 
+def _ms_teams_bot_card(
+    title: str,
+    paragraphs: list[str],
+    *,
+    notes: tuple[str, ...] = (),
+    connect_url: str = "",
+    ai_disclosure: bool = False,
+) -> dict:
+    """Compose the bot's Adaptive Card attachment.
+
+    Every bot-authored message is card-*only*. Teams renders an activity's
+    ``text`` and its card attachment as two stacked blocks, so carrying the same
+    copy in both made a single message read as two — the Store "combine them into
+    a single welcome message" failure. ``fallbackText`` covers renderers that
+    cannot draw a card without adding a second visible block in Teams.
+
+    ``notes`` render subtle (limitations / account dependency) and
+    ``ai_disclosure`` appends the transparency line at most once.
+    """
+    body: list[dict] = [
+        {
+            "type": "TextBlock",
+            "size": "Medium",
+            "weight": "Bolder",
+            "wrap": True,
+            "text": title,
+        },
+    ]
+    body.extend(
+        {"type": "TextBlock", "wrap": True, "text": paragraph}
+        for paragraph in paragraphs
+    )
+    body.extend(
+        {"type": "TextBlock", "wrap": True, "isSubtle": True, "text": note}
+        for note in notes
+    )
+    if ai_disclosure:
+        body.append(
+            {
+                "type": "TextBlock",
+                "wrap": True,
+                "isSubtle": True,
+                "spacing": "Small",
+                "text": _MS_TEAMS_BOT_AI_DISCLOSURE,
+            },
+        )
+    card = {
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "fallbackText": " ".join([title, *paragraphs]),
+        "body": body,
+        "actions": _ms_teams_bot_action_buttons(connect_url),
+    }
+    return {
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "content": card,
+    }
+
+
 def _ms_teams_bot_welcome_card(connect_url: str) -> dict:
-    """Rich welcome Adaptive Card sent on install.
+    """The install greeting — the only message that welcomes.
 
-    Carries everything Teams Store certification expects in a bot welcome: the
-    app value proposition, the one-time setup/integration step, the account
-    dependency/limitation, an AI-generated-content disclosure, and onboarding
-    buttons (connect / sign up / help / support). The connect button only
-    renders while the install is pending (``connect_url`` present).
+    Carries what Teams Store certification expects in a bot welcome: the value
+    proposition, the one-time setup step, the account dependency, the AI
+    disclosure, and onboarding buttons. Command replies deliberately use
+    different titles and copy so a reviewer never sees the welcome twice.
+
+    The setup wording follows the bind state: an already-bound tenant has no
+    ``connect_url`` and must not be told to connect.
     """
-    card = {
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "body": [
-            {
-                "type": "TextBlock",
-                "size": "Medium",
-                "weight": "Bolder",
-                "wrap": True,
-                "text": f"Connect {_MS_TEAMS_BOT_APP_NAME} to Microsoft Teams",
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "text": (
-                    "I'm your Unify AI teammate, right here in Microsoft Teams. "
-                    "Message me to ask questions, hand off work, and get updates "
-                    "without leaving Teams."
-                ),
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "text": (
-                    "To finish setup, tap **Connect to Unify** and sign in — you "
-                    "only do this once. You can also say **Hi**, **Hello**, or "
-                    "**Help** anytime."
-                ),
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "isSubtle": True,
-                "text": (
-                    "Requires an active Unify account or organization. Until this "
-                    "workspace is connected, I can only help you finish setup."
-                ),
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "isSubtle": True,
-                "spacing": "Small",
-                "text": _MS_TEAMS_BOT_AI_DISCLOSURE,
-            },
-        ],
-        "actions": _ms_teams_bot_action_buttons(connect_url),
-    }
-    return {
-        "contentType": "application/vnd.microsoft.card.adaptive",
-        "content": card,
-    }
+    paragraphs = [_MS_TEAMS_BOT_VALUE_PROP]
+    if connect_url:
+        paragraphs.append(
+            "To finish setup, tap **Connect to Unify** and sign in — you only do "
+            "this once.",
+        )
+    paragraphs.append("Type **Help** anytime to see everything I can do.")
+    notes = (
+        (
+            (
+                "Requires an active Unify account or organization. Until this "
+                "workspace is connected, I can only help you finish setup."
+            )
+            if connect_url
+            else "Requires an active Unify account or organization."
+        ),
+    )
+    return _ms_teams_bot_card(
+        f"Welcome to {_MS_TEAMS_BOT_APP_NAME}",
+        paragraphs,
+        notes=notes,
+        connect_url=connect_url,
+        ai_disclosure=True,
+    )
 
 
-def _ms_teams_bot_connect_card(text: str, connect_url: str) -> dict:
-    """Adaptive Card attachment: a message plus a one-tap "Connect to Unify".
+def _ms_teams_bot_greeting_card(connect_url: str) -> dict:
+    """Reply to "hi" / "hello" — a short hello, not a second welcome."""
+    paragraphs = [_MS_TEAMS_BOT_VALUE_PROP]
+    if connect_url:
+        paragraphs.append(_MS_TEAMS_BOT_CONNECT_NUDGE)
+    paragraphs.append("Type **Help** to see everything I can do.")
+    return _ms_teams_bot_card(
+        "Hi there",
+        paragraphs,
+        connect_url=connect_url,
+    )
 
-    Tapping ``Connect`` opens Console with the pending install's nonce, which
-    binds the tenant to the signed-in owner — no code to copy. Used for the
-    pending-reply path; carries the same onboarding buttons and AI disclosure as
-    the welcome so every proactive card is certification-consistent.
+
+def _ms_teams_bot_help_card(connect_url: str) -> dict:
+    """Reply to "help" — the value proposition plus every supported command.
+
+    Certification requires help to be self-explanatory about what the app is for
+    and to list the commands the bot answers, with no dead ends.
     """
-    card = {
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "body": [
-            {
-                "type": "TextBlock",
-                "size": "Medium",
-                "weight": "Bolder",
-                "wrap": True,
-                "text": f"Connect {_MS_TEAMS_BOT_APP_NAME} to Microsoft Teams",
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "text": text,
-            },
-            {
-                "type": "TextBlock",
-                "wrap": True,
-                "isSubtle": True,
-                "spacing": "Small",
-                "text": _MS_TEAMS_BOT_AI_DISCLOSURE,
-            },
+    paragraphs = [_MS_TEAMS_BOT_VALUE_PROP]
+    if connect_url:
+        paragraphs.append(_MS_TEAMS_BOT_CONNECT_NUDGE)
+    paragraphs.extend(
+        [
+            "Here's what I answer to:",
+            "**Help** — show this message.",
+            "**Hi** or **Hello** — a quick hello and where to start.",
+            (
+                "**Anything else** — just describe what you need in your own "
+                "words and I'll take it from there."
+            ),
         ],
-        "actions": _ms_teams_bot_action_buttons(connect_url),
-    }
-    return {
-        "contentType": "application/vnd.microsoft.card.adaptive",
-        "content": card,
-    }
+    )
+    return _ms_teams_bot_card(
+        f"What {_MS_TEAMS_BOT_APP_NAME} can do",
+        paragraphs,
+        notes=("In a channel or group chat, @mention me so I see the message.",),
+        connect_url=connect_url,
+        ai_disclosure=True,
+    )
+
+
+def _ms_teams_bot_unknown_command_card(connect_url: str) -> dict:
+    """Reply to input the bot does not recognise, always with a way forward.
+
+    The apology is the title only — restating it in the body is the kind of
+    duplicated sentence the Store review flagged.
+    """
+    paragraphs = []
+    if connect_url:
+        paragraphs.append(_MS_TEAMS_BOT_CONNECT_NUDGE)
+    paragraphs.append("Type **Help** to see all the commands I can work with.")
+    return _ms_teams_bot_card(
+        "Sorry, I didn't understand that",
+        paragraphs,
+        connect_url=connect_url,
+    )
 
 
 def _send_ms_teams_bot_message(
@@ -1074,40 +1261,47 @@ def send_ms_teams_bot_install_welcome(
     """Proactively DM the installer a welcome + one-click connect link.
 
     The caller is responsible for firing this once per conversation (a Teams add
-    can emit repeated events). The plain-text greeting carries the full message
-    for surfaces that render only ``text``; the rich welcome card is always
-    attached so the onboarding buttons render, and its ``Connect to Unify``
-    button appears only while the install is pending (Orchestra returns a
-    ``connect_url``). The connect link itself comes from Orchestra (single source
-    of the Console URL + nonce).
+    can emit repeated events). Card-only: an activity carrying both ``text`` and
+    a card renders as two stacked blocks, which reads as two welcome messages.
+    The ``Connect to Unify`` button appears only while the install is pending
+    (Orchestra returns a ``connect_url``); the link itself comes from Orchestra,
+    the single source of the Console URL + nonce.
     """
     if not install:
         return
     connect_url = install.get("connect_url") or ""
     message: dict = {
         "type": "message",
-        "text": _MS_TEAMS_BOT_WELCOME_TEXT,
         "attachments": [_ms_teams_bot_welcome_card(connect_url)],
     }
     _send_ms_teams_bot_message(activity, install, message)
 
 
-def send_ms_teams_bot_pending_reply(
+def send_ms_teams_bot_command_reply(
     activity: dict,
+    command: str,
     connect_url: str | None,
 ) -> None:
-    """Reply to an inbound message that landed on an unbound (pending) install.
+    """Answer a generic bot command with the card specific to that command.
 
-    Keeps the bot responsive rather than silent when someone messages it before
-    the tenant is connected — a common Store-review path. Includes the connect
-    card when a ``connect_url`` is available.
+    Keeps the bot responsive without repeating the install welcome: a greeting, a
+    help request, and unrecognised input each get their own title and copy
+    (certification requires valid and invalid commands to be answered
+    differently). ``connect_url`` is set only for a still-unbound workspace, and
+    is what adds the setup nudge and the ``Connect to Unify`` button.
     """
-    message: dict = {"type": "message", "text": _MS_TEAMS_BOT_PENDING_REPLY_TEXT}
-    if connect_url:
-        message["attachments"] = [
-            _ms_teams_bot_connect_card(_MS_TEAMS_BOT_PENDING_REPLY_TEXT, connect_url),
-        ]
-    _send_ms_teams_bot_message(activity, None, message)
+    connect_url = connect_url or ""
+    if command == _MS_TEAMS_BOT_COMMAND_HELP:
+        card = _ms_teams_bot_help_card(connect_url)
+    elif command == _MS_TEAMS_BOT_COMMAND_GREETING:
+        card = _ms_teams_bot_greeting_card(connect_url)
+    else:
+        card = _ms_teams_bot_unknown_command_card(connect_url)
+    _send_ms_teams_bot_message(
+        activity,
+        None,
+        {"type": "message", "attachments": [card]},
+    )
 
 
 def revoke_ms_teams_bot_install(activity: dict) -> None:
@@ -1800,6 +1994,7 @@ def _build_start_job_request_data(
     desktop_mode = _resolve_desktop_mode(assistant)
     user_desktops = assistant.get("user_desktops", [])
     is_coordinator = assistant.get("is_coordinator", False)
+    is_multiplayer = assistant.get("is_multiplayer", False)
     voice_provider, voice_id = resolve_runtime_voice(
         is_coordinator=is_coordinator,
         voice_provider=assistant.get("voice_provider"),
@@ -1852,6 +2047,7 @@ def _build_start_job_request_data(
         "desktop_mode": desktop_mode,
         "user_desktops": json.dumps(user_desktops),
         "is_coordinator": ("true" if is_coordinator else "false"),
+        "is_multiplayer": ("true" if is_multiplayer else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
         "team_summaries": encode_team_summaries_for_form(
             assistant.get("team_summaries") or [],
@@ -2932,6 +3128,10 @@ def _gmail_thread_to_conversation(thread):
                     else []
                 ),
                 "subject": _header(headers, "Subject").replace("Re: ", ""),
+                # Original envelope recipient, preserved by the catch-all
+                # routing rule. The only surviving copy of a twin alias when
+                # the twin was BCC'd (To/Cc never contained it).
+                "x_gm_original_to": _header(headers, "X-Gm-Original-To"),
                 "content": _payload_text(payload),
             },
         )
