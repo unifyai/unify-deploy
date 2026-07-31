@@ -309,9 +309,14 @@ class Settings:
         # memory because the Cloud Run instance holding a bot's websocket is not
         # the one an assistant pod's poll reaches. One overwritten object per
         # room; provision with a short lifecycle rule.
+        #
+        # One bucket for both environments, separated by a ``deploy_env`` path
+        # prefix, matching call recordings (``unity-call-recordings``). No
+        # ``env_suffix`` here: the environment lives in the object path, not the
+        # bucket name.
         self.meet_screenshare_bucket: str = os.environ.get(
             "UNITY_MEET_SCREENSHARE_BUCKET",
-            f"unity-meet-screenshare{self.env_suffix}",
+            "unity-recall-meet-screenshare",
         )
 
         # AssistantSession control plane

@@ -24,6 +24,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -60,22 +61,57 @@ _JPEG_QUALITY = 85
 
 
 def _blob_name(room: str) -> str:
-    return f"{room}/focus.jpg"
+    """Object path for one room's focused frame.
+
+    Environment is a path prefix rather than a separate bucket, matching call
+    recordings (``{deploy_env}/{assistant}/{room}_{ts}.mp3``). It also keeps
+    staging and production apart where the room name alone would not: room names
+    are derived from the assistant id, and the two environments have independent
+    Orchestra databases, so the same id -- and therefore the same room -- can
+    exist in both.
+
+    The only place the prefix is applied, for reads as well as writes. Both sides
+    run in this service off one ``DEPLOY_ENV``, so they cannot disagree about
+    which environment's frames they are handling.
+    """
+
+    return f"{SETTINGS.deploy_env}/{room}/focus.jpg"
+
+
+_storage_client = None
 
 
 def _bucket():
     """The frames bucket, or None when this environment has none provisioned.
 
-    Deliberately not created on demand: buckets are provisioned deliberately,
-    with a lifecycle rule, not conjured by whichever pod noticed first.
+    The bucket is deliberately never created on demand: buckets are provisioned
+    with a lifecycle rule attached, not conjured by whichever instance noticed
+    first. The client is cached because this is called once per stored frame --
+    credential discovery every second, for the length of every meeting, is a
+    cost with nothing to show for it.
     """
 
-    from google.cloud import storage
+    global _storage_client
 
     name = SETTINGS.meet_screenshare_bucket
     if not name:
         return None
-    return storage.Client().bucket(name)
+    if _storage_client is None:
+        import json
+
+        from google.cloud import storage
+        from google.oauth2.service_account import Credentials
+
+        creds_json = os.getenv("GCP_SA_KEY")
+        if creds_json:
+            _storage_client = storage.Client(
+                credentials=Credentials.from_service_account_info(
+                    json.loads(creds_json),
+                ),
+            )
+        else:
+            _storage_client = storage.Client()
+    return _storage_client.bucket(name)
 
 
 @dataclass

@@ -15,17 +15,23 @@ from common.settings import SETTINGS
 
 RELAY_SECRET = "TEST-RELAY-SECRET"
 BUCKET = "test-meet-screenshare"
+# Pinned rather than inherited: object paths are prefixed by the environment, so
+# a runner with DEPLOY_ENV set would otherwise change what the assertions expect.
+DEPLOY_ENV = "staging"
 
 
 @pytest.fixture(autouse=True)
 def _relay_config():
     previous_secret = SETTINGS.recall_relay_secret
     previous_bucket = SETTINGS.meet_screenshare_bucket
+    previous_env = SETTINGS.deploy_env
     SETTINGS.recall_relay_secret = RELAY_SECRET
     SETTINGS.meet_screenshare_bucket = BUCKET
+    SETTINGS.deploy_env = DEPLOY_ENV
     yield
     SETTINGS.recall_relay_secret = previous_secret
     SETTINGS.meet_screenshare_bucket = previous_bucket
+    SETTINGS.deploy_env = previous_env
 
 
 def _client() -> TestClient:
@@ -213,7 +219,7 @@ def test_stored_frames_are_jpeg_and_carry_who_shared_them() -> None:
     with patch("communication.meet_screenshare._bucket", return_value=bucket):
         _write_frame("unity_25_gmeet", "7", "Ada", _png_b64())
 
-    assert bucket.blob.call_args.args[0] == "unity_25_gmeet/focus.jpg"
+    assert bucket.blob.call_args.args[0] == "staging/unity_25_gmeet/focus.jpg"
     assert blob.metadata == {"participant_id": "7", "participant_name": "Ada"}
     data, kwargs = blob.upload_from_string.call_args.args[0], (
         blob.upload_from_string.call_args.kwargs
@@ -221,6 +227,55 @@ def test_stored_frames_are_jpeg_and_carry_who_shared_them() -> None:
     assert kwargs["content_type"] == "image/jpeg"
     # JPEG start-of-image marker: the PNG really was transcoded.
     assert data[:2] == b"\xff\xd8"
+
+
+def test_the_environment_prefix_separates_the_two_deployments() -> None:
+    """One bucket, so the prefix is the only thing keeping the environments apart.
+
+    Room names are derived from the assistant id and the two environments have
+    independent Orchestra databases, so the same id -- and the same room name --
+    can exist in both. Unprefixed, they would be the same object.
+    """
+    from communication.meet_screenshare import _blob_name
+
+    SETTINGS.deploy_env = "staging"
+    staging = _blob_name("unity_25_gmeet")
+    SETTINGS.deploy_env = "production"
+    production = _blob_name("unity_25_gmeet")
+
+    assert staging == "staging/unity_25_gmeet/focus.jpg"
+    assert production == "production/unity_25_gmeet/focus.jpg"
+    assert staging != production
+
+
+def test_reads_and_writes_agree_on_the_path() -> None:
+    """Writer and reader both run in this service, so they cannot disagree.
+
+    Pinned because a prefix applied on write but not on read would 404 forever
+    while looking exactly like nobody sharing.
+    """
+    from communication.meet_screenshare import _blob_name
+
+    blob = MagicMock()
+    blob.updated = datetime.now(timezone.utc)
+    blob.metadata = {}
+    blob.download_as_bytes.return_value = b"\xff\xd8x"
+    bucket = MagicMock()
+    bucket.blob.return_value = blob
+    bucket.get_blob.return_value = blob
+
+    with patch("communication.meet_screenshare._bucket", return_value=bucket):
+        from communication.meet_screenshare import _write_frame
+
+        _write_frame("unity_25_gmeet", "7", "Ada", _png_b64())
+        written = bucket.blob.call_args.args[0]
+
+        _client().get(
+            f"/meet/screenshare/unity_25_gmeet/focus.jpg?token={RELAY_SECRET}",
+        )
+        read = bucket.get_blob.call_args.args[0]
+
+    assert written == read == _blob_name("unity_25_gmeet")
 
 
 def test_a_store_failure_does_not_propagate() -> None:
