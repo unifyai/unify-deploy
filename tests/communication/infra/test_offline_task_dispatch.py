@@ -33,7 +33,6 @@ def _activation(**overrides):
         "entrypoint": 777,
         "scheduled_for": "2026-04-10T09:00:00+00:00",
         "task_name": "Daily summary",
-        "task_description": "Send the daily summary email.",
     }
     activation.update(overrides)
     return activation
@@ -111,7 +110,6 @@ def test_explicit_offline_dispatch_skips_orchestra_execution_lookup():
             source_medium="api",
             entrypoint=777,
             task_name="Daily summary",
-            task_description="Send the daily summary email.",
         ),
     )
 
@@ -380,7 +378,7 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
     assert create_payload["task_name"] == "Daily summary"
-    assert create_payload["task_description"] == "Send the daily summary email."
+    assert "task_description" not in create_payload
     assert create_payload["entrypoint"] == 777
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["assistant_id"] == "assistant-123"
@@ -489,7 +487,7 @@ def test_offline_dispatch_retries_failed_terminal_run():
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == expected_job_name
     assert update_kwargs["updates"]["retry_count"] == 2
-    assert update_kwargs["updates"]["previous_error"] == "boom"
+    assert "previous_error" not in update_kwargs["updates"]
     assert update_kwargs["updates"]["error"] is None
     mock_release.assert_called_once()
     assert mock_release.call_args.kwargs["mode"] == "reopen"
@@ -1058,7 +1056,7 @@ def test_offline_runner_env_carries_agentic_execution_without_function_id():
 
     assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
     assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
-    assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Send the daily summary email."
+    assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Daily summary"
 
 
 def test_offline_runner_env_carries_symbolic_function_id():
@@ -1416,7 +1414,7 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
     assert create_payload["source_contact_id"] == "77"
     assert create_payload["source_contact_display_name"] == "Alice Owner"
     assert create_payload["task_name"] == "Daily summary"
-    assert create_payload["task_description"] == "Send the daily summary email."
+    assert "task_description" not in create_payload
 
 
 def test_offline_dispatch_request_accepts_provider_event_source_type():
@@ -1667,12 +1665,18 @@ def test_terminalize_offline_job_failed_updates_run_and_releases_source():
         source_task_log_id=555,
         mode="fail",
         info=mock_release.call_args.kwargs["info"],
+        run_key="rk",
     )
     assert "unity-task-execution-abc" in mock_release.call_args.kwargs["info"]
 
 
 def test_terminalize_offline_job_complete_marks_inflight_run_completed():
-    """Complete Jobs heal Runs still stuck running/pending, then release."""
+    """Complete Jobs heal Runs still stuck running/pending — without release.
+
+    Release is scoped to the definition and fails every running execution
+    under it; with recurrence projecting successors at dispatch, releasing
+    on the success path killed the healthy successor of a completed Job.
+    """
 
     from communication.infra import task_execution
 
@@ -1697,8 +1701,7 @@ def test_terminalize_offline_job_complete_marks_inflight_run_completed():
 
     assert result["run_updated"] is True
     assert mock_update.call_args.kwargs["updates"]["state"] == "completed"
-    mock_release.assert_called_once()
-    assert mock_release.call_args.kwargs["mode"] == "fail"
+    mock_release.assert_not_called()
 
 
 def test_terminalize_offline_job_idempotent_when_already_terminal():
@@ -1735,7 +1738,9 @@ def test_terminalize_offline_job_idempotent_when_already_terminal():
     assert first["run_updated"] is False
     assert second["run_updated"] is False
     mock_update.assert_not_called()
-    assert mock_release.call_count == 2
+    # Only the Failed call releases; Complete never does.
+    assert mock_release.call_count == 1
+    assert mock_release.call_args.kwargs["mode"] == "fail"
 
 
 def test_offline_task_job_terminal_endpoint():

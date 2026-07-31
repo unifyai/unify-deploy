@@ -186,7 +186,6 @@ def _offline_dispatch_request_from_provider_event(
         entrypoint=execution.get("entrypoint"),
         wake=Wake.provider_event,
         task_name=execution.get("task_name"),
-        task_description=execution.get("task_description"),
     )
 
 
@@ -658,7 +657,6 @@ def _execution_snapshot_from_explicit_dispatch_request(
         "entrypoint": request.entrypoint,
         "max_runtime_seconds": request.max_runtime_seconds,
         "task_name": request.task_name,
-        "task_description": request.task_description,
     }
     if request.scheduled_for is not None:
         snapshot["scheduled_for"] = request.scheduled_for.astimezone(
@@ -795,7 +793,6 @@ def _fail_stale_inflight_run_and_reopen_source(
     run_state: str,
     job_status: dict[str, Any],
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> str:
     """Fail a stale Run row and reopen its Tasks source for reclaim."""
 
@@ -811,7 +808,6 @@ def _fail_stale_inflight_run_and_reopen_source(
             error=error,
             result_summary=error,
             retry_count=retry_count,
-            previous_error=previous_error,
         ),
     )
     _release_active_task_source(
@@ -945,7 +941,6 @@ def _running_task_run_updates(
     job_name: str,
     *,
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> dict[str, Any]:
     """Return the canonical Orchestra patch for one in-flight offline run."""
 
@@ -959,8 +954,6 @@ def _running_task_run_updates(
     }
     if retry_count is not None:
         updates["retry_count"] = retry_count
-    if previous_error:
-        updates["previous_error"] = previous_error
     return updates
 
 
@@ -969,7 +962,6 @@ def _failed_task_run_updates(
     error: str,
     result_summary: str,
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> dict[str, Any]:
     """Return the canonical terminal patch for a failed offline run."""
 
@@ -981,8 +973,6 @@ def _failed_task_run_updates(
     }
     if retry_count is not None:
         updates["retry_count"] = retry_count
-    if previous_error:
-        updates["previous_error"] = previous_error
     return updates
 
 
@@ -1612,7 +1602,6 @@ def _build_offline_runner_env(
         "wake": str(request.wake),
         "run_key": run_key,
         "task_name": str(execution.get("task_name") or ""),
-        "task_description": str(execution.get("task_description") or ""),
         "scheduled_for": request.scheduled_for,
         "source_ref": request.source_ref,
         "source_medium": (
@@ -1800,8 +1789,6 @@ def _build_offline_run_create_payload(
         ),
         "task_name": _optional_display_text(request.task_name)
         or _optional_display_text(execution.get("task_name")),
-        "task_description": _optional_display_text(request.task_description)
-        or _optional_display_text(execution.get("task_description")),
         "state": "pending",
     }
 
@@ -2057,8 +2044,8 @@ def _scheduled_execution_upsert_request_from_execution(
             else None
         ),
         task_label=_optional_display_text(execution.get("task_name")),
-        task_summary=_optional_display_text(execution.get("task_description")),
-        recurrence_hint="recurring" if execution.get("repeat") else "one_off",
+        task_summary=_optional_display_text(execution.get("task_name")),
+        recurrence_hint="recurring" if execution.get("recurring") else "one_off",
     )
 
 
@@ -2084,7 +2071,6 @@ def _offline_dispatch_request_from_execution(
             str(execution.get("scheduled_for")).replace("Z", "+00:00"),
         ),
         task_name=_optional_display_text(execution.get("task_name")),
-        task_description=_optional_display_text(execution.get("task_description")),
     )
 
 
@@ -2471,7 +2457,6 @@ async def dispatch_offline_task(
         created = bool(run_response.get("created"))
         run_state = str(run.get("state") or "pending")
         retry_count: int | None = None
-        previous_error: str | None = None
         if not created and run_state == "completed":
             _emit_task_execution_event(
                 "task_execution.offline_dispatch.adopted",
@@ -2491,7 +2476,6 @@ async def dispatch_offline_task(
             }
         if not created and run_state == "failed":
             retry_count = int(run.get("retry_count") or 0) + 1
-            previous_error = str(run.get("error") or "")
             await asyncio.to_thread(
                 _release_active_task_source,
                 assistant_id=request.assistant_id,
@@ -2554,7 +2538,6 @@ async def dispatch_offline_task(
             # claims to be in flight: fail the stale row, reopen the Tasks
             # source if it is still active, and launch a retry.
             retry_count = int(run.get("retry_count") or 0) + 1
-            previous_error = str(run.get("error") or "")
             await asyncio.to_thread(
                 _fail_stale_inflight_run_and_reopen_source,
                 assistant_id=request.assistant_id,
@@ -2563,7 +2546,6 @@ async def dispatch_offline_task(
                 run_state=run_state,
                 job_status=job_status,
                 retry_count=retry_count,
-                previous_error=previous_error,
             )
             _emit_task_execution_event(
                 "task_execution.offline_dispatch.retrying",
@@ -2667,7 +2649,6 @@ async def dispatch_offline_task(
             updates=_running_task_run_updates(
                 job_name,
                 retry_count=retry_count,
-                previous_error=previous_error,
             ),
         )
         _emit_task_execution_event(
