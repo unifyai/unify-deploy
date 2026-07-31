@@ -3350,3 +3350,91 @@ def dispatch_livekit_agent(room_name: str):
 # OAuth helpers were moved to ``common/microsoft_oauth.py`` and
 # ``common/google_oauth.py`` so the comms service can call them
 # without depending on this module.  Import them from there.
+
+
+# ---------------------------------------------------------------------------
+# Billing-gate auto-replies
+# ---------------------------------------------------------------------------
+
+COMMS_GATE_TIMEOUT_SECONDS = 5
+
+
+def check_comms_gate(assistant_id: str | int | None) -> dict | None:
+    """Billing-gate state for an assistant, or ``None`` when not gated.
+
+    Fail-open by design: a gate-lookup hiccup must never take down inbound
+    comms — hard billing enforcement lives server-side in the runtime's
+    spending gate; this call only powers the courtesy auto-reply.
+    """
+    if not assistant_id:
+        return None
+    try:
+        response = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/billing/comms-gate",
+            params={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=COMMS_GATE_TIMEOUT_SECONDS,
+        ).json()
+    except Exception as exc:
+        logger.warning("comms-gate lookup failed (fail-open): %s", exc)
+        return None
+    if isinstance(response, dict) and response.get("gated"):
+        return response
+    return None
+
+
+def _normalize_phone(number: str | None) -> str:
+    return re.sub(r"[^\d+]", "", (number or "").replace("whatsapp:", ""))
+
+
+def is_owner_sender(assistant_data: dict, channel: str, sender: str) -> bool:
+    """Whether the inbound sender is the assistant's own user.
+
+    The billing-gate auto-reply goes only to the account owner — the one
+    person who can fix the billing state. Third-party contacts get the
+    unchanged behaviour (silence) so a paused account's billing state is
+    never disclosed to strangers.
+    """
+    if channel == "email":
+        owner = (assistant_data.get("user_email") or "").strip().lower()
+        return bool(owner) and sender.strip().lower() == owner
+    sender_norm = _normalize_phone(sender)
+    if not sender_norm:
+        return False
+    owners = {
+        _normalize_phone(assistant_data.get("user_number")),
+        _normalize_phone(assistant_data.get("user_whatsapp_number")),
+    }
+    owners.discard("")
+    return sender_norm in owners
+
+
+def send_billing_gate_notice(
+    gmail_service,
+    *,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    message: str,
+) -> None:
+    """Reply to the owner's inbound email with the billing-gate explanation.
+
+    Owner-only (see ``is_owner_sender``), one notice per inbound message —
+    the same loop-safety envelope as ``send_twin_moved_notice``.
+    """
+    import base64 as _base64
+    from email.mime.text import MIMEText as _MIMEText
+
+    msg = _MIMEText(message)
+    msg["to"] = to_email
+    msg["from"] = mailbox
+    subject = (original_subject or "").strip()
+    msg["subject"] = f"Re: {subject}" if subject else "Your Unify assistant is paused"
+    try:
+        gmail_service.users().messages().send(
+            userId="me",
+            body={"raw": _base64.urlsafe_b64encode(msg.as_bytes()).decode()},
+        ).execute()
+        logger.info("Sent billing-gate notice over email")
+    except Exception as exc:
+        logger.error("Failed to send billing-gate notice: %s", exc)

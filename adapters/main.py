@@ -222,15 +222,18 @@ from .helpers import (
     get_assistant,
     get_contacts,
     get_outlook_thread_id,
+    check_comms_gate,
     get_phone_call_session,
     get_pubsub_client,
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
+    is_owner_sender,
     is_twin_alias_mailbox,
     is_unity_coordinator_email_address,
     parse_teams_resource_id,
     resolve_twin_alias_recipient,
+    send_billing_gate_notice,
     send_twin_moved_notice,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -459,6 +462,16 @@ async def twilio_call_webhook(request: Request):
             "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
+
+    # Billing-gated account: speak the explanation instead of a dead
+    # conference (owner-only; other callers keep today's behaviour).
+    if is_owner_sender(context["assistant"], "call", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = VoiceResponse()
+            resp_user.say(gate["message"])
+            resp_user.hangup()
+            return Response(content=str(resp_user), media_type="text/xml")
 
     logger.info(
         "Activation intent scheduled (legacy is_job_running flag): %s",
@@ -907,6 +920,16 @@ async def twilio_sms_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
+    # Billing-gated account: the runtime can't respond, so explain over
+    # the same channel instead of going silent. Owner-only — third-party
+    # contacts keep today's behaviour.
+    if is_owner_sender(assistant_data, "msg", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = MessagingResponse()
+            resp_user.message(gate["message"])
+            return Response(content=str(resp_user), media_type="text/xml")
+
     logger.info(
         "Activation intent scheduled (legacy is_job_running flag): %s",
         context["is_job_running"],
@@ -1200,6 +1223,15 @@ async def twilio_whatsapp_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
 
+    # Billing-gated account: explain over the same channel instead of
+    # going silent (owner-only; contacts keep today's behaviour).
+    if is_owner_sender(assistant_data, "whatsapp", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = MessagingResponse()
+            resp_user.message(gate["message"])
+            return Response(content=str(resp_user), media_type="text/xml")
+
     attachments = await _ingest_whatsapp_media(form_data, assistant_id, message_sid)
 
     resp_user = MessagingResponse()
@@ -1326,6 +1358,16 @@ async def twilio_whatsapp_call_webhook(request: Request):
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
+
+    # Billing-gated account: speak the explanation instead of a dead
+    # conference (owner-only; other callers keep today's behaviour).
+    if is_owner_sender(assistant_data, "whatsapp_call", from_raw):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp = VoiceResponse()
+            resp.say(gate["message"])
+            resp.hangup()
+            return Response(content=str(resp), media_type="text/xml")
 
     call_id = provider_call_sid.replace(":", "-")
     conference_name = f"unity_wa_conf_{call_id}"
@@ -3843,6 +3885,21 @@ def gmail_notification_processor(envelope: dict = Body(...)):
                 "console.unify.ai to view your assistant details."
             )
             return Response(content=error_message, status_code=500)
+
+        # Billing-gated account: reply with the explanation instead of
+        # dropping the thread silently (owner-only; other senders keep
+        # today's behaviour).
+        if is_owner_sender(assistant_data, "email", from_email):
+            gate = check_comms_gate(assistant_id)
+            if gate:
+                send_billing_gate_notice(
+                    gmail_service,
+                    mailbox=assistant_email_address,
+                    to_email=from_email,
+                    original_subject=last_message.get("subject") or "",
+                    message=gate["message"],
+                )
+                return Response(content="OK", status_code=200)
 
         logger.info(
             "Activation intent scheduled (legacy is_job_running flag): %s",
