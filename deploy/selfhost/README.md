@@ -351,6 +351,12 @@ Caveats:
   WhatsApp text stay poll-only locally, and local Orchestra resolves ownership
   before the bridge forwards anything to the local Coordinator. `down --full`
   reverts the voice webhook.
+- **Losing that race is not a startup failure.** When another live install holds
+  the number, `up` logs a warning and brings the rest of the stack up without
+  inbound calls; only a genuinely broken call edge (missing credentials, dead
+  tunnel, failed SIP trunk) stops startup. The claim has no expiry, so a plain
+  `down` leaves it held — the owning install must run `down --full` to release
+  it. `sync-comms --set-voice` exits `3` for this case, distinct from `2`.
 - cloudflared quick tunnels get a fresh URL each run; the voice webhook is
   re-synced automatically on `up` and whenever the tunnel restarts.
 - WhatsApp Business Calling additionally needs the feature enabled on the Twilio

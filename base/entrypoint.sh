@@ -86,8 +86,13 @@ start_agent_service() {
     fi
 
     echo "⬥ Starting agent-service..."
-    if [ -f "$agent_dir/dist/index.js" ]; then
-        set -- node --no-deprecation "$agent_dir/dist/index.js"
+    # tsc preserves the rootDir layout, so the build lands at dist/src/index.js
+    # -- dist/index.js has never existed. Probing the wrong path silently sent
+    # every production start down the ts-node fallback, which compiles the
+    # whole service on each boot and needs the dev dependencies to survive in
+    # the runtime image to work at all.
+    if [ -f "$agent_dir/dist/src/index.js" ]; then
+        set -- node --no-deprecation "$agent_dir/dist/src/index.js"
     else
         set -- npx ts-node "$agent_dir/src/index.ts"
     fi

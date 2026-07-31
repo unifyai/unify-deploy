@@ -453,15 +453,26 @@ cmd_up_calls_setup() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
-  if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
-    if declare -F self_host_voice_synced_url_file &>/dev/null; then
-      printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
-        >"$(self_host_voice_synced_url_file)"
-    fi
-  else
-    log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
-    return 1
-  fi
+  local sync_rc=0
+  "$py" "$SYNC_COMMS_SCRIPT" --set-voice || sync_rc=$?
+  case "$sync_rc" in
+    0)
+      if declare -F self_host_voice_synced_url_file &>/dev/null; then
+        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+          >"$(self_host_voice_synced_url_file)"
+      fi
+      ;;
+    3)
+      # The shared number is healthy and owned by another live install. Nothing
+      # is broken here, so the rest of the stack must not be held hostage to it.
+      log_warn "Shared voice number is claimed by another install — its owner keeps inbound calls"
+      log_warn "Everything else starts normally. That install releases it with: unity stack down --full"
+      ;;
+    *)
+      log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
+      return 1
+      ;;
+  esac
 }
 
 current_tmux_session() {
@@ -893,9 +904,47 @@ cmd_resume() {
   echo ""
 }
 
+# Block until the durable session reports its exit sentinel. Progress, not
+# elapsed time, decides when to give up: a cold `up` legitimately runs for well
+# over ten minutes, so a wall-clock deadline abandons healthy startups. Startup
+# is only wedged once the session stops producing output entirely.
+wait_for_durable_stack_session() {
+  local session="$1"
+  local stall_seconds="$2"
+  local idle_seconds=0
+  local pane=""
+  local previous_pane=""
+
+  while (( idle_seconds < stall_seconds )); do
+    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
+      log_success "Durable stack session is ready: $session"
+      return 0
+    fi
+    # The success sentinel is absent here, so any sentinel is a non-zero exit.
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* ]]; then
+      log_error "Durable stack startup failed in tmux session: $session"
+      echo "$pane"
+      return 1
+    fi
+    if [[ "$pane" == "$previous_pane" ]]; then
+      idle_seconds=$((idle_seconds + 2))
+    else
+      previous_pane="$pane"
+      idle_seconds=0
+    fi
+    sleep 2
+  done
+
+  log_error "Durable stack startup stalled — no output for ${stall_seconds}s"
+  log_info "Attach for logs: tmux attach -t $session"
+  return 1
+}
+
 cmd_up_durable() {
   local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
-  local timeout_seconds="${UNITY_STACK_TMUX_READY_TIMEOUT_SECONDS:-420}"
+  # Seconds of complete silence before startup counts as wedged.
+  local stall_seconds="${UNITY_STACK_TMUX_STALL_SECONDS:-300}"
   local console_port="${CONSOLE_PORT:-3000}"
   local bash_bin="${UNITY_STACK_BASH:-bash}"
 
@@ -937,28 +986,7 @@ cmd_up_durable() {
   log_info "Starting durable stack session: $session"
   tmux new-session -d -s "$session" "$stack_command"
 
-  local elapsed=0
-  local pane=""
-  while (( elapsed < timeout_seconds )); do
-    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
-      log_success "Durable stack session is ready: $session"
-      break
-    fi
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* && "$pane" != *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
-      log_error "Durable stack startup failed in tmux session: $session"
-      echo "$pane"
-      return 1
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-
-  if (( elapsed >= timeout_seconds )); then
-    log_error "Timed out waiting for durable stack startup"
-    log_info "Attach for logs: tmux attach -t $session"
-    return 1
-  fi
+  wait_for_durable_stack_session "$session" "$stall_seconds" || return 1
 
   if ! curl -fsSI --max-time 10 "http://localhost:${console_port}/" >/dev/null; then
     log_error "Console did not respond at http://localhost:${console_port}"

@@ -27,6 +27,15 @@ Modes:
   * ``--check``: report drift without mutating; exit 1 on drift. Honors
     ``--set-voice`` (verifies voice points at the tunnel) vs poll-only otherwise.
 
+Exit codes:
+  0 success; 1 drift (``--check``); 2 failure; 3 the shared callback is held by
+  another live installation. 3 is separate because nothing is broken — the
+  provider state is healthy and owned by someone else — so a caller may proceed
+  without inbound calls instead of treating it as a failed call edge.
+
+Each channel is reconciled independently and the worst outcome is reported, so
+a contended WhatsApp sender never stops the phone number from being acquired.
+
 The numbers are the git-tracked source of truth in ``self_host_env.sh`` and are
 read from the environment (source that file, or run via ``stack.sh sync-comms``).
 Twilio credentials are read from the environment or, as a convenience, from
@@ -49,7 +58,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Callable
 import fcntl
+from functools import partial
 import json
 import os
 import sys
@@ -69,8 +80,19 @@ _TWILIO_ENV_FILE = Path(
 _OWNER_QUERY_KEY = "unity_installation_owner"
 _STATE_VERSION = 1
 _VOICE_TUNNEL_MODES = frozenset({"set-voice", "voice-only"})
+_EXIT_OWNERSHIP_CONFLICT = 3
 _ACTIVE_OWNER = ""
 _ACTIVE_STATE: dict = {}
+
+
+class OwnershipConflict(RuntimeError):
+    """Another live installation holds the shared callback this one wants.
+
+    Distinct from a broken call edge: provider state is healthy and correctly
+    owned, so a caller may keep going without inbound calls rather than fail.
+    Subclasses RuntimeError so existing handlers still treat it as an error
+    unless they opt into the distinction.
+    """
 
 
 def _state_root() -> Path:
@@ -204,7 +226,7 @@ def _claim_resource(
             and current != desired
             and current != pending
         ):
-            raise RuntimeError(
+            raise OwnershipConflict(
                 f"{name} changed after this installation acquired it; "
                 "refusing to overwrite another owner",
             )
@@ -220,7 +242,7 @@ def _claim_resource(
         tagged_owner = _url_owner(value)
         if value and tagged_owner != owner:
             owner_label = tagged_owner or "an untagged external owner"
-            raise RuntimeError(
+            raise OwnershipConflict(
                 f"{name}.{field} is active for {owner_label}; refusing takeover",
             )
 
@@ -433,7 +455,7 @@ def _ensure_application(
     current_owner = _url_owner(app.get("voice_url") or "")
     if current_owner != owner:
         owner_label = current_owner or "an untagged external owner"
-        raise RuntimeError(
+        raise OwnershipConflict(
             f"WhatsApp voice app is active for {owner_label}; refusing mutation",
         )
     sid = app["sid"]
@@ -487,7 +509,7 @@ def _require_sender_voice_app(
 ) -> None:
     current_app_sid = _sender_voice_app(_get_whatsapp_sender(sender_sid, headers))
     if current_app_sid != expected_app_sid:
-        raise RuntimeError(
+        raise OwnershipConflict(
             "WhatsApp voice application changed during acquisition; "
             "refusing takeover",
         )
@@ -560,7 +582,7 @@ def reconcile_whatsapp_voice(
                 current_owner = _url_owner(current_app.get("voice_url") or "")
                 if current_owner != owner:
                     owner_label = current_owner or "an untagged external owner"
-                    raise RuntimeError(
+                    raise OwnershipConflict(
                         "WhatsApp voice is active for "
                         f"{owner_label}; refusing takeover",
                     )
@@ -621,7 +643,7 @@ def reconcile_whatsapp_voice(
                 f"[whatsapp-call] {number}: active external voice app preserved",
             )
             return True
-        raise RuntimeError(
+        raise OwnershipConflict(
             f"WhatsApp voice app is owned by {current_owner or 'an external owner'}",
         )
     if check:
@@ -1071,6 +1093,32 @@ def release_owned_state(env: dict, *, scope: str = "all") -> bool:
     return ok
 
 
+def _reconcile_step(action: Callable[[], bool]) -> int:
+    """Reconcile one channel and classify the result as an exit code.
+
+    Channels are separate provider resources, so each is isolated: contention
+    on the WhatsApp sender must not stop the phone number from being acquired.
+    """
+    try:
+        return 0 if action() else 1
+    except OwnershipConflict as exc:
+        print(
+            f"CONFLICT: shared callback held by another installation: {exc}",
+            file=sys.stderr,
+        )
+        return _EXIT_OWNERSHIP_CONFLICT
+    except (OSError, RuntimeError, urllib.error.HTTPError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = f"{exc.code} {exc.read().decode()[:300]}"
+        else:
+            detail = str(exc)
+        print(
+            f"ERROR: Twilio webhook reconciliation failed: {detail}",
+            file=sys.stderr,
+        )
+        return 2
+
+
 def main() -> int:
     global _ACTIVE_OWNER, _ACTIVE_STATE
 
@@ -1181,45 +1229,42 @@ def main() -> int:
         )
         return 2
 
-    ok = True
-    try:
-        if whatsapp_number:
-            if mode != "voice-only":
-                ok &= reconcile_whatsapp(
-                    whatsapp_number,
-                    env,
-                    check=args.check,
-                )
-            if mode != "text-only":
-                ok &= reconcile_whatsapp_voice(
+    channels: list[Callable[[], bool]] = []
+    if whatsapp_number:
+        if mode != "voice-only":
+            channels.append(
+                partial(reconcile_whatsapp, whatsapp_number, env, check=args.check),
+            )
+        if mode != "text-only":
+            channels.append(
+                partial(
+                    reconcile_whatsapp_voice,
                     whatsapp_number,
                     env,
                     mode=mode,
                     public_url=public_url,
                     check=args.check,
-                )
-        if phone_number:
-            ok &= reconcile_phone(
+                ),
+            )
+    if phone_number:
+        channels.append(
+            partial(
+                reconcile_phone,
                 phone_number,
                 env,
                 mode=mode,
                 public_url=public_url,
                 check=args.check,
-            )
-    except (OSError, RuntimeError, urllib.error.HTTPError) as exc:
-        detail = ""
-        if isinstance(exc, urllib.error.HTTPError):
-            detail = f"{exc.code} {exc.read().decode()[:300]}"
-        else:
-            detail = str(exc)
-        print(
-            f"ERROR: Twilio webhook reconciliation failed: {detail}",
-            file=sys.stderr,
+            ),
         )
-        return 2
 
-    if not ok:
-        return 1
+    codes = [_reconcile_step(channel) for channel in channels]
+
+    # Worst outcome wins, and a broken channel outranks a contended one: losing
+    # a shared number is survivable, a broken call edge is not.
+    for code in (2, _EXIT_OWNERSHIP_CONFLICT, 1):
+        if code in codes:
+            return code
     return 0
 
 
