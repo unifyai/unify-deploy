@@ -1195,6 +1195,12 @@ async def _run_fm_mode_inner(
     # throwaway root are sufficient.
     adapter = LocalFileSystemAdapter(root=None, enable_sync=False)
     fm = FileManager(adapter=adapter, data_manager=dm)
+    # A collection is as shareable as a table, so an FM dispatch honours the
+    # same destination vocabulary. Membership is validated first: a binding
+    # naming a team the assistant does not belong to must not write there.
+    destination = getattr(fm_binding, "destination", None)
+    if destination:
+        _validate_team_destination(fm_binding)
     logger.info(
         "[ingest][fm] activated context=%s/%s alias=%s",
         fm_binding.user_id,
@@ -1218,7 +1224,7 @@ async def _run_fm_mode_inner(
         message=f"Storing {plan.file_path} as documents on the worker fleet.",
     )
     try:
-        with instrumentation:
+        with instrumentation, fm._using_file_destination(destination):
             result = fm_process_plan(
                 fm,
                 plan=plan,
