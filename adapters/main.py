@@ -231,6 +231,7 @@ from .helpers import (
     is_unity_coordinator_email_address,
     parse_teams_resource_id,
     resolve_twin_alias_recipient,
+    send_twin_moved_notice,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     resolve_email_route,
@@ -3375,12 +3376,22 @@ async def assistant_update_webhook(request: Request):
             assistant_data.get("team_summaries") or [],
             field_name="team_summaries",
         )
+        raw_wake_reasons = form_data.get("wake_reasons")
+        wake_reasons: list = []
+        if raw_wake_reasons:
+            try:
+                parsed = json.loads(raw_wake_reasons)
+                if isinstance(parsed, list):
+                    wake_reasons = [r for r in parsed if isinstance(r, dict)]
+            except (TypeError, ValueError):
+                logger.warning("Ignoring malformed wake_reasons on assistant update")
         assistant_event = _coerce_assistant_update_event(
             {
                 **assistant_data,
                 "team_ids": team_ids,
                 "team_summaries": team_summaries,
                 "update_kind": update_kind,
+                "wake_reasons": wake_reasons,
             },
         )
         logger.info(
@@ -3787,6 +3798,19 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
         elif is_shared_coordinator_email:
             route = resolve_email_route(assistant_email_address, from_email)
+            if route and route.get("action") == "coordinator_multiplayer_moved":
+                # The sender is this address's verified owner, but their twin
+                # left the shared pools for its own address. Within the grace
+                # window a redirect notice beats a silent drop.
+                send_twin_moved_notice(
+                    gmail_service,
+                    mailbox=assistant_email_address,
+                    to_email=from_email,
+                    original_subject=last_message.get("subject") or "",
+                    twin_name=route.get("twin_name") or "",
+                    alias_email=route.get("alias_email") or "",
+                )
+                return Response(content="OK", status_code=200)
             if not route or route.get("action"):
                 logger.info(
                     "Shared coordinator email route action for %s from %s: %s",
