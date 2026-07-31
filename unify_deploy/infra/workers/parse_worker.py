@@ -14,6 +14,11 @@ from google.cloud import storage
 
 from unify.common.pipeline._utils import utc_now_iso
 from unify.common.pipeline.artifact_store import ArtifactStore
+from unify.common.pipeline.run_journal import (
+    NullJournal,
+    RunJournal,
+    journal_from_payload,
+)
 from unify.common.pipeline.run_ledger import PipelineStageManifest
 from unify.common.pipeline.types import IngestRequested, ParseRequested
 from unify.common.pipeline.work_queue import ReceivedWorkItem
@@ -30,6 +35,28 @@ if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
 
 logger = logging.getLogger(__name__)
+
+
+async def _journal_parse_event(
+    journal: RunJournal | NullJournal,
+    binding,
+    **event: object,
+) -> None:
+    """Write one parse event as the owning assistant.
+
+    The parse worker has no standing identity, so each write borrows the
+    per-message key scope the ingest stage already uses. Failure to journal
+    never fails the parse -- the run outlives its telemetry.
+    """
+    if isinstance(journal, NullJournal) or binding is None:
+        return
+    from .ingest_worker import _with_unify_key
+
+    try:
+        async with _with_unify_key(binding):
+            journal.event(**event)
+    except Exception:  # noqa: BLE001 -- observability must not kill work
+        logger.warning("Parse journal event failed", exc_info=True)
 
 
 async def handle_parse_message(
@@ -58,6 +85,8 @@ async def handle_parse_message(
 
     msg = ParseRequested.model_validate(item.payload)
     run_id = msg.job_id
+    journal = journal_from_payload(item.payload)
+    journal_binding = msg.dm_binding or msg.fm_binding
 
     artifact_store = infra.artifact_store
     work_queue = infra.work_queue
@@ -169,6 +198,17 @@ async def handle_parse_message(
                             error=pr.error,
                         ),
                     )
+                await _journal_parse_event(
+                    journal,
+                    journal_binding,
+                    stage="parse",
+                    level="error",
+                    state="failed",
+                    message="; ".join(
+                        f"{pr.logical_path}: {pr.error or 'parse failed'}"
+                        for pr in failed_results
+                    ),
+                )
                 raise RuntimeError(
                     "Parse failed for configured source files: "
                     + ", ".join(pr.logical_path for pr in failed_results),
@@ -243,6 +283,16 @@ async def handle_parse_message(
                     ),
                 )
 
+                await _journal_parse_event(
+                    journal,
+                    journal_binding,
+                    stage="parse",
+                    state="succeeded",
+                    message=(
+                        f"Parsed {pr.logical_path} "
+                        f"({len(plan.tables_meta)} table(s))."
+                    ),
+                )
                 ingest_msg = IngestRequested(
                     job_id=run_id,
                     dispatch_id=msg.dispatch_id,
@@ -252,6 +302,7 @@ async def handle_parse_message(
                     ingestion_mode=msg.ingestion_mode,
                     fm_binding=msg.fm_binding,
                     dm_binding=msg.dm_binding,
+                    observability=msg.observability,
                 )
                 parse_lease = _refresh_parse_lease(
                     artifact_store,

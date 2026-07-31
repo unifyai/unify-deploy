@@ -41,10 +41,13 @@ from unify.common.pipeline import (
     CheckpointedIngest,
     DuplicateLiveAttempt,
     IngestPlan,
+    NullJournal,
     PipelineCancelled,
     PipelineInstrumentation,
+    RunJournal,
     TableWork,
     incomplete_tables,
+    journal_from_payload,
 )
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.common.pipeline._utils import utc_now_iso
@@ -785,6 +788,13 @@ async def handle_ingest_message(
     work_queue = infra.work_queue
     job_store = infra.job_store
     run_ledger = infra.run_ledger_factory(run_id)
+    # Events land in the run's own Ingestion contexts, written as the owning
+    # assistant inside the per-message key scope. Append-only on purpose: the
+    # run *row* is reconciled by the manager at read time from the control
+    # plane's aggregate, because several jobs share one run and concurrent
+    # workers doing read-modify-write on one row is exactly how two stores
+    # start disagreeing.
+    journal = journal_from_payload(item.payload)
 
     is_terminal, terminal_status = _is_terminal_job(job_store, run_id)
     if is_terminal:
@@ -870,6 +880,7 @@ async def handle_ingest_message(
                     infra=infra,
                     run_ledger=run_ledger,
                     is_cancelled=check_cancelled,
+                    journal=journal,
                 )
             else:
                 total_rows, overall_error = await _run_dm_mode(
@@ -879,6 +890,7 @@ async def handle_ingest_message(
                     run_ledger=run_ledger,
                     is_cancelled=check_cancelled,
                     should_surrender=should_surrender,
+                    journal=journal,
                 )
             _delete_staged_scratch_files(scratch_dir, run_id=run_id)
             _guard_scratch_usage(
@@ -1119,6 +1131,7 @@ async def _run_fm_mode(
     infra: WorkerInfra,
     run_ledger,
     is_cancelled: CancellationCheck | None = None,
+    journal: RunJournal | NullJournal = NullJournal(),
 ) -> tuple[int, str | None]:
     """Dispatch an ``IngestPlan`` through ``fm_process_plan``.
 
@@ -1144,6 +1157,7 @@ async def _run_fm_mode(
             fm_binding=fm_binding,
             activate_unify_context=activate_unify_context,
             is_cancelled=is_cancelled,
+            journal=journal,
         )
 
 
@@ -1156,6 +1170,7 @@ async def _run_fm_mode_inner(
     fm_binding,
     activate_unify_context,
     is_cancelled: CancellationCheck | None = None,
+    journal: RunJournal | NullJournal = NullJournal(),
 ) -> tuple[int, str | None]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
     from unify.data_manager import DataManager
@@ -1197,6 +1212,11 @@ async def _run_fm_mode_inner(
     total_rows = 0
     error: str | None = None
     start = time.perf_counter()
+    journal.event(
+        stage="ingest",
+        state="running",
+        message=f"Storing {plan.file_path} as documents on the worker fleet.",
+    )
     try:
         with instrumentation:
             result = fm_process_plan(
@@ -1223,6 +1243,17 @@ async def _run_fm_mode_inner(
         error = str(exc) or "fm_process_plan raised"
         logger.exception("[ingest][fm] Failed for %s", plan.file_path)
 
+    journal.event(
+        stage="ingest",
+        state="succeeded" if error is None else "failed",
+        level="info" if error is None else "error",
+        done=total_rows,
+        message=(
+            f"Stored {plan.file_path} ({total_rows} row(s))."
+            if error is None
+            else f"{plan.file_path}: {error}"
+        ),
+    )
     run_ledger.write(
         PipelineStageManifest(
             run_id=msg.job_id,
@@ -1367,6 +1398,7 @@ async def _run_dm_mode(
     run_ledger,
     is_cancelled: CancellationCheck | None = None,
     should_surrender: Callable[[], bool] | None = None,
+    journal: RunJournal | NullJournal = NullJournal(),
 ) -> tuple[int, str | None]:
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
@@ -1401,6 +1433,7 @@ async def _run_dm_mode(
             activate_unify_context=activate_unify_context,
             is_cancelled=is_cancelled,
             should_surrender=should_surrender,
+            journal=journal,
         )
 
 
@@ -1415,6 +1448,7 @@ async def _run_dm_mode_inner(
     activate_unify_context,
     is_cancelled: CancellationCheck | None = None,
     should_surrender: Callable[[], bool] | None = None,
+    journal: RunJournal | NullJournal = NullJournal(),
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope.
 
@@ -1462,6 +1496,16 @@ async def _run_dm_mode_inner(
     total_rows = 0
     error: str | None = None
     start = time.perf_counter()
+    declared_total = sum(entry.declared_rows for entry in work)
+    journal.event(
+        stage="ingest",
+        state="running",
+        total=declared_total or None,
+        message=(
+            f"Ingesting {len(work)} table(s) from {plan.file_path} "
+            "on the worker fleet."
+        ),
+    )
     try:
         with instrumentation:
             outcome = engine.run(
@@ -1471,6 +1515,11 @@ async def _run_dm_mode_inner(
                 source_path=plan.file_path,
                 instrumentation=instrumentation,
                 is_cancelled=is_cancelled,
+                on_progress=lambda table_id, done, total: journal.progress(
+                    stage="ingest",
+                    done=done,
+                    total=total or None,
+                ),
                 # A SIGTERM (HPA scale-down, rollout) or the queue's
                 # lease-lifetime cap both mean this attempt must stop owning the
                 # message. Surrendering between chunks leaves the checkpoint
@@ -1505,6 +1554,19 @@ async def _run_dm_mode_inner(
         error = str(exc) or "checkpointed ingest raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
 
+    journal.event(
+        stage="ingest",
+        state="succeeded" if error is None else "failed",
+        level="info" if error is None else "error",
+        done=total_rows,
+        total=declared_total or None,
+        message=(
+            f"Committed {total_rows} row(s) from {plan.file_path} to "
+            f"{', '.join(sorted({entry.context for entry in work}))}."
+            if error is None
+            else f"{plan.file_path}: {error}"
+        ),
+    )
     run_ledger.write(
         PipelineStageManifest(
             run_id=msg.job_id,

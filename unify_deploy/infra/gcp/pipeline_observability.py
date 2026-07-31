@@ -3,6 +3,14 @@
 This module is intentionally environment-agnostic.  It stores full resource
 paths and derives concrete Pub/Sub/GCS names from ``GcpPipelineSettings`` via
 the existing ``GcsArtifactStore`` and ``PubSubWorkQueue`` adapters.
+
+.. deprecated::
+    The GCS event journal here is superseded by run events written to the
+    ``Ingestion/*`` contexts through ``unify.common.pipeline.run_journal`` --
+    one history a run's owner can read whichever tier executed the work.
+    Kept until the context-based trail is verified live end to end; the
+    recovery helpers (DLQ persistence, message parking) are queue mechanics,
+    not observability, and stay regardless.
 """
 
 from __future__ import annotations
