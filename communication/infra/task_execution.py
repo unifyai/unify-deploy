@@ -823,13 +823,18 @@ def _fail_stale_inflight_run_and_reopen_source(
     return error
 
 
-def _adopt_inflight_source_conflict(
+def _active_sibling_run_for_source(
     *,
     batch_api: Any,
     request: OfflineTaskDispatchRequest,
     exclude_run_key: str,
 ) -> dict[str, Any] | None:
-    """Return an adopt payload when another Job already owns this Tasks source."""
+    """Return the sibling run genuinely executing this Tasks source, if any.
+
+    "Genuinely executing" means an in-flight run row whose recorded Job is
+    still active on the cluster — a stale row whose Job vanished does not
+    count and is handled by the stale-inflight repair path instead.
+    """
 
     latest = _lookup_latest_task_run(
         assistant_id=request.assistant_id,
@@ -850,12 +855,88 @@ def _adopt_inflight_source_conflict(
     if job_status.get("status") != "active":
         return None
     return {
-        "success": True,
-        "status": "adopted_inflight_source",
         "run_key": other_run_key,
         "job_name": job_name,
         "run_state": str(latest.get("state") or ""),
         "job_status": job_status,
+    }
+
+
+def _skip_overlapped_scheduled_occurrence(
+    *,
+    batch_api: Any,
+    request: OfflineTaskDispatchRequest,
+    run_key: str,
+    execution: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Terminalize a due scheduled occurrence whose predecessor still runs.
+
+    Booting a worker just to discover the overlap costs a full pod cold
+    start; this check is one run lookup and one Job status read. Only
+    ``scheduled`` wakes are eligible — explicit kicks, triggers, and
+    provider events are content-bearing and must never be swallowed.
+
+    The skipped occurrence terminalizes as completed with an overlap
+    summary. Its successor is deliberately not minted here: projection
+    ownership stays with the running predecessor's dispatcher, and the
+    supervisor sweep floors the series once that run ends.
+    """
+
+    if str(request.wake) != "scheduled":
+        return None
+    sibling = _active_sibling_run_for_source(
+        batch_api=batch_api,
+        request=request,
+        exclude_run_key=run_key,
+    )
+    if sibling is None:
+        return None
+    _create_or_adopt_task_run(
+        _build_offline_run_create_payload(request, run_key, execution),
+    )
+    _update_task_run(
+        assistant_id=request.assistant_id,
+        run_key=run_key,
+        updates=_completed_task_run_updates(
+            result_summary=(
+                "overlap_skip: predecessor run "
+                f"{sibling['run_key']} (job {sibling['job_name']}) is still "
+                "running; occurrence skipped at dispatch without booting a "
+                "worker"
+            ),
+        ),
+    )
+    return {
+        "success": True,
+        "status": "skipped_overlap",
+        "run_key": run_key,
+        "predecessor_run_key": sibling["run_key"],
+        "predecessor_job_name": sibling["job_name"],
+    }
+
+
+def _adopt_inflight_source_conflict(
+    *,
+    batch_api: Any,
+    request: OfflineTaskDispatchRequest,
+    exclude_run_key: str,
+) -> dict[str, Any] | None:
+    """Return an adopt payload when another Job already owns this Tasks source."""
+
+    sibling = _active_sibling_run_for_source(
+        batch_api=batch_api,
+        request=request,
+        exclude_run_key=exclude_run_key,
+    )
+    if sibling is None:
+        return None
+    return {
+        "success": True,
+        "status": "adopted_inflight_source",
+        "run_key": sibling["run_key"],
+        "job_name": sibling["job_name"],
+        "run_state": sibling["run_state"],
+        "job_status": sibling["job_status"],
         "source_task_log_id": request.source_task_log_id,
     }
 
@@ -2355,6 +2436,28 @@ async def dispatch_offline_task(
             }
 
         run_key = _build_offline_run_key(request)
+        batch_api, core_api, _, _ = await _get_k8s_clients()
+
+        stage = "overlap_check"
+        skipped_overlap = await asyncio.to_thread(
+            _skip_overlapped_scheduled_occurrence,
+            batch_api=batch_api,
+            request=request,
+            run_key=run_key,
+            execution=execution,
+        )
+        if skipped_overlap is not None:
+            _emit_task_execution_event(
+                "task_execution.offline_dispatch.skipped",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    status="skipped_overlap",
+                ),
+            )
+            return skipped_overlap
+
         stage = "run_create_or_adopt"
         _emit_task_execution_event(
             "task_execution.offline_dispatch.stage",
@@ -2369,7 +2472,6 @@ async def dispatch_offline_task(
         run_state = str(run.get("state") or "pending")
         retry_count: int | None = None
         previous_error: str | None = None
-        batch_api, core_api, _, _ = await _get_k8s_clients()
         if not created and run_state == "completed":
             _emit_task_execution_event(
                 "task_execution.offline_dispatch.adopted",

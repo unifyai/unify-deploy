@@ -51,6 +51,8 @@ ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
+# shellcheck source=selfhost/builtins_catalog_cache.sh
+source "$SCRIPT_DIR/builtins_catalog_cache.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
 UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
@@ -572,6 +574,15 @@ raise SystemExit(1)
 PY
 }
 
+# The integration manifest actually applied to a seed run, or empty when the
+# provider bootstrap is skipped. Both the snapshot and the restore key on this,
+# so a run without the manifest cannot match one with it.
+seed_builtins_cache_manifest() {
+  local manifest="$DEPLOY_REPO_PATH/deploy/selfhost/integration-bootstrap.selfhost.toml"
+  [[ -n "${COMPOSIO_API_KEY:-}" && -f "$manifest" ]] || return 0
+  printf '%s' "$manifest"
+}
+
 cmd_seed_builtins() {
   export SELF_HOST=1
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
@@ -600,9 +611,11 @@ cmd_seed_builtins() {
     return 1
   fi
 
+
   local args=()
-  local manifest="$DEPLOY_REPO_PATH/deploy/selfhost/integration-bootstrap.selfhost.toml"
-  if [[ -n "${COMPOSIO_API_KEY:-}" && -f "$manifest" ]]; then
+  local manifest
+  manifest="$(seed_builtins_cache_manifest)"
+  if [[ -n "$manifest" ]]; then
     args+=(--integration-bootstrap-manifest "$manifest")
     export UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
     export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-$(console_admin_key)}"
@@ -614,7 +627,16 @@ cmd_seed_builtins() {
     fi
   fi
 
+  # A fresh redeploy purged the catalogue along with the desired_hash guarding
+  # it. Put both back when schema and manifest are unchanged, so the seed below
+  # converges in seconds instead of re-syncing the provider catalogue. A miss,
+  # or an already-populated database, simply falls through to the full sync.
+  if builtins_catalog_restore "$manifest"; then
+    log_success "Restored cached Builtins catalogue (skipping upstream re-sync)"
+  fi
+
   log_info "Seeding Builtins catalogues..."
+  local seed_rc=0
   (
     cd "$UNITY_REPO_PATH"
     UNIFY_KEY="$api_key" \
@@ -625,7 +647,14 @@ cmd_seed_builtins() {
       ORCHESTRA_DB_PASS="${ORCHESTRA_DB_PASS:-orchestra}" \
       ORCHESTRA_DB_BASE="${ORCHESTRA_DB_BASE:-orchestra}" \
       "$py" scripts/seed_builtins_catalog.py "${args[@]}"
-  )
+  ) || seed_rc=$?
+  (( seed_rc == 0 )) || return "$seed_rc"
+
+  # Converged catalogue: snapshot it so the next redeploy restores instead of
+  # re-syncing. Never fatal — a missing cache only costs time.
+  if builtins_catalog_save "$manifest"; then
+    log_info "Cached Builtins catalogue for future redeploys"
+  fi
 }
 
 wait_for_http() {
