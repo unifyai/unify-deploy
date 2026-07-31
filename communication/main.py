@@ -148,6 +148,7 @@ class CommunicationInfraRuntimeActivator:
             "is_multiplayer": str(assistant.get("is_multiplayer") or False).lower(),
             "team_ids": ",".join(str(v) for v in assistant.get("team_ids") or []),
             "team_summaries": json.dumps(assistant.get("team_summaries") or []),
+            "owner_team_id": str(assistant.get("owner_team_id") or ""),
             "self_contact_id": assistant.get("self_contact_id") or 0,
             "boss_contact_id": assistant.get("boss_contact_id") or 0,
             "org_id": assistant.get("organization_id") or "",
