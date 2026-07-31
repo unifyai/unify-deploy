@@ -18,6 +18,7 @@
 # falls through to the normal sync, so a stale snapshot is never applied.
 
 BUILTINS_CATALOG_PROJECT="${BUILTINS_CATALOG_PROJECT:-Builtins}"
+BUILTINS_CATALOG_STATE_TABLE="integration_bootstrap_state"
 BUILTINS_CATALOG_KEEP="${BUILTINS_CATALOG_KEEP:-3}"
 
 builtins_catalog_cache_dir() {
@@ -108,11 +109,9 @@ builtins_catalog_save() {
   target="$cache_dir/$key.sql.gz"
   tmp="$target.$$.partial"
 
+  # Data only. Transaction control and clearing the placeholder project belong
+  # to the restore, which is the side that knows what it is loading into.
   {
-    printf 'BEGIN;\n'
-    # Data-only restore into a freshly migrated database: suppress FK triggers
-    # so table order does not matter, and keep sequences untouched.
-    printf 'SET session_replication_role = replica;\n'
     printf 'COPY public.project FROM stdin;\n'
     builtins_catalog_psql -tAc \
       "COPY (SELECT * FROM project WHERE id = ${project_id}) TO STDOUT"
@@ -126,17 +125,19 @@ builtins_catalog_save() {
         "COPY (SELECT * FROM ${table} WHERE project_id = ${project_id}) TO STDOUT"
       printf '\\.\n'
     done < <(builtins_catalog_tables)
-    # Bootstrap bookkeeping carries the desired_hash that lets the existing
-    # guard short-circuit the sync; it is not project-scoped.
-    local bookkeeping
-    for bookkeeping in integration_bootstrap_state integration_backends; do
-      builtins_catalog_psql -tAc "SELECT to_regclass('public.${bookkeeping}')" \
-        2>/dev/null | grep -q . || continue
-      printf 'COPY public.%s FROM stdin;\n' "$bookkeeping"
-      builtins_catalog_psql -tAc "COPY (SELECT * FROM ${bookkeeping}) TO STDOUT"
+    # Carries the desired_hash that lets Orchestra's guard short-circuit the
+    # sync, and is not project-scoped so it needs capturing by name.
+    #
+    # integration_backends is deliberately excluded: Orchestra's self-host
+    # bootstrap recreates those rows on every start, so shipping them in a
+    # snapshot only collides with the ones already there.
+    if builtins_catalog_psql -tAc \
+      "SELECT to_regclass('public.${BUILTINS_CATALOG_STATE_TABLE}')" 2>/dev/null | grep -q .; then
+      printf 'COPY public.%s FROM stdin;\n' "$BUILTINS_CATALOG_STATE_TABLE"
+      builtins_catalog_psql -tAc \
+        "COPY (SELECT * FROM ${BUILTINS_CATALOG_STATE_TABLE}) TO STDOUT"
       printf '\\.\n'
-    done
-    printf 'COMMIT;\n'
+    fi
   } 2>/dev/null | gzip >"$tmp" || { rm -f "$tmp"; return 1; }
 
   mv -f "$tmp" "$target"
@@ -145,32 +146,49 @@ builtins_catalog_save() {
 }
 
 # Load a snapshot matching the current schema and manifest. No match, an
-# existing catalogue, or any load failure leaves the database untouched and
-# lets the normal sync run.
+# already-populated catalogue, or any load failure leaves the database usable
+# and lets the normal sync run.
 builtins_catalog_restore() {
   local manifest="${1:-}"
   builtins_catalog_db_ready || return 1
-  [[ -z "$(builtins_catalog_project_id)" ]] || return 1
+
+  # Orchestra's self-host bootstrap creates an empty Builtins project (and its
+  # contexts) as it starts, so the project existing means nothing. Only a
+  # populated catalogue is a reason not to load one.
+  local existing_id
+  existing_id="$(builtins_catalog_project_id)"
+  if [[ -n "$existing_id" ]]; then
+    [[ "$(builtins_catalog_row_count "$existing_id")" == "0" ]] || return 1
+  fi
 
   local key snapshot
   key="$(builtins_catalog_cache_key "$manifest")" || return 1
   snapshot="$(builtins_catalog_cache_dir)/$key.sql.gz"
   [[ -f "$snapshot" ]] || return 1
 
-  if ! gunzip -c "$snapshot" | builtins_catalog_psql_stdin -q -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
-    # The transaction rolled back; drop the snapshot so it cannot fail again.
+  # Clear the placeholder and load in one transaction: the snapshot carries the
+  # project row with its original id, which the rows reference.
+  if ! {
+    printf 'BEGIN;\n'
+    # Data-only load into a freshly migrated database: suppress FK triggers so
+    # table order does not matter, and leave sequences untouched.
+    printf 'SET session_replication_role = replica;\n'
+    [[ -n "$existing_id" ]] && builtins_catalog_delete_sql "$existing_id"
+    gunzip -c "$snapshot"
+    printf 'COMMIT;\n'
+  } | builtins_catalog_psql_stdin -q -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
+    # The transaction rolled back, so the placeholder is intact; drop the
+    # snapshot so a bad one cannot fail every redeploy.
     rm -f "$snapshot"
     return 1
   fi
 
   # A snapshot carrying the bootstrap hash but no catalogue would let the seed
   # short-circuit against an empty catalogue, so require both.
-  local project_id restored
+  local project_id
   project_id="$(builtins_catalog_project_id)"
   [[ -n "$project_id" ]] || return 1
-  restored="$(builtins_catalog_psql -tAc \
-    "SELECT count(*) FROM log_event WHERE project_id = ${project_id}" 2>/dev/null | tr -d '[:space:]')"
-  if [[ -z "$restored" || "$restored" == "0" ]]; then
+  if [[ "$(builtins_catalog_row_count "$project_id")" == "0" ]]; then
     builtins_catalog_discard "$project_id"
     rm -f "$snapshot"
     return 1
@@ -178,18 +196,33 @@ builtins_catalog_restore() {
   return 0
 }
 
-# Roll back a partial restore so the normal sync starts from a clean database.
-builtins_catalog_discard() {
+# Size of a project's catalogue. `0` for an empty placeholder project.
+builtins_catalog_row_count() {
+  builtins_catalog_psql -tAc \
+    "SELECT count(*) FROM log_event WHERE project_id = ${1}" 2>/dev/null |
+    tr -d '[:space:]'
+}
+
+# DELETE statements clearing a project's catalogue, project row included, plus
+# the bootstrap state the snapshot replaces. Everything the snapshot writes must
+# be cleared first, or loading it collides with what is already there.
+builtins_catalog_delete_sql() {
   local project_id="$1"
   local table
+  while read -r table; do
+    [[ -n "$table" ]] || continue
+    printf 'DELETE FROM public.%s WHERE project_id = %s;\n' "$table" "$project_id"
+  done < <(builtins_catalog_tables)
+  printf 'DELETE FROM public.project WHERE id = %s;\n' "$project_id"
+  printf 'DELETE FROM public.%s;\n' "$BUILTINS_CATALOG_STATE_TABLE"
+}
+
+# Undo a restore that produced an empty catalogue, so the sync starts clean.
+builtins_catalog_discard() {
   {
     printf 'BEGIN;\n'
     printf 'SET session_replication_role = replica;\n'
-    while read -r table; do
-      [[ -n "$table" ]] || continue
-      printf 'DELETE FROM public.%s WHERE project_id = %s;\n' "$table" "$project_id"
-    done < <(builtins_catalog_tables)
-    printf 'DELETE FROM public.project WHERE id = %s;\n' "$project_id"
+    builtins_catalog_delete_sql "$1"
     printf 'COMMIT;\n'
   } | builtins_catalog_psql_stdin -q -v ON_ERROR_STOP=1 >/dev/null 2>&1 || true
 }
