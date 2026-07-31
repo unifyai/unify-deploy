@@ -622,6 +622,19 @@ class GcsArtifactStore:
             return None
         return IngestCheckpoint.model_validate(data)
 
+    def delete_checkpoints(self, job_id: str) -> None:
+        """Discard every recorded checkpoint for one job (no-op if absent).
+
+        Exists for full re-runs only; the lease, not this, is what keeps a live
+        attempt safe from concurrent writers.
+        """
+        prefix = self._full_key(f"jobs/{_safe_fragment(job_id)}/checkpoints/")
+        for blob in self.bucket.client.list_blobs(self.bucket, prefix=prefix):
+            self._with_retry(
+                blob.delete,
+                operation=f"delete_checkpoint({blob.name})",
+            )
+
     # -- retry wrapper -------------------------------------------------------
 
     def _with_retry(self, fn, *, operation: str):
