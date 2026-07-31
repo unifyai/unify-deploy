@@ -3438,3 +3438,91 @@ def send_billing_gate_notice(
         logger.info("Sent billing-gate notice over email")
     except Exception as exc:
         logger.error("Failed to send billing-gate notice: %s", exc)
+
+
+def send_slack_billing_gate_notice(
+    team_id: str,
+    channel_id: str,
+    thread_ts: str | None,
+    message: str,
+) -> None:
+    """Post the billing-gate explanation into the sender's Slack DM.
+
+    Best-effort: a missing bot token or a failed post is logged and
+    swallowed — the notice is a courtesy, never a delivery guarantee.
+    """
+    bot_token = _resolve_slack_bot_token(team_id)
+    if not bot_token:
+        logger.warning("slack billing-gate notice skipped: no bot token")
+        return
+    body: dict = {"channel": channel_id, "text": message}
+    if thread_ts:
+        body["thread_ts"] = thread_ts
+    try:
+        payload = requests.post(
+            f"{SLACK_API_BASE}/chat.postMessage",
+            json=body,
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=10,
+        ).json()
+        if not payload.get("ok"):
+            logger.warning(
+                "slack billing-gate notice failed: %s",
+                payload.get("error"),
+            )
+    except Exception as exc:
+        logger.error("Failed to send Slack billing-gate notice: %s", exc)
+
+
+def send_ms_teams_billing_gate_notice(activity: dict, message: str) -> None:
+    """Reply to a 1:1 Teams bot conversation with the billing-gate notice."""
+    _send_ms_teams_bot_message(
+        activity,
+        None,
+        {"type": "message", "text": message},
+    )
+
+
+async def send_outlook_billing_gate_notice(
+    graph_client,
+    *,
+    has_user_token: bool,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    message: str,
+) -> None:
+    """Reply to the owner's inbound Outlook email with the gate explanation.
+
+    Targets ``/me`` for delegated tokens and ``/users/{mailbox}`` for admin
+    app credentials, mirroring the read path in ``get_outlook_thread_id``.
+    """
+    from msgraph.generated.models.body_type import BodyType
+    from msgraph.generated.models.email_address import EmailAddress
+    from msgraph.generated.models.item_body import ItemBody
+    from msgraph.generated.models.message import Message
+    from msgraph.generated.models.recipient import Recipient
+    from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
+        SendMailPostRequestBody,
+    )
+
+    subject = (original_subject or "").strip()
+    graph_message = Message(
+        subject=f"Re: {subject}" if subject else "Your Unify assistant is paused",
+        body=ItemBody(content_type=BodyType.Text, content=message),
+        to_recipients=[
+            Recipient(email_address=EmailAddress(address=to_email)),
+        ],
+    )
+    request_body = SendMailPostRequestBody(
+        message=graph_message,
+        save_to_sent_items=True,
+    )
+    try:
+        if has_user_token:
+            await graph_client.me.send_mail.post(request_body)
+        else:
+            await graph_client.users.by_user_id(mailbox).send_mail.post(request_body)
+        logger.info("Sent billing-gate notice over Outlook")
+    except Exception as exc:
+        logger.error("Failed to send Outlook billing-gate notice: %s", exc)
