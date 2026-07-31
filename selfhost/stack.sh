@@ -453,15 +453,26 @@ cmd_up_calls_setup() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
-  if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
-    if declare -F self_host_voice_synced_url_file &>/dev/null; then
-      printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
-        >"$(self_host_voice_synced_url_file)"
-    fi
-  else
-    log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
-    return 1
-  fi
+  local sync_rc=0
+  "$py" "$SYNC_COMMS_SCRIPT" --set-voice || sync_rc=$?
+  case "$sync_rc" in
+    0)
+      if declare -F self_host_voice_synced_url_file &>/dev/null; then
+        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+          >"$(self_host_voice_synced_url_file)"
+      fi
+      ;;
+    3)
+      # The shared number is healthy and owned by another live install. Nothing
+      # is broken here, so the rest of the stack must not be held hostage to it.
+      log_warn "Shared voice number is claimed by another install — its owner keeps inbound calls"
+      log_warn "Everything else starts normally. That install releases it with: unity stack down --full"
+      ;;
+    *)
+      log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
+      return 1
+      ;;
+  esac
 }
 
 current_tmux_session() {
