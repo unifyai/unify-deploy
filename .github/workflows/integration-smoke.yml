@@ -56,7 +56,7 @@ concurrency:
 
 jobs:
   merge-gate:
-    name: Integration smoke
+    name: Integration smoke (run)
     # Self-hosted runner living inside the `unity` GKE cluster (staging
     # namespace). See deploy/k8s/ci-runner/README.md for provisioning.
     runs-on: [self-hosted, unity-cluster, staging]
@@ -186,3 +186,41 @@ jobs:
           ${{ github.workspace }}/.ci-created-assistants.txt
         if-no-files-found: ignore
         retention-days: 14
+
+  # Single, stable required status check for staging->main releases.
+  #
+  # This job MUST run unconditionally. GitHub counts a *skipped* required check
+  # as satisfied, so while the expensive merge-gate job carried the required
+  # context directly, every ordinary push published an implicit passing
+  # "Integration smoke" on its commit. A release PR shares its head SHA with
+  # those pushes, so that stale pass can satisfy branch protection before the
+  # real PR-triggered run finishes -- letting a release merge without the gate.
+  # Recent releases here show exactly that stale context alongside the real
+  # result (pass + skipping); the identical shape in orchestra let four
+  # releases merge with a failing suite.
+  #
+  # Running always means the context is only ever an explicit pass or fail.
+  # An ordinary push now reports "Integration smoke" red, which is the honest
+  # signal: this live-cluster suite did not run for this commit, so a release
+  # cannot be cut from it until it does. This job is deliberately on a hosted
+  # runner, not the self-hosted cluster runner, so the gate still reports when
+  # the cluster runner is unavailable.
+  integration-smoke-required:
+    name: Integration smoke
+    needs: merge-gate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the integration smoke to have passed
+      run: |
+        result="${{ needs.merge-gate.result }}"
+        echo "integration smoke result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Integration smoke did not run for this commit, so the"
+          echo "::error::release gate cannot pass. Push with [run-integration],"
+          echo "::error::or open the staging -> main PR which runs it."
+        fi
+        exit 1
