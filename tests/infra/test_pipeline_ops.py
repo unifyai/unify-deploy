@@ -361,3 +361,55 @@ class TestPrepare:
         assert keys[1].startswith("jobs/run1/sources/0001-")
         assert ".." not in keys[0]
         assert " " not in keys[0]
+
+
+class TestWrittenContexts:
+    def test_fm_written_contexts_win_over_the_target_fallback(self, store):
+        """A collection job's target_context is empty; the finished job records
+        the concrete paths the file pipeline chose. Without them, `bind the
+        canvas to status.contexts` — the flagship instruction — has nothing to
+        bind to for every dispatched document ingestion."""
+        job_store = _JobStore(
+            {
+                "j1": _job(
+                    "j1",
+                    "success",
+                    contexts=[
+                        "u/1/Files/Local/7/Content",
+                        "u/1/Files/Local/7/Tables/Sheet1",
+                    ],
+                ),
+            },
+            ["j1"],
+        )
+        status = dispatch_status(infra=_infra(store, job_store, []), dispatch_id="d1")
+        assert status["contexts"] == [
+            "u/1/Files/Local/7/Content",
+            "u/1/Files/Local/7/Tables/Sheet1",
+        ]
+
+
+class TestCliShareTheLease:
+    def test_the_cli_publish_refuses_while_the_plane_recovers(self, store):
+        """One lease, both callers.
+
+        The race this closes: an operator's CLI retry and an assistant-driven
+        retry publishing for the same job at once — two live messages against
+        one attempt-lease, the loser freezing the checkpoint into a silent
+        under-ingest.
+        """
+        import asyncio
+
+        from unify_deploy.infra.cli.pipeline_control import _publish_retry
+
+        held = hold_recovery(store, "j1")
+        infra = _infra(store, _JobStore({}, []), [])
+        with pytest.raises(RecoveryBusy):
+            asyncio.run(
+                _publish_retry(infra, topic="ingest", payload={}, job_id="j1"),
+            )
+        held.release()
+        assert (
+            asyncio.run(_publish_retry(infra, topic="ingest", payload={}, job_id="j1"))
+            == "msg-1"
+        )
