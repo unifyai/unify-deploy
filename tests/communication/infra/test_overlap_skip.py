@@ -132,3 +132,53 @@ def test_no_skip_when_the_latest_run_is_this_occurrence(monkeypatch):
         execution=None,
     )
     assert result is None
+
+
+class TestDispatchRunKeyResolution:
+    """A scheduled dispatch names its run from the ledger, not from parts."""
+
+    def _execution(self, run_key: str) -> dict:
+        return {"run_key": run_key, "task_id": 12, "wake": "scheduled"}
+
+    def test_scheduled_adopts_the_projected_key(self, monkeypatch):
+        monkeypatch.setattr(
+            task_execution,
+            "_build_offline_run_key",
+            lambda request: "rebuilt-and-wrong",
+        )
+        resolved = task_execution._resolve_offline_dispatch_run_key(
+            _request(),
+            self._execution("offline:scheduled:1406:team-11:12:abc:20260801T100000Z"),
+        )
+        assert resolved == "offline:scheduled:1406:team-11:12:abc:20260801T100000Z", (
+            "the scheduled lane rebuilt a key it was already holding; any "
+            "normalisation drift between the two builders mints a twin"
+        )
+
+    @pytest.mark.parametrize("wake", ["triggered", "explicit", "provider_event"])
+    def test_other_lanes_still_construct(self, monkeypatch, wake):
+        monkeypatch.setattr(
+            task_execution,
+            "_build_offline_run_key",
+            lambda request: "constructed",
+        )
+        resolved = task_execution._resolve_offline_dispatch_run_key(
+            _request(wake=wake),
+            self._execution("stored-but-not-mine"),
+        )
+        assert resolved == "constructed"
+
+    def test_scheduled_falls_back_when_the_row_has_no_key(self, monkeypatch):
+        monkeypatch.setattr(
+            task_execution,
+            "_build_offline_run_key",
+            lambda request: "constructed",
+        )
+        assert (
+            task_execution._resolve_offline_dispatch_run_key(_request(), {})
+            == "constructed"
+        )
+        assert (
+            task_execution._resolve_offline_dispatch_run_key(_request(), None)
+            == "constructed"
+        )

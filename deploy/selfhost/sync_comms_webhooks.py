@@ -947,6 +947,34 @@ def reconcile_phone(
     return True
 
 
+def _release_precheck(
+    name: str,
+    current: dict,
+    resource: dict,
+    changed_label: str,
+) -> bool | None:
+    """Settle a release from recorded state, or return None to restore.
+
+    ``prior`` is what the provider held when this installation claimed the
+    resource and ``applied`` is what it last wrote, so ``applied == prior``
+    means no write ever landed. An acquisition that failed between claim and
+    commit leaves exactly that, and the claim would otherwise refuse to release
+    for the rest of the installation's life once another owner took over.
+    """
+    if _resource_matches(current, resource["prior"]):
+        print(f"[release] {name} was not changed; prior state intact ✓")
+        return True
+    if _resource_matches_owned_generation(current, resource):
+        return None
+    if resource["applied"] == resource["prior"]:
+        print(f"[release] {name} was never applied; dropping stale claim ✓")
+        return True
+    print(
+        f"ERROR: refusing to release {name}: {changed_label} changed after acquisition",
+    )
+    return False
+
+
 def _release_resource(name: str, resource: dict, env: dict) -> bool:
     metadata = resource["metadata"]
     prior = resource["prior"]
@@ -980,14 +1008,9 @@ def _release_resource(name: str, resource: dict, env: dict) -> bool:
                 "StatusCallback": prior.get("status_callback") or "",
                 "StatusCallbackMethod": prior.get("status_callback_method") or "POST",
             }
-        if _resource_matches(current, prior):
-            print(f"[release] {name} was not changed; prior state intact ✓")
-            return True
-        if not _resource_matches_owned_generation(current, resource):
-            print(
-                f"ERROR: refusing to release {name}: callbacks changed after acquisition",
-            )
-            return False
+        decided = _release_precheck(name, current, resource, "callbacks")
+        if decided is not None:
+            return decided
         _update_incoming_number(
             account_sid,
             record["sid"],
@@ -1016,14 +1039,9 @@ def _release_resource(name: str, resource: dict, env: dict) -> bool:
             "status_callback_method": webhook.get("status_callback_method") or "POST",
             "status_callback_url": webhook.get("status_callback_url") or "",
         }
-        if _resource_matches(current, prior):
-            print(f"[release] {name} was not changed; prior state intact ✓")
-            return True
-        if not _resource_matches_owned_generation(current, resource):
-            print(
-                f"ERROR: refusing to release {name}: callbacks changed after acquisition",
-            )
-            return False
+        decided = _release_precheck(name, current, resource, "callbacks")
+        if decided is not None:
+            return decided
         body = json.dumps(
             {
                 "webhook": {
@@ -1046,14 +1064,9 @@ def _release_resource(name: str, resource: dict, env: dict) -> bool:
 
     full = _get_whatsapp_sender(sender["sid"], headers)
     current = {"voice_application_sid": _sender_voice_app(full)}
-    if _resource_matches(current, prior):
-        print(f"[release] {name} was not changed; prior state intact ✓")
-        return True
-    if not _resource_matches_owned_generation(current, resource):
-        print(
-            f"ERROR: refusing to release {name}: voice app changed after acquisition",
-        )
-        return False
+    decided = _release_precheck(name, current, resource, "voice app")
+    if decided is not None:
+        return decided
     _set_sender_voice_app(
         sender["sid"],
         headers,
