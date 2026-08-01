@@ -1320,6 +1320,34 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     return run_key
 
 
+def _resolve_offline_dispatch_run_key(
+    request: OfflineTaskDispatchRequest,
+    execution: dict[str, Any] | None,
+) -> str:
+    """Return the run key naming this occurrence.
+
+    A projected scheduled occurrence already carries the run key Orchestra
+    minted for it, and validation has just pinned this dispatch to that
+    exact occurrence: revision, destination, source row, entrypoint, and
+    slot all matched. Adopting the stored key therefore names the same run
+    the projection named, instead of rebuilding it through a second
+    byte-compatible implementation. Two normalisation drifts in that dual
+    construction (``team:11`` vs ``team-11``; two datetime spellings) minted
+    twins and silently halted the scheduler in July.
+
+    The other lanes still construct. Their occurrences are named from
+    inbound facts the ledger has not recorded yet: a triggered wake keys on
+    the arriving message, an explicit kick has no projected row at all, and
+    provider events key on the event identity digest.
+    """
+
+    if Wake.normalize(request.wake) is Wake.scheduled:
+        stored = str((execution or {}).get("run_key") or "").strip()
+        if stored:
+            return stored
+    return _build_offline_run_key(request)
+
+
 def _build_offline_task_job_name(
     run_key: str,
     *,
@@ -2421,7 +2449,7 @@ async def dispatch_offline_task(
                 "reason": "destination_membership_revoked",
             }
 
-        run_key = _build_offline_run_key(request)
+        run_key = _resolve_offline_dispatch_run_key(request, execution)
         batch_api, core_api, _, _ = await _get_k8s_clients()
 
         stage = "overlap_check"
