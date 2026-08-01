@@ -486,6 +486,30 @@ Manager dependency. It writes `IntegrationBootstrapState` plus Builtins
 `Integrations/Meta` checkpoint rows, so rerunning the same request resumes from
 completed batches instead of falling back to the inline API path.
 
+### Catalogue reuse across redeploys
+
+A full provider catalogue is tens of thousands of rows and takes ~30 minutes to
+sync. Orchestra skips the sync when `IntegrationBootstrapState`'s `desired_hash`
+still matches, but `up` deletes the Postgres volume, so that state — and the
+catalogue it guards — is gone on every fresh redeploy.
+
+`up` therefore snapshots the `Builtins` project to
+`~/.unity/builtins-catalog/<alembic-head>-<manifest-sha>.sql.gz` after a
+successful seed, and restores it into the new database before the next seed
+runs. The hash comparison then short-circuits normally. A schema or manifest
+change produces a different key and simply misses, falling through to a full
+sync; developer data is never captured, so `up` still purges it.
+
+The catalogue is provider metadata rather than anything install-specific, so one
+machine's snapshot seeds another. Point `UNITY_BUILTINS_CATALOG_URL` at an https
+location serving `<key>.sql.gz` and a first `up` on a new machine downloads the
+catalogue instead of syncing it.
+
+> A snapshot is SQL executed against the local database. Only point
+> `UNITY_BUILTINS_CATALOG_URL` at a location you control. Downloads are rejected
+> unless they contain nothing but `COPY` data blocks, which bounds a corrupt or
+> tampered file but does not replace trusting the host.
+
 ## System requirements
 
 - macOS, Linux, or Windows via WSL2

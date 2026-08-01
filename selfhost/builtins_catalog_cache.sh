@@ -21,6 +21,18 @@ BUILTINS_CATALOG_PROJECT="${BUILTINS_CATALOG_PROJECT:-Builtins}"
 BUILTINS_CATALOG_STATE_TABLE="integration_bootstrap_state"
 BUILTINS_CATALOG_KEEP="${BUILTINS_CATALOG_KEEP:-3}"
 
+# Optional https base URL holding published snapshots as <base>/<key>.sql.gz.
+# The catalogue is provider metadata that is identical for a given schema and
+# manifest, so one machine's snapshot seeds any other — a first `up` on a new
+# machine becomes a download instead of a full provider sync.
+#
+# A snapshot is SQL executed against the local database, so this must only ever
+# point at a location the operator controls. Downloads are structurally
+# validated before use (see builtins_catalog_validate), which bounds a corrupt
+# or truncated file but is not a substitute for trusting the host.
+BUILTINS_CATALOG_URL="${UNITY_BUILTINS_CATALOG_URL:-}"
+BUILTINS_CATALOG_FETCH_TIMEOUT="${UNITY_BUILTINS_CATALOG_FETCH_TIMEOUT:-600}"
+
 builtins_catalog_cache_dir() {
   printf '%s' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/builtins-catalog"
 }
@@ -145,6 +157,43 @@ builtins_catalog_save() {
   return 0
 }
 
+# A snapshot must be nothing but `COPY public.<table> FROM stdin;` blocks and
+# their data. Data lines are consumed by COPY and cannot execute, so refusing
+# every other statement keeps a downloaded file from running arbitrary SQL as
+# the database superuser.
+builtins_catalog_validate() {
+  gunzip -c "$1" 2>/dev/null | awk '
+    BEGIN { in_copy = 0 }
+    in_copy { if ($0 == "\\.") in_copy = 0; next }
+    /^COPY public\.[a-z_]+ FROM stdin;$/ { in_copy = 1; blocks++; next }
+    /^$/ { next }
+    { print "unexpected statement: " substr($0, 1, 60) > "/dev/stderr"; bad = 1; exit }
+    END { if (bad || in_copy || blocks == 0) exit 1 }
+  ' 2>/dev/null
+}
+
+# Fetch a published snapshot for this key when the local cache has none.
+builtins_catalog_fetch() {
+  local key="$1" target="$2"
+  [[ -n "$BUILTINS_CATALOG_URL" ]] || return 1
+  [[ "$BUILTINS_CATALOG_URL" == https://* ]] || return 1
+  command -v curl &>/dev/null || return 1
+
+  local tmp="${target}.download.$$"
+  mkdir -p "$(dirname "$target")"
+  if ! curl -fsSL --max-time "$BUILTINS_CATALOG_FETCH_TIMEOUT" \
+    -o "$tmp" "${BUILTINS_CATALOG_URL%/}/${key}.sql.gz"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! gzip -t "$tmp" 2>/dev/null || ! builtins_catalog_validate "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$target"
+  return 0
+}
+
 # Load a snapshot matching the current schema and manifest. No match, an
 # already-populated catalogue, or any load failure leaves the database usable
 # and lets the normal sync run.
@@ -164,7 +213,9 @@ builtins_catalog_restore() {
   local key snapshot
   key="$(builtins_catalog_cache_key "$manifest")" || return 1
   snapshot="$(builtins_catalog_cache_dir)/$key.sql.gz"
-  [[ -f "$snapshot" ]] || return 1
+  if [[ ! -f "$snapshot" ]]; then
+    builtins_catalog_fetch "$key" "$snapshot" || return 1
+  fi
 
   # Clear the placeholder and load in one transaction: the snapshot carries the
   # project row with its original id, which the rows reference.
