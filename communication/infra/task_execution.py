@@ -2072,7 +2072,11 @@ def _scheduled_execution_upsert_request_from_execution(
             else None
         ),
         task_label=_optional_display_text(execution.get("task_name")),
-        task_summary=_optional_display_text(execution.get("task_name")),
+        # Orchestra projects a bounded summary of the authored description;
+        # falling back to the title tells a woken assistant nothing about
+        # what the work is.
+        task_summary=_optional_display_text(execution.get("task_summary"))
+        or _optional_display_text(execution.get("task_name")),
         recurrence_hint="recurring" if execution.get("recurring") else "one_off",
     )
 
