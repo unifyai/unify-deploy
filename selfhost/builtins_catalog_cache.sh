@@ -194,6 +194,31 @@ builtins_catalog_fetch() {
   return 0
 }
 
+# setval statements lifting every identity sequence past the largest id its
+# column holds. Emitted as SQL so it runs inside the restore transaction,
+# against the loaded rows.
+#
+# Covers the whole schema rather than the snapshot's tables: `log_event` is
+# partitioned and its id sequence is shared, so a catalogue load moves the high
+# water mark for every project in the database. Restricted to integer columns
+# because a few tables (`interface`) key on text. Only ever moves a sequence
+# forward — GREATEST leaves an already-ahead sequence alone.
+builtins_catalog_sequence_resync_sql() {
+  builtins_catalog_psql -tAc "
+    SELECT format(
+             'SELECT setval(%L, GREATEST((SELECT COALESCE(max(%I),0) FROM %I), (SELECT COALESCE(last_value,1) FROM %s)), true);',
+             s.seqrelid::regclass::text, a.attname, t.relname, s.seqrelid::regclass::text
+           )
+    FROM pg_sequence s
+    JOIN pg_depend d ON d.objid = s.seqrelid AND d.deptype IN ('a', 'i')
+    JOIN pg_class t ON t.oid = d.refobjid
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+    WHERE t.relkind IN ('r', 'p')
+      AND NOT t.relispartition
+      AND a.atttypid IN ('int2'::regtype, 'int4'::regtype, 'int8'::regtype)
+  " 2>/dev/null | tr -d '\r'
+}
+
 # Load a snapshot matching the current schema and manifest. No match, an
 # already-populated catalogue, or any load failure leaves the database usable
 # and lets the normal sync run.
@@ -222,10 +247,17 @@ builtins_catalog_restore() {
   if ! {
     printf 'BEGIN;\n'
     # Data-only load into a freshly migrated database: suppress FK triggers so
-    # table order does not matter, and leave sequences untouched.
+    # table order does not matter.
     printf 'SET session_replication_role = replica;\n'
     [[ -n "$existing_id" ]] && builtins_catalog_delete_sql "$existing_id"
     gunzip -c "$snapshot"
+    # COPY writes each row's original id without drawing from the owning
+    # sequence, so a freshly migrated database is left with sequences still
+    # near 1 while rows sit tens of thousands higher. The next INSERT anywhere
+    # in the database — not just in the catalogue — then draws a taken id and
+    # fails the primary key, which surfaces as a 500 on POST /v0/logs rather
+    # than anything pointing back here. Resync before the data is visible.
+    printf '%s\n' "$(builtins_catalog_sequence_resync_sql)"
     printf 'COMMIT;\n'
   } | builtins_catalog_psql_stdin -q -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
     # The transaction rolled back, so the placeholder is intact; drop the
