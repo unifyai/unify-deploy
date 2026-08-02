@@ -189,26 +189,34 @@ jobs:
 
   # Single, stable required status check for staging->main releases.
   #
-  # This job MUST run unconditionally. GitHub counts a *skipped* required check
-  # as satisfied, so while the expensive merge-gate job carried the required
+  # This job must run unconditionally on the triggers where merge-gate is
+  # meant to run for release purposes (pull_request and workflow_dispatch), so
+  # the context is always an explicit pass or fail there rather than an
+  # implicit pass-by-skip. GitHub counts a *skipped* required check as
+  # satisfied, so while the expensive merge-gate job carried the required
   # context directly, every ordinary push published an implicit passing
   # "Integration smoke" on its commit. A release PR shares its head SHA with
   # those pushes, so that stale pass can satisfy branch protection before the
-  # real PR-triggered run finishes -- letting a release merge without the gate.
-  # Recent releases here show exactly that stale context alongside the real
-  # result (pass + skipping); the identical shape in orchestra let four
+  # real PR-triggered run finishes -- letting a release merge without the
+  # gate. Recent releases here show exactly that stale context alongside the
+  # real result (pass + skipping); the identical shape in orchestra let four
   # releases merge with a failing suite.
   #
-  # Running always means the context is only ever an explicit pass or fail.
-  # An ordinary push now reports "Integration smoke" red, which is the honest
-  # signal: this live-cluster suite did not run for this commit, so a release
-  # cannot be cut from it until it does. This job is deliberately on a hosted
+  # It must NOT run on plain push. merge-gate is gated behind [run-integration]
+  # there (it exercises real staging infra, so it can't run on every commit),
+  # so an unconditional push-triggered run would either republish the same
+  # implicit-pass-by-skip bug, or -- once made to fail closed -- attach a
+  # failing "Integration smoke" run to that push's SHA that persists even
+  # after the real pull_request-triggered run for the same SHA passes, since
+  # branch protection blocks on any matching-name run, not just the latest.
+  # Publishing nothing on push means the context is simply pending until the
+  # pull_request run supplies the real answer. This job stays on a hosted
   # runner, not the self-hosted cluster runner, so the gate still reports when
   # the cluster runner is unavailable.
   integration-smoke-required:
     name: Integration smoke
     needs: merge-gate
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
     - name: Require the integration smoke to have passed
