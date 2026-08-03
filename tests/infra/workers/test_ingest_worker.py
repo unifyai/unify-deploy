@@ -30,14 +30,80 @@ from unify.common.pipeline.types import (
     TableMeta,
 )
 from unify_deploy.infra.workers import ingest_worker
-from unify_deploy.infra.gcp.artifact_store import (
-    LeaseNotAcquired,
-    LeaseRecord,
-    StaleLeaseError,
-)
 from unify_deploy.infra.workers import worker_utils
 from unify_deploy.infra.workers.assistant_key_resolver import ResolvedAssistant
-from unify_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
+
+# Lease, checkpoint and completion invariants belong to the shared engine and are
+# tested against the port in unify's tests/common/test_checkpointed_ingest.py, so
+# both bindings are held to them. What is tested here is the worker's own
+# surroundings: how it drives that engine and what it does with the outcome.
+
+
+def _single_table_plan(*, row_count: int = 1) -> IngestPlan:
+    return IngestPlan(
+        run_id="job-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(
+                table_id="table_1",
+                label="table_1",
+                columns=["a"],
+                row_count=row_count,
+            ),
+        ],
+        table_inputs={
+            "table_1": InlineRowsHandle(
+                rows=[{"a": 1}] * row_count,
+                columns=["a"],
+                row_count=row_count,
+            ),
+        },
+    )
+
+
+def _stub_msg(**overrides):
+    return SimpleNamespace(
+        **{
+            "job_id": "job-1",
+            "dispatch_id": "dispatch-1",
+            "batch_size": 100,
+            "target_context": "ctx",
+            "request_key": "",
+            **overrides,
+        },
+    )
+
+
+class _StubLedger:
+    def __init__(self):
+        self.entries = []
+
+    def write(self, entry):
+        self.entries.append(entry)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _StubInfra:
+    class _Store:
+        def read_checkpoint(self, *_args, **_kwargs):
+            return None
+
+    artifact_store = _Store()
+    storage_client = None
+    settings = SimpleNamespace(lease_ttl_seconds=900)
+
+
+class _StubDataManager:
+    """Stands in for DataManager so the worker can be driven without a backend."""
+
+    def ingest(self, *_args, **_kwargs):
+        return None
 
 
 @pytest.mark.asyncio
@@ -222,37 +288,6 @@ def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
     )
 
 
-def test_duplicate_live_ingest_lease_raises_before_dm_write(monkeypatch) -> None:
-    """A duplicate delivery must not start DataManager work while a lease is fresh."""
-
-    class Store:
-        def acquire_lease(self, *args, **kwargs):
-            raise LeaseNotAcquired(
-                "live owner",
-                lease=LeaseRecord(
-                    key="jobs/job-1/leases/ingest-table_1.json",
-                    owner_id="pod-a",
-                    attempt_id="attempt-a",
-                    stage="ingest",
-                    acquired_at="2026-05-06T00:00:00+00:00",
-                    heartbeat_at="2026-05-06T00:00:00+00:00",
-                    expires_at="2026-05-06T00:15:00+00:00",
-                    generation=3,
-                ),
-            )
-
-    with pytest.raises(DuplicateLiveAttempt) as exc:
-        ingest_worker._acquire_ingest_lease(
-            Store(),
-            job_id="job-1",
-            table_id="table_1",
-            attempt_id="attempt-b",
-        )
-
-    assert exc.value.stage == "ingest"
-    assert exc.value.lease.owner_id == "pod-a"
-
-
 @pytest.mark.asyncio
 async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -> None:
     events: list[str] = []
@@ -329,7 +364,6 @@ async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -
         work_queue=_Queue(),
         job_store=_JobStore(),
         run_ledger_factory=lambda _run_id: _Ledger(),
-        cost_ledger_factory=lambda _run_id: _Ledger(),
         settings=SimpleNamespace(
             environment="test",
             pubsub=SimpleNamespace(project_id="proj"),
@@ -351,7 +385,7 @@ async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -
     )
 
     async def _fake_run_dm_mode(**_kwargs):
-        return 1, None
+        return 1, None, ["ctx"]
 
     monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
 
@@ -414,49 +448,6 @@ def _completion_plan(*, row_count: int) -> IngestPlan:
             ),
         },
     )
-
-
-def test_declared_table_totals_resolves_meta_and_handle_row_counts() -> None:
-    plan = IngestPlan(
-        run_id="job-x",
-        file_path="demo.csv",
-        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
-        tables_meta=[
-            TableMeta(table_id="t_meta", label="t_meta", columns=["a"], row_count=7),
-            TableMeta(table_id="t_handle", label="t_handle", columns=["a"]),
-            TableMeta(table_id="t_unknown", label="t_unknown", columns=["a"]),
-        ],
-        table_inputs={
-            "t_meta": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=7),
-            "t_handle": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=3),
-            "t_unknown": InlineRowsHandle(rows=[{"a": 1}], columns=["a"]),
-        },
-    )
-    totals = ingest_worker._declared_table_totals(plan)
-    # meta.row_count wins for t_meta; handle.row_count is the fallback for
-    # t_handle; t_unknown is omitted because no count is resolvable.
-    assert totals == {"t_meta": 7, "t_handle": 3}
-
-
-def test_incomplete_dm_tables_flags_short_checkpoint() -> None:
-    plan = _completion_plan(row_count=10)
-
-    class _Store:
-        def read_checkpoint(self, _job_id, _table_id):
-            return SimpleNamespace(rows_committed=6, chunks_committed=6)
-
-    shorts = ingest_worker._incomplete_dm_tables(plan, _Store(), "job-1")
-    assert shorts == [("table_1", 6, 10)]
-
-
-def test_incomplete_dm_tables_accepts_complete_checkpoint() -> None:
-    plan = _completion_plan(row_count=10)
-
-    class _Store:
-        def read_checkpoint(self, _job_id, _table_id):
-            return SimpleNamespace(rows_committed=10, chunks_committed=10)
-
-    assert ingest_worker._incomplete_dm_tables(plan, _Store(), "job-1") == []
 
 
 async def _run_completion_gate_message(
@@ -532,14 +523,13 @@ async def _run_completion_gate_message(
         work_queue=_Queue(),
         job_store=_JobStore(),
         run_ledger_factory=lambda _run_id: _Ledger(),
-        cost_ledger_factory=lambda _run_id: _Ledger(),
         settings=SimpleNamespace(
             environment="test",
             pubsub=SimpleNamespace(project_id="proj"),
         ),
     )
     if max_retries_env is not None:
-        monkeypatch.setenv("UNITY_INGEST_INCOMPLETE_MAX_RETRIES", max_retries_env)
+        monkeypatch.setenv("UNITY_INGESTION_INCOMPLETE_MAX_RETRIES", max_retries_env)
     monkeypatch.setattr(worker_utils, "_shutdown_event", None)
     monkeypatch.setattr(ingest_worker, "_spawn_control_watcher", lambda *_a: _Watch())
     monkeypatch.setattr(ingest_worker, "_mark_ingest_running", lambda **_kwargs: None)
@@ -562,7 +552,7 @@ async def _run_completion_gate_message(
 
     async def _fake_run_dm_mode(**_kwargs):
         # Ingest "succeeds" without error, but the checkpoint is short.
-        return committed_rows, None
+        return committed_rows, None, ["ctx"]
 
     monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
 
@@ -636,71 +626,27 @@ async def test_completion_gate_dead_letters_when_budget_exhausted(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> None:
-    """Early DM ingest failures should not be masked by local bookkeeping bugs."""
+async def test_dm_mode_surfaces_an_engine_failure(monkeypatch) -> None:
+    """An exception from the shared engine must reach the ledger, not be masked.
 
-    class _DataManager:
-        def ingest(self, *args, **kwargs):
-            return None
-
+    The worker wraps the engine in bookkeeping; a bug there previously turned a
+    real ingest failure into a silent zero-row success.
+    """
     import unify.data_manager as data_manager_module
+    from unify.common.pipeline import checkpointed_ingest
 
-    monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
+    monkeypatch.setattr(data_manager_module, "DataManager", _StubDataManager)
 
-    def fail_before_results(**_kwargs):
-        raise RuntimeError("boom before artifact results")
+    def _boom(self, *_args, **_kwargs):
+        raise RuntimeError("boom inside the engine")
 
-    monkeypatch.setattr(ingest_worker, "ingest_artifacts", fail_before_results)
+    monkeypatch.setattr(checkpointed_ingest.CheckpointedIngest, "run", _boom)
 
-    class _ArtifactStore:
-        def read_checkpoint(self, *_args, **_kwargs):
-            return None
-
-    class _Infra:
-        artifact_store = _ArtifactStore()
-        storage_client = None
-
-    class _RunLedger:
-        def __init__(self):
-            self.entries = []
-
-        def write(self, entry):
-            self.entries.append(entry)
-
-    plan = IngestPlan(
-        run_id="job-1",
-        file_path="demo.csv",
-        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
-        tables_meta=[
-            TableMeta(
-                table_id="table_1",
-                label="table:1",
-                columns=["a"],
-                row_count=1,
-            ),
-        ],
-        table_inputs={
-            "table_1": InlineRowsHandle(
-                rows=[{"a": 1}],
-                columns=["a"],
-                row_count=1,
-            ),
-        },
-    )
-    ledger = _RunLedger()
-
-    rows, error = await ingest_worker._run_dm_mode_inner(
-        plan=plan,
-        msg=type(
-            "_Msg",
-            (),
-            {
-                "job_id": "job-1",
-                "dispatch_id": "dispatch-1",
-                "batch_size": 100,
-            },
-        )(),
-        infra=_Infra(),
+    ledger = _StubLedger()
+    rows, error, _contexts = await ingest_worker._run_dm_mode_inner(
+        plan=_single_table_plan(),
+        msg=_stub_msg(),
+        infra=_StubInfra(),
         run_ledger=ledger,
         dm_binding=DmBinding(
             user_id="user-1",
@@ -712,147 +658,38 @@ async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> 
     )
 
     assert rows == 0
-    assert error == "boom before artifact results"
+    assert error == "boom inside the engine"
     assert ledger.entries[-1].status == "error"
 
 
-# ---------------------------------------------------------------------------
-# Phase 1: attempt-lease release on shutdown/surrender
-# ---------------------------------------------------------------------------
-
-
-def test_release_ingest_lease_releases_and_untracks() -> None:
-    calls: list[tuple] = []
-
-    class _Store:
-        def release_lease(self, key, *, owner_id, attempt_id, generation):
-            calls.append((key, owner_id, attempt_id, generation))
-
-    lease = ingest_worker._ActiveIngestLease(
-        key="jobs/job-1/leases/ingest-t.json",
-        owner_id="owner-a",
-        attempt_id="attempt-a",
-        generation=5,
-    )
-    ingest_worker._track_ingest_lease(lease)
-    assert lease.key in ingest_worker._active_ingest_leases
-
-    ingest_worker._release_ingest_lease(_Store(), lease, reason="test")
-
-    assert calls == [("jobs/job-1/leases/ingest-t.json", "owner-a", "attempt-a", 5)]
-    assert lease.key not in ingest_worker._active_ingest_leases
-
-
-def test_release_ingest_lease_swallows_stale_lease_error() -> None:
-    class _Store:
-        def release_lease(self, *_a, **_k):
-            raise StaleLeaseError("owner changed")
-
-    lease = ingest_worker._ActiveIngestLease(
-        key="jobs/job-1/leases/ingest-t.json",
-        owner_id="owner-a",
-        attempt_id="attempt-a",
-        generation=1,
-    )
-    ingest_worker._track_ingest_lease(lease)
-
-    # A lease taken over by another attempt must not raise out of release.
-    ingest_worker._release_ingest_lease(_Store(), lease, reason="test")
-    assert lease.key not in ingest_worker._active_ingest_leases
-
-
-def test_release_tracked_job_leases_is_scoped_by_job_prefix() -> None:
-    released: list[str] = []
-
-    class _Store:
-        def release_lease(self, key, **_k):
-            released.append(key)
-
-    keep = ingest_worker._ActiveIngestLease(
-        key="jobs/job-B/leases/ingest-t1.json",
-        owner_id="o",
-        attempt_id="a",
-        generation=1,
-    )
-    drop = ingest_worker._ActiveIngestLease(
-        key="jobs/job-A/leases/ingest-t1.json",
-        owner_id="o",
-        attempt_id="a",
-        generation=1,
-    )
-    ingest_worker._track_ingest_lease(keep)
-    ingest_worker._track_ingest_lease(drop)
-
-    ingest_worker._release_tracked_job_leases(_Store(), "job-A")
-
-    assert released == ["jobs/job-A/leases/ingest-t1.json"]
-    assert keep.key in ingest_worker._active_ingest_leases
-    # cleanup the unrelated tracked lease
-    ingest_worker._active_ingest_leases.pop(keep.key, None)
-
-
 @pytest.mark.asyncio
-async def test_dm_mode_reraises_retry_on_surrender(monkeypatch) -> None:
-    """A captured surrender error must re-raise RetryWorkItem (not finalize)."""
+async def test_dm_mode_lets_a_surrender_propagate(monkeypatch) -> None:
+    """A surrender must reach the entrypoint, not be finalized as an error.
+
+    Finalizing it would ack the message and the run would never resume, losing
+    everything after the last checkpoint. The engine raises ``RetryWorkItem``;
+    the worker's job is to not swallow it.
+    """
+    import unify.data_manager as data_manager_module
+    from unify.common.pipeline import checkpointed_ingest
     from unify.common.pipeline.work_queue import RetryWorkItem
 
-    class _DataManager:
-        def ingest(self, *args, **kwargs):
-            return None
+    monkeypatch.setattr(data_manager_module, "DataManager", _StubDataManager)
 
-    import unify.data_manager as data_manager_module
+    def _surrender(self, *_args, **_kwargs):
+        raise RetryWorkItem(
+            f"Job job-1 {checkpointed_ingest.SURRENDER_SENTINEL}; "
+            "will resume from checkpoint",
+        )
 
-    monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
+    monkeypatch.setattr(checkpointed_ingest.CheckpointedIngest, "run", _surrender)
 
-    surrender = (
-        "Job job-1 surrendering in-flight chunk: worker shutting down; "
-        "will resume from checkpoint"
-    )
-    monkeypatch.setattr(
-        ingest_worker,
-        "ingest_artifacts",
-        lambda **_kwargs: [
-            SimpleNamespace(success=False, error=surrender, value=None),
-        ],
-    )
-
-    class _ArtifactStore:
-        def read_checkpoint(self, *_args, **_kwargs):
-            return None
-
-    class _Infra:
-        artifact_store = _ArtifactStore()
-        storage_client = None
-
-    class _RunLedger:
-        def __init__(self):
-            self.entries = []
-
-        def write(self, entry):
-            self.entries.append(entry)
-
-    plan = IngestPlan(
-        run_id="job-1",
-        file_path="demo.csv",
-        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
-        tables_meta=[
-            TableMeta(table_id="table_1", label="table_1", columns=["a"], row_count=1),
-        ],
-        table_inputs={
-            "table_1": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=1),
-        },
-    )
-
-    with pytest.raises(RetryWorkItem, match="surrendering in-flight chunk"):
+    with pytest.raises(RetryWorkItem):
         await ingest_worker._run_dm_mode_inner(
-            plan=plan,
-            msg=type(
-                "_Msg",
-                (),
-                {"job_id": "job-1", "dispatch_id": "dispatch-1", "batch_size": 100},
-            )(),
-            infra=_Infra(),
-            run_ledger=_RunLedger(),
+            plan=_single_table_plan(),
+            msg=_stub_msg(),
+            infra=_StubInfra(),
+            run_ledger=_StubLedger(),
             dm_binding=DmBinding(
                 user_id="user-1",
                 assistant_id="assistant-1",
@@ -861,6 +698,11 @@ async def test_dm_mode_reraises_retry_on_surrender(monkeypatch) -> None:
             default_target="ctx",
             activate_unify_context=lambda **_kwargs: None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: attempt-lease release on shutdown/surrender
+# ---------------------------------------------------------------------------
 
 
 def _make_plan(
@@ -1302,53 +1144,127 @@ async def _asyncio_sleep(seconds: float) -> None:
 # _make_checkpoint_callback with cancellation
 # ---------------------------------------------------------------------------
 
-from unify.common.pipeline import PipelineCancelled
+
+# ---------------------------------------------------------------------------
+# The staged request is the caller's intent, and a dispatched run honours it
+# ---------------------------------------------------------------------------
 
 
-def test_checkpoint_callback_raises_on_cancellation(tmp_path) -> None:
-    """The checkpoint callback should raise PipelineCancelled when cancelled."""
-
-    class _Store:
-        def write_checkpoint(self, *a, **kw):
-            pass
-
-    class _Task:
-        task_type = "insert_chunk_rows"
-
-    class _Result:
-        value = {"row_count": 10}
-
-    callback = ingest_worker._make_checkpoint_callback(
-        _Store(),
-        "job-1",
-        "content",
-        is_cancelled=lambda: True,
+def _staged_request(**target_overrides):
+    from unify.ingestion_manager.types.request import (
+        EmbedSpec,
+        FilesSource,
+        IngestionRequest,
+        TableTarget,
     )
 
-    with pytest.raises(PipelineCancelled):
-        callback(_Task(), _Result())
-
-
-def test_checkpoint_callback_noop_when_not_cancelled(tmp_path) -> None:
-    """The callback runs normally when is_cancelled returns False."""
-    written = {"count": 0}
-
-    class _Store:
-        def write_checkpoint(self, *a, **kw):
-            written["count"] += 1
-
-    class _Task:
-        task_type = "insert_chunk_rows"
-
-    class _Result:
-        value = {"row_count": 10}
-
-    callback = ingest_worker._make_checkpoint_callback(
-        _Store(),
-        "job-1",
-        "content",
-        is_cancelled=lambda: False,
+    return IngestionRequest(
+        source=FilesSource(paths=["demo.csv"]),
+        target=TableTarget(
+            context="Data/Deals",
+            unique_keys={"deal_id": "str"},
+            fields={"deal_id": "str", "amount": "float"},
+            infer_untyped_fields=True,
+            **target_overrides,
+        ),
+        embed=EmbedSpec(columns=["notes"], strategy="after"),
     )
 
-    callback(_Task(), _Result())
-    assert written["count"] == 1
+
+class TestStagedRequestOverlay:
+    def test_the_request_options_reach_the_table_work(self):
+        """Dropping these is the append-instead-of-upsert failure.
+
+        Files always dispatch when a fleet is reachable, so if the caller's
+        declared row identity does not survive the wire, re-submitting the same
+        spreadsheet to the same table quietly appends a full second copy while
+        the inline tier -- same request -- upserts. The two tiers must not
+        disagree about what a request means.
+        """
+        work = ingest_worker._table_work_from_plan(
+            _single_table_plan(),
+            msg=_stub_msg(),
+            default_target="ctx",
+            request=_staged_request(),
+        )
+        entry = work[0]
+        assert entry.unique_keys == {"deal_id": "str"}
+        assert entry.fields == {"deal_id": "str", "amount": "float"}
+        assert entry.embed_columns == ["notes"]
+        assert entry.embed_strategy == "after"
+        assert entry.infer_untyped_fields is True
+
+    def test_without_a_request_the_parse_derived_config_stands(self):
+        """Operator-CLI submits have no staged request and keep their behaviour."""
+        work = ingest_worker._table_work_from_plan(
+            _single_table_plan(),
+            msg=_stub_msg(),
+            default_target="ctx",
+            request=None,
+        )
+        entry = work[0]
+        assert entry.unique_keys is None
+        assert entry.fields is None
+        assert entry.infer_untyped_fields is False
+
+    def test_an_unreadable_staged_request_fails_rather_than_defaulting(self):
+        """Proceeding without the request would silently drop row identity —
+        the exact failure the request exists to prevent — so the message must
+        nack and retry once the store answers again."""
+        from unify.common.pipeline.artifact_store import ArtifactNotFound
+
+        class _Store:
+            def get_json(self, key):
+                raise ArtifactNotFound(key)
+
+        with pytest.raises(ArtifactNotFound):
+            ingest_worker._load_staged_request(
+                _Store(),
+                _stub_msg(request_key="jobs/run1/request.json"),
+            )
+
+    def test_a_missing_request_key_means_no_request(self):
+        assert (
+            ingest_worker._load_staged_request(object(), _stub_msg(request_key=""))
+            is None
+        )
+
+    def test_a_collection_request_shapes_the_fm_config(self):
+        """The caller's collection intent must survive dispatch: the shared
+        name is what lets related files land in one namespace, and
+        extract_tables=False is what keeps a report's layout tables from
+        becoming noise contexts."""
+        from unify.ingestion_manager.types.request import (
+            CollectionTarget,
+            FilesSource,
+            IngestionRequest,
+        )
+
+        request = IngestionRequest(
+            source=FilesSource(paths=["demo.pdf"]),
+            target=CollectionTarget(name="Quarterly Reports", extract_tables=False),
+        )
+        config = ingest_worker._build_fm_config_from_plan(
+            _single_table_plan(),
+            request=request,
+        )
+        assert config.ingest.storage_id == "Quarterly Reports"
+        assert config.ingest.table_ingest is False
+
+
+class TestResultContexts:
+    def test_content_and_table_contexts_are_collected_once_each(self):
+        result = SimpleNamespace(
+            content_ref=SimpleNamespace(context="u/1/Files/Local/7/Content"),
+            tables_ref=[
+                SimpleNamespace(context="u/1/Files/Local/7/Tables/Sheet1"),
+                SimpleNamespace(context="u/1/Files/Local/7/Tables/Sheet1"),
+            ],
+        )
+        assert ingest_worker._result_contexts(result) == [
+            "u/1/Files/Local/7/Content",
+            "u/1/Files/Local/7/Tables/Sheet1",
+        ]
+
+    def test_a_result_without_refs_reports_nothing(self):
+        assert ingest_worker._result_contexts(SimpleNamespace()) == []

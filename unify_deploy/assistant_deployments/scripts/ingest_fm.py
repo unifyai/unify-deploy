@@ -25,7 +25,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+    from unify.common.pipeline.config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def _dispatch_fm(
     """
     from unify.common.pipeline import DispatchTarget, publish_parse_request
     from unify.common.pipeline.types import FmBinding
-    from unify_deploy.assistant_deployments.types.pipeline_config import (
+    from unify.common.pipeline.config import (
         build_table_config_for_source_file,
     )
     from unify_deploy.infra.gcp.settings import GcpPipelineSettings

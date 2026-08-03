@@ -254,6 +254,7 @@ router.include_router(drain_router)
 # AssistantSession (self-scoped).
 from communication.infra.self_router import assistant_self_router
 import communication.infra.assistant_jobs_routes  # noqa: F401  # register routes
+import communication.infra.pipeline_control_plane  # noqa: F401  # register routes
 
 
 async def _assert_job_owned_by_assistant(

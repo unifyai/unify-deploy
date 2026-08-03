@@ -93,6 +93,9 @@ log_stage() {
 
 _load_install_progress() {
     if [[ -f "$SCRIPT_DIR/install_progress.sh" ]]; then
+        # Set here rather than changing the shared default, which other installers
+        # size for their own step count.
+        export INSTALL_PROGRESS_TOTAL="${INSTALL_PROGRESS_TOTAL:-8}"
         # shellcheck disable=SC1091
         source "$SCRIPT_DIR/install_progress.sh"
         return 0
@@ -550,6 +553,83 @@ ensure_console_npm_deps() {
     log_success "Console npm dependencies installed"
 }
 
+# --- Canvas authoring toolchain -------------------------------------------
+# Canvas is authored as real TSX, so the assistant needs a node toolchain to
+# lint, typecheck and bundle it, plus the runtime host to render it before
+# publishing. The hosted image bakes both in (unify/deploy/Dockerfile); source
+# mode builds nothing, so without this step canvas authoring fails with
+# "toolchain is unavailable" and the render gate silently skips.
+#
+# Installed to the paths CanvasManager probes when unconfigured, so nothing needs
+# wiring into unify/.env — one source of truth rather than a path restated in two
+# places that can drift apart.
+CANVAS_TOOLCHAIN_DIR="${CANVAS_TOOLCHAIN_DIR:-$HOME/.unity/canvas-toolchain}"
+CANVAS_HOST_DIR="${CANVAS_HOST_DIR:-$HOME/.unity/canvas-host}"
+
+# Which branding checkout to build from. Console vendors it as a submodule, so a
+# stack with console already has one; a sibling checkout wins for anyone working
+# on the kit itself.
+_canvas_branding_src() {
+    local candidate
+    for candidate in "${BRANDING_REPO:-}" "$UNITY_HOME/branding" "$CONSOLE_REPO/branding"; do
+        if [[ -n "$candidate" && -f "$candidate/packages/canvas-kit/package.json" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_canvas_toolchain() {
+    local installer="$UNITY_REPO/scripts/install-canvas-toolchain.sh"
+    if [[ ! -f "$installer" ]]; then
+        log_warn "Canvas installer not found at $installer — skipping canvas setup."
+        return 0
+    fi
+
+    local branding
+    if ! branding="$(_canvas_branding_src)"; then
+        log_warn "No branding checkout found — canvas authoring will be unavailable."
+        log_info "Initialise it with: git -C \"$CONSOLE_REPO\" submodule update --init branding"
+        return 0
+    fi
+
+    if [[ -d "$CANVAS_TOOLCHAIN_DIR/node_modules" && -f "$CANVAS_HOST_DIR/host/v1/index.html" ]]; then
+        log_success "Canvas toolchain already installed"
+    else
+        log_info "Building the canvas toolchain and runtime host (first run takes a few minutes)..."
+        if ! bash "$installer" \
+            --branding "$branding" \
+            --toolchain "$CANVAS_TOOLCHAIN_DIR" \
+            --host "$CANVAS_HOST_DIR"; then
+            # Not fatal. The rest of the stack works without canvas, and failing
+            # the whole setup over one optional surface is the wrong trade.
+            log_warn "Canvas toolchain build failed — canvas authoring will be unavailable."
+            return 0
+        fi
+        log_success "Canvas toolchain installed"
+    fi
+
+    # The render gate drives chromium through unify's own playwright. When it is
+    # missing the gate skips rather than fails, so this is attempted and never
+    # enforced.
+    local py="$UNITY_REPO/.venv/bin/python"
+    if [[ -x "$py" ]] && ! "$py" - <<'PY' >/dev/null 2>&1
+import pathlib
+import sys
+
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as playwright:
+    sys.exit(0 if pathlib.Path(playwright.chromium.executable_path).exists() else 1)
+PY
+    then
+        log_info "Installing Chromium for the canvas render gate..."
+        "$py" -m playwright install chromium >/dev/null 2>&1 \
+            || log_warn "Chromium install failed — canvases will publish without a visual check."
+    fi
+}
+
 # --- Main -----------------------------------------------------------------
 main() {
     local boot_runtime="false"
@@ -625,7 +705,12 @@ main() {
         exit 1
     fi
 
-    if ! progress_step_run 7 "Checking LiveKit Cloud voice configuration" \
+    # Never gates setup: ensure_canvas_toolchain warns and returns 0 on every
+    # failure path, because a stack without canvas is still a working stack.
+    progress_step_run 7 "Installing the canvas authoring toolchain" \
+        ensure_canvas_toolchain || true
+
+    if ! progress_step_run 8 "Checking LiveKit Cloud voice configuration" \
         setup_voice_defaults; then
         exit 1
     fi

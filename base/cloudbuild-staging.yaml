@@ -56,9 +56,11 @@ steps:
     UNIFY_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
     MAGNITUDE_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/magnitude.git refs/heads/unity-modifications | cut -f1)
+    BRANDING_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/branding.git refs/heads/staging | cut -f1)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
-    echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8}"
+    echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
+    echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
     SYSTEM_SHAS=""
     for repo in orchestra console docs; do
       SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/$${repo}.git refs/heads/staging | cut -f1)
@@ -82,6 +84,7 @@ steps:
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
     MAGNITUDE_SHA=$$(cat /workspace/magnitude_sha.txt)
     SYSTEM_SHA=$$(cat /workspace/system_repos_sha.txt)
+    BRANDING_SHA=$$(cat /workspace/canvas_branding_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
@@ -91,6 +94,7 @@ steps:
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       --build-arg MAGNITUDE_SHA=$$MAGNITUDE_SHA \
       --build-arg SYSTEM_REPOS_SHA=$$SYSTEM_SHA \
+      --build-arg CANVAS_BRANDING_SHA=$$BRANDING_SHA \
       -f /workspace/unity-src/deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest \

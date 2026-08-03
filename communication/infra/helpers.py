@@ -357,7 +357,10 @@ def build_unity_job_manifest(
             outbound HTTP call (e.g. SmartLead's 60s client timeout)
             returns or is interrupted.
     """
-    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
+    # CONSOLE_URL is optional with a production default baked into unify's
+    # settings; per-environment ConfigMaps override it so canvas and dashboard
+    # links point at the Console that can actually serve them.
+    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "CONSOLE_URL"}
     unity_config_env = []
     for key in (
         "GCP_PROJECT_ID",
@@ -365,6 +368,7 @@ def build_unity_job_manifest(
         "VERTEXAI_LOCATION",
         "VERTEXAI_PROJECT",
         "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
+        "CONSOLE_URL",
     ):
         config_ref = {
             "name": "unity-config",

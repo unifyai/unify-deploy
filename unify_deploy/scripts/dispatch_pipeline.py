@@ -284,7 +284,7 @@ def _collect_adhoc_items(args: argparse.Namespace) -> list[DispatchItem]:
 
 def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
     """Build dispatch items from --config."""
-    from unify_deploy.assistant_deployments.types.pipeline_config import (
+    from unify.common.pipeline.config import (
         PipelineConfig,
         build_table_config_for_source_file,
     )

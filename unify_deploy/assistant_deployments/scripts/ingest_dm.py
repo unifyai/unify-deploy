@@ -26,7 +26,7 @@ import time
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
-    from unify_deploy.assistant_deployments.types.pipeline_config import (
+    from unify.common.pipeline.config import (
         PipelineConfig,
         SourceTableSpec,
     )
