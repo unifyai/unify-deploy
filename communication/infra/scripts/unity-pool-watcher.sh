@@ -699,6 +699,7 @@ PYSCRIPT
 PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unify_key
+VNC_PASSWORD=$vnc_password
 ORCHESTRA_URL=$orchestra_url
 UNITY_COMMS_URL=$comms_url
 UNITY_LOCAL_ROOT=/Unity/Local
