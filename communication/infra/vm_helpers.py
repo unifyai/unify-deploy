@@ -15,6 +15,7 @@ import json
 import logging
 import random
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -3886,9 +3887,12 @@ def _assign_pool_vm(
             vm_name=vm_name,
             vm_type=vm_type,
         )
+        # VncAuth (DES-based) only compares the first 8 bytes of the password,
+        # but mint a longer secret anyway since it also feeds HMAC/signed uses.
+        desktop_secret = secrets.token_urlsafe(16)
         metadata = {
             "unify-key": unify_apikey,
-            "vnc-password": unify_apikey,
+            "vnc-password": desktop_secret,
             "ssh-public-key": public_key,
             "disk-device": device_name,
             "assistant-id": assistant_id,
@@ -3936,6 +3940,7 @@ def _assign_pool_vm(
             "ip_address": claimed["ip_address"],
             "hostname": claimed["hostname"],
             "desktop_url": claimed["desktop_url"],
+            "desktop_secret": desktop_secret,
             "status": "RUNNING",
             "ssh_username": POOL_SSH_USERNAME,
             "ssh_port": SSH_SYNC_PORT,
