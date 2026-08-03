@@ -54,6 +54,7 @@ from .assistant_sessions import (
     assistant_session_observability_fields,
     assistant_session_name,
     assistant_session_stop_requested,
+    binding_desktop_secret,
     binding_desktop_url,
     binding_id as binding_id_from_status,
     binding_release_generation,
@@ -197,6 +198,7 @@ async def _publish_desktop_ready(
     vm_type: str,
     *,
     binding_id: str,
+    desktop_secret: str | None = None,
 ) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
@@ -211,18 +213,22 @@ async def _publish_desktop_ready(
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
+    event: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "binding_id": binding_id,
+        "event_type": "assistant_desktop_ready",
+        "desktop_url": f"https://{hostname}",
+        "vm_type": vm_type,
+        "message": f"VM ({vm_type}) startup complete",
+    }
+    if desktop_secret:
+        event["desktop_secret"] = desktop_secret
+
     message_data = json.dumps(
         {
             "thread": "unity_system_event",
             "publish_timestamp": time.time(),
-            "event": {
-                "assistant_id": assistant_id,
-                "binding_id": binding_id,
-                "event_type": "assistant_desktop_ready",
-                "desktop_url": f"https://{hostname}",
-                "vm_type": vm_type,
-                "message": f"VM ({vm_type}) startup complete",
-            },
+            "event": event,
         },
     ).encode("utf-8")
 
@@ -2752,6 +2758,7 @@ async def vm_ready_endpoint(
             hostname,
             vm_type,
             binding_id=current_binding_id,
+            desktop_secret=binding_desktop_secret(fresh_binding) or None,
         )
         await asyncio.to_thread(
             record_assistant_session_signal,
