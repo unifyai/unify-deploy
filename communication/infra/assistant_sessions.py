@@ -256,6 +256,12 @@ def binding_desktop_url(binding: dict[str, Any] | None) -> str:
     return str((binding or {}).get("desktopUrl", "") or "")
 
 
+def binding_desktop_secret(binding: dict[str, Any] | None) -> str:
+    """Return the per-binding desktop secret (VNC password) stored on the binding."""
+
+    return str((binding or {}).get("desktopSecret", "") or "")
+
+
 def binding_id(binding: dict[str, Any] | None) -> str:
     """Return the immutable binding identifier."""
 
@@ -514,6 +520,7 @@ def build_binding(
     vm_assignment: dict[str, Any] | None = None,
     vm_ref: dict[str, Any] | None = None,
     desktop_url: str | None = None,
+    desktop_secret: str | None = None,
     created_at: str | None = None,
     container_bootstrap_started_at: str | None = None,
     container_ready_at: str | None = None,
@@ -535,6 +542,7 @@ def build_binding(
         "vmAssignment": vm_assignment,
         "vmRef": vm_ref,
         "desktopUrl": desktop_url,
+        "desktopSecret": desktop_secret,
         "createdAt": created_at,
         "containerBootstrapStartedAt": container_bootstrap_started_at,
         "containerReadyAt": container_ready_at,
@@ -559,6 +567,7 @@ def _binding_from_current(
     vm_assignment: dict[str, Any] | None | object = _STATUS_UNSET,
     vm_ref: dict[str, Any] | None | object = _STATUS_UNSET,
     desktop_url: str | None | object = _STATUS_UNSET,
+    desktop_secret: str | None | object = _STATUS_UNSET,
     created_at: str | None | object = _STATUS_UNSET,
     container_bootstrap_started_at: str | None | object = _STATUS_UNSET,
     container_ready_at: str | None | object = _STATUS_UNSET,
@@ -600,6 +609,11 @@ def _binding_from_current(
             binding_desktop_url(current_binding) or None
             if desktop_url is _STATUS_UNSET
             else desktop_url
+        ),
+        desktop_secret=(
+            binding_desktop_secret(current_binding) or None
+            if desktop_secret is _STATUS_UNSET
+            else desktop_secret
         ),
         created_at=(
             str(current_binding.get("createdAt", "") or "") or None
@@ -1787,6 +1801,7 @@ def persist_binding_vm_assignment_result(
     state: str,
     message: str | None = None,
     vm_ref: dict[str, Any] | None = None,
+    desktop_secret: str | None = None,
     source: str | None = None,
 ) -> bool:
     """Persist the outcome for the current binding VM assignment attempt."""
@@ -1809,6 +1824,7 @@ def persist_binding_vm_assignment_result(
                 vm_assignment=None,
                 vm_ref=vm_ref,
                 desktop_url=None,
+                desktop_secret=desktop_secret,
                 vm_assigned_at=observed_at,
                 guest_handshake_started_at=observed_at,
                 vm_ready_observed_at=None,

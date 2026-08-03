@@ -34,6 +34,7 @@ def binding_payload(
     vm_assignment: dict | None | object = BINDING_UNSET,
     vm_ref: dict | None | object = BINDING_UNSET,
     desktop_url: str | None | object = BINDING_UNSET,
+    desktop_secret: str | None | object = BINDING_UNSET,
     created_at: str | None | object = BINDING_UNSET,
     container_bootstrap_started_at: str | None | object = BINDING_UNSET,
     container_ready_at: str | None | object = BINDING_UNSET,
@@ -69,6 +70,11 @@ def binding_payload(
         vm_ref=binding_vm_ref(binding) or None if vm_ref is BINDING_UNSET else vm_ref,
         desktop_url=(
             binding.get("desktopUrl") if desktop_url is BINDING_UNSET else desktop_url
+        ),
+        desktop_secret=(
+            binding.get("desktopSecret")
+            if desktop_secret is BINDING_UNSET
+            else desktop_secret
         ),
         created_at=(
             binding.get("createdAt") if created_at is BINDING_UNSET else created_at

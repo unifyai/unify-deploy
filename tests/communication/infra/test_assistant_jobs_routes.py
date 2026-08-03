@@ -101,6 +101,38 @@ def test_liveview_route_updates_existing_row(client: TestClient) -> None:
     }
     put.assert_called_once()
     assert put.call_args.kwargs["json"]["logs"] == [7]
-    assert put.call_args.kwargs["json"]["entries"]["liveview_url"] == (
-        "https://vm.example/desktop"
-    )
+    assert put.call_args.kwargs["json"]["entries"] == {
+        "liveview_url": "https://vm.example/desktop",
+    }
+
+
+def test_liveview_route_writes_password_when_present(client: TestClient) -> None:
+    auth = AsyncMock(return_value=CallerContext(is_admin=True))
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json.return_value = {"logs": [{"id": 7}]}
+    put_resp = MagicMock()
+    put_resp.status_code = 200
+    put_resp.json.return_value = {"info": "ok"}
+
+    with (
+        patch.object(routes, "authorize_admin_or_assistant", auth),
+        patch.object(routes.requests, "get", return_value=get_resp),
+        patch.object(routes.requests, "put", return_value=put_resp) as put,
+    ):
+        response = client.patch(
+            "/infra/assistant-jobs/liveview",
+            json={
+                "assistant_id": "42",
+                "job_name": "job-abc",
+                "liveview_url": "https://vm.example/desktop",
+                "liveview_password": "s3cr3t",
+            },
+            headers={"Authorization": "Bearer admin"},
+        )
+
+    assert response.status_code == 200
+    assert put.call_args.kwargs["json"]["entries"] == {
+        "liveview_url": "https://vm.example/desktop",
+        "liveview_password": "s3cr3t",
+    }

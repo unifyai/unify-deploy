@@ -264,7 +264,7 @@ def _run_vm_assignment(
         if placement is None:
             raise ValueError(
                 "Desktop assignment requires a complete AssistantSession placement; "
-                "refusing the default pool location"
+                "refusing the default pool location",
             )
         if migration is not None:
             # Preparation is replay-safe and leaves the source disk/IP intact.
@@ -294,7 +294,7 @@ def _run_vm_assignment(
                     "poolLocation": result["pool_location"],
                     "region": result["region"],
                     "zone": result["zone"],
-                }
+                },
             )
             try:
                 release_pool_vm(
@@ -307,7 +307,7 @@ def _run_vm_assignment(
                 raise ValueError(
                     "Pool assignment returned a VM outside the requested placement: "
                     f"expected={placement.location.id}/{placement.zone} "
-                    f"actual={result['pool_location']}/{result['zone']}"
+                    f"actual={result['pool_location']}/{result['zone']}",
                 )
         persisted = persist_binding_vm_assignment_result(
             custom_api,
@@ -325,6 +325,7 @@ def _run_vm_assignment(
                 "zone": result["zone"],
                 **({"regionalMigration": migration} if migration is not None else {}),
             },
+            desktop_secret=result.get("desktop_secret"),
             source="worker.vm_assignment",
         )
         if persisted:

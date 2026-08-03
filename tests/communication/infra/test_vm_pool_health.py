@@ -942,6 +942,84 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     assert result["ip_address"] == "34.0.0.123"
 
 
+def test_assign_pool_vm_mints_distinct_desktop_secret(monkeypatch):
+    update_metadata = MagicMock()
+
+    monkeypatch.setattr(
+        "communication.infra.helpers.setup_kubernetes_client",
+        lambda: (None, None, None, object()),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.acquire_assignment_lease",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.release_assignment_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._ensure_disk_ready_for_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.reclaim_stale_assistant_ip_owners",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.claim_idle_vm",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-4-staging",
+            "ip_address": "34.0.0.4",
+            "hostname": "unity-pool-ubuntu-4-staging.vm.unify.ai",
+            "desktop_url": "https://unity-pool-ubuntu-4-staging.vm.unify.ai",
+            "status": "RUNNING",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.attach_assistant_static_ip_to_pool_vm",
+        lambda *_args, **_kwargs: {
+            "hostname": "unity-assistant-assistant-123-staging.vm.unify.ai",
+            "ip_address": "34.0.0.123",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.create_assistant_disk",
+        lambda *_args, **_kwargs: "disk-self-link",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.attach_assistant_disk",
+        lambda *_args, **_kwargs: "unity-disk-assistant-123",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._fetch_existing_ssh_key",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.generate_ssh_keypair",
+        lambda: ("PRIVATE", "PUBLIC"),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.store_ssh_private_key",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.get_secret",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        update_metadata,
+    )
+
+    result = assign_pool_vm("assistant-123", "binding-new", "unify-key-abc")
+
+    metadata = update_metadata.call_args.args[1]
+    assert metadata["unify-key"] == "unify-key-abc"
+    assert metadata["vnc-password"] != "unify-key-abc"
+    assert len(metadata["vnc-password"]) >= 16
+    assert result["desktop_secret"] == metadata["vnc-password"]
+
+
 def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypatch):
     claim_idle = MagicMock()
 

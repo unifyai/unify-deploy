@@ -122,6 +122,7 @@ def patch_liveview_via_infra(
     assistant_id: str,
     job_name: str,
     liveview_url: str,
+    liveview_password: str | None = None,
     timeout: float = 30,
 ) -> bool:
     """Set liveview_url via ``/infra/assistant-jobs/liveview``."""
@@ -130,6 +131,8 @@ def patch_liveview_via_infra(
         "job_name": job_name,
         "liveview_url": liveview_url,
     }
+    if liveview_password is not None:
+        payload["liveview_password"] = liveview_password
     try:
         resp = requests.patch(
             f"{comms_url.rstrip('/')}/infra/assistant-jobs/liveview",

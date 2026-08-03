@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -407,6 +408,7 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
                     "name": "unity-pool-ubuntu-1-staging",
                     "hostname": "vm-1.vm.unify.ai",
                 },
+                "desktopSecret": "vm-secret-abc",
             },
         },
     }
@@ -478,6 +480,7 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
         "vm-1.vm.unify.ai",
         "ubuntu",
         binding_id="binding-123",
+        desktop_secret="vm-secret-abc",
     )
     assert record_signal.call_args.kwargs["signal_name"] == "desktopReady"
     assert record_signal.call_args.kwargs["payload"]["bindingId"] == "binding-123"
@@ -486,6 +489,60 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
         == "https://vm-1.vm.unify.ai"
     )
     assert record_signal.call_args.kwargs["payload"]["messageId"] == "message-123"
+
+
+@pytest.mark.asyncio
+async def test_publish_desktop_ready_includes_secret_when_set():
+    from communication.infra import views as views_module
+
+    publisher = MagicMock()
+    publisher.topic_path.return_value = "projects/test/topics/unity-1207-staging"
+    future = MagicMock()
+    future.result.return_value = "message-999"
+    publisher.publish.return_value = future
+
+    with patch.object(
+        views_module,
+        "_get_pubsub_clients",
+        return_value=(publisher, MagicMock()),
+    ):
+        message_id = await views_module._publish_desktop_ready(
+            "1207",
+            "vm-1.vm.unify.ai",
+            "ubuntu",
+            binding_id="binding-123",
+            desktop_secret="vm-secret-abc",
+        )
+
+    assert message_id == "message-999"
+    payload = json.loads(publisher.publish.call_args.kwargs["data"])
+    assert payload["event"]["desktop_secret"] == "vm-secret-abc"
+
+
+@pytest.mark.asyncio
+async def test_publish_desktop_ready_omits_secret_when_absent():
+    from communication.infra import views as views_module
+
+    publisher = MagicMock()
+    publisher.topic_path.return_value = "projects/test/topics/unity-1207-staging"
+    future = MagicMock()
+    future.result.return_value = "message-998"
+    publisher.publish.return_value = future
+
+    with patch.object(
+        views_module,
+        "_get_pubsub_clients",
+        return_value=(publisher, MagicMock()),
+    ):
+        await views_module._publish_desktop_ready(
+            "1207",
+            "vm-1.vm.unify.ai",
+            "ubuntu",
+            binding_id="binding-123",
+        )
+
+    payload = json.loads(publisher.publish.call_args.kwargs["data"])
+    assert "desktop_secret" not in payload["event"]
 
 
 def test_vm_ready_ignores_release_in_progress_for_current_binding(tunnel_client):

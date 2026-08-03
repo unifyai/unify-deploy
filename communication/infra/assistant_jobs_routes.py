@@ -49,6 +49,7 @@ class AssistantJobsLiveviewRequest(BaseModel):
     assistant_id: str
     job_name: str
     liveview_url: str = Field(..., min_length=1)
+    liveview_password: str | None = None
 
 
 def _orchestra_admin_headers() -> dict[str, str]:
@@ -145,14 +146,22 @@ def _find_startup_log_id(*, assistant_id: str, job_name: str) -> int | None:
     return int(log_id) if log_id is not None else None
 
 
-def _update_liveview_url(*, log_id: int, liveview_url: str) -> None:
+def _update_liveview_url(
+    *,
+    log_id: int,
+    liveview_url: str,
+    liveview_password: str | None = None,
+) -> None:
+    entries: dict[str, Any] = {"liveview_url": liveview_url}
+    if liveview_password is not None:
+        entries["liveview_password"] = liveview_password
     response = requests.put(
         f"{_orchestra_base()}/logs",
         headers=_orchestra_admin_headers(),
         json={
             "logs": [log_id],
             "context": CONTEXT_NAME,
-            "entries": {"liveview_url": liveview_url},
+            "entries": entries,
             "overwrite": True,
         },
         timeout=ORCHESTRA_TIMEOUT_SECONDS,
@@ -212,6 +221,7 @@ async def patch_assistant_jobs_liveview(
             _update_liveview_url,
             log_id=log_id,
             liveview_url=body.liveview_url,
+            liveview_password=body.liveview_password,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
