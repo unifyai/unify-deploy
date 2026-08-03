@@ -251,11 +251,11 @@ USER unity
 # A missing toolchain otherwise surfaces only when an assistant tries to publish
 # (the build gate rejects every canvas), and a missing host is worse — the
 # render review reports "skipped" and unreviewed canvases publish silently.
-# gate_available() also proves the runtime user resolves a chromium; the verify
-# script then drives lint → tsc → esbuild against the vendored kit and exits
-# non-zero on any failure, including a .builds directory this user cannot write.
-RUN python -c "from unify.canvas_manager.ops.build_ops import toolchain_available; from unify.canvas_manager.ops.review_ops import gate_available; assert toolchain_available(), 'canvas toolchain missing from the image'; assert gate_available(), 'canvas host or chromium unavailable to the runtime user'" && \
-    python tests/_verify_canvas_build.py
+# The script compiles a probe canvas through the real lint → tsc → esbuild
+# chain (which also proves .builds is writable by this user) and checks the
+# render gate's prerequisites resolve. Self-contained under deploy/ because the
+# unify checkout's tests/ tree is dockerignored and never reaches the context.
+RUN python deploy/scripts/canvas_gate.py
 
 # Expose the ports that the applications use
 # 8000: conversation manager, 3000: agent-service (Magnitude)
