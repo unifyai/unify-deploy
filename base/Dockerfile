@@ -1,3 +1,37 @@
+# ---------------------------------------------------------------------------
+# Canvas toolchain and runtime host
+# ---------------------------------------------------------------------------
+# Built in a separate stage so the branding monorepo's node_modules — around a
+# gigabyte, most of it irrelevant here — never reaches the runtime image. Only
+# two directories are copied forward.
+#
+# CanvasManager needs both: the toolchain to lint/typecheck/bundle authored TSX,
+# and the runtime host to render the result headlessly before publishing. The
+# host assets are the same bytes the canvas origin serves, so what the assistant
+# reviews is what a viewer sees.
+FROM node:22-slim AS canvas
+ARG GITHUB_TOKEN
+ARG BRANCH=main
+ARG CANVAS_BRANDING_SHA=unknown
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
+
+# CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
+# kit would be baked in indefinitely. Branch logic mirrors the dependency clones
+# below: main→main, everything else→staging.
+RUN echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
+    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    chmod +x /tmp/install-canvas-toolchain.sh && \
+    /tmp/install-canvas-toolchain.sh \
+        --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
+        --toolchain /opt/canvas-toolchain \
+        --host /opt/canvas-host && \
+    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+
+
 # Use Python 3.12 slim image as base
 FROM python:3.12-slim
 
@@ -104,6 +138,15 @@ ENV MKL_NUM_THREADS=1
 RUN HF_HOME=/opt/hf-cache python unify/conversation_manager/medium_scripts/call.py download-files
 RUN playwright install
 
+# Canvas authoring artifacts from the builder stage. The render gate drives the
+# playwright chromium installed just above (mirrored into the runtime user's
+# cache in the useradd layer below), which is why this follows it: without a
+# browser CanvasManager would compile a canvas and then decline to publish it.
+COPY --from=canvas /opt/canvas-toolchain /opt/canvas-toolchain
+COPY --from=canvas /opt/canvas-host /opt/canvas-host
+ENV UNITY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain
+ENV UNITY_CANVAS_HOST_ROOT=/opt/canvas-host
+
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
 RUN cd /opt/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
@@ -191,11 +234,25 @@ RUN useradd -m -u 1000 unity && \
     mkdir -p /run/dbus && chmod 777 /run/dbus && \
     mkdir -p /tmp/runtime-unity && chown unity:unity /tmp/runtime-unity && chmod 700 /tmp/runtime-unity && \
     chown -R unity:unity /app /var/log/unity /var/log/unisdk /var/log/unillm /var/log/magnitude && \
+    # Canvas builds compile in a temp dir under the toolchain's .builds so node
+    # resolution walks up into its node_modules; COPY --from lands it root-owned,
+    # which would fail every canvas build at mkdtemp as the runtime user.
+    chown unity:unity /opt/canvas-toolchain/.builds && \
     cp -r /root/.cache/ms-playwright /home/unity/.cache/ms-playwright && \
     cp -r /root/.config/xfce4 /home/unity/.config/xfce4 2>/dev/null || true && \
     chown -R unity:unity /home/unity/.cache /home/unity/.config
 
 USER unity
+
+# Prove the canvas authoring chain inside the final image, as the runtime user.
+# A missing toolchain otherwise surfaces only when an assistant tries to publish
+# (the build gate rejects every canvas), and a missing host is worse — the
+# render review reports "skipped" and unreviewed canvases publish silently.
+# gate_available() also proves the runtime user resolves a chromium; the verify
+# script then drives lint → tsc → esbuild against the vendored kit and exits
+# non-zero on any failure, including a .builds directory this user cannot write.
+RUN python -c "from unify.canvas_manager.ops.build_ops import toolchain_available; from unify.canvas_manager.ops.review_ops import gate_available; assert toolchain_available(), 'canvas toolchain missing from the image'; assert gate_available(), 'canvas host or chromium unavailable to the runtime user'" && \
+    python tests/_verify_canvas_build.py
 
 # Expose the ports that the applications use
 # 8000: conversation manager, 3000: agent-service (Magnitude)
