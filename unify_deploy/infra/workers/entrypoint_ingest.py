@@ -128,6 +128,7 @@ async def main() -> None:
     from .worker_utils import (
         DuplicateLiveAttempt,
         LeaseExtender,
+        build_selfhost_worker_infra,
         build_worker_infra,
         initialize_worker_environment,
         install_signal_handlers,
@@ -154,7 +155,14 @@ async def main() -> None:
     # touched.
     _ = args.project  # kept for CLI compatibility; project read per-msg.
 
-    infra = build_worker_infra()
+    # Self-host binds local artifacts and the emulated queue; the handler
+    # below is the same either way, which is what makes the local stack a
+    # rehearsal of the hosted one rather than a separate code path.
+    infra = (
+        build_selfhost_worker_infra()
+        if os.environ.get("SELF_HOST", "").strip() not in ("", "0", "false")
+        else build_worker_infra()
+    )
 
     logger.info("Ingest worker started, polling for messages...")
 

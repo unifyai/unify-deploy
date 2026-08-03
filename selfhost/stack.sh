@@ -13,7 +13,7 @@
 #   ./scripts/stack.sh redeploy     Alias for up
 #   ./scripts/stack.sh down [--full]    Stop stack (--full stops background runtime too)
 #   ./scripts/stack.sh status       Show service status
-#   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub)
+#   ./scripts/stack.sh logs [svc]   Follow service logs (console|orchestra|pubsub|canvas)
 #   ./scripts/stack.sh doctor       Check prerequisites
 #   ./scripts/stack.sh smoke        Verify the running local product
 #   ./scripts/stack.sh repair-console  Restart Console with preserved stack env
@@ -51,6 +51,8 @@ ENSURE_PREREQS_SCRIPT="$SCRIPT_DIR/ensure_prereqs.sh"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
+# shellcheck source=canvas_origin.sh
+source "$SCRIPT_DIR/canvas_origin.sh"
 # shellcheck source=selfhost/builtins_catalog_cache.sh
 source "$SCRIPT_DIR/builtins_catalog_cache.sh"
 
@@ -857,6 +859,11 @@ cmd_resume() {
 
   cmd_up_provider_triggers_setup || return 1
 
+  # Before Console: it reads CANVAS_ORIGIN at startup to build its CSP `frame-src`,
+  # so starting the origin afterwards would leave the running Console unable to
+  # frame it until the next restart.
+  canvas_origin_start
+
   if declare -F self_host_ensure_service_supervisor &>/dev/null \
     && [[ -f "$SCRIPT_DIR/service.sh" ]]; then
     log_info "Ensuring background runtime (scheduled tasks while stack is down)..."
@@ -916,6 +923,9 @@ cmd_resume() {
   echo "=============================================="
   echo ""
   echo "  Console:   http://localhost:${console_port}"
+  if canvas_origin_is_running; then
+    echo "  Canvas:    ${CANVAS_ORIGIN}"
+  fi
   echo ""
   if [[ -f "$runtime_file" ]]; then
     echo "  Open Console and chat with your Coordinator."
@@ -1065,6 +1075,10 @@ cmd_down() {
     source "$SELF_HOST_ENV_SCRIPT"
   fi
 
+  # Stopped with Console either way: the origin only serves frames for Console
+  # pages, so leaving it listening would hold port 3100 for nothing.
+  canvas_origin_stop
+
   if [[ "$full_stop" == "true" ]]; then
     if [[ -x "$SCRIPT_DIR/self_host_desktop.sh" ]]; then
       bash "$SCRIPT_DIR/self_host_desktop.sh" stop || true
@@ -1146,6 +1160,9 @@ cmd_status() {
     echo ""
     bash "$SCRIPT_DIR/service.sh" status
   fi
+
+  echo ""
+  canvas_origin_status_line
 
   cmd_health_summary
 
@@ -1388,6 +1405,16 @@ cmd_logs() {
   if [[ ! -f "$CONSOLE_LOCAL_SCRIPT" ]]; then
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
     return 1
+  fi
+  # The canvas origin is the one service this script starts itself, so its log is
+  # the one it has to serve; everything else belongs to Console's local.sh.
+  if [[ "${1:-}" == "canvas" ]]; then
+    if [[ ! -f "$CANVAS_ORIGIN_LOG_FILE" ]]; then
+      log_error "No canvas origin log at $CANVAS_ORIGIN_LOG_FILE"
+      return 1
+    fi
+    tail -f "$CANVAS_ORIGIN_LOG_FILE"
+    return 0
   fi
   # Console's local.sh owns the per-service logfiles for the stack
   # (console|orchestra|pubsub|stripe); delegate so there's one log surface.

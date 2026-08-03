@@ -78,6 +78,13 @@ build_cm_env() {
   export UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://gateway:8001}"
   export UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://gateway:8001}"
 
+  # Files always parse off this process when a fleet is reachable, and here one
+  # is: the ingestion worker services share the pipeline-artifacts volume with
+  # the service fronting /infra/pipeline/*. Left unset, every file would parse
+  # in-process instead -- which works, but rehearses none of the parse/ingest
+  # process split the hosted stack runs.
+  export UNITY_INGESTION_PIPELINE_URL="${UNITY_INGESTION_PIPELINE_URL:-$UNITY_COMMS_URL}"
+
   export UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=true
   export UNITY_CONVERSATION_LOCAL_COMMS_MODE=local
   export UNITY_CONVERSATION_LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"

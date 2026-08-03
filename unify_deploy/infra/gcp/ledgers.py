@@ -1,4 +1,4 @@
-"""GCS-backed RunLedger and CostLedger implementations."""
+"""GCS-backed RunLedger implementation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from unify.common.pipeline.retry_policy import ResilientRequestPolicy
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from unify.common.pipeline.cost_ledger import PipelineCostLedger
 
 from .settings import GcsArtifactStoreSettings
 
@@ -93,54 +92,6 @@ class GcsRunLedger:
             )
         except Exception:
             logger.exception("Failed to flush run ledger to GCS: %s", self._blob_key)
-
-    @property
-    def gcs_uri(self) -> str:
-        return f"gs://{self._bucket_name}/{self._blob_key}"
-
-
-class GcsCostLedger:
-    """GCS-backed cost ledger writing the final cost ledger as JSON.
-
-    Implements the ``CostLedger`` protocol from unify.
-    """
-
-    def __init__(
-        self,
-        *,
-        client: storage.Client,
-        settings: GcsArtifactStoreSettings,
-        run_id: str,
-        retry_policy: ResilientRequestPolicy | None = None,
-    ):
-        self._client = client
-        self._bucket_name = settings.bucket
-        prefix = settings.prefix.strip("/")
-        job_root = f"{prefix}/jobs/{run_id}" if prefix else f"jobs/{run_id}"
-        self._blob_key = f"{job_root}/cost_ledger.json"
-        self._retry_policy = retry_policy or ResilientRequestPolicy()
-
-        self._latest: "PipelineCostLedger | None" = None
-        self._lock = threading.Lock()
-
-    def write(self, ledger: "PipelineCostLedger") -> None:
-        with self._lock:
-            self._latest = ledger
-
-    def flush(self) -> None:
-        with self._lock:
-            ledger = self._latest
-        if ledger is None:
-            return
-        blob = self._client.bucket(self._bucket_name).blob(self._blob_key)
-        content = ledger.model_dump_json(indent=2)
-        try:
-            blob.upload_from_string(content, content_type="application/json")
-        except Exception:
-            logger.exception("Failed to flush cost ledger to GCS: %s", self._blob_key)
-
-    def close(self) -> None:
-        self.flush()
 
     @property
     def gcs_uri(self) -> str:

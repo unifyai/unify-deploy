@@ -21,7 +21,7 @@ from typing import Any, TYPE_CHECKING, Literal, Optional
 from pydantic import BaseModel, Field
 from unify.secret_manager.types import Secret
 from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
-from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+from unify.common.pipeline.config import PipelineConfig
 
 if TYPE_CHECKING:
     from types import ModuleType

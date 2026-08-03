@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from unify.common.pipeline.artifact_store import ArtifactStore
-from unify.common.pipeline.cost_ledger import CostLedger
 from unify.common.pipeline.deployment.types import (
     DeploymentBundleStore,
     DeploymentJobStore,
@@ -65,7 +64,6 @@ class WorkerInfra:
     # record periodic liveness signals without contending with the
     # main stage/file/run ledger buffer.
     heartbeat_ledger_factory: Callable[[str], RunLedger]
-    cost_ledger_factory: Callable[[str], CostLedger]
     bundle_store: DeploymentBundleStore
     job_store: DeploymentJobStore
     settings: GcpPipelineSettings
@@ -584,25 +582,81 @@ def build_worker_infra(
             flush_threshold=1,
         )
 
-    def cost_ledger_factory(run_id: str) -> CostLedger:
-        from unify_deploy.infra.gcp.ledgers import GcsCostLedger
-
-        return GcsCostLedger(
-            client=storage_client,
-            settings=ledger_settings,
-            run_id=run_id,
-        )
-
     return WorkerInfra(
         artifact_store=artifact_store,
         work_queue=work_queue,
         run_ledger_factory=run_ledger_factory,
         heartbeat_ledger_factory=heartbeat_ledger_factory,
-        cost_ledger_factory=cost_ledger_factory,
         bundle_store=bundle_store,
         job_store=job_store,
         settings=settings,
         storage_client=storage_client,
+    )
+
+
+def build_selfhost_worker_infra(
+    *,
+    settings: GcpPipelineSettings | None = None,
+    artifact_root: str | None = None,
+) -> WorkerInfra:
+    """Assemble the self-host adapter stack: local artifacts, emulated queue.
+
+    Mirrors the hosted topology rather than approximating it, and the mirroring
+    is the point -- self-host runs the **same** worker handlers in the **same**
+    process split (one parse container, one ingest container), so a fault that
+    only shows up when parse and ingest are separate processes shows up here too.
+
+    Two adapters differ from hosted, and only in where bytes live:
+
+    * artifacts on a shared volume instead of a bucket, via
+      ``LocalArtifactStore`` -- which implements the whole port, leases and
+      checkpoints included, so resumability is not lost in the substitution;
+    * the queue against the Pub/Sub emulator rather than the real service. Kept
+      as Pub/Sub deliberately: ack deadlines, redelivery, dead-lettering and
+      parked-message ordering are exactly the behaviours worth rehearsing
+      locally, and an in-memory queue would rehearse none of them.
+    """
+    from unify.common.pipeline.artifact_store import LocalArtifactStore
+    from unify.common.pipeline.deployment import (
+        LocalDeploymentBundleStore,
+        LocalDeploymentJobStore,
+    )
+    from unify.common.pipeline.run_ledger import JsonlRunLedger
+
+    from unify_deploy.infra.gcp.work_queue import PubSubWorkQueue
+
+    if settings is None:
+        settings = GcpPipelineSettings()
+
+    root = artifact_root or os.environ.get(
+        "UNITY_SELFHOST_ARTIFACT_ROOT",
+        "/artifacts",
+    )
+    artifact_store = LocalArtifactStore(root_dir=root)
+
+    _, publisher, subscriber = build_gcp_clients()
+    work_queue = PubSubWorkQueue(
+        publisher=publisher,
+        subscriber=subscriber,
+        settings=settings.pubsub,
+        environment=settings.environment,
+        cancellation_store=artifact_store,
+    )
+
+    def _ledger(run_id: str, basename: str = "run_ledger.jsonl") -> RunLedger:
+        return JsonlRunLedger(path=f"{root}/jobs/{run_id}/{basename}")
+
+    return WorkerInfra(
+        artifact_store=artifact_store,
+        work_queue=work_queue,
+        run_ledger_factory=_ledger,
+        heartbeat_ledger_factory=lambda run_id: _ledger(run_id, "heartbeats.jsonl"),
+        bundle_store=LocalDeploymentBundleStore(root_dir=f"{root}/bundles"),
+        job_store=LocalDeploymentJobStore(root_dir=f"{root}/jobs"),
+        settings=settings,
+        # No storage client: row streaming falls back to the staged local copy,
+        # which is what LocalArtifactStore.download_to_local provides.
+        storage_client=None,
     )
 
 

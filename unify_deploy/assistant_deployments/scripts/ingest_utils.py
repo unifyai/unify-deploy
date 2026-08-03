@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+    from unify.common.pipeline.config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ def load_pipeline_config(
     PipelineConfig
         A validated, path-resolved configuration object.
     """
-    from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+    from unify.common.pipeline.config import PipelineConfig
 
     config = PipelineConfig.from_file(config_path)
 
@@ -325,7 +325,7 @@ def merge_pipeline_configs(
     Reads every ``*.json`` file in *config_dir*, validates each as a
     :class:`PipelineConfig`, then produces a single merged config.
     """
-    from unify_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
+    from unify.common.pipeline.config import PipelineConfig
 
     config_dir = Path(config_dir)
     if not config_dir.is_dir():

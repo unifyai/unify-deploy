@@ -18,12 +18,13 @@ Commands:
     verify   -- Compare declared manifest row_count vs durable checkpoint across
                 a dispatch/job; non-zero exit on any shortfall (audit gate)
 
-WARNING: Do not run ``retry`` and ``recover-stale`` on the same job
-concurrently. Both publish an ingest message; two live messages for one job
-contend for the GCS attempt-lease and can freeze the durable checkpoint,
-leading to a silent under-ingest. Both commands now refuse to publish while a
-recent in-flight message exists (override with ``--force`` only when you are
-certain the prior message is gone).
+``retry`` and ``recover-stale`` publishes are serialised per job on the same
+recovery lease the hosted ``/infra/pipeline/*`` control plane takes, so two
+recovery paths -- CLI or assistant-driven -- cannot put two live messages
+against one job's attempt-lease (the race that froze checkpoints into silent
+under-ingests). A held lease fails the command naming the holder. The
+freshness-window guard and ``--force`` remain as an additional operator-side
+screen but are no longer the mechanism that prevents the race.
 
 Usage:
     python -m unify_deploy.infra.cli.pipeline_control submit \\
@@ -676,8 +677,31 @@ def _mark_job_dlq(infra, record, dlq_keys: list[str]) -> None:
     job_store.upsert_job(job)
 
 
-async def _publish_retry(infra, *, topic: str, payload: dict) -> str:
-    return await infra.work_queue.publish(topic=topic, payload=payload)
+async def _publish_retry(
+    infra,
+    *,
+    topic: str,
+    payload: dict,
+    job_id: str = "",
+) -> str:
+    """Publish one recovery message, serialised per job on the recovery lease.
+
+    The same lease the hosted control plane takes, so a CLI retry and an
+    assistant-driven retry cannot both publish for one job -- two live messages
+    contend for the attempt-lease and the loser's writes freeze the durable
+    checkpoint into a silent under-ingest. A held lease surfaces as
+    ``RecoveryBusy`` naming the holder rather than as a race.
+    """
+    if not job_id:
+        return await infra.work_queue.publish(topic=topic, payload=payload)
+
+    from unify_deploy.infra.pipeline_ops import hold_recovery
+
+    lease = hold_recovery(infra.artifact_store, job_id)
+    try:
+        return await infra.work_queue.publish(topic=topic, payload=payload)
+    finally:
+        lease.release()
 
 
 def _parse_outbox_key(job_id: str) -> str:
@@ -1051,6 +1075,7 @@ async def _execute_stale_recovery(
                     infra,
                     topic="ingest",
                     payload=item["payload"],
+                    job_id=job_id,
                 )
                 job.status = "queued"
                 job.finished_at = None
@@ -1145,7 +1170,7 @@ async def cmd_submit(args: argparse.Namespace) -> None:
     from unify_deploy.assistant_deployments.scripts.ingest_utils import (
         load_pipeline_config,
     )
-    from unify_deploy.assistant_deployments.types.pipeline_config import (
+    from unify.common.pipeline.config import (
         build_table_config_for_source_file,
     )
 
@@ -1867,6 +1892,7 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                     infra,
                     topic=item["topic"],
                     payload=item["payload"],
+                    job_id=item["job_id"],
                 )
                 if job_store:
                     job = job_store.read_job(item["job_id"])
