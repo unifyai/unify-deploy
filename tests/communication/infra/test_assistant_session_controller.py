@@ -1178,6 +1178,8 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        desktopSecret="vm-secret-abc",
     )
     patch_status = MagicMock()
 
@@ -1201,6 +1203,7 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
     assert patch_status.call_args.kwargs["phase"] == "Active"
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
     assert "vmRef" not in patch_status.call_args.kwargs["binding"]
+    assert "desktopSecret" not in patch_status.call_args.kwargs["binding"]
 
 
 def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):

@@ -206,6 +206,8 @@ spec:
                         type: string
                   desktopUrl:
                     type: string
+                  desktopSecret:
+                    type: string
                   createdAt:
                     type: string
                   containerBootstrapStartedAt:

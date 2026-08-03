@@ -1409,6 +1409,7 @@ def _recover_timed_out_release_request(
             binding,
             vm_ref=None,
             desktop_url=None,
+            desktop_secret=None,
             release_requested_at=release_requested_at,
             release_completed_at=release_completed_at,
             release_generation=next_release_generation
@@ -1545,6 +1546,7 @@ def _binding_release_state(
             binding,
             vm_ref=None,
             desktop_url=None,
+            desktop_secret=None,
             release_requested_at=release_requested_at,
             release_completed_at=release_completed_at,
         )
@@ -1625,6 +1627,7 @@ def _binding_release_state(
                     binding,
                     vm_ref=None,
                     desktop_url=None,
+                    desktop_secret=None,
                     release_completed_at=release_completed_at,
                 )
             elif result.get("reason") == "binding_changed":
@@ -1632,6 +1635,7 @@ def _binding_release_state(
                     binding,
                     vm_ref=None,
                     desktop_url=None,
+                    desktop_secret=None,
                 )
         else:
             request_signal_state = str(release_request_signal.get("state", "") or "")
@@ -1666,6 +1670,7 @@ def _binding_release_state(
                     binding,
                     vm_ref=None,
                     desktop_url=None,
+                    desktop_secret=None,
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                     release_generation=release_generation or None,
@@ -2944,7 +2949,12 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             assistant_id,
             phase="Active",
             observed_activation_id=activation_id,
-            binding=_binding_payload(binding, vm_ref=None, desktop_url=None),
+            binding=_binding_payload(
+                binding,
+                vm_ref=None,
+                desktop_url=None,
+                desktop_secret=None,
+            ),
             last_error="",
             source="controller.reconcile",
             desktop_probe_failures=0,

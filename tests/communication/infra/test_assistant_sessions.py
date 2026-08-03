@@ -26,6 +26,7 @@ from communication.infra.assistant_sessions import (
     build_binding_signal,
     build_runtime_service_urls,
     build_suspend_intent,
+    binding_desktop_secret,
     binding_vm_assignment,
     binding_vm_ref,
     claim_binding_vm_assignment_attempt,
@@ -649,6 +650,7 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
             "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
             "vmType": "ubuntu",
         },
+        desktop_secret="vm-secret-abc",
         source="test",
     )
 
@@ -658,6 +660,7 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
         == "unity-pool-ubuntu-10-staging"
     )
     assert binding_vm_assignment(session["status"]["binding"]) == {}
+    assert binding_desktop_secret(session["status"]["binding"]) == "vm-secret-abc"
 
 
 def test_persist_binding_vm_assignment_result_ignores_stale_attempt(monkeypatch):
@@ -803,6 +806,7 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
                     "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
                 },
                 desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
+                desktop_secret="vm-secret-abc",
             ),
         },
     }
@@ -858,6 +862,7 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
     assert "podRef" not in session["status"]["binding"]
     assert "vmRef" not in session["status"]["binding"]
     assert "desktopUrl" not in session["status"]["binding"]
+    assert "desktopSecret" not in session["status"]["binding"]
 
 
 def test_crd_status_schema_covers_all_persisted_status_fields():
@@ -915,6 +920,7 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "podRef",
         "vmRef",
         "desktopUrl",
+        "desktopSecret",
         "containerBootstrapStartedAt",
         "guestHandshakeStartedAt",
         "releaseGeneration",
