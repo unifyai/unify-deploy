@@ -164,7 +164,12 @@ def log_job_startup(
         _log_created.set()
 
 
-def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> None:
+def update_liveview_url(
+    assistant_id: str,
+    user_id: str,
+    liveview_url: str,
+    liveview_password: str | None = None,
+) -> None:
     """Update the AssistantJobs record with the resolved liveview_url.
 
     Called by the ``AssistantDesktopReady`` event handler once the VM is
@@ -193,6 +198,7 @@ def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> N
             assistant_id=str(assistant_id),
             job_name=job_name,
             liveview_url=liveview_url,
+            liveview_password=liveview_password,
         )
         if ok:
             LOGGER.debug(
@@ -301,8 +307,9 @@ class HostedAssistantJobsBackend:
         assistant_id: str,
         user_id: str,
         liveview_url: str,
+        liveview_password: str | None = None,
     ) -> None:
-        update_liveview_url(assistant_id, user_id, liveview_url)
+        update_liveview_url(assistant_id, user_id, liveview_url, liveview_password)
 
     def mark_job_done(
         self,
