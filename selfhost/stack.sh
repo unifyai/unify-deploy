@@ -53,6 +53,8 @@ STACK_STATE_SCRIPT="$SCRIPT_DIR/stack_state.sh"
 RESET_DB_SCRIPT="$SCRIPT_DIR/reset_db.sh"
 # shellcheck source=canvas_origin.sh
 source "$SCRIPT_DIR/canvas_origin.sh"
+# shellcheck source=selfhost/builtins_catalog_cache.sh
+source "$SCRIPT_DIR/builtins_catalog_cache.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
 UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
@@ -455,15 +457,26 @@ cmd_up_calls_setup() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
-  if "$py" "$SYNC_COMMS_SCRIPT" --set-voice; then
-    if declare -F self_host_voice_synced_url_file &>/dev/null; then
-      printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
-        >"$(self_host_voice_synced_url_file)"
-    fi
-  else
-    log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
-    return 1
-  fi
+  local sync_rc=0
+  "$py" "$SYNC_COMMS_SCRIPT" --set-voice || sync_rc=$?
+  case "$sync_rc" in
+    0)
+      if declare -F self_host_voice_synced_url_file &>/dev/null; then
+        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+          >"$(self_host_voice_synced_url_file)"
+      fi
+      ;;
+    3)
+      # The shared number is healthy and owned by another live install. Nothing
+      # is broken here, so the rest of the stack must not be held hostage to it.
+      log_warn "Shared voice number is claimed by another install — its owner keeps inbound calls"
+      log_warn "Everything else starts normally. That install releases it with: unity stack down --full"
+      ;;
+    *)
+      log_error "Voice webhook sync failed — inbound calls may be answered by staging/prod"
+      return 1
+      ;;
+  esac
 }
 
 current_tmux_session() {
@@ -563,6 +576,15 @@ raise SystemExit(1)
 PY
 }
 
+# The integration manifest actually applied to a seed run, or empty when the
+# provider bootstrap is skipped. Both the snapshot and the restore key on this,
+# so a run without the manifest cannot match one with it.
+seed_builtins_cache_manifest() {
+  local manifest="$DEPLOY_REPO_PATH/deploy/selfhost/integration-bootstrap.selfhost.toml"
+  [[ -n "${COMPOSIO_API_KEY:-}" && -f "$manifest" ]] || return 0
+  printf '%s' "$manifest"
+}
+
 cmd_seed_builtins() {
   export SELF_HOST=1
   export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
@@ -591,9 +613,11 @@ cmd_seed_builtins() {
     return 1
   fi
 
+
   local args=()
-  local manifest="$DEPLOY_REPO_PATH/deploy/selfhost/integration-bootstrap.selfhost.toml"
-  if [[ -n "${COMPOSIO_API_KEY:-}" && -f "$manifest" ]]; then
+  local manifest
+  manifest="$(seed_builtins_cache_manifest)"
+  if [[ -n "$manifest" ]]; then
     args+=(--integration-bootstrap-manifest "$manifest")
     export UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
     export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-$(console_admin_key)}"
@@ -605,7 +629,16 @@ cmd_seed_builtins() {
     fi
   fi
 
+  # A fresh redeploy purged the catalogue along with the desired_hash guarding
+  # it. Put both back when schema and manifest are unchanged, so the seed below
+  # converges in seconds instead of re-syncing the provider catalogue. A miss,
+  # or an already-populated database, simply falls through to the full sync.
+  if builtins_catalog_restore "$manifest"; then
+    log_success "Restored cached Builtins catalogue (skipping upstream re-sync)"
+  fi
+
   log_info "Seeding Builtins catalogues..."
+  local seed_rc=0
   (
     cd "$UNITY_REPO_PATH"
     UNIFY_KEY="$api_key" \
@@ -616,7 +649,14 @@ cmd_seed_builtins() {
       ORCHESTRA_DB_PASS="${ORCHESTRA_DB_PASS:-orchestra}" \
       ORCHESTRA_DB_BASE="${ORCHESTRA_DB_BASE:-orchestra}" \
       "$py" scripts/seed_builtins_catalog.py "${args[@]}"
-  )
+  ) || seed_rc=$?
+  (( seed_rc == 0 )) || return "$seed_rc"
+
+  # Converged catalogue: snapshot it so the next redeploy restores instead of
+  # re-syncing. Never fatal — a missing cache only costs time.
+  if builtins_catalog_save "$manifest"; then
+    log_info "Cached Builtins catalogue for future redeploys"
+  fi
 }
 
 wait_for_http() {
@@ -903,9 +943,47 @@ cmd_resume() {
   echo ""
 }
 
+# Block until the durable session reports its exit sentinel. Progress, not
+# elapsed time, decides when to give up: a cold `up` legitimately runs for well
+# over ten minutes, so a wall-clock deadline abandons healthy startups. Startup
+# is only wedged once the session stops producing output entirely.
+wait_for_durable_stack_session() {
+  local session="$1"
+  local stall_seconds="$2"
+  local idle_seconds=0
+  local pane=""
+  local previous_pane=""
+
+  while (( idle_seconds < stall_seconds )); do
+    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
+      log_success "Durable stack session is ready: $session"
+      return 0
+    fi
+    # The success sentinel is absent here, so any sentinel is a non-zero exit.
+    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* ]]; then
+      log_error "Durable stack startup failed in tmux session: $session"
+      echo "$pane"
+      return 1
+    fi
+    if [[ "$pane" == "$previous_pane" ]]; then
+      idle_seconds=$((idle_seconds + 2))
+    else
+      previous_pane="$pane"
+      idle_seconds=0
+    fi
+    sleep 2
+  done
+
+  log_error "Durable stack startup stalled — no output for ${stall_seconds}s"
+  log_info "Attach for logs: tmux attach -t $session"
+  return 1
+}
+
 cmd_up_durable() {
   local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
-  local timeout_seconds="${UNITY_STACK_TMUX_READY_TIMEOUT_SECONDS:-420}"
+  # Seconds of complete silence before startup counts as wedged.
+  local stall_seconds="${UNITY_STACK_TMUX_STALL_SECONDS:-300}"
   local console_port="${CONSOLE_PORT:-3000}"
   local bash_bin="${UNITY_STACK_BASH:-bash}"
 
@@ -947,28 +1025,7 @@ cmd_up_durable() {
   log_info "Starting durable stack session: $session"
   tmux new-session -d -s "$session" "$stack_command"
 
-  local elapsed=0
-  local pane=""
-  while (( elapsed < timeout_seconds )); do
-    pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
-      log_success "Durable stack session is ready: $session"
-      break
-    fi
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* && "$pane" != *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
-      log_error "Durable stack startup failed in tmux session: $session"
-      echo "$pane"
-      return 1
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-
-  if (( elapsed >= timeout_seconds )); then
-    log_error "Timed out waiting for durable stack startup"
-    log_info "Attach for logs: tmux attach -t $session"
-    return 1
-  fi
+  wait_for_durable_stack_session "$session" "$stall_seconds" || return 1
 
   if ! curl -fsSI --max-time 10 "http://localhost:${console_port}/" >/dev/null; then
     log_error "Console did not respond at http://localhost:${console_port}"

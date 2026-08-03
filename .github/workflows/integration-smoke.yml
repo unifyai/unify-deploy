@@ -56,7 +56,7 @@ concurrency:
 
 jobs:
   merge-gate:
-    name: Integration smoke
+    name: Integration smoke (run)
     # Self-hosted runner living inside the `unity` GKE cluster (staging
     # namespace). See deploy/k8s/ci-runner/README.md for provisioning.
     runs-on: [self-hosted, unity-cluster, staging]
@@ -186,3 +186,49 @@ jobs:
           ${{ github.workspace }}/.ci-created-assistants.txt
         if-no-files-found: ignore
         retention-days: 14
+
+  # Single, stable required status check for staging->main releases.
+  #
+  # This job must run unconditionally on the triggers where merge-gate is
+  # meant to run for release purposes (pull_request and workflow_dispatch), so
+  # the context is always an explicit pass or fail there rather than an
+  # implicit pass-by-skip. GitHub counts a *skipped* required check as
+  # satisfied, so while the expensive merge-gate job carried the required
+  # context directly, every ordinary push published an implicit passing
+  # "Integration smoke" on its commit. A release PR shares its head SHA with
+  # those pushes, so that stale pass can satisfy branch protection before the
+  # real PR-triggered run finishes -- letting a release merge without the
+  # gate. Recent releases here show exactly that stale context alongside the
+  # real result (pass + skipping); the identical shape in orchestra let four
+  # releases merge with a failing suite.
+  #
+  # It must NOT run on plain push. merge-gate is gated behind [run-integration]
+  # there (it exercises real staging infra, so it can't run on every commit),
+  # so an unconditional push-triggered run would either republish the same
+  # implicit-pass-by-skip bug, or -- once made to fail closed -- attach a
+  # failing "Integration smoke" run to that push's SHA that persists even
+  # after the real pull_request-triggered run for the same SHA passes, since
+  # branch protection blocks on any matching-name run, not just the latest.
+  # Publishing nothing on push means the context is simply pending until the
+  # pull_request run supplies the real answer. This job stays on a hosted
+  # runner, not the self-hosted cluster runner, so the gate still reports when
+  # the cluster runner is unavailable.
+  integration-smoke-required:
+    name: Integration smoke
+    needs: merge-gate
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the integration smoke to have passed
+      run: |
+        result="${{ needs.merge-gate.result }}"
+        echo "integration smoke result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Integration smoke did not run for this commit, so the"
+          echo "::error::release gate cannot pass. Push with [run-integration],"
+          echo "::error::or open the staging -> main PR which runs it."
+        fi
+        exit 1

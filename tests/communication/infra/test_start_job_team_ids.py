@@ -222,3 +222,36 @@ def test_invalid_team_summaries_form_returns_400(client):
     assert response.status_code == 400
     assert response.json()["detail"] == "team_summaries.team_id must be an integer"
     bootstrap.assert_not_called()
+
+
+def test_owner_team_id_reaches_the_bootstrap_payload(client):
+    """The live session resolves shared-scoped tables through this value.
+
+    It was absent from the wake payload and this form for as long as both
+    existed, so every live boot of a team-owned assistant reconciled with
+    ``owner_team_id=None`` — and planted its deployment-defined tasks into the
+    personal root instead of the owning team's home. The duplicates surfaced in
+    the console's Tasks pane days later, merged in by the all-roots scope.
+    """
+
+    response, bootstrap = _post_start_job(client, owner_team_id="11")
+
+    assert response.status_code == 200
+    payload = _bootstrap_payload(bootstrap)
+    assert payload["owner_team_id"] == 11
+
+
+def test_absent_owner_team_id_stays_none_for_personal_assistants(client):
+    response, bootstrap = _post_start_job(client)
+
+    assert response.status_code == 200
+    payload = _bootstrap_payload(bootstrap)
+    assert payload["owner_team_id"] is None
+
+
+def test_malformed_owner_team_id_is_rejected(client):
+    response, _ = _post_start_job(client, owner_team_id="team-eleven")
+    assert response.status_code == 400
+
+    response, _ = _post_start_job(client, owner_team_id="-3")
+    assert response.status_code == 400

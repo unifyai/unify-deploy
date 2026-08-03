@@ -390,6 +390,7 @@ def build_unity_job_manifest(
         "UNITY_EGRESS_PROXY_SERVER",
         "UNITY_EGRESS_PROXY_USERNAME",
         "UNITY_EGRESS_PROXY_PASSWORD",
+        "UNITY_EGRESS_PROXY_REGIONS",
     }
     unity_secret_env = []
     for key in (
@@ -423,6 +424,10 @@ def build_unity_job_manifest(
         "UNITY_EGRESS_PROXY_SERVER",
         "UNITY_EGRESS_PROXY_USERNAME",
         "UNITY_EGRESS_PROXY_PASSWORD",
+        # A dedicated-IP username carries no {region} placeholder, so this is
+        # the only thing stating where that endpoint leaves from; without it
+        # egressPolicy.ts refuses the session rather than guess.
+        "UNITY_EGRESS_PROXY_REGIONS",
         "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",

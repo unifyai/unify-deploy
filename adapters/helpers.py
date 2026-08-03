@@ -3350,3 +3350,179 @@ def dispatch_livekit_agent(room_name: str):
 # OAuth helpers were moved to ``common/microsoft_oauth.py`` and
 # ``common/google_oauth.py`` so the comms service can call them
 # without depending on this module.  Import them from there.
+
+
+# ---------------------------------------------------------------------------
+# Billing-gate auto-replies
+# ---------------------------------------------------------------------------
+
+COMMS_GATE_TIMEOUT_SECONDS = 5
+
+
+def check_comms_gate(assistant_id: str | int | None) -> dict | None:
+    """Billing-gate state for an assistant, or ``None`` when not gated.
+
+    Fail-open by design: a gate-lookup hiccup must never take down inbound
+    comms — hard billing enforcement lives server-side in the runtime's
+    spending gate; this call only powers the courtesy auto-reply.
+    """
+    if not assistant_id:
+        return None
+    try:
+        response = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/billing/comms-gate",
+            params={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=COMMS_GATE_TIMEOUT_SECONDS,
+        ).json()
+    except Exception as exc:
+        logger.warning("comms-gate lookup failed (fail-open): %s", exc)
+        return None
+    if isinstance(response, dict) and response.get("gated"):
+        return response
+    return None
+
+
+def _normalize_phone(number: str | None) -> str:
+    return re.sub(r"[^\d+]", "", (number or "").replace("whatsapp:", ""))
+
+
+def is_owner_sender(assistant_data: dict, channel: str, sender: str) -> bool:
+    """Whether the inbound sender is the assistant's own user.
+
+    The billing-gate auto-reply goes only to the account owner — the one
+    person who can fix the billing state. Third-party contacts get the
+    unchanged behaviour (silence) so a paused account's billing state is
+    never disclosed to strangers.
+    """
+    if channel == "email":
+        owner = (assistant_data.get("user_email") or "").strip().lower()
+        return bool(owner) and sender.strip().lower() == owner
+    sender_norm = _normalize_phone(sender)
+    if not sender_norm:
+        return False
+    owners = {
+        _normalize_phone(assistant_data.get("user_number")),
+        _normalize_phone(assistant_data.get("user_whatsapp_number")),
+    }
+    owners.discard("")
+    return sender_norm in owners
+
+
+def send_billing_gate_notice(
+    gmail_service,
+    *,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    message: str,
+) -> None:
+    """Reply to the owner's inbound email with the billing-gate explanation.
+
+    Owner-only (see ``is_owner_sender``), one notice per inbound message —
+    the same loop-safety envelope as ``send_twin_moved_notice``.
+    """
+    import base64 as _base64
+    from email.mime.text import MIMEText as _MIMEText
+
+    msg = _MIMEText(message)
+    msg["to"] = to_email
+    msg["from"] = mailbox
+    subject = (original_subject or "").strip()
+    msg["subject"] = f"Re: {subject}" if subject else "Your Unify assistant is paused"
+    try:
+        gmail_service.users().messages().send(
+            userId="me",
+            body={"raw": _base64.urlsafe_b64encode(msg.as_bytes()).decode()},
+        ).execute()
+        logger.info("Sent billing-gate notice over email")
+    except Exception as exc:
+        logger.error("Failed to send billing-gate notice: %s", exc)
+
+
+def send_slack_billing_gate_notice(
+    team_id: str,
+    channel_id: str,
+    thread_ts: str | None,
+    message: str,
+) -> None:
+    """Post the billing-gate explanation into the sender's Slack DM.
+
+    Best-effort: a missing bot token or a failed post is logged and
+    swallowed — the notice is a courtesy, never a delivery guarantee.
+    """
+    bot_token = _resolve_slack_bot_token(team_id)
+    if not bot_token:
+        logger.warning("slack billing-gate notice skipped: no bot token")
+        return
+    body: dict = {"channel": channel_id, "text": message}
+    if thread_ts:
+        body["thread_ts"] = thread_ts
+    try:
+        payload = requests.post(
+            f"{SLACK_API_BASE}/chat.postMessage",
+            json=body,
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=10,
+        ).json()
+        if not payload.get("ok"):
+            logger.warning(
+                "slack billing-gate notice failed: %s",
+                payload.get("error"),
+            )
+    except Exception as exc:
+        logger.error("Failed to send Slack billing-gate notice: %s", exc)
+
+
+def send_ms_teams_billing_gate_notice(activity: dict, message: str) -> None:
+    """Reply to a 1:1 Teams bot conversation with the billing-gate notice."""
+    _send_ms_teams_bot_message(
+        activity,
+        None,
+        {"type": "message", "text": message},
+    )
+
+
+async def send_outlook_billing_gate_notice(
+    graph_client,
+    *,
+    has_user_token: bool,
+    mailbox: str,
+    to_email: str,
+    original_subject: str,
+    message: str,
+) -> None:
+    """Reply to the owner's inbound Outlook email with the gate explanation.
+
+    Targets ``/me`` for delegated tokens and ``/users/{mailbox}`` for admin
+    app credentials, mirroring the read path in ``get_outlook_thread_id``.
+    """
+    from msgraph.generated.models.body_type import BodyType
+    from msgraph.generated.models.email_address import EmailAddress
+    from msgraph.generated.models.item_body import ItemBody
+    from msgraph.generated.models.message import Message
+    from msgraph.generated.models.recipient import Recipient
+    from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
+        SendMailPostRequestBody,
+    )
+
+    subject = (original_subject or "").strip()
+    graph_message = Message(
+        subject=f"Re: {subject}" if subject else "Your Unify assistant is paused",
+        body=ItemBody(content_type=BodyType.Text, content=message),
+        to_recipients=[
+            Recipient(email_address=EmailAddress(address=to_email)),
+        ],
+    )
+    request_body = SendMailPostRequestBody(
+        message=graph_message,
+        save_to_sent_items=True,
+    )
+    try:
+        if has_user_token:
+            await graph_client.me.send_mail.post(request_body)
+        else:
+            await graph_client.users.by_user_id(mailbox).send_mail.post(request_body)
+        logger.info("Sent billing-gate notice over Outlook")
+    except Exception as exc:
+        logger.error("Failed to send Outlook billing-gate notice: %s", exc)

@@ -220,7 +220,6 @@ class OfflineTaskDispatchRequest(BaseModel):
     source_contact_id: Optional[int] = None
     source_contact_display_name: Optional[str] = None
     task_name: Optional[str] = None
-    task_description: Optional[str] = None
 
 
 class OfflineTaskJobTerminalRequest(BaseModel):

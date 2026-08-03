@@ -148,7 +148,6 @@ def _scheduled_task_entries(
 
     entries = {
         "task_id": task_id,
-        "instance_id": 0,
         "name": f"Integration scheduled task {task_id}",
         "description": "Quietly start this work when it becomes due.",
         "status": "scheduled",
@@ -181,7 +180,6 @@ def _trigger_task_entries(
 
     entries = {
         "task_id": task_id,
-        "instance_id": 0,
         "name": f"Integration trigger task {task_id}",
         "description": "Consider this task whenever the configured inbound arrives.",
         "status": "triggerable",

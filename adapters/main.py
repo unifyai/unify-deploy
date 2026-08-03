@@ -222,15 +222,22 @@ from .helpers import (
     get_assistant,
     get_contacts,
     get_outlook_thread_id,
+    check_comms_gate,
+    fetch_slack_user_profile,
     get_phone_call_session,
     get_pubsub_client,
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
+    is_owner_sender,
     is_twin_alias_mailbox,
     is_unity_coordinator_email_address,
     parse_teams_resource_id,
     resolve_twin_alias_recipient,
+    send_billing_gate_notice,
+    send_ms_teams_billing_gate_notice,
+    send_outlook_billing_gate_notice,
+    send_slack_billing_gate_notice,
     send_twin_moved_notice,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -459,6 +466,16 @@ async def twilio_call_webhook(request: Request):
             "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
+
+    # Billing-gated account: speak the explanation instead of a dead
+    # conference (owner-only; other callers keep today's behaviour).
+    if is_owner_sender(context["assistant"], "call", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = VoiceResponse()
+            resp_user.say(gate["message"])
+            resp_user.hangup()
+            return Response(content=str(resp_user), media_type="text/xml")
 
     logger.info(
         "Activation intent scheduled (legacy is_job_running flag): %s",
@@ -907,6 +924,16 @@ async def twilio_sms_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
+    # Billing-gated account: the runtime can't respond, so explain over
+    # the same channel instead of going silent. Owner-only — third-party
+    # contacts keep today's behaviour.
+    if is_owner_sender(assistant_data, "msg", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = MessagingResponse()
+            resp_user.message(gate["message"])
+            return Response(content=str(resp_user), media_type="text/xml")
+
     logger.info(
         "Activation intent scheduled (legacy is_job_running flag): %s",
         context["is_job_running"],
@@ -1200,6 +1227,15 @@ async def twilio_whatsapp_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
 
+    # Billing-gated account: explain over the same channel instead of
+    # going silent (owner-only; contacts keep today's behaviour).
+    if is_owner_sender(assistant_data, "whatsapp", from_number):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp_user = MessagingResponse()
+            resp_user.message(gate["message"])
+            return Response(content=str(resp_user), media_type="text/xml")
+
     attachments = await _ingest_whatsapp_media(form_data, assistant_id, message_sid)
 
     resp_user = MessagingResponse()
@@ -1326,6 +1362,16 @@ async def twilio_whatsapp_call_webhook(request: Request):
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
+
+    # Billing-gated account: speak the explanation instead of a dead
+    # conference (owner-only; other callers keep today's behaviour).
+    if is_owner_sender(assistant_data, "whatsapp_call", from_raw):
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            resp = VoiceResponse()
+            resp.say(gate["message"])
+            resp.hangup()
+            return Response(content=str(resp), media_type="text/xml")
 
     call_id = provider_call_sid.replace(":", "-")
     conference_name = f"unity_wa_conf_{call_id}"
@@ -1706,6 +1752,31 @@ async def slack_events_webhook(request: Request):
         )
         return {"ok": True}
 
+    # Billing-gated account: reply in the DM instead of going silent.
+    # DM-only, and only when the sender's Slack profile email provably
+    # matches the account owner — channel chatter and unverifiable
+    # senders keep today's behaviour (silence) so billing state is
+    # never disclosed beyond the owner.
+    if not is_channel:
+        sender_profile = await asyncio.to_thread(
+            fetch_slack_user_profile,
+            team_id,
+            inner.get("user", "") or "",
+        )
+        sender_email = (sender_profile.get("email") or "").strip().lower()
+        owner_email = (assistant_data.get("user_email") or "").strip().lower()
+        if sender_email and owner_email and sender_email == owner_email:
+            gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+            if gate:
+                await asyncio.to_thread(
+                    send_slack_billing_gate_notice,
+                    team_id,
+                    inner.get("channel", "") or "",
+                    inner.get("thread_ts"),
+                    gate["message"],
+                )
+                return {"ok": True}
+
     # Contacts: prefer the assistant's own Contacts context (hydrated
     # with slack_user_id where the contact has been seen before);
     # fall back to the (assistant, user) default pair so an inbound
@@ -1961,6 +2032,20 @@ async def ms_teams_bot_messages_webhook(request: Request):
     is_channel = conversation_type != "personal"
     channel_data = activity.get("channelData") or {}
     sender = activity.get("from") or {}
+
+    # Billing-gated account: reply in the 1:1 bot chat instead of going
+    # silent. Personal conversations only — the 1:1 route pins to the
+    # sender's own workspace, and channel replies would disclose billing
+    # state to a mixed audience.
+    if not is_channel:
+        gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+        if gate:
+            await asyncio.to_thread(
+                send_ms_teams_billing_gate_notice,
+                activity,
+                gate["message"],
+            )
+            return {"status": 200}
 
     api_key = assistant_data.get("api_key", "") or ""
     user_id = assistant_data.get("user_id", "") or ""
@@ -3844,6 +3929,21 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
             return Response(content=error_message, status_code=500)
 
+        # Billing-gated account: reply with the explanation instead of
+        # dropping the thread silently (owner-only; other senders keep
+        # today's behaviour).
+        if is_owner_sender(assistant_data, "email", from_email):
+            gate = check_comms_gate(assistant_id)
+            if gate:
+                send_billing_gate_notice(
+                    gmail_service,
+                    mailbox=assistant_email_address,
+                    to_email=from_email,
+                    original_subject=last_message.get("subject") or "",
+                    message=gate["message"],
+                )
+                return Response(content="OK", status_code=200)
+
         logger.info(
             "Activation intent scheduled (legacy is_job_running flag): %s",
             context["is_job_running"],
@@ -3967,6 +4067,22 @@ async def outlook_notification_processor(request: Request):
 
         from_email = last_message["sender"]
         logger.info(f"from_email: {_redact_email(from_email)}")
+
+        # Billing-gated account: reply with the explanation instead of
+        # dropping the thread silently (owner-only; other senders keep
+        # today's behaviour).
+        if is_owner_sender(assistant_data, "email", from_email):
+            gate = await asyncio.to_thread(check_comms_gate, assistant_id)
+            if gate:
+                await send_outlook_billing_gate_notice(
+                    graph_client,
+                    has_user_token=has_user_token,
+                    mailbox=assistant_email_address,
+                    to_email=from_email,
+                    original_subject=last_message.get("subject") or "",
+                    message=gate["message"],
+                )
+                return Response(content="OK", status_code=200)
 
         def _process_outlook():
             # Validate contact now that we have the sender

@@ -186,7 +186,6 @@ def _offline_dispatch_request_from_provider_event(
         entrypoint=execution.get("entrypoint"),
         wake=Wake.provider_event,
         task_name=execution.get("task_name"),
-        task_description=execution.get("task_description"),
     )
 
 
@@ -658,7 +657,6 @@ def _execution_snapshot_from_explicit_dispatch_request(
         "entrypoint": request.entrypoint,
         "max_runtime_seconds": request.max_runtime_seconds,
         "task_name": request.task_name,
-        "task_description": request.task_description,
     }
     if request.scheduled_for is not None:
         snapshot["scheduled_for"] = request.scheduled_for.astimezone(
@@ -795,7 +793,6 @@ def _fail_stale_inflight_run_and_reopen_source(
     run_state: str,
     job_status: dict[str, Any],
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> str:
     """Fail a stale Run row and reopen its Tasks source for reclaim."""
 
@@ -811,7 +808,6 @@ def _fail_stale_inflight_run_and_reopen_source(
             error=error,
             result_summary=error,
             retry_count=retry_count,
-            previous_error=previous_error,
         ),
     )
     _release_active_task_source(
@@ -823,13 +819,18 @@ def _fail_stale_inflight_run_and_reopen_source(
     return error
 
 
-def _adopt_inflight_source_conflict(
+def _active_sibling_run_for_source(
     *,
     batch_api: Any,
     request: OfflineTaskDispatchRequest,
     exclude_run_key: str,
 ) -> dict[str, Any] | None:
-    """Return an adopt payload when another Job already owns this Tasks source."""
+    """Return the sibling run genuinely executing this Tasks source, if any.
+
+    "Genuinely executing" means an in-flight run row whose recorded Job is
+    still active on the cluster — a stale row whose Job vanished does not
+    count and is handled by the stale-inflight repair path instead.
+    """
 
     latest = _lookup_latest_task_run(
         assistant_id=request.assistant_id,
@@ -850,12 +851,88 @@ def _adopt_inflight_source_conflict(
     if job_status.get("status") != "active":
         return None
     return {
-        "success": True,
-        "status": "adopted_inflight_source",
         "run_key": other_run_key,
         "job_name": job_name,
         "run_state": str(latest.get("state") or ""),
         "job_status": job_status,
+    }
+
+
+def _skip_overlapped_scheduled_occurrence(
+    *,
+    batch_api: Any,
+    request: OfflineTaskDispatchRequest,
+    run_key: str,
+    execution: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Terminalize a due scheduled occurrence whose predecessor still runs.
+
+    Booting a worker just to discover the overlap costs a full pod cold
+    start; this check is one run lookup and one Job status read. Only
+    ``scheduled`` wakes are eligible — explicit kicks, triggers, and
+    provider events are content-bearing and must never be swallowed.
+
+    The skipped occurrence terminalizes as completed with an overlap
+    summary. Its successor is deliberately not minted here: projection
+    ownership stays with the running predecessor's dispatcher, and the
+    supervisor sweep floors the series once that run ends.
+    """
+
+    if str(request.wake) != "scheduled":
+        return None
+    sibling = _active_sibling_run_for_source(
+        batch_api=batch_api,
+        request=request,
+        exclude_run_key=run_key,
+    )
+    if sibling is None:
+        return None
+    _create_or_adopt_task_run(
+        _build_offline_run_create_payload(request, run_key, execution),
+    )
+    _update_task_run(
+        assistant_id=request.assistant_id,
+        run_key=run_key,
+        updates=_completed_task_run_updates(
+            result_summary=(
+                "overlap_skip: predecessor run "
+                f"{sibling['run_key']} (job {sibling['job_name']}) is still "
+                "running; occurrence skipped at dispatch without booting a "
+                "worker"
+            ),
+        ),
+    )
+    return {
+        "success": True,
+        "status": "skipped_overlap",
+        "run_key": run_key,
+        "predecessor_run_key": sibling["run_key"],
+        "predecessor_job_name": sibling["job_name"],
+    }
+
+
+def _adopt_inflight_source_conflict(
+    *,
+    batch_api: Any,
+    request: OfflineTaskDispatchRequest,
+    exclude_run_key: str,
+) -> dict[str, Any] | None:
+    """Return an adopt payload when another Job already owns this Tasks source."""
+
+    sibling = _active_sibling_run_for_source(
+        batch_api=batch_api,
+        request=request,
+        exclude_run_key=exclude_run_key,
+    )
+    if sibling is None:
+        return None
+    return {
+        "success": True,
+        "status": "adopted_inflight_source",
+        "run_key": sibling["run_key"],
+        "job_name": sibling["job_name"],
+        "run_state": sibling["run_state"],
+        "job_status": sibling["job_status"],
         "source_task_log_id": request.source_task_log_id,
     }
 
@@ -864,7 +941,6 @@ def _running_task_run_updates(
     job_name: str,
     *,
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> dict[str, Any]:
     """Return the canonical Orchestra patch for one in-flight offline run."""
 
@@ -878,8 +954,6 @@ def _running_task_run_updates(
     }
     if retry_count is not None:
         updates["retry_count"] = retry_count
-    if previous_error:
-        updates["previous_error"] = previous_error
     return updates
 
 
@@ -888,7 +962,6 @@ def _failed_task_run_updates(
     error: str,
     result_summary: str,
     retry_count: int | None = None,
-    previous_error: str | None = None,
 ) -> dict[str, Any]:
     """Return the canonical terminal patch for a failed offline run."""
 
@@ -900,8 +973,6 @@ def _failed_task_run_updates(
     }
     if retry_count is not None:
         updates["retry_count"] = retry_count
-    if previous_error:
-        updates["previous_error"] = previous_error
     return updates
 
 
@@ -1249,6 +1320,34 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     return run_key
 
 
+def _resolve_offline_dispatch_run_key(
+    request: OfflineTaskDispatchRequest,
+    execution: dict[str, Any] | None,
+) -> str:
+    """Return the run key naming this occurrence.
+
+    A projected scheduled occurrence already carries the run key Orchestra
+    minted for it, and validation has just pinned this dispatch to that
+    exact occurrence: revision, destination, source row, entrypoint, and
+    slot all matched. Adopting the stored key therefore names the same run
+    the projection named, instead of rebuilding it through a second
+    byte-compatible implementation. Two normalisation drifts in that dual
+    construction (``team:11`` vs ``team-11``; two datetime spellings) minted
+    twins and silently halted the scheduler in July.
+
+    The other lanes still construct. Their occurrences are named from
+    inbound facts the ledger has not recorded yet: a triggered wake keys on
+    the arriving message, an explicit kick has no projected row at all, and
+    provider events key on the event identity digest.
+    """
+
+    if Wake.normalize(request.wake) is Wake.scheduled:
+        stored = str((execution or {}).get("run_key") or "").strip()
+        if stored:
+            return stored
+    return _build_offline_run_key(request)
+
+
 def _build_offline_task_job_name(
     run_key: str,
     *,
@@ -1531,7 +1630,6 @@ def _build_offline_runner_env(
         "wake": str(request.wake),
         "run_key": run_key,
         "task_name": str(execution.get("task_name") or ""),
-        "task_description": str(execution.get("task_description") or ""),
         "scheduled_for": request.scheduled_for,
         "source_ref": request.source_ref,
         "source_medium": (
@@ -1719,8 +1817,6 @@ def _build_offline_run_create_payload(
         ),
         "task_name": _optional_display_text(request.task_name)
         or _optional_display_text(execution.get("task_name")),
-        "task_description": _optional_display_text(request.task_description)
-        or _optional_display_text(execution.get("task_description")),
         "state": "pending",
     }
 
@@ -1976,8 +2072,12 @@ def _scheduled_execution_upsert_request_from_execution(
             else None
         ),
         task_label=_optional_display_text(execution.get("task_name")),
-        task_summary=_optional_display_text(execution.get("task_description")),
-        recurrence_hint="recurring" if execution.get("repeat") else "one_off",
+        # Orchestra projects a bounded summary of the authored description;
+        # falling back to the title tells a woken assistant nothing about
+        # what the work is.
+        task_summary=_optional_display_text(execution.get("task_summary"))
+        or _optional_display_text(execution.get("task_name")),
+        recurrence_hint="recurring" if execution.get("recurring") else "one_off",
     )
 
 
@@ -2003,7 +2103,6 @@ def _offline_dispatch_request_from_execution(
             str(execution.get("scheduled_for")).replace("Z", "+00:00"),
         ),
         task_name=_optional_display_text(execution.get("task_name")),
-        task_description=_optional_display_text(execution.get("task_description")),
     )
 
 
@@ -2354,7 +2453,29 @@ async def dispatch_offline_task(
                 "reason": "destination_membership_revoked",
             }
 
-        run_key = _build_offline_run_key(request)
+        run_key = _resolve_offline_dispatch_run_key(request, execution)
+        batch_api, core_api, _, _ = await _get_k8s_clients()
+
+        stage = "overlap_check"
+        skipped_overlap = await asyncio.to_thread(
+            _skip_overlapped_scheduled_occurrence,
+            batch_api=batch_api,
+            request=request,
+            run_key=run_key,
+            execution=execution,
+        )
+        if skipped_overlap is not None:
+            _emit_task_execution_event(
+                "task_execution.offline_dispatch.skipped",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    status="skipped_overlap",
+                ),
+            )
+            return skipped_overlap
+
         stage = "run_create_or_adopt"
         _emit_task_execution_event(
             "task_execution.offline_dispatch.stage",
@@ -2368,8 +2489,6 @@ async def dispatch_offline_task(
         created = bool(run_response.get("created"))
         run_state = str(run.get("state") or "pending")
         retry_count: int | None = None
-        previous_error: str | None = None
-        batch_api, core_api, _, _ = await _get_k8s_clients()
         if not created and run_state == "completed":
             _emit_task_execution_event(
                 "task_execution.offline_dispatch.adopted",
@@ -2389,7 +2508,6 @@ async def dispatch_offline_task(
             }
         if not created and run_state == "failed":
             retry_count = int(run.get("retry_count") or 0) + 1
-            previous_error = str(run.get("error") or "")
             await asyncio.to_thread(
                 _release_active_task_source,
                 assistant_id=request.assistant_id,
@@ -2452,7 +2570,6 @@ async def dispatch_offline_task(
             # claims to be in flight: fail the stale row, reopen the Tasks
             # source if it is still active, and launch a retry.
             retry_count = int(run.get("retry_count") or 0) + 1
-            previous_error = str(run.get("error") or "")
             await asyncio.to_thread(
                 _fail_stale_inflight_run_and_reopen_source,
                 assistant_id=request.assistant_id,
@@ -2461,7 +2578,6 @@ async def dispatch_offline_task(
                 run_state=run_state,
                 job_status=job_status,
                 retry_count=retry_count,
-                previous_error=previous_error,
             )
             _emit_task_execution_event(
                 "task_execution.offline_dispatch.retrying",
@@ -2565,7 +2681,6 @@ async def dispatch_offline_task(
             updates=_running_task_run_updates(
                 job_name,
                 retry_count=retry_count,
-                previous_error=previous_error,
             ),
         )
         _emit_task_execution_event(
