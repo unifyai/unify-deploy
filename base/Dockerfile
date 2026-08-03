@@ -21,15 +21,18 @@ COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
 
 # CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
 # kit would be baked in indefinitely. Branch logic mirrors the dependency clones
-# below: main→main, everything else→staging.
+# below: main→main, everything else→staging. The second insteadOf covers the
+# packages/iso submodule, whose .gitmodules URL is SSH-form; without it the
+# submodule init cannot authenticate and the kit build loses @unity/iso.
 RUN echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
     git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:" && \
     chmod +x /tmp/install-canvas-toolchain.sh && \
     /tmp/install-canvas-toolchain.sh \
         --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
         --toolchain /opt/canvas-toolchain \
         --host /opt/canvas-host && \
-    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+    git config --global --unset-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
 
 # Use Python 3.12 slim image as base
