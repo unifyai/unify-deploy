@@ -141,6 +141,13 @@ ENV MKL_NUM_THREADS=1
 RUN HF_HOME=/opt/hf-cache python unify/conversation_manager/medium_scripts/call.py download-files
 RUN playwright install
 
+# The install above ran as root into /root/.cache; the useradd layer below
+# mirrors it to /home/unity/.cache. Pin the path explicitly because the Job
+# template sets XDG_CACHE_HOME=/tmp/.cache, which playwright's registry probe
+# honours — it then looked for browsers in the empty /tmp volume and the canvas
+# render gate silently skipped on every pod.
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/unity/.cache/ms-playwright
+
 # Canvas authoring artifacts from the builder stage. The render gate drives the
 # playwright chromium installed just above (mirrored into the runtime user's
 # cache in the useradd layer below), which is why this follows it: without a

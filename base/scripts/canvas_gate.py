@@ -14,7 +14,7 @@ on the first live publish.
 """
 
 from unify.canvas_manager.ops.build_ops import build_canvas, toolchain_available
-from unify.canvas_manager.ops.review_ops import gate_available
+from unify.canvas_manager.ops.review_ops import gate_available, render_and_review
 
 TSX = """
 import { Canvas, Card, CardContent, CardHeader, CardTitle, type CanvasViewProps } from '@unity/canvas-kit';
@@ -47,4 +47,18 @@ assert len(report.bundle_sha) == 64, "probe bundle has no content hash"
 
 assert gate_available(), "canvas host or chromium unavailable to the runtime user"
 
-print(f"canvas gate ok: {report.bytes} bytes in {report.duration_ms} ms")
+# Render for real, not just probe for executables: a chromium that exists but
+# cannot launch, or a browser registry pointed somewhere else at runtime, both
+# surface as a skip that reports rendered=True with no screenshots. Requiring
+# the screenshots is what makes this a proof rather than a smoke test.
+review = render_and_review(token="canvasgate01", bundle=code, props={}, rows={})
+assert review.rendered, f"probe canvas did not render: {review.error}"
+assert review.screenshots, (
+    f"render was skipped, not performed (verdict: {review.verdict!r}) — "
+    "the runtime user could not launch a browser"
+)
+
+print(
+    f"canvas gate ok: {report.bytes} bytes in {report.duration_ms} ms, "
+    f"{len(review.screenshots)} screenshots",
+)
