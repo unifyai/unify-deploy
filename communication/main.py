@@ -56,6 +56,7 @@ from communication.infra.views import (
     vm_self_router,
 )
 from communication.meet_bridge import router as meet_bridge_router
+from communication.meet_desktop_page import router as meet_desktop_page_router
 from communication.meet_events import router as meet_events_router
 from communication.meet_screenshare import router as meet_screenshare_router
 from unify.gateway.app import ExtraRouter, create_app
@@ -194,6 +195,10 @@ app = create_app(
         # from their cloud with no credential of ours. It carries no secret and
         # does nothing until handed a short-TTL, room-scoped LiveKit token.
         ExtraRouter(meet_bridge_router, prefix="/meet"),
+        # Same reasoning as the bridge: a Recall bot's browser loads this from
+        # their cloud with no credential of ours, and it is inert until handed a
+        # short-TTL, room-scoped, subscribe-only LiveKit token.
+        ExtraRouter(meet_desktop_page_router, prefix="/meet"),
         # Recall opens this websocket outbound and cannot set headers, so the
         # route authenticates its own query-parameter token rather than taking
         # a router-level admin dependency.
