@@ -14,7 +14,11 @@ on the first live publish.
 """
 
 from unify.canvas_manager.ops.build_ops import build_canvas, toolchain_available
-from unify.canvas_manager.ops.review_ops import gate_available, render_and_review
+from unify.canvas_manager.ops.review_ops import (
+    _browser_available,
+    _host_root,
+    render_and_review,
+)
 
 TSX = """
 import { Canvas, Card, CardContent, CardHeader, CardTitle, type CanvasViewProps } from '@unity/canvas-kit';
@@ -45,7 +49,14 @@ assert (
 ), "probe bundle did not keep the kit external"
 assert len(report.bundle_sha) == 64, "probe bundle has no content hash"
 
-assert gate_available(), "canvas host or chromium unavailable to the runtime user"
+# Asserted separately: a missing host and a missing browser have entirely
+# different fixes, and a lumped assert once cost a build cycle to find out
+# which half had failed.
+assert _host_root() is not None, "canvas host missing from the image"
+assert _browser_available(), (
+    "chromium unresolvable by the runtime user — check PLAYWRIGHT_BROWSERS_PATH "
+    "and the browser install layout"
+)
 
 # Render for real, not just probe for executables: a chromium that exists but
 # cannot launch, or a browser registry pointed somewhere else at runtime, both
