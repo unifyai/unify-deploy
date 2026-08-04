@@ -166,17 +166,10 @@ ENV UNITY_CANVAS_HOST_ROOT=/opt/canvas-host
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
-# cdn.playwright.dev is dual-stack while the build workers are IPv4-only, so a
-# resolver answer that leads with AAAA makes node bind an IPv6 socket and fail
-# with EADDRNOTAVAIL before it ever reaches the network. Playwright then retries
-# the whole download five times at ~130s each, which reads as a build timeout
-# rather than a connectivity fault. Ordering IPv4 first keeps that off the
-# critical path; the python installer above is unaffected because it walks every
-# resolved address. Scoped to this layer — the runtime's own node services must
-# keep the default resolution order.
-RUN cd /opt/magnitude/packages/magnitude-core && \
-    NODE_OPTIONS=--dns-result-order=ipv4first npx patchright install --with-deps chromium && \
-    chown -R 1000:1000 /home/unity/.cache
+# Wrapped in a script because patchright's Chrome-for-Testing mirror list holds a
+# single unreachable host on these builders; the script explains the failure and
+# routes the download at the bucket that host only redirects to anyway.
+RUN bash deploy/scripts/install_patchright_chromium.sh
 
 # Configure Chromium as default browser so XFCE and GUI apps can find it
 RUN CHROME_PATH=$(find /home/unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
