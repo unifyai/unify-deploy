@@ -59,7 +59,11 @@ RUN npm ci
 
 # Install browser runtimes using magnitude-core's patchright (Playwright fork)
 # so the browser build matches what magnitude-core expects at runtime.
-RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
+# IPv4 is forced for the download: the CDN and its storage redirect are both
+# dual-stack, and on an IPv4-only builder node fails the IPv6 attempt with
+# EADDRNOTAVAIL, then retries the whole download until the build times out.
+RUN cd /app/magnitude/packages/magnitude-core && \
+    NODE_OPTIONS=--dns-result-order=ipv4first npx patchright install --with-deps chromium
 
 # Configure Chromium as default browser so GUI apps and XFCE can find it
 RUN CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \

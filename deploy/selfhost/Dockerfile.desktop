@@ -58,8 +58,13 @@ WORKDIR /app/agent-service
 COPY agent-service/ ./
 RUN npm ci && npx tsc --skipLibCheck
 
-# Install browser runtimes using magnitude-core's patchright (Playwright fork)
-RUN cd /app/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
+# Install browser runtimes using magnitude-core's patchright (Playwright fork).
+# IPv4 is forced for the download: the CDN and its storage redirect are both
+# dual-stack, and on an IPv4-only builder (Cloud Build, GitHub-hosted runners)
+# node fails the IPv6 attempt with EADDRNOTAVAIL, then retries the whole
+# download until the build times out.
+RUN cd /app/magnitude/packages/magnitude-core && \
+    NODE_OPTIONS=--dns-result-order=ipv4first npx patchright install --with-deps chromium
 
 # XFCE helper definition so exo-open recognizes Chromium as a browser option
 RUN mkdir -p /usr/share/xfce4/helpers && \
