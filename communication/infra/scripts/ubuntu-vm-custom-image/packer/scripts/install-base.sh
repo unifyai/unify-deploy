@@ -258,6 +258,15 @@ else
     echo "WARNING: supervisord.conf not found"
 fi
 
+# The Debian package enables supervisor.service, and the packaged
+# /etc/supervisor/supervisord.conf includes conf.d/*.conf -- so the unit would
+# start every program above at boot, before the startup script has written the
+# VNC password or pointed the Caddyfile at the assistant hostname. The startup
+# script starts the unit itself once setup is done; leave it installed (for
+# Restart=on-failure) but not auto-started.
+systemctl disable supervisor 2>/dev/null || true
+echo "supervisor.service disabled at boot (startup script starts it after setup)"
+
 # =============================================================================
 # XFCE Configuration
 # =============================================================================

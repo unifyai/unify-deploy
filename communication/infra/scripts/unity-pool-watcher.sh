@@ -743,8 +743,13 @@ EOF
                 log "Caddy not listening after 15s, restarting via supervisord..."
                 supervisorctl restart services:caddy 2>/dev/null || true
             else
-                log "Caddy not listening after 15s, supervisord not available, starting directly..."
-                nohup /usr/local/bin/caddy run --config /etc/caddy/Caddyfile > /var/log/caddy/caddy-direct.log 2>&1 &
+                log "Caddy not listening after 15s, supervisor socket absent, starting the unit..."
+                # Never spawn a bare `caddy run` here: a second Caddy binds :443
+                # and admin :2019 alongside supervisor's, and configure_caddy_hostname's
+                # reload then reaches only one of them -- leaving the other serving
+                # the pool vhost and answering assistant-host requests with an
+                # empty 200. Go through the unit so there is exactly one.
+                systemctl restart supervisor 2>/dev/null || true
             fi
         fi
         sleep 1
