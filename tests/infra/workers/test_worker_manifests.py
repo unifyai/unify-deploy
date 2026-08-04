@@ -94,6 +94,56 @@ def test_cloud_build_deployment_reconcile_is_control_plane_only() -> None:
         assert "--planes control-plane,runtime" not in text
 
 
+def test_comms_deploy_carries_the_pipeline_backends_the_control_plane_probes() -> None:
+    """The comms service must name the same bucket and project as its workers.
+
+    ``/infra/pipeline/health`` answers ``ok`` only when both the artifact
+    bucket and the Pub/Sub project resolve, and assistants read that answer to
+    decide whether a fleet exists at all. Without ``UNITY_PUBSUB_PROJECT_ID``
+    the project stayed empty, health reported unusable, and every file
+    ingestion parsed in the assistant's own process instead of dispatching --
+    the one boundary the tier rule exists to hold. This caught that omission
+    on staging after the control plane itself was already deployed and
+    answering.
+
+    The values are asserted against the worker manifests rather than written
+    twice, because a plane that mints upload targets in one bucket while the
+    workers read another is a worse failure than no plane at all: the dispatch
+    is accepted and the work goes nowhere.
+    """
+    for relative_path, worker_manifest in [
+        (
+            "deploy/cloudbuild-staging.yaml",
+            "deploy/k8s/workers/ingest-worker-deployment_staging.yaml",
+        ),
+        (
+            "deploy/cloudbuild.yaml",
+            "deploy/k8s/workers/ingest-worker-deployment.yaml",
+        ),
+    ]:
+        worker = (ROOT / worker_manifest).read_text()
+        bucket = _manifest_env_value(worker, "UNITY_GCS_ARTIFACT_BUCKET")
+        environment = _manifest_env_value(worker, "UNITY_GCP_PIPELINE_ENVIRONMENT")
+        project = _manifest_env_value(worker, "UNITY_PUBSUB_PROJECT_ID")
+
+        text = (ROOT / relative_path).read_text()
+        assert f"UNITY_GCS_ARTIFACT_BUCKET={bucket}" in text
+        assert f"UNITY_GCP_PIPELINE_ENVIRONMENT={environment}" in text
+        assert "UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}" in text
+        # ``${PROJECT_ID}`` is the build's own project, which is where the
+        # workers' topics live; pinning the literal here would drift instead.
+        assert project == "gcp-project-runtime"
+
+
+def _manifest_env_value(manifest_text: str, name: str) -> str:
+    """Read one ``name``/``value`` env pair out of a k8s manifest."""
+    lines = manifest_text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == f"- name: {name}":
+            return lines[index + 1].split("value:", 1)[1].strip().strip('"')
+    raise AssertionError(f"{name} not found in manifest")
+
+
 def test_cloud_build_worker_rollout_has_independent_availability_timeout() -> None:
     for relative_path in [
         "deploy/cloudbuild-staging.yaml",
