@@ -475,13 +475,21 @@ echo "Setup complete in ${ELAPSED}s - launching supervisord"
 touch /var/log/agent-service.log
 chown unityuser:unityuser /var/log/agent-service.log
 
-# Source the canonical env file so supervisord inherits all vars.
-set -a
-. /etc/default/unity-vm
-set +a
-/usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf &
-SUPERVISORD_PID=$!
-trap "kill $SUPERVISORD_PID 2>/dev/null; wait $SUPERVISORD_PID 2>/dev/null" EXIT
+# Hand supervisor to systemd rather than running our own copy. Launching one
+# here left TWO supervisords per VM -- systemd's (the Debian unit, which loads
+# the same programs via supervisord.conf's `[include] conf.d/*.conf`) plus this
+# one. Both bound :443 and both bound Caddy's admin :2019, so the reload in the
+# pool watcher's configure_caddy_hostname reached only one of them: the other
+# kept serving the pool vhost and answered assistant-host requests with an
+# empty 200, which surfaced in the pod as a ContentTypeError from /api/act on
+# whichever connection happened to land there.
+#
+# systemd is the intended owner -- supervisor.service.d/unity-env.conf exists
+# precisely so its Restart=on-failure inherits these vars. Start it only now,
+# after setup, because the unit is disabled at boot (see install-base.sh): its
+# programs must not come up before the VNC password and Caddy hostname are
+# written.
+systemctl restart supervisor
 
 echo "Waiting for Caddy on port 443..."
 for i in $(seq 1 30); do
@@ -521,4 +529,7 @@ fi
 TOTAL_ELAPSED=$(( $(date +%s) - START_TIME ))
 echo "Startup complete in ${TOTAL_ELAPSED}s — VM is idle and ready for assignment"
 
-wait $SUPERVISORD_PID
+# Exit instead of blocking on our own supervisord for the VM's lifetime.
+# systemd keeps the services alive now, and google-startup-scripts.service can
+# finally complete -- the old `wait` held it open forever. Nothing else needs
+# this script resident: the pool watcher is its own unit.

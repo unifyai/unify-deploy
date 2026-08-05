@@ -357,10 +357,7 @@ def build_unity_job_manifest(
             outbound HTTP call (e.g. SmartLead's 60s client timeout)
             returns or is interrupted.
     """
-    # CONSOLE_URL is optional with a production default baked into unify's
-    # settings; per-environment ConfigMaps override it so canvas and dashboard
-    # links point at the Console that can actually serve them.
-    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "CONSOLE_URL"}
+    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
     unity_config_env = []
     for key in (
         "GCP_PROJECT_ID",
@@ -368,7 +365,6 @@ def build_unity_job_manifest(
         "VERTEXAI_LOCATION",
         "VERTEXAI_PROJECT",
         "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
-        "CONSOLE_URL",
     ):
         config_ref = {
             "name": "unity-config",
@@ -477,6 +473,18 @@ def build_unity_job_manifest(
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+        # Console origin for user-facing links (canvas and dashboard views).
+        # Derived from the deploy environment like the artifact bucket below,
+        # so links point at the Console that can actually serve them without
+        # any per-environment configuration.
+        {
+            "name": "CONSOLE_URL",
+            "value": (
+                "https://console.unify.ai"
+                if deploy_env == "production"
+                else "https://internal.example.com"
+            ),
+        },
         {
             "name": "UNITY_STARTUP_TIMING",
             "value": "0",

@@ -28,7 +28,7 @@ repos:
   hooks:
   - id: autoflake
     name: autoflake
-    entry: uv run autoflake
+    entry: uv run --no-sync autoflake
     language: system
     types: [python]
     args: [--in-place, --remove-all-unused-imports, --remove-duplicate-keys]
@@ -39,7 +39,7 @@ repos:
 
   - id: black
     name: Format with Black
-    entry: uv run black
+    entry: uv run --no-sync black
     language: system
     types: [python]
 

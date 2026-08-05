@@ -139,19 +139,26 @@ RUN install -m 0755 /app/scripts/sandbox-dpkg /usr/local/bin/sandbox-dpkg
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 RUN HF_HOME=/opt/hf-cache python unify/conversation_manager/medium_scripts/call.py download-files
-RUN playwright install
 
-# The install above ran as root into /root/.cache; the useradd layer below
-# mirrors it to /home/unity/.cache. Pin the path explicitly because the Job
-# template sets XDG_CACHE_HOME=/tmp/.cache, which playwright's registry probe
-# honours — it then looked for browsers in the empty /tmp volume and the canvas
-# render gate silently skipped on every pod.
+# One browser registry, fixed before anything installs into it. The path is
+# pinned because the Job template sets XDG_CACHE_HOME=/tmp/.cache, which
+# playwright's probe honours — it then looked for browsers in the empty /tmp
+# volume and the canvas render gate silently skipped on every pod. Installing
+# straight into the runtime user's cache (chowned in the useradd layer) beats
+# installing into /root and copying: patchright below also writes here, and a
+# copy into a directory that already exists nests the browsers one level deep,
+# which is invisible at build and fatal at resolve time.
+# Ownership is settled inside the layer that writes the bytes: a later
+# chown -R would copy-up the whole browser tree into its own layer, shipping
+# every browser twice. uid 1000 is valid before the user record exists.
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/unity/.cache/ms-playwright
+RUN mkdir -p /home/unity/.cache/ms-playwright && playwright install && \
+    chown -R 1000:1000 /home/unity/.cache
 
 # Canvas authoring artifacts from the builder stage. The render gate drives the
-# playwright chromium installed just above (mirrored into the runtime user's
-# cache in the useradd layer below), which is why this follows it: without a
-# browser CanvasManager would compile a canvas and then decline to publish it.
+# playwright chromium installed just above, which is why this follows it:
+# without a browser CanvasManager would compile a canvas and then decline to
+# publish it.
 COPY --from=canvas /opt/canvas-toolchain /opt/canvas-toolchain
 COPY --from=canvas /opt/canvas-host /opt/canvas-host
 ENV UNITY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain
@@ -159,10 +166,13 @@ ENV UNITY_CANVAS_HOST_ROOT=/opt/canvas-host
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
-RUN cd /opt/magnitude/packages/magnitude-core && npx patchright install --with-deps chromium
+# Wrapped in a script because patchright's Chrome-for-Testing mirror list holds a
+# single unreachable host on these builders; the script explains the failure and
+# routes the download at the bucket that host only redirects to anyway.
+RUN bash deploy/scripts/install_patchright_chromium.sh
 
 # Configure Chromium as default browser so XFCE and GUI apps can find it
-RUN CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
+RUN CHROME_PATH=$(find /home/unity/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1) && \
     printf '#!/bin/bash\nexec "%s" --no-sandbox "$@"\n' "$CHROME_PATH" > /usr/local/bin/chromium-browser && \
     chmod +x /usr/local/bin/chromium-browser && \
     printf '[Desktop Entry]\nVersion=1.0\nName=Chromium Web Browser\nExec=/usr/local/bin/chromium-browser %%U\nTerminal=false\nType=Application\nIcon=web-browser\nCategories=Network;WebBrowser;\nMimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\nStartupNotify=true\n' \
@@ -248,9 +258,12 @@ RUN useradd -m -u 1000 unity && \
     # resolution walks up into its node_modules; COPY --from lands it root-owned,
     # which would fail every canvas build at mkdtemp as the runtime user.
     chown unity:unity /opt/canvas-toolchain/.builds && \
-    cp -r /root/.cache/ms-playwright /home/unity/.cache/ms-playwright && \
     cp -r /root/.config/xfce4 /home/unity/.config/xfce4 2>/dev/null || true && \
-    chown -R unity:unity /home/unity/.cache /home/unity/.config
+    # Non-recursive over the home and the cache: the browser registry inside is
+    # already uid 1000 from its install layers, and re-walking it here would
+    # copy the tree up into this layer.
+    chown unity:unity /home/unity /home/unity/.cache && \
+    chown -R unity:unity /home/unity/.config
 
 USER unity
 
