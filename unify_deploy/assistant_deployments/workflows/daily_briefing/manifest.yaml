@@ -1,11 +1,49 @@
 name: Daily briefing
 slug: daily_briefing
-version: "1.0.0"
+# Below 1.0.0 until the staging walk proves the briefing composes and
+# delivers at 08:30 against a connected mailbox. That proof is the
+# promotion to 1.0.0 — nothing else is.
+version: "0.0.1"
 category: comms
 icon_id: briefing
+
+# `description` is the card: one line, no more. `about` is the page a
+# reader weighs before installing — what the workflow does, when it
+# runs, what arrives, and how its settings shape it. Markdown.
 description: >
   Your calendar, the unread that actually matters, and anything starting
   to slip — before stand-up.
+
+about: |
+  Every weekday at 08:30 your assistant assembles one chat message with
+  the three things worth knowing before stand-up: the rest of today's
+  calendar with context, the unread email that actually needs you, and
+  any commitment starting to slip.
+
+  **Today** lists each remaining meeting — time, who it is with, and the
+  one thing worth knowing walking in, such as a doc shared for it or an
+  unanswered thread with an attendee. Conflicts and back-to-backs are
+  flagged.
+
+  **Needs you** is triaged, not dumped. An unread email earns its single
+  line only when it asks you a direct question, comes from someone you
+  meet today, blocks someone else's work, touches your stated focus, or
+  carries a deadline inside two working days. Newsletters, receipts and
+  CC-only threads never qualify; past seven items, the briefing keeps
+  the most consequential and says how many it left out.
+
+  **Slipping** watches commitments drifting past their point of no
+  return: a thread waiting on your reply for two working days or more, a
+  deadline inside 48 hours with no visible progress, a promise made in
+  email or a meeting that has not moved since. Weekends and out-of-office
+  windows are never counted as waiting time.
+
+  Installing plants the composition and triage procedures, the
+  definition of "slipping", the scan-window helper, and the recurring
+  job itself. Nothing fires until Gmail is connected — the job stays
+  held, and connecting arms it. The optional **focus** setting names
+  projects, people or deadlines the briefing must always check, even on
+  days the calendar and inbox are quiet about them.
 
 # Connections the briefing needs before its job is armed. Installing
 # without them still plants everything; the recurring task stays held
@@ -37,10 +75,12 @@ capabilities: []
 # planted rows.
 params_schema:
   focus:
-    label: Focus
+    label: Always watch for
     type: textarea
     required: false
     help: >
-      Anything the briefing should always watch for — projects, people,
-      deadlines. Left empty, the briefing infers focus from the calendar
-      and inbox alone.
+      Projects, people or deadlines the briefing checks every morning
+      even when the calendar and inbox are quiet about them — for
+      example "the Q3 board deck, anything from Acme procurement, the
+      visa renewal". Left empty, the briefing infers focus from the
+      calendar and inbox alone.
