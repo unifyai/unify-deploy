@@ -49,6 +49,50 @@ def _assistant_data(**overrides):
     return assistant_data
 
 
+def _offline_runner_env(**assistant_overrides) -> dict:
+    from communication.infra.models import OfflineTaskDispatchRequest
+    from communication.infra.task_execution import _build_offline_runner_env
+
+    return _build_offline_runner_env(
+        request=OfflineTaskDispatchRequest(**_payload()),
+        execution=_activation(),
+        assistant_data=_assistant_data(**assistant_overrides),
+        run_key="run-key-1",
+        job_name="job-1",
+    )
+
+
+def test_offline_runner_env_carries_channel_capabilities():
+    """A headless run has no activation payload and no inbound traffic, so
+    every channel it can use has to arrive as environment."""
+    env = _offline_runner_env(
+        assistant_email_provider="microsoft_365",
+        assistant_discord_bot_id="discord-bot-1",
+        assistant_slack_bot_user_id="U_BOT",
+        assistant_slack_team_id="T_WORKSPACE",
+        assistant_has_ms_teams_bot=True,
+        assistant_ms_teams_tenant_id="tenant-abc",
+    )
+
+    assert env["ASSISTANT_EMAIL_PROVIDER"] == "microsoft_365"
+    assert env["ASSISTANT_DISCORD_BOT_ID"] == "discord-bot-1"
+    assert env["ASSISTANT_SLACK_BOT_USER_ID"] == "U_BOT"
+    assert env["ASSISTANT_SLACK_TEAM_ID"] == "T_WORKSPACE"
+    assert env["ASSISTANT_HAS_MS_TEAMS_BOT"] == "true"
+    assert env["ASSISTANT_MS_TEAMS_TENANT_ID"] == "tenant-abc"
+
+
+def test_offline_runner_env_does_not_invent_channels():
+    """The default must not claim a provider the assistant does not have —
+    a wrong email_provider would silently enable or disable Teams."""
+    env = _offline_runner_env()
+
+    assert env["ASSISTANT_EMAIL_PROVIDER"] == "google_workspace"
+    assert env["ASSISTANT_HAS_MS_TEAMS_BOT"] == "false"
+    assert env["ASSISTANT_MS_TEAMS_TENANT_ID"] == ""
+    assert env["ASSISTANT_SLACK_TEAM_ID"] == ""
+
+
 def _client() -> TestClient:
     from common.settings import SETTINGS
     from communication.infra.views import assistant_self_router, router
