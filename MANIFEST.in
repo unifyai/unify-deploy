@@ -1,2 +1,2 @@
 recursive-include communication/infra/scripts *
-recursive-include unify_deploy/assistant_deployments *.json *.md *.yaml *.yml
+recursive-include unify_deploy/assistant_deployments *.json *.jsonl *.md *.yaml *.yml

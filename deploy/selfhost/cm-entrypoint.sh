@@ -72,6 +72,15 @@ build_cm_env() {
   export UNITY_DESKTOP_SHARED_MOUNT="${UNITY_DESKTOP_SHARED_MOUNT:-1}"
   export UNITY_LOCAL_ROOT="${UNITY_LOCAL_ROOT:-/Unity/Local}"
 
+  # The curated workflow catalogue ships inside unify_deploy; resolving
+  # it here (rather than hardcoding a path) survives editable installs,
+  # wheels, and image layout changes alike. Empty means no shelf: unify
+  # skips the WorkflowManager entirely.
+  if [ -z "${UNITY_WORKFLOWS_DIR:-}" ]; then
+    UNITY_WORKFLOWS_DIR="$(python3 -c 'from unify_deploy.assistant_deployments.workflows import workflows_root; print(workflows_root())' 2>/dev/null || true)"
+  fi
+  export UNITY_WORKFLOWS_DIR
+
   export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-pubsub-emulator:8085}"
   export GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
   export ORCHESTRA_URL="${ORCHESTRA_URL:-http://orchestra:8000/v0}"
