@@ -55,18 +55,17 @@ about: |
 # an inline connect action. Not the OAuth alias space in runtime_oauth
 # (where this same connection is "google"), which the gallery cannot see.
 #
-# Naming the app is usually all a bundle does: the resolver asks the
-# gallery for a live connection, then the app's own native package for
-# the secrets that make it usable. `required_secrets` is only for apps
-# neither can answer for — a BYOD OAuth provider like Workspace, which
-# has no package and no gallery row, so its refresh token is the signal.
-# For a native package (hubspot, github, …) or a gallery app (notion,
-# slack, …), omit it: restating their secrets here means two places to
-# update when the package changes.
+# Naming the app is all a bundle should do. The resolver asks the gallery
+# for a live connection, then the app's own native package, then whether
+# the gallery offers the app at all — and Gmail is a gallery app with
+# OAuth, so the fix for "not connected" is the gallery's connect flow.
+# `required_secrets` is only for an app no authority can answer for: a
+# BYOD OAuth provider with no package and no gallery row. Declaring it
+# for a gallery app is worse than redundant — it makes the UI offer a
+# pasted secret instead of the connect button that actually works.
 requirements:
 - slug: gmail
   name: Gmail
-  required_secrets: [GOOGLE_REFRESH_TOKEN]
 
 capabilities: []
 
