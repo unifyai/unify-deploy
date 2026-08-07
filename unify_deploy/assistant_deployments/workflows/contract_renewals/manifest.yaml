@@ -1,0 +1,80 @@
+name: Contract renewal watch
+slug: contract_renewals
+# Below 1.0.0 until the staging walk proves a real contract in Drive
+# produces the right decision date on the calendar with the right lead
+# time in front of it.
+version: "0.0.1"
+category: ops
+icon_id: radar
+
+description: >
+  Reads your contracts for the dates that auto-renew them, and puts the
+  decision on your calendar before the notice window closes.
+
+about: |
+  Almost every contract that renews when nobody wanted it to renews the
+  same way: the notice period ended three weeks before anyone looked at
+  the file. The date was never hidden — it was just written in clause 9
+  of a PDF in a folder.
+
+  Every Monday at 08:00 your assistant reads the contracts in the Drive
+  folder you name and pulls four things out of each one: the renewal
+  date, the notice period required to stop it renewing, whether it
+  renews automatically, and who signed it. From those it works out the
+  **decision date** — the last day you can act — and puts that on your
+  calendar with a reminder ahead of it, so the decision arrives while
+  there is still room to make it.
+
+  Each calendar entry names the contract, the counterparty, the value if
+  the document states one, the exact clause the notice period comes
+  from, and a link to the file. A renewal you decide to keep is a
+  five-second dismissal; one you do not is a month of warning instead of
+  a surprise invoice.
+
+  Contracts already covered are not re-read on every pass, and a
+  document whose dates cannot be found is reported once, by name, rather
+  than silently skipped — an unreadable contract is exactly the one you
+  want to know about.
+
+  Installing plants the contract-reading and reminder-placement
+  procedures, the notice-period policy, the decision-date helper, and
+  the weekly scan. Nothing fires until Google Drive and Google Calendar
+  are connected — the job stays held, and connecting arms it.
+
+# Google Drive and Google Calendar are gallery apps with OAuth, so the
+# resolver answers from a live connection row and "not connected" means
+# press Connect. No `required_secrets`: their own authority already
+# defines what connecting means.
+requirements:
+- slug: google_drive
+  name: Google Drive
+- slug: google_calendar
+  name: Google Calendar
+
+capabilities: []
+
+params_schema:
+  folder:
+    label: Contracts folder
+    type: text
+    required: true
+    help: >
+      The Drive folder holding the contracts to watch — for example
+      "Legal / Signed contracts". Subfolders are included. Only files
+      your Drive connection can read are scanned.
+  lead_days:
+    label: Warn before the decision date
+    type: number
+    required: false
+    suffix: days
+    help: >
+      How much warning you want in front of the last day you can give
+      notice — for example 30. Left empty, the workflow gives you 30
+      days, and shortens it only when the contract itself leaves less.
+  calendar:
+    label: Put reminders on
+    type: text
+    required: false
+    help: >
+      The calendar renewal reminders are created on — for example
+      "Operations". Left empty, they go on your primary calendar.

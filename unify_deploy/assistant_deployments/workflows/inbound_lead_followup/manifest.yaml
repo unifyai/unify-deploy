@@ -1,0 +1,79 @@
+name: Inbound lead follow-up
+slug: inbound_lead_followup
+# Below 1.0.0 until the staging walk proves a real inbound lead gets a
+# drafted first touch posted for approval inside the response budget.
+version: "0.0.1"
+category: growth
+icon_id: funnel
+
+description: >
+  Every new inbound lead gets researched and a first-touch email drafted
+  for your approval, before the response window closes.
+
+about: |
+  Inbound leads go cold fast, and the thing that usually kills them is
+  not judgement — it is the twenty minutes of company research nobody
+  had time for. This workflow does that part.
+
+  Twice each working day, at 09:15 and 14:15, your assistant sweeps
+  HubSpot for contacts that arrived through an inbound route and have
+  had no outbound touch yet. For each one it reads what the CRM already
+  knows, looks the company up, and works out the single most plausible
+  reason they got in touch.
+
+  It then drafts a first-touch email — short, specific to that company,
+  and ending in one question that is easy to answer — and posts the
+  draft to your Slack channel with the lead's name, source, and how
+  much of the response budget is left. You approve, edit or discard.
+  **Nothing is ever sent automatically**: the draft waits for you.
+
+  The **response budget** is counted in working hours only, so a lead
+  that arrives at 17:55 on Friday is not treated as four hours late by
+  Monday morning. When a lead passes its budget it is posted first and
+  labelled as overdue, rather than quietly dropped down the list.
+
+  Installing plants the drafting and qualification procedures, the
+  team's response-time promise, the working-hours budget helper, and
+  the recurring sweep itself. Nothing fires until HubSpot and Slack are
+  connected — the job stays held, and connecting arms it.
+
+# HubSpot and Slack are gallery apps with OAuth, so naming them is all
+# this bundle does: the resolver asks the gallery for a live connection
+# and the fix for "not connected" is the gallery's own connect flow.
+# Declaring `required_secrets` here would offer a pasted credential
+# instead of the connect button that actually works.
+requirements:
+- slug: hubspot
+  name: HubSpot
+- slug: slack
+  name: Slack
+
+capabilities: []
+
+params_schema:
+  channel:
+    label: Post drafts to
+    type: text
+    required: true
+    help: >
+      The Slack channel each draft is posted to for approval — for
+      example "#inbound" or "#sales-leads". Use a channel your assistant
+      has been invited to; a private channel it is not a member of will
+      silently receive nothing.
+  budget_hours:
+    label: Respond within
+    type: number
+    required: false
+    help: >
+      How many working hours a new inbound lead may wait before the
+      draft is flagged overdue — for example 4. Counted inside working
+      hours only, so evenings and weekends never burn the budget. Left
+      empty, the workflow uses four hours.
+  offer:
+    label: What to offer first
+    type: text
+    required: false
+    help: >
+      The next step every first touch asks for — for example "a 20-minute
+      call this week" or "a short demo video". Left empty, the assistant
+      picks the ask that best fits what the lead seems to want.
