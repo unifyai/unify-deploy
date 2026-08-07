@@ -1680,6 +1680,31 @@ def _build_offline_runner_env(
             "ASSISTANT_WHATSAPP_NUMBER": str(
                 assistant_data.get("assistant_whatsapp_number") or "",
             ),
+            # Channel capability, not just channel address. A live session
+            # learns which channels exist from its activation payload and from
+            # inbound traffic; an offline run has neither, so omitting these
+            # leaves every non-phone/email/WhatsApp channel looking disabled.
+            # ASSISTANT_EMAIL_PROVIDER in particular gates Microsoft Teams:
+            # defaulting it to google_workspace refuses every Teams send from
+            # a task, whatever the assistant is really configured with.
+            "ASSISTANT_EMAIL_PROVIDER": str(
+                assistant_data.get("assistant_email_provider") or "google_workspace",
+            ),
+            "ASSISTANT_DISCORD_BOT_ID": str(
+                assistant_data.get("assistant_discord_bot_id") or "",
+            ),
+            "ASSISTANT_SLACK_BOT_USER_ID": str(
+                assistant_data.get("assistant_slack_bot_user_id") or "",
+            ),
+            "ASSISTANT_SLACK_TEAM_ID": str(
+                assistant_data.get("assistant_slack_team_id") or "",
+            ),
+            "ASSISTANT_HAS_MS_TEAMS_BOT": (
+                "true" if assistant_data.get("assistant_has_ms_teams_bot") else "false"
+            ),
+            "ASSISTANT_MS_TEAMS_TENANT_ID": str(
+                assistant_data.get("assistant_ms_teams_tenant_id") or "",
+            ),
             "SELF_CONTACT_ID": str(self_contact_id),
             "ASSISTANT_DESKTOP_MODE": str(
                 assistant_data.get("desktop_mode") or "ubuntu",

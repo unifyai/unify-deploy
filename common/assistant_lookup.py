@@ -23,6 +23,7 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
     "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
+    "assistant_has_ms_teams_bot,assistant_ms_teams_tenant_id,"
     "age,nationality,"
     "about,job_title,timezone,default_model,default_reasoning_effort,"
     "slow_brain_model,slow_brain_reasoning_effort"
@@ -76,6 +77,8 @@ def _local_assistant_data() -> dict[str, Any]:
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
         "assistant_discord_bot_id": "",
+        "assistant_has_ms_teams_bot": False,
+        "assistant_ms_teams_tenant_id": "",
         "desktop_mode": NO_DESKTOP_MODE,
         "user_desktops": [],
         "is_local": True,
@@ -118,6 +121,12 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         ),
         "assistant_slack_team_id": _runtime_str(
             assistant.get("assistant_slack_team_id"),
+        ),
+        "assistant_has_ms_teams_bot": bool(
+            assistant.get("assistant_has_ms_teams_bot"),
+        ),
+        "assistant_ms_teams_tenant_id": _runtime_str(
+            assistant.get("assistant_ms_teams_tenant_id"),
         ),
         "assistant_email": assistant["email"] or "",
         "assistant_email_provider": assistant.get("email_provider")
