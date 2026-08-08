@@ -1,0 +1,81 @@
+name: Meeting prep
+slug: meeting_prep
+# Below 1.0.0 until the staging walk proves a real morning's meetings each
+# get a brief that names the right people and the right last thread.
+version: "0.0.1"
+category: comms
+icon_id: scope
+
+description: >
+  Half an hour before each meeting, a short brief on who you are seeing, what
+  you last said to them, and what is likely to come up.
+
+about: |
+  Walking into a meeting cold is rarely a knowledge problem. The context
+  exists — it is in last month's thread, in the document someone shared on
+  Tuesday, in the thing you promised on the call before. It is just not in
+  your head at 9:58.
+
+  Thirty minutes before each meeting on your calendar, your assistant sends
+  you a brief. Who is attending and what their role is. The last substantive
+  exchange you had with each of them, and when. Anything attached to the
+  invite or shared in the thread that set the meeting up. Any commitment you
+  made to these people that is still open — the surest way to start a meeting
+  badly is to be reminded of something you forgot.
+
+  It closes with the one thing most likely to need a decision, phrased as a
+  question rather than a summary, so you arrive with a position instead of a
+  recap.
+
+  Back-to-backs get one combined message rather than three, sent before the
+  first. Meetings you own but nobody else accepted, and anything you have
+  marked as focus time, are skipped — a brief for an empty room is noise.
+
+  This reads your own calendar and mailbox, so it needs **your Workspace**
+  connected — the Google or Microsoft account you connect once in your
+  profile, not a third-party app. Installing plants the brief-writing and
+  attendee-research procedures, the definition of a substantive exchange,
+  the lead-time helper, and the recurring job. Nothing fires until the
+  Workspace is connected; connecting arms it.
+
+# Workspace is the one requirement that is not an integration at all: it is
+# not in the gallery and not a native package, and it is connected in the
+# same manager the profile pane and the onboarding checklist open. The
+# `kind: workspace` route is what tells the resolver that, and the declared
+# secret is the signal those flows store — the one case where naming a
+# secret is right rather than redundant.
+requirements:
+- slug: google_workspace
+  name: Google Workspace
+  kind: workspace
+  required_secrets: [GOOGLE_REFRESH_TOKEN]
+
+capabilities: []
+
+params_schema:
+  lead_minutes:
+    label: Send the brief
+    type: number
+    required: false
+    suffix: minutes before
+    help: >
+      How long before a meeting starts the brief should arrive — for example
+      30. Long enough to read, short enough that nothing has changed since.
+      Left empty, the brief arrives 30 minutes before.
+  skip_recurring:
+    label: Skip recurring meetings
+    type: boolean
+    required: false
+    help: >
+      Turn on to leave your standing meetings alone — a daily stand-up rarely
+      needs a brief. One-offs and externals are still covered. Left empty,
+      every meeting with another attendee gets one.
+  focus:
+    label: Always include
+    type: textarea
+    required: false
+    help: >
+      Anything the brief should surface whenever it is relevant to who you
+      are meeting — for example "open renewals, anything from the security
+      review". Left empty, the brief covers the attendees and the thread that
+      set the meeting up and nothing else.
