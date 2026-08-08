@@ -1,0 +1,80 @@
+name: Pull request unblocker
+slug: pr_review_nudge
+# Below 1.0.0 until the staging walk proves a real stale review gets
+# nudged in Slack and the daily digest reads correctly against a repo
+# with genuine traffic.
+version: "0.0.1"
+category: build
+icon_id: rocket
+
+description: >
+  Finds the reviews and pull requests that have stopped moving, and says
+  who has to do what to unstick each one.
+
+about: |
+  Code does not ship because of the pull requests being worked on. It
+  ships because of the ones nobody is looking at, and those are exactly
+  the ones nobody mentions in stand-up.
+
+  Every working day at 09:15 your assistant reads the open pull requests
+  in the repositories you name and sorts them by what is actually
+  blocking each one: waiting on a first review, waiting on a re-review
+  after changes were pushed, waiting on the author to answer comments,
+  or waiting on nothing but a merge.
+
+  Anything that has not moved for longer than your staleness threshold
+  is nudged — one Slack message to the person whose turn it is, naming
+  the pull request, how long it has been sitting, and the single next
+  action. One person, one action, never a broadcast to the channel.
+
+  A short digest is posted to your team channel with the same list
+  grouped by blocker, plus a one-line note on the oldest thing in the
+  queue. Draft pull requests are ignored, and so is anything the author
+  has explicitly labelled as parked.
+
+  Staleness is counted in working days, so a review opened on Friday
+  afternoon is not treated as three days late on Monday morning.
+
+  Installing plants the nudge and triage procedures, the definition of
+  a stalled review, the working-day age helper, and the recurring sweep.
+  Nothing fires until GitHub and Slack are connected — the job stays
+  held, and connecting arms it.
+
+# GitHub and Slack are gallery apps with OAuth; naming them is all a
+# bundle should do. The resolver asks the gallery for a live connection,
+# so "not connected" resolves to the gallery's connect flow rather than
+# a pasted token.
+requirements:
+- slug: github
+  name: GitHub
+- slug: slack
+  name: Slack
+
+capabilities: []
+
+params_schema:
+  repositories:
+    label: Repositories to watch
+    type: textarea
+    required: true
+    help: >
+      One "owner/repo" per line — for example "unifyai/unify". Only these
+      repositories are read. A repository your GitHub connection cannot
+      see is reported once and then skipped rather than retried every day.
+  digest_channel:
+    label: Post the digest to
+    type: text
+    required: true
+    help: >
+      The Slack channel the daily summary goes to — for example "#eng".
+      Individual nudges are always sent as direct messages, never here.
+  stale_after_days:
+    label: Nudge after
+    type: number
+    required: false
+    suffix: working days
+    help: >
+      How long a pull request may sit with no review activity before its
+      reviewer is nudged — for example 1. Counted in working days, so a
+      Friday review is not overdue on Monday. Left empty, the workflow
+      nudges after one working day.
