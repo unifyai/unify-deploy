@@ -265,31 +265,6 @@ def patch_job_labels(
             return False
 
 
-def _workflows_dir_for_runtime() -> str:
-    """Absolute path of the curated workflow catalogue in this image.
-
-    The catalogue ships inside ``unify_deploy``, so it is resolved from the
-    installed package rather than hardcoded: editable installs, wheels and
-    image layout changes all keep working, and staging cannot end up
-    pointing somewhere production does not.
-
-    Returns ``""`` when the package is absent, which unify reads as "no
-    shelf" and skips the WorkflowManager for -- a runtime without the
-    catalogue must still boot.
-    """
-    try:
-        from unify_deploy.assistant_deployments.workflows import workflows_root
-
-        return str(workflows_root())
-    except Exception:
-        logger.warning(
-            "Workflow catalogue package not importable; assistant Jobs will "
-            "start without a workflow shelf",
-            exc_info=True,
-        )
-        return ""
-
-
 def _merge_env_overrides(
     env_vars: list[dict],
     extra_env: dict[str, str] | None,
@@ -539,17 +514,22 @@ def build_unity_job_manifest(
             "name": "MEET_BRIDGE_PAGE_URL",
             "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",
         },
-        # The curated workflow catalogue ships inside the runtime image as
-        # part of unify_deploy, so its path is a property of the image and
-        # not of the environment -- resolving it here rather than through a
-        # per-environment ConfigMap key keeps one source of truth and means
-        # staging and production cannot disagree about where the shelf is.
-        # Empty (an image without the package) means no shelf: unify skips
-        # the WorkflowManager entirely rather than failing to boot.
-        {
-            "name": "UNITY_WORKFLOWS_DIR",
-            "value": _workflows_dir_for_runtime(),
-        },
+        # UNITY_WORKFLOWS_DIR is deliberately NOT set here.
+        #
+        # It used to be, resolved from this process's own installed
+        # unify_deploy — which lives at /app in the comms image and under
+        # site-packages in the assistant image. Stamping an absolute path
+        # from one image into a container built from another named a
+        # directory that did not exist there: the assistant logged
+        # "Workflow catalogue root /app/unify_deploy/... does not exist",
+        # registered nothing, and every install reported an empty catalogue
+        # while the package sat two directories away.
+        #
+        # The catalogue ships inside the runtime image, so the runtime is
+        # the only thing that can say where it is. unify resolves its own
+        # installed copy; the env var stays an explicit override for
+        # self-host and development, set in the same container that reads
+        # it.
     ]
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)
