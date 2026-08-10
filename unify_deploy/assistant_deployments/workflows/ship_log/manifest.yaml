@@ -1,0 +1,93 @@
+name: Ship log
+slug: ship_log
+# Below 1.0.0 until a staging walk proves a real day of commits, reviews
+# and closed issues reads as work rather than as a git log with prose
+# around it.
+version: "0.0.1"
+category: build
+icon_id: rocket
+
+description: >
+  What you actually shipped today, written the way you would say it in
+  stand-up rather than the way git recorded it.
+
+about: |
+  By six o'clock the day is a list of commits, and a list of commits is
+  not an answer to "what did you get done?". The work was a bug that took
+  four hours and one line, a review that unblocked someone else, and a
+  design decision that never touched a file.
+
+  At the end of each working day your assistant reads what you did across
+  the repositories you name — commits pushed, pull requests opened and
+  merged, reviews you gave, issues you closed — and writes it as three
+  short sections: shipped, in progress, blocked.
+
+  It groups by outcome, not by repository. Six commits fixing one bug are
+  one line. A pull request opened in the morning and merged in the
+  afternoon is one line about the thing that shipped, not two about the
+  pull request. Work you did on someone else's change is counted as
+  yours, because reviewing is work and it never appears in a commit
+  count.
+
+  Blocked is the section that earns the whole message: anything you left
+  waiting on a person, a review or a decision, so that tomorrow starts
+  with it instead of rediscovering it on Thursday.
+
+  A day with nothing in it says so in one line. Padding a quiet day is
+  how a stand-up post stops being read.
+
+  Run it whenever you want the log early — before a stand-up in another
+  timezone, or at the end of a day that ended sooner than usual.
+
+  Installing plants the reading and writing procedures, the definition of
+  a shipped change, the day-window helper, and the daily job.
+
+# Somewhere to post it, and which app that is belongs to the team rather
+# than to this bundle: any one of them satisfies the requirement, and the
+# procedures are written against posting a message, not against a
+# particular API.
+requirements:
+- slug: github
+  name: GitHub
+- slug: discord
+  name: Discord
+  alternatives:
+  - slug: slack
+    name: Slack
+  - slug: microsoft_teams
+    name: Microsoft Teams
+
+capabilities: []
+
+params_schema:
+  repositories:
+    label: Repositories to read
+    type: textarea
+    required: true
+    help: >
+      One "owner/repo" per line — for example "unifyai/unify". Only these
+      are read. Work in a repository your GitHub connection cannot see is
+      reported once as unreadable rather than silently missing.
+  post_to:
+    label: Post the log to
+    type: text
+    required: false
+    help: >
+      The channel the log goes to — for example "#standup" on Slack or
+      Discord. Left empty, the log arrives as a chat message to you and is
+      posted nowhere.
+  post_at:
+    label: Post at
+    type: text
+    required: false
+    help: >
+      The time the log is written, in 24-hour form — for example "17:30".
+      Left empty, it is written at 17:30 on working days.
+  include_reviews:
+    label: Count reviews you gave
+    type: boolean
+    required: false
+    help: >
+      Turn off to report only your own changes. Left empty, reviews you
+      gave to other people's pull requests are counted as work, because
+      they are and they never show up in a commit count.
