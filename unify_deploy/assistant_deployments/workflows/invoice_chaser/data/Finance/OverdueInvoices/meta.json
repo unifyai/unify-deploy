@@ -1,0 +1,16 @@
+{
+  "description": "One row per overdue invoice the chaser is tracking: what is owed, how far past due it is, which stage of the ladder it has reached, and when it was last chased. Written by the workflow's own job at run time; the bundle ships only the shape.",
+  "fields": {
+    "reference": "str",
+    "customer": "str",
+    "amount": "float",
+    "currency": "str",
+    "due_date": "str",
+    "days_overdue": "int",
+    "stage": "str",
+    "chases_sent": "int",
+    "last_chase_at": "str",
+    "status": "str"
+  },
+  "seed_key": "reference"
+}

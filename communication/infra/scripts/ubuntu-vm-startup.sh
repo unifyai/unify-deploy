@@ -290,14 +290,14 @@ echo "=== Updating Magnitude ==="
 if [[ -d "/magnitude/.git" ]]; then
     cd /magnitude
     [[ -n "$GITHUB_TOKEN" ]] && git remote set-url origin "$MAGNITUDE_URL" 2>/dev/null || true
-    git fetch --depth 1 origin unity-modifications 2>&1 || true
-    git reset --hard origin/unity-modifications 2>&1 || true
+    git fetch --depth 1 origin main 2>&1 || true
+    git reset --hard origin/main 2>&1 || true
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
     save_commit_hash /magnitude "$commit"
     echo "  Magnitude updated (commit: $commit)"
 elif [[ ! -f "/magnitude/package.json" ]]; then
     echo "  Cloning Magnitude..."
-    git clone --depth 1 --branch unity-modifications "$MAGNITUDE_URL" /magnitude 2>&1
+    git clone --depth 1 --branch main "$MAGNITUDE_URL" /magnitude 2>&1
 fi
 
 echo "  Installing dependencies..."

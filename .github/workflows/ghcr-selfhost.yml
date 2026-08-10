@@ -151,7 +151,7 @@ jobs:
         fi
         UNISDK_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
         UNILLM_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
-        MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/unity-modifications" | cut -f1)"
+        MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/main" | cut -f1)"
         # The canvas stage clones branding, whose clone command is static text, so
         # without this the layer is served from cache indefinitely and the image
         # keeps shipping whatever component kit it was first built with.

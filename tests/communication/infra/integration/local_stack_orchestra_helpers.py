@@ -16,10 +16,6 @@ from tests.communication.infra.integration.conftest import LocalStackUrls
 _TEMP_SUBSCRIPTION_TTL_SECONDS = 86_400
 
 
-def unify_key() -> str:
-    return os.environ["UNIFY_KEY"]
-
-
 def admin_key() -> str:
     return os.environ["ORCHESTRA_ADMIN_KEY"]
 
@@ -28,11 +24,40 @@ def auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def create_user(urls: LocalStackUrls, email: str) -> dict:
+    response = requests.post(
+        f"{urls.orchestra_url}/admin/user",
+        json={"email": email, "name": "Integration Test"},
+        headers=auth_headers(admin_key()),
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    api_key = body.get("api_key")
+    if not api_key:
+        lookup = requests.get(
+            f"{urls.orchestra_url}/admin/user/by-user-id",
+            params={"user_id": body["id"]},
+            headers=auth_headers(admin_key()),
+            timeout=30,
+        )
+        assert lookup.status_code == 200, lookup.text
+        api_key = lookup.json()["api_key"]
+    return {
+        "id": body["id"],
+        "api_key": api_key,
+        "headers": auth_headers(api_key),
+    }
+
+
 def create_organization(urls: LocalStackUrls, name: str) -> dict:
+    # Organizations are capped at one per owner, so every test org gets its
+    # own disposable owner rather than piling onto the operator account.
+    owner = create_user(urls, f"{name}-owner-{uuid.uuid4().hex[:8]}@example.com")
     response = requests.post(
         f"{urls.orchestra_url}/organizations",
         json={"name": name},
-        headers=auth_headers(unify_key()),
+        headers=owner["headers"],
         timeout=30,
     )
     assert response.status_code == 201, response.text

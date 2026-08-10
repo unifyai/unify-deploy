@@ -1,0 +1,85 @@
+name: Overdue invoice chaser
+slug: invoice_chaser
+# Below 1.0.0 until the staging walk proves a genuinely overdue Stripe
+# invoice produces the right stage of chase, in the right voice, against
+# a connected mailbox.
+version: "0.0.1"
+category: ops
+icon_id: scales
+
+description: >
+  Watches Stripe for invoices that have gone past due and drafts the
+  chase email the stage calls for — polite first, firm later.
+
+about: |
+  Late invoices are rarely refusals. They are usually an email that
+  arrived on a busy day and was never seen again. Chasing them works,
+  and almost nobody has the stomach to do it on a schedule.
+
+  Every working day at 10:00 your assistant reads your Stripe account
+  for invoices that are open and past their due date, works out how far
+  past due each one is, and drafts the chase that stage calls for. The
+  ladder is deliberate: a light reminder in the first week, a direct
+  follow-up in the second, and a firm note naming the terms after that.
+  The customer's own history matters — someone who has always paid
+  eventually is chased more gently than a first invoice that never
+  moved.
+
+  Each draft lands in your mailbox as a reply on the original thread
+  wherever one exists, so the customer sees a conversation rather than a
+  new demand. **Nothing is sent without you**: the assistant drafts,
+  you send.
+
+  Anything you have told it to leave alone is left alone — the exclusion
+  list is honoured before anything else, and an invoice under dispute,
+  in an active payment plan, or belonging to a named account is skipped
+  and reported rather than chased.
+
+  Past the escalation ceiling, the assistant stops drafting and says so
+  once: an invoice that has ignored three chases is a conversation for a
+  person, not a fourth email.
+
+  Installing plants the chase-writing procedure, the escalation ladder,
+  the do-not-chase policy, the overdue-stage helper, and the recurring
+  job. Nothing fires until Stripe and Gmail are connected — the job
+  stays held, and connecting arms it.
+
+# Stripe and Gmail are gallery apps the resolver can see a live
+# connection for, so this bundle names them and stops. Restating their
+# credentials as `required_secrets` would offer a pasted key instead of
+# the connect flow that actually works.
+requirements:
+- slug: stripe
+  name: Stripe
+- slug: gmail
+  name: Gmail
+
+capabilities: []
+
+params_schema:
+  sender_name:
+    label: Sign chases as
+    type: text
+    required: true
+    help: >
+      The name and role at the bottom of every chase — for example
+      "Priya, Accounts at Northwind". Customers answer a person far more
+      often than they answer "the finance team".
+  never_chase:
+    label: Never chase
+    type: textarea
+    required: false
+    help: >
+      Customers, domains or invoice references to leave alone entirely,
+      one per line — for example "acme.com" or "INV-2041". Use it for
+      accounts under dispute, on a payment plan, or handled by someone
+      else. Left empty, every overdue invoice is eligible.
+  max_chases:
+    label: Stop after
+    type: number
+    required: false
+    suffix: chases
+    help: >
+      How many chases one invoice may receive before the assistant stops
+      drafting and hands it to you — for example 3. Left empty, it stops
+      after three.

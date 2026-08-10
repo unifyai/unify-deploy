@@ -261,13 +261,13 @@ Write-Host "=== Updating Magnitude ===" -ForegroundColor Cyan
 $magnitudeDir = 'C:\magnitude'
 
 if (Test-Path "$magnitudeDir\.git") {
-    Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $gcpGithubToken -RepoName "magnitude"
+    Update-GitRepo -RepoPath $magnitudeDir -Branch "main" -GithubToken $gcpGithubToken -RepoName "magnitude"
 } elseif (-not (Test-Path "$magnitudeDir\package.json")) {
     Write-Host "  Cloning Magnitude..."
     if (Test-Path $magnitudeDir) {
         & $script:CmdExe /c "rmdir /s /q `"$magnitudeDir`" 2>nul"
     }
-    Invoke-Git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir
+    Invoke-Git clone --depth 1 --branch main $magnitudeUrl $magnitudeDir
     if (Test-Path "$magnitudeDir\package.json") {
         Push-Location $magnitudeDir
         $commit = Invoke-Git rev-parse --short=12 HEAD

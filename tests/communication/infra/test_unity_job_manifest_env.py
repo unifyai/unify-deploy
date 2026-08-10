@@ -623,3 +623,22 @@ def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
         for name in secret_backed:
             assert f"{name}=https://" not in body, f"{name} retyped in {filename}"
         assert "UNITY_ADAPTERS_URL" in secret_backed, filename
+
+
+def test_workflows_dir_is_not_stamped_from_this_image() -> None:
+    """A path resolved here is a fact about the comms image, not the Job's.
+
+    UNITY_WORKFLOWS_DIR used to be set from this process's own installed
+    unify_deploy, which lives at /app in the comms image and under
+    site-packages in the assistant image. The Job then received an absolute
+    path that did not exist in its own container: the assistant logged
+    "Workflow catalogue root /app/unify_deploy/... does not exist",
+    registered no bundles, and every workflow install reported an empty
+    catalogue while the package sat two directories away.
+
+    The catalogue ships inside the runtime image, so the runtime resolves
+    it. The variable remains an explicit override for self-host and
+    development, set in the same container that reads it.
+    """
+    manifest = build_unity_job_manifest(job_name="workflows-dir-staging")
+    assert "UNITY_WORKFLOWS_DIR" not in _env_by_name(manifest)

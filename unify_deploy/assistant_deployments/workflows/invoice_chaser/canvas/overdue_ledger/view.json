@@ -1,0 +1,20 @@
+{
+  "title": "Overdue invoices",
+  "description": "What is outstanding, how far past due, and which stage of the chase ladder each invoice has reached. Reads the table the chaser keeps current; it never calls Stripe itself.",
+  "bindings": [
+    {
+      "alias": "invoices",
+      "manager": "data",
+      "table": "Data/Finance/OverdueInvoices",
+      "args": {
+        "operation": "filter",
+        "filter": "status == 'open'",
+        "order_by": "days_overdue",
+        "descending": true,
+        "limit": 200
+      }
+    }
+  ],
+  "actions": [],
+  "visibility": "private"
+}

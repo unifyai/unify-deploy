@@ -1,2 +1,6 @@
 recursive-include communication/infra/scripts *
-recursive-include unify_deploy/assistant_deployments *.json *.jsonl *.md *.yaml *.yml
+# Every file a bundle is loaded from. `.tsx` is here because a workflow
+# ships canvas *source*: without it the package carries a view.json with
+# no view.tsx beside it, the catalogue loader refuses the bundle, and the
+# Builtins seed silently stops publishing the whole shelf.
+recursive-include unify_deploy/assistant_deployments *.json *.jsonl *.md *.yaml *.yml *.tsx

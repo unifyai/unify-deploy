@@ -46,7 +46,7 @@ RUN chmod +x /app/desktop/desktop.sh /app/desktop/device.sh /app/desktop/startup
 
 # Magnitude packages (agent-service file: deps). Clone in-image so CI does not rely
 # on a local magnitude checkout in the Docker build context.
-RUN git clone --depth 1 --branch unity-modifications https://github.com/unifyai/magnitude.git /app/magnitude
+RUN git clone --depth 1 --branch main https://github.com/unifyai/magnitude.git /app/magnitude
 WORKDIR /app/magnitude
 # Root install wires workspace packages; lockfile is macOS-generated so resolve for Linux.
 RUN rm -f package-lock.json && npm install --ignore-scripts
