@@ -55,7 +55,7 @@ steps:
   - |
     UNIFY_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
-    MAGNITUDE_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/magnitude.git refs/heads/unity-modifications | cut -f1)
+    MAGNITUDE_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
     BRANDING_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/branding.git refs/heads/staging | cut -f1)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt

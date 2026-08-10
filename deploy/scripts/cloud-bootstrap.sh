@@ -92,8 +92,8 @@ clone_repo "unillm"
 if [[ "${CLONE_MAGNITUDE:-false}" == "true" ]]; then
     clone_repo "magnitude"
     if [[ -d "$REPO_ROOT/magnitude" ]]; then
-        echo "Checking out unity-modifications branch for magnitude..."
-        (cd "$REPO_ROOT/magnitude" && git checkout unity-modifications 2>/dev/null) || true
+        echo "Checking out main branch for magnitude..."
+        (cd "$REPO_ROOT/magnitude" && git checkout main 2>/dev/null) || true
     fi
 fi
 

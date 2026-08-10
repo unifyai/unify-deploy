@@ -34,7 +34,7 @@ Private deployment + hosted-runtime repo for the **Unity** AI assistant platform
 | [`unifyai/console`](https://github.com/unifyai/console) | private/hosted | Next.js web UI / observability dashboard. | `main`, `staging` |
 | [`unifyai/unify`](https://github.com/unifyai/unify) | public | Python SDK wrapping Orchestra's REST API. | `main`, `staging` |
 | [`unifyai/unillm`](https://github.com/unifyai/unillm) | public | LLM abstraction layer with caching. | `main`, `staging` |
-| [`unifyai/magnitude`](https://github.com/unifyai/magnitude) | private | Computer-use/browser automation dependency. **Consumed at branch `unity-modifications`** (see loose ends). | `unity-modifications` |
+| [`unifyai/magnitude`](https://github.com/unifyai/magnitude) | private | Computer-use/browser automation dependency. **Consumed at branch `main`**. | `main` |
 
 Open-source `unity` runs against hosted Orchestra (`ORCHESTRA_URL`, default `https://api.unify.ai/v0`) with no Console. The full "all-repo local" stack lives in `selfhost/` here.
 
@@ -329,7 +329,7 @@ Each build clones `unity` (matching branch), overlays this package, pushes to Ar
 
 - **All repos:** `tests.yml`, `sync-staging.yml` (fast-forward `staging` after `main`).
 - **orchestra:** `ghcr-selfhost.yml` (→ `ghcr.io/unifyai/orchestra`), billing/cleanup cron jobs hitting `https://api.unify.ai/v0/admin/*` (prod) and `https://internal.example.com/v0/*` (staging).
-- **unity:** `tests.yml` (env `unity-testing`; clones orchestra/unify/unillm + `magnitude@unity-modifications`), `llm-cache-refresh.yml` (env `unity-llm-cache-refresh`), `pages.yml`.
+- **unity:** `tests.yml` (env `unity-testing`; clones orchestra/unify/unillm + `magnitude@main`), `llm-cache-refresh.yml` (env `unity-llm-cache-refresh`), `pages.yml`.
 - **unity-deploy:** `ghcr-selfhost.yml` (→ `ghcr.io/unifyai/unity-selfhost`, `unity-desktop-selfhost`; `workflow_dispatch` only), `hosted-tests.yml` (`GCP_PROJECT_ID=gcp-project-runtime`).
 - **console:** `ghcr-selfhost.yml` (→ `ghcr.io/unifyai/console-selfhost`), `code-quality.yml`, `security.yml`.
 - **unillm:** `pypi.yml` (publish on tag).
@@ -371,7 +371,7 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 | 5 | **P1** | Orphaned GitHub environments | `unity` repo has `unity-testing` (full secret set) and `unity-llm-cache-refresh` superseded by `unity-testing` / `unity-llm-cache-refresh`. Migrate env-scoped secrets + delete the `unity-*` envs. |
 | 6 | **P1** | Stale Cloud Build triggers | Triggers bound to `repositories/unity` / `unity-deploy` (e.g. `adapters-unity-deploy`, `unity-comms-app-*`) fail at source-fetch (~3-6s, no steps) even though GitHub redirects the repo. Recreate as `unity-*` triggers against `repositories/unity` / `unity-deploy`. Compat files `cloudbuild/unity-comms-app*.yaml` exist for old trigger names. |
 | 7 | **P1** | Referenced-but-unconfigured secrets | `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (console build-arg), `TWILIO_*`/`LIVEKIT_*`/`GCP_SA_KEY` (unity-deploy `hosted-tests.yml`) are not configured → empty/skip. |
-| 8 | **P2** | `magnitude@unity-modifications` | `unity` `install.sh`/CI and unity-deploy `unity-pool-watcher.sh`/`cloud-bootstrap.sh` fetch the `unity-modifications` branch of `unifyai/magnitude`. Rename the branch + update refs as a coordinated change. |
+| 8 | **P2** | ~~`magnitude@main`~~ | RESOLVED: magnitude default/consumption branch is now `main`; install/CI/pool scripts updated. |
 | 9 | **P2** | OS user `unityuser` (HOME `/Unity`) | Across unity desktop scripts + unity-deploy packer/pool scripts + `file_manager/sync/config.py`. Renaming requires rebuilding pool images. |
 | 10 | **P2** | Windows pool entirely `unity-*` | RESOLVED (code aligned): Windows pool stays `unity-*` by design. `vm_config.py`/`vm_helpers.py` now use a per-OS prefix (`pool_vm_name_prefix`): Ubuntu → `unity-pool-*`, Windows → `unity-pool-*`; Windows image family → `unity-pool-windows-vm`, tag → `unity-windows-vm`. New Windows VMs/IPs/DNS now match the live pool, so replenish no longer breaks. |
 | 11 | **P2** | Pub/Sub ~84% `unity-*` | 1,334 topics / 5,198 subs legacy vs 252 / 1,021 unity; per-assistant duplication. Cut over + delete legacy. |

@@ -574,7 +574,7 @@ function Invoke-Update {
     # ── Magnitude ──
     $magnitudeDir = "C:\magnitude"
     $magSaved = Get-SavedCommitHash $magnitudeDir
-    $magRemote = Get-RemoteCommitHash $magnitudeUrl "unity-modifications"
+    $magRemote = Get-RemoteCommitHash $magnitudeUrl "main"
 
     if ($magSaved -and $magRemote -and ($magSaved -eq $magRemote)) {
         Write-Log "Magnitude up-to-date ($magSaved)"
@@ -598,8 +598,8 @@ function Invoke-Update {
         if (Test-Path "$magnitudeDir\.git") {
             Push-Location $magnitudeDir
             if ($githubToken) { git remote set-url origin $magnitudeUrl 2>$null }
-            git fetch --depth 1 origin unity-modifications 2>&1
-            git reset --hard origin/unity-modifications 2>&1
+            git fetch --depth 1 origin main 2>&1
+            git reset --hard origin/main 2>&1
             $commit = (git rev-parse --short=12 HEAD 2>&1)
             Save-CommitHash $magnitudeDir $commit
             Pop-Location
@@ -608,7 +608,7 @@ function Invoke-Update {
             if (Test-Path $magnitudeDir) {
                 cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null
             }
-            git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
+            git clone --depth 1 --branch main $magnitudeUrl $magnitudeDir 2>&1
             if (Test-Path "$magnitudeDir\package.json") {
                 Push-Location $magnitudeDir
                 $commit = (git rev-parse --short=12 HEAD 2>&1)
