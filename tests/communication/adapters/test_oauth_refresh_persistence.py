@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(project_root))
 
 os.environ.setdefault("OUTLOOK_WEBHOOK_SECRET", "test-outlook-secret")
