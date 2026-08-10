@@ -18,7 +18,6 @@ from .conftest import (
     ADMIN_KEY,
     NAMESPACE,
     ORCHESTRA_URL,
-    UNIFY_KEY,
     _admin_record_to_data,
     poll_until,
     pull_outbound_messages,
@@ -49,8 +48,10 @@ def _require_explicit_routing() -> None:
         "Coordinator e2e requires explicit service URLs so it does not "
         f"accidentally hit default staging routes. Missing: {', '.join(missing_routes)}"
     )
-    assert UNIFY_KEY, "UNIFY_KEY is required to create the disposable organization"
-    assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY is required for admin assistant lookup"
+    assert ADMIN_KEY, (
+        "ORCHESTRA_ADMIN_KEY is required to mint disposable owners and for "
+        "admin assistant lookup"
+    )
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:
@@ -166,12 +167,34 @@ def _wait_for_personal_coordinator_assistant_id(
     )
 
 
+def _create_disposable_owner() -> dict[str, Any]:
+    """Mint a fresh user to own one disposable organization.
+
+    Organizations are capped at one per owner, so every test org needs its
+    own owner rather than piling onto the operator account.
+    """
+    email = f"coord-e2e-owner-{time.time_ns()}-{uuid.uuid4().hex[:8]}@example.com"
+    response = requests.post(
+        f"{ORCHESTRA_URL}/admin/user",
+        json={"email": email, "name": "Coordinator E2E Owner"},
+        headers=_auth_headers(ADMIN_KEY),
+        timeout=30,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Disposable owner create failed: {response.status_code} {response.text}"
+    body = response.json()
+    api_key = body.get("api_key") or _fetch_user_api_key(str(body["id"]))
+    return {"id": str(body["id"]), "api_key": api_key}
+
+
 def _create_organization() -> dict[str, Any]:
     organization_name = f"coord-e2e-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
+    owner = _create_disposable_owner()
     response = requests.post(
         f"{ORCHESTRA_URL}/organizations",
         json={"name": organization_name},
-        headers=_auth_headers(UNIFY_KEY),
+        headers=_auth_headers(owner["api_key"]),
         timeout=90,
     )
     assert (
