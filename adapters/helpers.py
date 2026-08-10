@@ -2053,6 +2053,15 @@ def _build_start_job_request_data(
             assistant.get("team_summaries") or [],
             field_name="team_summaries",
         ),
+        # Team-owned assistants have no personal root: the runtime routes
+        # shared-scoped tables to Teams/{owner}/… via this value. Dropping it
+        # makes the bootstrap Secret deliver null and the live session falls
+        # back to deriving ownership from the platform record alone.
+        "owner_team_id": (
+            str(assistant["owner_team_id"])
+            if assistant.get("owner_team_id") is not None
+            else ""
+        ),
         "self_contact_id": str(_required_contact_id(assistant, "self_contact_id")),
         "boss_contact_id": str(_required_contact_id(assistant, "boss_contact_id")),
         "org_id": (

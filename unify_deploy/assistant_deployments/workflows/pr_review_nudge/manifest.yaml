@@ -49,6 +49,11 @@ requirements:
   name: GitHub
 - slug: slack
   name: Slack
+  alternatives:
+  - slug: discord
+    name: Discord
+  - slug: microsoft_teams
+    name: Microsoft Teams
 
 capabilities: []
 

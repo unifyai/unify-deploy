@@ -45,8 +45,18 @@ about: |
 requirements:
 - slug: hubspot
   name: HubSpot
+  alternatives:
+  - slug: salesforce
+    name: Salesforce
+  - slug: pipedrive
+    name: Pipedrive
 - slug: slack
   name: Slack
+  alternatives:
+  - slug: discord
+    name: Discord
+  - slug: microsoft_teams
+    name: Microsoft Teams
 
 capabilities: []
 

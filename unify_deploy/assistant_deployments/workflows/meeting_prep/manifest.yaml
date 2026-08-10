@@ -31,24 +31,17 @@ about: |
   first. Meetings you own but nobody else accepted, and anything you have
   marked as focus time, are skipped — a brief for an empty room is noise.
 
-  This reads your own calendar and mailbox, so it needs **your Workspace**
-  connected — the Google or Microsoft account you connect once in your
-  profile, not a third-party app. Installing plants the brief-writing and
+  It reads the calendar for what is coming and the mailbox for what was last
+  said, so it needs both connected. Installing plants the brief-writing and
   attendee-research procedures, the definition of a substantive exchange,
-  the lead-time helper, and the recurring job. Nothing fires until the
-  Workspace is connected; connecting arms it.
+  the lead-time helper, and the recurring job. Nothing fires until the apps
+  are connected; connecting arms it.
 
-# Workspace is the one requirement that is not an integration at all: it is
-# not in the gallery and not a native package, and it is connected in the
-# same manager the profile pane and the onboarding checklist open. The
-# `kind: workspace` route is what tells the resolver that, and the declared
-# secret is the signal those flows store — the one case where naming a
-# secret is right rather than redundant.
 requirements:
-- slug: google_workspace
-  name: Google Workspace
-  kind: workspace
-  required_secrets: [GOOGLE_REFRESH_TOKEN]
+- slug: google_calendar
+  name: Google Calendar
+- slug: gmail
+  name: Gmail
 
 capabilities: []
 

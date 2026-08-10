@@ -1,0 +1,73 @@
+name: Release radar
+slug: release_radar
+# Below 1.0.0 until a staging walk proves a real week of releases across a
+# handful of fast-moving repositories reads correctly — and that a version
+# nobody needs to act on is left out rather than padded in.
+version: "0.0.1"
+category: build
+icon_id: radar
+
+description: >
+  What shipped this week in the libraries you build on, and which of it
+  changes something for you.
+
+about: |
+  The libraries an AI engineer builds on move faster than the code using
+  them. A model id is renamed, a default flips, a parameter becomes
+  required — and none of it is noticed until a run fails on a Tuesday for
+  a reason that was announced three weeks earlier.
+
+  Every Monday morning your assistant reads the releases published since
+  the last run for the repositories you name, and reports the ones that
+  matter to you. Each entry says what the release is, what changed in it
+  that affects someone using the library rather than writing it, and
+  whether anything in it is breaking.
+
+  Breaking changes lead. Deprecations follow, with the date they take
+  effect if the release names one. New capabilities come last and only
+  when they are genuinely new, not when a patch note calls a bug fix an
+  improvement. A release that changes nothing for a caller is named in a
+  single line and not explained — the point of the list is what you have
+  to do about it.
+
+  Pre-releases are skipped by default: a release candidate is news for
+  the people testing it and noise for everyone else.
+
+  Run it whenever you want a catch-up rather than waiting for Monday —
+  it reads the window since the last run, so an on-demand run right after
+  a scheduled one is honest about having little to say.
+
+  Installing plants the reading and triage procedures, the definition of
+  a breaking change, the release-window helper, and the weekly job.
+
+requirements:
+- slug: github
+  name: GitHub
+
+capabilities: []
+
+params_schema:
+  repositories:
+    label: Repositories to watch
+    type: textarea
+    required: true
+    help: >
+      One "owner/repo" per line — for example "anthropics/anthropic-sdk-python".
+      Only these are read. A repository your GitHub connection cannot see is
+      reported once and then skipped rather than retried every week.
+  include_prereleases:
+    label: Include pre-releases
+    type: boolean
+    required: false
+    help: >
+      Turn on to include release candidates and betas. Left empty, only
+      published stable releases are read — a release candidate is news for
+      the people testing it and noise for everyone else.
+  focus:
+    label: What matters to you
+    type: textarea
+    required: false
+    help: >
+      What your own code leans on, so a change to it is never buried — for
+      example "streaming, tool use, the async client". Left empty, breaking
+      changes and deprecations lead and everything else follows.

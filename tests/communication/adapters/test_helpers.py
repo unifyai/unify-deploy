@@ -33,7 +33,9 @@ from adapters.helpers import (
     send_ms_teams_bot_install_welcome,
     start_unity_job,
 )
+from adapters.helpers import _build_start_job_request_data
 from common.settings import SETTINGS
+from communication.infra.views import _decode_owner_team_id_form
 
 TEST_SELF_CONTACT_ID = 42
 TEST_BOSS_CONTACT_ID = 43
@@ -1588,3 +1590,56 @@ def test_command_reply_noop_without_conversation(mock_mint, mock_post):
 
     mock_mint.assert_not_called()
     mock_post.assert_not_called()
+
+
+# --- _build_start_job_request_data ownership contract ---
+
+
+def _start_job_assistant(**overrides) -> dict:
+    assistant = {
+        "api_key": "test_api_key",
+        "assistant_id": "1406",
+        "user_id": "user_1",
+        "user_first_name": "Boss",
+        "user_surname": "User",
+        "user_email": "boss@example.com",
+        "assistant_first_name": "Brain",
+        "assistant_surname": "Operator",
+        "assistant_age": "30",
+        "assistant_nationality": "British",
+        "assistant_about": "Ops assistant",
+        "assistant_timezone": "UTC",
+        "user_number": "+15555550001",
+        "assistant_number": "+15555550000",
+        "assistant_email": "brain@example.com",
+        "user_whatsapp_number": "",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
+        "team_ids": [11],
+        "owner_team_id": 11,
+    }
+    assistant.update(overrides)
+    return assistant
+
+
+def test_start_job_form_delivers_team_ownership_through_the_decoder():
+    """Ownership must survive the adapters form -> /infra/job/start decode hop.
+
+    Dropping the field defaults the Form to "" -> None, the bootstrap Secret
+    delivers null, and a team-owned assistant's live session routes
+    shared-scoped storage to the personal root.
+    """
+    data = _build_start_job_request_data(_start_job_assistant(), "api_message")
+
+    assert data["owner_team_id"] == "11"
+    assert _decode_owner_team_id_form(data["owner_team_id"]) == 11
+
+
+def test_start_job_form_keeps_a_user_owned_assistant_personal():
+    data = _build_start_job_request_data(
+        _start_job_assistant(owner_team_id=None, team_ids=[]),
+        "email",
+    )
+
+    assert data["owner_team_id"] == ""
+    assert _decode_owner_team_id_form(data["owner_team_id"]) is None
