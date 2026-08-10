@@ -404,7 +404,12 @@ def build_unity_job_manifest(
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
         "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
+        # OPENROUTER_API_KEY is intentionally NOT mounted: OpenRouter traffic
+        # is brokered through the hosted LLM gateway (UNILLM_LLM_GATEWAY_URL
+        # above), authenticated with the pod's own UNIFY_KEY, so the raw
+        # provider key never lives in a tenant-controlled pod. ONLY safe once a
+        # Unity image built with gateway-capable unillm is live in the target
+        # environment — see the Phase 3 rollout order in the LLM-gateway spec.
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
         # authenticate to Orchestra and the hosted gateway with their own
         # per-assistant UNIFY_KEY against ownership-scoped routes, so a
