@@ -116,7 +116,19 @@ reportMissingImports = "warning"
 include = ["unify_deploy*", "communication*", "adapters*", "common*"]
 
 [tool.setuptools.package-data]
-"unify_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
+# `.jsonl` and `.tsx` are where a workflow bundle's content lives — every
+# procedure, claim and task row, and the canvas source. Without them a
+# wheel-installed bundle is a manifest with nothing behind it, and the
+# catalogue loader either refuses it or publishes an empty workflow.
+"unify_deploy" = [
+    "**/*.json",
+    "**/*.jsonl",
+    "**/*.md",
+    "**/*.py",
+    "**/*.tsx",
+    "**/*.yaml",
+    "**/*.yml",
+]
 "*" = ["*.json", "*.md", "*.yaml", "*.yml", "data/*.json", "data/*.md", "data/*.yaml", "data/*.yml"]
 "communication" = ["**/*.md", "**/*.ps1", "**/*.sh", "**/*.html", "**/*.conf", "**/*.hcl"]
 
