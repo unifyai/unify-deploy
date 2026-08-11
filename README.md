@@ -318,7 +318,7 @@ The production OpenRouter account is **`shared@unify.ai`** ("Shared Account"), *
 
 | Key name | Hash | Cap | Held in | Consumer |
 |---|---|---|---|---|
-| `unify-prod-gateway-2026-08-11` | `e09094a1` | $40,000 ⚠️ **no reset** | `OPENROUTER_API_KEY` (gcp-project-runtime) + `ORCHESTRA_OPENROUTER_API_KEY` (saas) | **Production** — assistant pods + Orchestra |
+| `unify-prod-gateway-2026-08-11` | `e09094a1` | $10,000/mo | `OPENROUTER_API_KEY` (gcp-project-runtime) + `ORCHESTRA_OPENROUTER_API_KEY` (saas) | **Production** — assistant pods + Orchestra |
 | `unify-staging-runtime` | `ea72ed20` | $4,000/mo | `OPENROUTER_API_KEY_STAGING` (gcp-project-runtime) | Staging assistant pods |
 | `unify-staging-orchestra` | `fb0ea371` | $4,000/mo | `ORCHESTRA_OPENROUTER_API_KEY_STAGING` (saas) | Staging Orchestra + trigger worker |
 | `unify-ci-orchestra-repo` | `4f5e1fc5` | $500/mo | GH secret `OPENROUTER_API_KEY_CI` | `unifyai/orchestra` CI |
@@ -338,12 +338,13 @@ CI secret names are deliberately inconsistent across repos (`OPENROUTER_API_KEY_
 gcloud secrets versions access latest --secret=OPENROUTER_API_KEY --project=gcp-project-runtime | tr -d '\n' | shasum -a 256
 ```
 
+Every key this estate deploys uses `limit_reset: monthly`, so a cap can throttle spend but can never cause a permanent silent outage. Keep it that way when minting: a one-time ceiling on a production key is an outage with a countdown on it.
+
 **⚠️ Known loose ends:**
 
-- **The production key's $40,000 cap does not reset.** Every other capped key uses `limit_reset: monthly`; this one is a one-time ceiling, so cumulative spend will hit it and stop production inference *permanently and silently* — at baseline volumes, within weeks of its 2026-08-11 mint. Either set `limit_reset: monthly` (auto-recovering, but permits $40k **per month**) or keep the hard stop and monitor usage against it deliberately. This is a live decision, not a settled design.
 - **`unifyai/orchestra` holds a second, older `OPENROUTER_API_KEY` secret** (set 2026-07-01, hours after `Default` was created) alongside its current `OPENROUTER_API_KEY_CI`. It most likely still contains the disabled `Default` key; GitHub never reveals secret values, so this can only be resolved by deleting or overwriting it. Any workflow still reading it will 401.
 - **`MCP: OpenRouter MCP: Claude Code (openrouter)`** (`e104bdd3`, $5 cap, $0 used) was auto-minted by an MCP integration on 2026-08-10 and is unattributed. Harmless, but it belongs to someone — attribute it or delete it.
-- Per-key caps sum to roughly $90k/month of theoretical headroom. There is no account-level cap.
+- Per-key caps across the eight active keys sum to **$20,105/month** of theoretical headroom. There is no account-level cap, so that sum is the real ceiling — and the retired `cfcba7cb` still carries a $40,000 cap that would count toward it if anyone re-enabled the key.
 
 ---
 
