@@ -32,6 +32,7 @@ from .runtime_clients import (
     get_pubsub_clients as _get_pubsub_clients,
     service_account_credentials as _service_account_credentials,
 )
+from .desktop_ready import publish_desktop_ready
 from .task_execution import router as task_execution_router
 from .dashboard_actions import router as dashboard_actions_router
 from .drain import router as drain_router
@@ -203,43 +204,17 @@ async def _publish_desktop_ready(
 ) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
-    Publishes a single inbound message for Unity. Unity's event handler
-    constructs the correct liveview URL (with ``/desktop/custom.html``)
-    and re-publishes to the ``assistant_desktop_ready`` thread that
-    Console's SSE subscription listens on.
-
-    Returns the Pub/Sub message ID.
+    Returns the Pub/Sub message ID. The wire shape is shared with the session
+    controller's readiness poll — see ``infra.desktop_ready``.
     """
-    publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
-
-    event: dict[str, Any] = {
-        "assistant_id": assistant_id,
-        "binding_id": binding_id,
-        "event_type": "assistant_desktop_ready",
-        "desktop_url": f"https://{hostname}",
-        "vm_type": vm_type,
-        "message": f"VM ({vm_type}) startup complete",
-    }
-    if desktop_secret:
-        event["desktop_secret"] = desktop_secret
-
-    message_data = json.dumps(
-        {
-            "thread": "unity_system_event",
-            "publish_timestamp": time.time(),
-            "event": event,
-        },
-    ).encode("utf-8")
-
-    future = publisher.publish(topic_path, data=message_data, thread="inbound")
-    message_id = await asyncio.to_thread(future.result)
-    logger.info(
-        f"Published assistant_desktop_ready for assistant {assistant_id} "
-        f"(message_id={message_id})",
+    return await asyncio.to_thread(
+        publish_desktop_ready,
+        assistant_id,
+        hostname,
+        vm_type,
+        binding_id=binding_id,
+        desktop_secret=desktop_secret,
     )
-    return message_id
 
 
 router = APIRouter()

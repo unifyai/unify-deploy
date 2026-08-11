@@ -2471,17 +2471,41 @@ def _attached_disk_vm_state(vm_name: str) -> Dict[str, Any]:
     }
 
 
-def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
-    """Clear a stale releasing disk owner before assigning a new binding."""
+def _ensure_disk_ready_for_binding(
+    assistant_id: str,
+    binding_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Clear a stale releasing disk owner before assigning a new binding.
+
+    Returns the owner state when the disk is already attached to a VM that *this
+    same binding* owns, meaning the caller should adopt that VM rather than claim
+    a fresh one. Returns ``None`` when the disk is free to use.
+
+    The same-binding case is a torn assignment: a previous attempt claimed the
+    VM, attached the disk and labelled both for this binding, then failed (or
+    lost a race) before the session persisted the vmRef. Raising here instead
+    deadlocks the binding against its own leftover disk on every retry, with no
+    reconciler to break the tie — the orphan sweeper keys on "no live Job for
+    this binding", which is false while the binding is live.
+    """
 
     attached_vm_name = find_vm_with_disk(assistant_id)
     if not attached_vm_name:
-        return
+        return None
 
     owner = _attached_disk_vm_state(attached_vm_name)
     owner_binding_id = str(owner.get("binding_id", "") or "")
     owner_pool_role = str(owner.get("pool_role", "") or "")
     requested_binding = binding_id.lower().replace("_", "-")
+    if owner_binding_id == requested_binding and owner_pool_role == "assigned":
+        _log_vm_pool_event(
+            "disk_handoff_adopt_own_vm",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=attached_vm_name,
+            owner_pool_role=owner_pool_role,
+        )
+        return owner
     if owner_binding_id != requested_binding and owner_pool_role != "assigned":
         _log_vm_pool_event(
             "disk_handoff_reclaim_stale_owner",
@@ -2497,7 +2521,7 @@ def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
         )
         attached_vm_name = find_vm_with_disk(assistant_id)
         if not attached_vm_name:
-            return
+            return None
         owner = _attached_disk_vm_state(attached_vm_name)
         owner_binding_id = str(owner.get("binding_id", "") or "")
         owner_pool_role = str(owner.get("pool_role", "") or "")
@@ -3732,6 +3756,82 @@ def _recycle_stale_pool_vms(vm_type: str) -> list[str]:
     return actions
 
 
+def _adopt_assigned_vm(
+    *,
+    assistant_id: str,
+    binding_id: str,
+    vm_type: str,
+    owner: Dict[str, Any],
+    attach_static_ip: bool,
+    started_at: float,
+) -> Dict[str, Any]:
+    """Resume a torn assignment against the VM this binding already owns.
+
+    The VM keeps the labels, attached disk, guest metadata and per-binding
+    desktop secret written by the attempt that failed to persist its vmRef, so
+    adopting recovers the warm desktop instead of burning a fresh boot cycle.
+    The secret is read back from ``vnc-password`` metadata rather than re-minted:
+    the guest already configured VNC with it, and rewriting metadata would not
+    re-trigger the pool watcher (it wakes on a *changed* ``unify-key``).
+
+    Static IP attachment is re-run because the failed attempt may have died
+    before that stage, in which case the VM still answers on its pool hostname.
+
+    An adopted VM whose guest never finished ``do_assign`` has no agent-service
+    listening. That is not detected here — the controller's readiness poll and
+    the guest-handshake deadline own it, and both outcomes beat deadlocking the
+    binding against its own disk forever.
+    """
+
+    vm_name = str(owner["vm_name"])
+    hostname = str(owner.get("hostname") or "")
+    ip_address = owner.get("ip_address")
+    if attach_static_ip:
+        stable_network = attach_assistant_static_ip_to_pool_vm(
+            vm_name,
+            assistant_id,
+            vm_type,
+        )
+        hostname = str(stable_network["hostname"])
+        ip_address = stable_network["ip_address"]
+
+    instance = compute_v1.InstancesClient().get(
+        project=SETTINGS.vm_project_id,
+        zone=_current_vm_placement().zone,
+        instance=vm_name,
+    )
+    desktop_secret = _read_instance_metadata(instance, "vnc-password") or ""
+    if not hostname:
+        hostname = _vm_ref_from_instance(instance)["hostname"]
+
+    placement = _current_vm_placement()
+    _log_vm_pool_event(
+        "assign_adopted",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        vm_name=vm_name,
+        vm_type=vm_type,
+        hostname=hostname,
+        desktop_secret_recovered=bool(desktop_secret),
+        duration_ms=int((time.monotonic() - started_at) * 1000),
+    )
+    return {
+        "vm_name": vm_name,
+        "assistant_id": assistant_id,
+        "binding_id": binding_id,
+        "ip_address": ip_address,
+        "hostname": hostname,
+        "desktop_url": f"https://{hostname}",
+        "desktop_secret": desktop_secret,
+        "status": "RUNNING",
+        "ssh_username": POOL_SSH_USERNAME,
+        "ssh_port": SSH_SYNC_PORT,
+        "pool_location": placement.location.id,
+        "region": placement.region,
+        "zone": placement.zone,
+    }
+
+
 def _assign_pool_vm(
     assistant_id: str,
     binding_id: str,
@@ -3764,7 +3864,7 @@ def _assign_pool_vm(
 
     try:
         current_stage = "ensure_disk_ready"
-        _run_vm_pool_stage(
+        adoptable_owner = _run_vm_pool_stage(
             operation="assign",
             stage=current_stage,
             fn=lambda: _ensure_disk_ready_for_binding(assistant_id, binding_id),
@@ -3772,6 +3872,24 @@ def _assign_pool_vm(
             binding_id=binding_id,
             vm_type=vm_type,
         )
+        if adoptable_owner is not None:
+            current_stage = "adopt_assigned_vm"
+            return _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=lambda: _adopt_assigned_vm(
+                    assistant_id=assistant_id,
+                    binding_id=binding_id,
+                    vm_type=vm_type,
+                    owner=adoptable_owner,
+                    attach_static_ip=attach_static_ip,
+                    started_at=started_at,
+                ),
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=str(adoptable_owner.get("vm_name") or ""),
+                vm_type=vm_type,
+            )
         if attach_static_ip:
             current_stage = "reclaim_stale_assistant_ip_owner"
             _run_vm_pool_stage(

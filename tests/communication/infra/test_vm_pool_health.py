@@ -1055,6 +1055,95 @@ def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypat
     claim_idle.assert_not_called()
 
 
+def _adopt_patches(monkeypatch, *, owner_binding_id: str, pool_role: str):
+    """Present a disk already attached to a VM labelled for ``owner_binding_id``."""
+    monkeypatch.setattr(
+        "communication.infra.helpers.setup_kubernetes_client",
+        lambda: (None, None, None, object()),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.acquire_assignment_lease",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.release_assignment_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1-staging",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._attached_disk_vm_state",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-1-staging",
+            "assistant_id": "assistant-123",
+            "binding_id": owner_binding_id,
+            "pool_role": pool_role,
+            "hostname": "unity-pool-ubuntu-1-staging.vm.unify.ai",
+            "ip_address": "34.0.0.1",
+        },
+    )
+
+
+def test_assign_pool_vm_adopts_the_vm_its_own_binding_already_owns(monkeypatch):
+    """A torn assignment resumes instead of deadlocking on its own disk.
+
+    When a previous attempt claimed the VM, attached the disk and labelled both
+    for this binding but never persisted the vmRef, the disk guard used to raise
+    forever: the reclaim path deliberately skips VMs that are ``assigned``, and
+    the orphan sweeper only releases VMs whose binding has no live Job.
+    """
+    claim_idle = MagicMock()
+    _adopt_patches(monkeypatch, owner_binding_id="binding-1", pool_role="assigned")
+    monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.attach_assistant_static_ip_to_pool_vm",
+        lambda *_args, **_kwargs: {
+            "hostname": "unity-assistant-123-staging.vm.unify.ai",
+            "ip_address": "34.0.0.9",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._read_instance_metadata",
+        lambda _instance, key: "recovered-secret" if key == "vnc-password" else None,
+    )
+
+    result = assign_pool_vm("assistant-123", "binding-1", "unify-key")
+
+    claim_idle.assert_not_called()
+    assert result["vm_name"] == "unity-pool-ubuntu-1-staging"
+    assert result["binding_id"] == "binding-1"
+    # Read back, not re-minted: the guest already configured VNC with this value
+    # and rewriting metadata would not re-trigger the pool watcher.
+    assert result["desktop_secret"] == "recovered-secret"
+    # Static IP attach is re-run, so a torn attempt that died before that stage
+    # still converges on the assistant hostname rather than the pool one.
+    assert result["hostname"] == "unity-assistant-123-staging.vm.unify.ai"
+    assert result["desktop_url"] == "https://unity-assistant-123-staging.vm.unify.ai"
+
+
+def test_assign_pool_vm_waits_rather_than_adopting_a_releasing_own_vm(monkeypatch):
+    """A VM mid-release is not adoptable even for the same binding.
+
+    Release teardown archives and detaches; adopting through it would race the
+    guest. Raising surfaces as ``waiting_release`` so the assignment retries
+    once the release completes.
+    """
+    claim_idle = MagicMock()
+    _adopt_patches(monkeypatch, owner_binding_id="binding-1", pool_role="releasing")
+    monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
+
+    with pytest.raises(AssistantDiskInUseError, match="releasing"):
+        assign_pool_vm("assistant-123", "binding-1", "unify-key")
+
+    claim_idle.assert_not_called()
+
+
 def test_reclaim_orphaned_disk_detaches_from_idle_vm(monkeypatch):
     detach = MagicMock(return_value=True)
     monkeypatch.setattr(

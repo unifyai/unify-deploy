@@ -77,6 +77,7 @@ from communication.infra.vm_helpers import (
 )
 from communication.infra.gcp_region_catalog import placement_from_ref
 from communication.assistant_session_controller.workers import (
+    schedule_desktop_ready_probe,
     schedule_guest_health_probe,
     schedule_vm_assignment,
     schedule_vm_release_request,
@@ -101,6 +102,7 @@ CONFIG = ControllerConfig.from_env()
 logger = logging.getLogger(__name__)
 
 DESKTOP_LIVENESS_FAILURE_THRESHOLD = CONFIG.desktop_liveness_failure_threshold
+DESKTOP_READY_PULL_AFTER_SECONDS = CONFIG.desktop_ready_pull_after_seconds
 RELEASE_REQUEST_TIMEOUT_SECONDS = POOL_RELEASE_TIMEOUT_SECONDS
 
 _batch_api: k8s_client.BatchV1Api | None = None
@@ -3517,6 +3519,25 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             ),
         )
         return
+
+    if _binding_deadline_exceeded(
+        binding,
+        "guestHandshakeStartedAt",
+        DESKTOP_READY_PULL_AFTER_SECONDS,
+    ):
+        # The guest's own /infra/vm/ready push has a bounded retry budget and
+        # only re-arms on a metadata change, so a rejection window that closes
+        # too late strands a healthy desktop. Observe readiness from this side
+        # instead of waiting for the deadline to tear the binding down.
+        schedule_desktop_ready_probe(
+            custom_api=_custom_api,
+            core_api=_core_api,
+            namespace=WATCH_NAMESPACE,
+            assistant_id=assistant_id,
+            binding_id=current_binding_id,
+            vm_ref=verified_vm_ref,
+            secret_name=secret_name,
+        )
 
     patch_assistant_session_status(
         _custom_api,

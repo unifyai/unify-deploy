@@ -8,9 +8,11 @@ from typing import Any, Callable
 
 from communication.infra.assistant_sessions import (
     DESIRED_STATE_STOPPED,
+    SIGNAL_DESKTOP_READY,
     SIGNAL_VM_GUEST_HEALTH,
     SIGNAL_VM_RELEASE_REQUEST,
     assistant_session_desired_state,
+    binding_desktop_secret,
     binding_id as binding_id_from_status,
     build_binding_signal,
     emit_observability_event,
@@ -27,11 +29,13 @@ from communication.infra.observability import (
     current_causal_context,
 )
 from communication.infra.gcp_region_catalog import placement_from_ref
+from communication.infra.desktop_ready import publish_desktop_ready
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
     assign_pool_vm,
     prepare_assistant_cross_region_migration,
     probe_vm_agent_service,
+    probe_vm_agent_service_authenticated,
     release_pool_vm,
     replenish_pool,
     vm_placement_scope,
@@ -388,6 +392,118 @@ def _run_vm_assignment(
             message=f"{type(exc).__name__}: {exc}",
             source="worker.vm_assignment",
         )
+
+
+def schedule_desktop_ready_probe(
+    *,
+    custom_api,
+    core_api,
+    namespace: str,
+    assistant_id: str,
+    binding_id: str,
+    vm_ref: dict[str, Any],
+    secret_name: str,
+) -> bool:
+    """Queue a readiness poll for a bound VM that never pushed ``/infra/vm/ready``."""
+
+    return get_worker_runtime().submit(
+        task_type="desktop_ready_probe",
+        task_assistant_id=assistant_id,
+        task_binding_id=binding_id,
+        fn=_run_desktop_ready_probe,
+        custom_api=custom_api,
+        core_api=core_api,
+        namespace=namespace,
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        vm_ref=vm_ref,
+        secret_name=secret_name,
+    )
+
+
+def _run_desktop_ready_probe(
+    *,
+    custom_api,
+    core_api,
+    namespace: str,
+    assistant_id: str,
+    binding_id: str,
+    vm_ref: dict[str, Any],
+    secret_name: str,
+) -> None:
+    """Observe desktop readiness from this side when the VM's push never lands.
+
+    The guest posts ``/infra/vm/ready`` at most ten times, five seconds apart,
+    and only re-runs that sequence when its ``unify-key`` metadata changes. So a
+    transient rejection window — container not yet ready, an activation
+    rollover, a binding re-mint — permanently costs the session its desktop even
+    though the VM is up and serving. Polling from the controller closes that
+    hole: it owns the authoritative binding state, so it can decide readiness
+    without the guest asking again.
+    """
+
+    if not _binding_is_current(custom_api, namespace, assistant_id, binding_id):
+        emit_observability_event(
+            "controller.worker.desktop_ready_probe.skipped",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            reason="binding_not_current",
+        )
+        return
+
+    hostname = str(vm_ref.get("hostname", "") or "")
+    if not hostname:
+        emit_observability_event(
+            "controller.worker.desktop_ready_probe.skipped",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            reason="missing_hostname",
+        )
+        return
+
+    startup_payload = read_bootstrap_secret(core_api, namespace, secret_name)
+    api_key = str(startup_payload.get("api_key", "") or "")
+    if not probe_vm_agent_service_authenticated(hostname, api_key):
+        emit_observability_event(
+            "controller.worker.desktop_ready_probe.not_ready",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            hostname=hostname,
+        )
+        return
+
+    session = get_assistant_session(custom_api, namespace, assistant_id) or {}
+    desktop_secret = binding_desktop_secret(session_binding(session)) or None
+    vm_type = str(vm_ref.get("vmType", "") or "ubuntu")
+    message_id = publish_desktop_ready(
+        assistant_id,
+        hostname,
+        vm_type,
+        binding_id=binding_id,
+        desktop_secret=desktop_secret,
+    )
+    emit_observability_event(
+        "controller.worker.desktop_ready_probe.observed",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        hostname=hostname,
+        vm_type=vm_type,
+        message_id=message_id,
+    )
+    record_assistant_session_signal(
+        custom_api,
+        namespace,
+        assistant_id,
+        signal_name=SIGNAL_DESKTOP_READY,
+        payload=build_binding_signal(
+            binding_id=binding_id,
+            state="ready",
+            hostname=hostname,
+            desktopUrl=f"https://{hostname}",
+            messageId=message_id,
+        ),
+        source="worker.desktop_ready_probe",
+    )
 
 
 def schedule_guest_health_probe(

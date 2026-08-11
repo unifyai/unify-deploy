@@ -493,6 +493,7 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
 
 @pytest.mark.asyncio
 async def test_publish_desktop_ready_includes_secret_when_set():
+    from communication.infra import desktop_ready as desktop_ready_module
     from communication.infra import views as views_module
 
     publisher = MagicMock()
@@ -502,8 +503,8 @@ async def test_publish_desktop_ready_includes_secret_when_set():
     publisher.publish.return_value = future
 
     with patch.object(
-        views_module,
-        "_get_pubsub_clients",
+        desktop_ready_module,
+        "get_pubsub_clients",
         return_value=(publisher, MagicMock()),
     ):
         message_id = await views_module._publish_desktop_ready(
@@ -521,6 +522,7 @@ async def test_publish_desktop_ready_includes_secret_when_set():
 
 @pytest.mark.asyncio
 async def test_publish_desktop_ready_omits_secret_when_absent():
+    from communication.infra import desktop_ready as desktop_ready_module
     from communication.infra import views as views_module
 
     publisher = MagicMock()
@@ -530,8 +532,8 @@ async def test_publish_desktop_ready_omits_secret_when_absent():
     publisher.publish.return_value = future
 
     with patch.object(
-        views_module,
-        "_get_pubsub_clients",
+        desktop_ready_module,
+        "get_pubsub_clients",
         return_value=(publisher, MagicMock()),
     ):
         await views_module._publish_desktop_ready(
