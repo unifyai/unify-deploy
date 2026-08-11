@@ -777,12 +777,16 @@ def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
 def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
     """restartPolicy is Never, so a dead broker cannot recover -- only report.
 
-    Without a probe the container reports Ready in any state, and the only
-    symptom reaching anyone is inference failing with nothing to point at.
+    The probe must exec inside the container. An httpGet probe is run by the
+    kubelet from the node and reaches a container by pod IP, so it cannot see
+    the broker's loopback-bound listener and fails however healthy the broker
+    is -- staging showed exactly that. Binding wider to satisfy it would
+    publish the broker on a cluster-routable address, which is the one thing
+    this container must not do.
     """
     probe = _sidecar(build_unity_job_manifest(job_name="probe-staging"))[
         "readinessProbe"
     ]
 
-    assert probe["httpGet"]["path"] == "/healthz"
-    assert probe["httpGet"]["port"] == 8787
+    assert "httpGet" not in probe
+    assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])
