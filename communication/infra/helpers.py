@@ -745,13 +745,30 @@ def build_unity_job_manifest(
                             # whatever state it is in, and the symptom reaching
                             # anyone is inference failing for no visible
                             # reason.
+                            # Exec, not httpGet. The kubelet runs an httpGet
+                            # probe from the node and reaches the container by
+                            # pod IP, so it cannot see a listener bound to
+                            # loopback -- it reports connection refused however
+                            # healthy the broker is. Binding wider to satisfy
+                            # the probe would publish the broker on a
+                            # cluster-routable address, which is the one thing
+                            # this container must not do. An exec probe runs
+                            # inside the container, where loopback is the
+                            # broker.
                             "readinessProbe": {
-                                "httpGet": {
-                                    "path": "/healthz",
-                                    "port": 8787,
-                                    "host": "127.0.0.1",
+                                "exec": {
+                                    "command": [
+                                        "python",
+                                        "-c",
+                                        (
+                                            "import urllib.request as u;"
+                                            "u.urlopen("
+                                            "'http://127.0.0.1:8787/healthz',"
+                                            "timeout=3)"
+                                        ),
+                                    ],
                                 },
-                                "initialDelaySeconds": 3,
+                                "initialDelaySeconds": 5,
                                 "periodSeconds": 10,
                                 "failureThreshold": 3,
                             },
