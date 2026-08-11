@@ -20,7 +20,7 @@ steps:
     set -euo pipefail
     UNITY_REF="${_UNITY_REF:-${_UNITY_REF:-main}}"
     UNITY_SHA_OVERRIDE="${_UNITY_SHA:-${_UNITY_SHA:-}}"
-    git clone --depth 1 --branch "$${UNITY_REF}" https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-src
+    git clone --depth 1 --branch "$${UNITY_REF}" https://github.com/unifyai/unify.git /workspace/unity-src
     if [ -n "$${UNITY_SHA_OVERRIDE}" ]; then
       git -C /workspace/unity-src fetch --depth 1 origin "$${UNITY_SHA_OVERRIDE}"
       git -C /workspace/unity-src checkout --detach FETCH_HEAD
@@ -33,7 +33,6 @@ steps:
     cp -R /workspace/base/. /workspace/unity-src/deploy/
     cp -R /workspace/unity-public-deploy/integrations /workspace/unity-src/deploy/integrations
     echo "Using Unity SHA: $$(cat /workspace/unity_sha.txt)"
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
   # Pull previous image for Docker layer cache (may not exist on first run)
@@ -54,22 +53,31 @@ steps:
   args:
   - '-c'
   - |
-    UNIFY_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unisdk.git refs/heads/main | cut -f1)
-    UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/main | cut -f1)
-    MAGNITUDE_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
-    BRANDING_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/branding.git refs/heads/main | cut -f1)
+    umask 077
+    trap 'rm -f /workspace/.k_*' EXIT
+    printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.k_branding
+    printf '%s' "$$ORCHESTRA_DEPLOY_KEY" > /workspace/.k_orchestra
+    printf '%s' "$$CONSOLE_DEPLOY_KEY" > /workspace/.k_console
+    # One invocation offers every key; github resolves whichever is authorised
+    # for the repository being read.
+    export GIT_SSH_COMMAND="ssh -i /workspace/.k_branding -i /workspace/.k_orchestra -i /workspace/.k_console -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    UNIFY_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/main | cut -f1)
+    UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/main | cut -f1)
+    MAGNITUDE_SHA=$$(git ls-remote https://github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
+    BRANDING_SHA=$$(git ls-remote git@github.com:unifyai/branding.git refs/heads/main | cut -f1)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
     echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
     SYSTEM_SHAS=""
     for repo in orchestra console docs; do
-      SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/$${repo}.git refs/heads/main | cut -f1)
+      if [ "$${repo}" = "docs" ]; then URL="https://github.com/unifyai/docs.git"; else URL="git@github.com:unifyai/$${repo}.git"; fi
+      SHA=$$(git ls-remote "$${URL}" refs/heads/main | cut -f1)
       SYSTEM_SHAS="$${SYSTEM_SHAS}$${SHA:0:12}-"
     done
     echo "$${SYSTEM_SHAS}" > /workspace/system_repos_sha.txt
     echo "System-source SHAs: $${SYSTEM_SHAS}"
-  secretEnv: ['GITHUB_TOKEN']
+  secretEnv: ['BRANDING_DEPLOY_KEY', 'ORCHESTRA_DEPLOY_KEY', 'CONSOLE_DEPLOY_KEY']
   waitFor: ['-']
 
   # Build Docker image with BuildKit inline cache.
@@ -85,11 +93,16 @@ steps:
     MAGNITUDE_SHA=$$(cat /workspace/magnitude_sha.txt)
     SYSTEM_SHA=$$(cat /workspace/system_repos_sha.txt)
     BRANDING_SHA=$$(cat /workspace/canvas_branding_sha.txt)
+    umask 077
+    trap 'rm -f /workspace/.branding_deploy_key /workspace/.iso_deploy_key' EXIT
+    printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.branding_deploy_key
+    printf '%s' "$$ISO_DEPLOY_KEY" > /workspace/.iso_deploy_key
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+      --secret id=branding_deploy_key,src=/workspace/.branding_deploy_key \
+      --secret id=iso_deploy_key,src=/workspace/.iso_deploy_key \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       --build-arg MAGNITUDE_SHA=$$MAGNITUDE_SHA \
       --build-arg SYSTEM_REPOS_SHA=$$SYSTEM_SHA \
@@ -98,7 +111,7 @@ steps:
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       /workspace/unity-src
-  secretEnv: ['ORCHESTRA_API_KEY', 'GITHUB_TOKEN']
+  secretEnv: ['ORCHESTRA_API_KEY', 'BRANDING_DEPLOY_KEY', 'ISO_DEPLOY_KEY']
   waitFor: ['clone-unity', 'pull-cache', 'resolve-dep-shas']
 
   # Push Docker Image (SHA and latest tags in parallel)
@@ -140,13 +153,11 @@ steps:
     set -euo pipefail
     UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg BRANCH=${_UNITY_REF} \
       -f /workspace/unity-src/deploy/scripts/job-watcher/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher:latest \
       /workspace/unity-src
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['clone-unity']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -202,7 +213,13 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_API_KEY/versions/latest
     env: 'ORCHESTRA_API_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
-    env: 'GITHUB_TOKEN'
+  - versionName: projects/${PROJECT_ID}/secrets/BRANDING_DEPLOY_KEY/versions/latest
+    env: 'BRANDING_DEPLOY_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/ISO_ANIMATION_DEPLOY_KEY/versions/latest
+    env: 'ISO_DEPLOY_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_DEPLOY_KEY/versions/latest
+    env: 'ORCHESTRA_DEPLOY_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/CONSOLE_DEPLOY_KEY/versions/latest
+    env: 'CONSOLE_DEPLOY_KEY'
 
 timeout: '1800s'

@@ -1997,9 +1997,10 @@ def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, st
     if supervisord_conf_loader:
         metadata_updates["supervisord-conf"] = supervisord_conf_loader()
 
-    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
-    if github_token:
-        metadata_updates["github-token"] = github_token
+    # No github-token: the repositories a pool VM clones are public, and the
+    # startup scripts already fall back to unauthenticated URLs when the key is
+    # absent. Instance metadata is readable by anything running on the VM, so a
+    # credential placed there is available to every process on it.
 
     tls_cert = get_secret(VM_WILDCARD_CERT_SECRET) or ""
     tls_key = get_secret(VM_WILDCARD_KEY_SECRET) or ""
@@ -3995,16 +3996,6 @@ def _assign_pool_vm(
                 vm_type=vm_type,
             )
 
-        current_stage = "load_github_token"
-        github_token = _run_vm_pool_stage(
-            operation="assign",
-            stage=current_stage,
-            fn=lambda: get_secret("DEVBOT_GITHUB_TOKEN") or "",
-            assistant_id=assistant_id,
-            binding_id=binding_id,
-            vm_name=vm_name,
-            vm_type=vm_type,
-        )
         # VncAuth (DES-based) only compares the first 8 bytes of the password,
         # but mint a longer secret anyway since it also feeds HMAC/signed uses.
         desktop_secret = secrets.token_urlsafe(16)
@@ -4017,7 +4008,6 @@ def _assign_pool_vm(
             "binding-id": binding_id,
             "hostname": hostname,
             RELEASE_GENERATION_METADATA_KEY: "",
-            "github-token": github_token,
         }
         if vm_type == "windows" and MAK_KEY:
             metadata["office-mak-key"] = MAK_KEY
@@ -5363,9 +5353,8 @@ def _start_one_stopped_vm(client, vm) -> bool:
     VM that is legitimately booting. The startup script transitions
     starting → idle via mark-idle once boot completes.
 
-    Restores the github-token metadata before starting, because the
-    previous boot's startup script wipes it for security. Without it,
-    the startup script can't clone private repos and crashes (set -e).
+    Refreshes the boot metadata before starting, since the previous boot's
+    startup script wipes the sensitive entries once it no longer needs them.
     """
     vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     try:
