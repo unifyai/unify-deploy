@@ -1197,6 +1197,8 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
     )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    queue_release = MagicMock(return_value=True)
+    monkeypatch.setattr(controller, "schedule_vm_release_request", queue_release)
 
     controller._update_status_for_session(deepcopy(body))
 
@@ -1204,6 +1206,50 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
     assert "vmRef" not in patch_status.call_args.kwargs["binding"]
     assert "desktopSecret" not in patch_status.call_args.kwargs["binding"]
+    # Dropping the desktop requirement must hand the pool VM back, not merely
+    # forget it: a forgotten VM keeps the assistant disk attached and deadlocks
+    # every later assignment in ensure_disk_ready.
+    assert queue_release.call_args.kwargs["vm_name"] == "unity-pool-ubuntu-1"
+    assert queue_release.call_args.kwargs["binding_id"] == "binding-1"
+    assert queue_release.call_args.kwargs["release_generation"] >= 1
+    assert patch_status.call_args.kwargs["binding"]["releaseRequestedAt"]
+
+
+def test_reconcile_marks_active_without_desktop_queues_no_release_without_vm(
+    monkeypatch,
+):
+    """A container-only binding that never held a VM has nothing to release."""
+    body = _base_session()
+    body["spec"]["desktop"] = {"required": False, "mode": "macos"}
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+    )
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    queue_release = MagicMock(return_value=True)
+    monkeypatch.setattr(controller, "schedule_vm_release_request", queue_release)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Active"
+    queue_release.assert_not_called()
+    assert "releaseRequestedAt" not in patch_status.call_args.kwargs["binding"]
 
 
 def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):

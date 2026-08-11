@@ -1431,6 +1431,56 @@ def _recover_timed_out_release_request(
     return binding, release_requested_at, release_completed_at, message
 
 
+def _release_desktop_for_container_session(
+    *,
+    assistant_id: str,
+    session_name: str,
+    binding: dict,
+) -> dict:
+    """Return the binding VM when a live binding stops requiring a desktop.
+
+    Clearing the vmRef on its own strands the pool VM: it keeps ``pool-role``
+    ``assigned`` plus the assistant's data disk labelled for this binding, while
+    the session no longer references it. Nothing reconciles that state — the
+    orphan sweeper keys on "no live Job for this binding", which is false here —
+    so the next assignment deadlocks in ``ensure_disk_ready`` against its own
+    leftover disk. Queue the same release the stop path uses so GCP converges
+    while the container session stays up.
+    """
+
+    vm_name = str(binding_vm_ref(binding).get("name", "") or "")
+    if not vm_name:
+        return binding
+
+    current_binding_id = binding_id_from_status(binding)
+    release_generation = binding_release_generation(binding) or 1
+    binding = _binding_payload(
+        binding,
+        vm_assignment=None,
+        release_requested_at=str(binding.get("releaseRequestedAt", "") or "")
+        or _now_iso(),
+        release_completed_at=None,
+        release_generation=release_generation,
+    )
+    emit_observability_event(
+        "controller.desktop_no_longer_required.queue_vm_release",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        vm_name=vm_name,
+        release_generation=release_generation,
+    )
+    schedule_vm_release_request(
+        custom_api=_custom_api,
+        namespace=WATCH_NAMESPACE,
+        assistant_id=assistant_id,
+        binding_id=current_binding_id,
+        vm_name=vm_name,
+        release_generation=release_generation,
+    )
+    return binding
+
+
 def _binding_release_state(
     *,
     body: dict,
@@ -2942,6 +2992,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             pod_ref=pod_ref,
             stage="container_active",
             stage_state="completed",
+        )
+        binding = _release_desktop_for_container_session(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
         )
         patch_assistant_session_status(
             _custom_api,
