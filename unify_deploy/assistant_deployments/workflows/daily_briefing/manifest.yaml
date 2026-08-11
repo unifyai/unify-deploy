@@ -69,9 +69,9 @@ requirements:
 
 capabilities: []
 
-# Per-install settings, recorded on the installation and read at run time
-# via WorkflowManager_get_installation_params — never baked into the
-# planted rows.
+# Per-install settings, recorded on the installation and resolved onto
+# every run's request by the scheduler — never baked into the planted
+# rows, and never fetched by the run itself.
 params_schema:
   focus:
     label: Always watch for

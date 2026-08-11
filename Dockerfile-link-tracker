@@ -1,18 +1,22 @@
 FROM python:3.12-slim
 
-ARG GITHUB_TOKEN
 ARG BRANCH_NAME=main
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 # unisdk is the only Orchestra dependency this service needs; the redirect must
-# stay small enough to start fast and simple enough to reason about.
-RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unisdk && \
+# stay small enough to start fast and simple enough to reason about. The
+# credential arrives as a BuildKit secret rather than a build argument: an
+# argument is recorded verbatim in the metadata of every layer that follows,
+# and a global git config would persist it in the image itself.
+RUN --mount=type=secret,id=github_token \
+    DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    GH_TOKEN="$(cat /run/secrets/github_token)" && \
+    git -c url."https://$GH_TOKEN@github.com/".insteadOf="https://github.com/" \
+        clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unisdk && \
     pip install --no-cache-dir /tmp/unisdk
 
 COPY pyproject.toml README.md ./
