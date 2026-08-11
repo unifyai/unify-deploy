@@ -772,3 +772,17 @@ def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
         e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
     }
     assert "UNIFY_KEY" not in env_names
+
+
+def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
+    """restartPolicy is Never, so a dead broker cannot recover -- only report.
+
+    Without a probe the container reports Ready in any state, and the only
+    symptom reaching anyone is inference failing with nothing to point at.
+    """
+    probe = _sidecar(build_unity_job_manifest(job_name="probe-staging"))[
+        "readinessProbe"
+    ]
+
+    assert probe["httpGet"]["path"] == "/healthz"
+    assert probe["httpGet"]["port"] == 8787

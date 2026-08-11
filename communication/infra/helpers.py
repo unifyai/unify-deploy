@@ -737,6 +737,24 @@ def build_unity_job_manifest(
                             "imagePullPolicy": image_pull_policy,
                             "command": ["python", "-m", "unify.llm_broker"],
                             "env": broker_env_vars,
+                            # The pod's restartPolicy is Never, so a broker
+                            # that dies is gone for the rest of the pod's life
+                            # and every LLM call after it fails. Nothing can
+                            # restart it here, but a probe makes the pod say
+                            # so: without one the container reports Ready
+                            # whatever state it is in, and the symptom reaching
+                            # anyone is inference failing for no visible
+                            # reason.
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/healthz",
+                                    "port": 8787,
+                                    "host": "127.0.0.1",
+                                },
+                                "initialDelaySeconds": 3,
+                                "periodSeconds": 10,
+                                "failureThreshold": 3,
+                            },
                             "resources": {
                                 "requests": {
                                     "cpu": "250m",
