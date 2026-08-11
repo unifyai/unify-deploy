@@ -471,20 +471,39 @@ def test_termination_grace_period_override() -> None:
     assert longer["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] == 120
 
 
-def test_container_resources_are_right_sized() -> None:
-    """Pins the 2 vCPU / 8 GiB / 10 GiB ephemeral shape applied in
-    the 2026-04 rightsizing. Tests against accidental regression to
-    the previous 2 vCPU / 16 GiB / 100 GiB shape (which was actually
-    billed as 2.46 vCPU on Autopilot's 1:6.5 ratio).
+def _millicores(value: str) -> int:
+    return int(value[:-1]) if value.endswith("m") else int(float(value) * 1000)
+
+
+def _mebibytes(value: str) -> int:
+    return int(value[:-2]) * (1024 if value.endswith("Gi") else 1)
+
+
+def test_pod_totals_the_right_sized_allocation() -> None:
+    """Pins what Autopilot actually bills: the sum across containers.
+
+    Autopilot charges a pod for the resources it requests, so the total is
+    the cost and any one container's share is an implementation detail. The
+    2 vCPU / 8 GiB / 10 GiB shape is the 2026-04 rightsizing; the earlier
+    2 vCPU / 16 GiB was billed as 2.46 vCPU under Autopilot's 1:6.5 ratio,
+    which is the regression this guards against.
+
+    Adding the broker sidecar deliberately did not move this number -- its
+    request came out of the runtime's headroom rather than onto the bill.
     """
-    resources = _container(build_unity_job_manifest(job_name="x"))["resources"]
-    expected = {
-        "cpu": "2",
-        "memory": "8Gi",
-        "ephemeral-storage": "10Gi",
-    }
-    assert resources["requests"] == expected
-    assert resources["limits"] == expected
+    containers = build_unity_job_manifest(job_name="x")["spec"]["template"]["spec"][
+        "containers"
+    ]
+
+    for field in ("requests", "limits"):
+        cpu = sum(_millicores(c["resources"][field]["cpu"]) for c in containers)
+        memory = sum(_mebibytes(c["resources"][field]["memory"]) for c in containers)
+        storage = sum(
+            _mebibytes(c["resources"][field]["ephemeral-storage"]) for c in containers
+        )
+        assert cpu == 2000, f"{field} cpu"
+        assert memory == 8 * 1024, f"{field} memory"
+        assert storage == 10 * 1024, f"{field} ephemeral-storage"
 
 
 def test_job_top_level_shape() -> None:
@@ -682,3 +701,67 @@ def test_workflows_dir_is_not_stamped_from_this_image() -> None:
     """
     manifest = build_unity_job_manifest(job_name="workflows-dir-staging")
     assert "UNITY_WORKFLOWS_DIR" not in _env_by_name(manifest)
+
+
+# ---------------------------------------------------------------------------
+# Provider-key broker sidecar
+# ---------------------------------------------------------------------------
+
+
+def _sidecar(manifest: dict) -> dict:
+    containers = manifest["spec"]["template"]["spec"]["containers"]
+    return next(c for c in containers if c["name"] == "llm-broker")
+
+
+def test_process_namespace_is_not_shared_with_the_sidecar() -> None:
+    """This flag is the boundary; without it the sidecar is decorative.
+
+    Sharing the namespace would put the broker's /proc — and the provider
+    credentials in its environment — back within reach of code running in
+    the runtime container, which is the entire thing it exists to prevent.
+    Kubernetes defaults it to false, but a default is not a decision and
+    flipping it would fail silently.
+    """
+    spec = build_unity_job_manifest(job_name="ns-staging")["spec"]["template"]["spec"]
+    assert spec["shareProcessNamespace"] is False
+
+
+def test_the_sidecar_runs_the_runtime_image_under_its_own_command() -> None:
+    """A second image would need its own build and could drift from the runtime."""
+    manifest = build_unity_job_manifest(job_name="sidecar-image-staging")
+    sidecar = _sidecar(manifest)
+    assert sidecar["image"] == _container(manifest)["image"]
+    assert sidecar["command"] == ["python", "-m", "unify.llm_broker"]
+
+
+def test_the_sidecar_carries_the_provider_credentials() -> None:
+    env = {
+        e["name"]: e for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        assert env[key]["valueFrom"]["secretKeyRef"]["key"] == key
+
+
+def test_the_sidecar_environment_stays_minimal() -> None:
+    """Every extra variable shares a process with the keys.
+
+    The sidecar needs credentials and somewhere to report spend. Anything
+    else widens what a compromise of it would yield, for no benefit.
+    """
+    env_names = {
+        e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    assert env_names == {"ORCHESTRA_URL", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}
+
+
+def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
+    """It brokers calls; it is not a second copy of the assistant.
+
+    UNIFY_KEY is the runtime's identity and is what Orchestra meters
+    against. The broker is handed one per request by its caller, so holding
+    a standing copy would only add a credential to the blast radius.
+    """
+    env_names = {
+        e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    assert "UNIFY_KEY" not in env_names

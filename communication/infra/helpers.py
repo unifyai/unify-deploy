@@ -584,6 +584,28 @@ def build_unity_job_manifest(
         ]
     env_vars = _merge_env_overrides(env_vars, extra_env)
 
+    # The broker sidecar's environment, kept deliberately small. It needs the
+    # provider credentials and somewhere to report spend, and nothing else:
+    # every additional variable here is one more thing sharing a process with
+    # the keys, which is the one property this container exists to hold.
+    #
+    # Sourced from the same Secret the runtime uses, because the boundary is
+    # the process, not the Secret -- what changes is which container's
+    # environment the value is read into.
+    # Sourced from the Secret directly rather than copied from the runtime's
+    # environment, because the runtime no longer has these to copy: they were
+    # removed from it precisely so no tenant-controlled process holds one.
+    broker_env_vars = [
+        entry for entry in env_vars if entry.get("name") == "ORCHESTRA_URL"
+    ]
+    broker_env_vars.extend(
+        {
+            "name": key,
+            "valueFrom": {"secretKeyRef": {"name": "unity-secrets", "key": key}},
+        }
+        for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
+    )
+
     image_pull_policy = (
         "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
     )
@@ -631,6 +653,17 @@ def build_unity_job_manifest(
                     "serviceAccountName": "assistant-runtime-sa",
                     "terminationGracePeriodSeconds": termination_grace_period_seconds,
                     "priorityClassName": (priority_class_name or "unity-idle"),
+                    # The separation between the runtime and the broker sidecar
+                    # is a process-namespace boundary, and this is the flag that
+                    # decides whether that boundary exists. Sharing the
+                    # namespace would put the broker's /proc -- and so the
+                    # provider credentials in its environment -- back within
+                    # reach of code running in the runtime container, which is
+                    # the thing the sidecar exists to prevent. False is also
+                    # Kubernetes' default; it is stated because a default is
+                    # not a decision, and nothing would fail loudly if it were
+                    # changed.
+                    "shareProcessNamespace": False,
                     "containers": [
                         {
                             "name": "unity-assistant",
@@ -651,16 +684,24 @@ def build_unity_job_manifest(
                             # Autopilot's 1:6.5 vCPU:memory ratio bumps CPU up
                             # at 16 GiB. At 8 GiB the requested 2 vCPU is
                             # honoured as-is, so this also drops effective CPU.
+                            # The broker sidecar's request is taken out of this
+                            # allocation rather than added to the pod, so the
+                            # pod still totals 2 vCPU / 8 GiB / 10 GiB and
+                            # Autopilot -- which bills per pod on requests --
+                            # charges exactly what it did before. What is spent
+                            # is headroom, not money: p999 CPU is 0.25 cores, so
+                            # 1.75 still leaves ~7x, and 7.5 GiB stays ~34% above
+                            # the 30-day maximum of 5.6 GiB rather than ~43%.
                             "resources": {
                                 "requests": {
-                                    "cpu": "2",
-                                    "memory": "8Gi",
-                                    "ephemeral-storage": "10Gi",
+                                    "cpu": "1750m",
+                                    "memory": "7680Mi",
+                                    "ephemeral-storage": "9Gi",
                                 },
                                 "limits": {
-                                    "cpu": "2",
-                                    "memory": "8Gi",
-                                    "ephemeral-storage": "10Gi",
+                                    "cpu": "1750m",
+                                    "memory": "7680Mi",
+                                    "ephemeral-storage": "9Gi",
                                 },
                             },
                             "volumeMounts": [
@@ -669,6 +710,39 @@ def build_unity_job_manifest(
                                     "mountPath": "/tmp",
                                 },
                             ],
+                        },
+                        # Holds the provider credentials so the runtime beside
+                        # it does not have to. Containers in a pod share a
+                        # network namespace but not a process one, so the
+                        # runtime can reach this over loopback and have it make
+                        # a call, while code running there cannot read this
+                        # process's environment to lift the key out and spend it
+                        # elsewhere. Scrubbing sandboxes could never achieve
+                        # that: the default execute_code surface runs in-process,
+                        # inside the runtime itself, with nothing to scrub.
+                        #
+                        # Runs the same image as the runtime, under a different
+                        # command. A second image would need its own build and
+                        # its own rollout, and could drift from the runtime it
+                        # is supposed to match.
+                        {
+                            "name": "llm-broker",
+                            "image": image,
+                            "imagePullPolicy": image_pull_policy,
+                            "command": ["python", "-m", "unify.llm_broker"],
+                            "env": broker_env_vars,
+                            "resources": {
+                                "requests": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                                "limits": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                            },
                         },
                     ],
                     "volumes": [
