@@ -309,7 +309,11 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["userId"] == "user-123"
     assert refreshed_spec["medium"] == "phone"
     assert refreshed_spec["desiredState"] == "Running"
-    assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
+    assert refreshed_spec["desktop"]["mode"] == "ubuntu"
+    assert refreshed_spec["desktop"]["required"] is True
+    # A required desktop always carries pool routing. Its contents depend on
+    # live capacity preflight, so assert presence rather than an exact value.
+    assert refreshed_spec["desktop"]["placement"]
     assert refreshed_spec["startupSecretRef"] == refreshed_secret_name
     assert "serviceUrls" not in refreshed_spec
     assert refreshed_spec["requestedAt"]
@@ -635,7 +639,10 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     assert response.status_code == 200
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
-    assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
+    # The form's desktop_mode is advisory: the effective mode comes from the
+    # Orchestra entitlement, so posting "macos" does not change the spec.
+    assert refreshed_spec["desktop"]["mode"] == "ubuntu"
+    assert refreshed_spec["desktop"]["required"] is True
 
 
 def test_start_job_reuses_inflight_restart_activation_for_terminal_session(client):
@@ -1302,3 +1309,49 @@ def test_start_job_still_defers_desktop_while_release_is_draining(client):
     )
 
     assert spec["desktop"]["required"] is False
+
+
+def test_start_job_never_requires_desktop_without_the_addon(client):
+    """An unentitled assistant is never promoted, even from a bound binding.
+
+    The downgrade guard restores only what entitlement already allows; it must
+    not manufacture a desktop requirement for an assistant that is not paying
+    for managed Computer Use.
+    """
+    session = _existing_session(
+        phase="PendingGuest",
+        binding=_bound_desktop_binding(),
+    )
+
+    with patch(
+        "communication.infra.views.get_assistant",
+        return_value={
+            "desktop_mode": "none",
+            "managed_desktop_status": "disabled",
+        },
+    ):
+        spec = _start_job_spec_for(client, session)
+
+    assert spec["desktop"]["required"] is False
+    assert spec["desktop"]["mode"] == "none"
+    assert "placement" not in spec["desktop"]
+
+
+def test_start_job_never_requires_desktop_when_addon_is_not_active(client):
+    """A configured desktop_mode without an active add-on is not entitlement."""
+    session = _existing_session(
+        phase="PendingGuest",
+        binding=_bound_desktop_binding(),
+    )
+
+    with patch(
+        "communication.infra.views.get_assistant",
+        return_value={
+            "desktop_mode": "ubuntu",
+            "managed_desktop_status": None,
+        },
+    ):
+        spec = _start_job_spec_for(client, session)
+
+    assert spec["desktop"]["required"] is False
+    assert "placement" not in spec["desktop"]
