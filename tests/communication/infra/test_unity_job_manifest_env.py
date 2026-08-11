@@ -94,18 +94,17 @@ def test_the_route_out_replaces_the_key_rather_than_accompanying_it() -> None:
     assert "OPENROUTER_API_KEY" not in env
 
 
-def test_anthropic_key_stays_mounted_until_the_broker_can_carry_it() -> None:
-    """The broker has no Anthropic leg, so dropping this breaks Claude models.
+def test_no_provider_billing_key_is_mounted_into_the_pod() -> None:
+    """Both providers are brokered, so the pod holds neither credential.
 
-    Anthropic has no OpenAI-compatible endpoint and reports usage in tokens
-    without a cost, so that leg needs a translation layer and server-side
-    pricing before the key can follow OpenRouter out of the pod.
+    Named individually rather than checked as a set: each was removed only
+    once its own leg was proven end to end, and a future provider added to
+    the mount list should fail here until the same is true of it.
     """
-    env = _env_by_name(build_unity_job_manifest(job_name="anthropic-key-staging"))
+    env = _env_by_name(build_unity_job_manifest(job_name="provider-keys-staging"))
 
-    assert env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == (
-        "ANTHROPIC_API_KEY"
-    )
+    assert "OPENROUTER_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
 
 
 def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:

@@ -394,7 +394,9 @@ def build_unity_job_manifest(
     }
     unity_secret_env = []
     for key in (
-        "ANTHROPIC_API_KEY",
+        # ANTHROPIC_API_KEY, like OPENROUTER_API_KEY below, is intentionally
+        # NOT mounted: Claude models are reached through the broker's native
+        # Anthropic leg, authenticated as the pod's own UNIFY_KEY.
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
         "DEEPSEEK_API_KEY",
@@ -419,9 +421,12 @@ def build_unity_job_manifest(
         # to read: a compromised pod holds only its own spend-limited,
         # attributable UNIFY_KEY.
         #
-        # ANTHROPIC_API_KEY is deliberately still mounted above: the broker has
-        # no Anthropic leg yet, so removing it here would break every
-        # Claude-configured assistant rather than protect one.
+        # Both keys leave together only because both legs are proven: a live
+        # pod's brain calls were observed settling through the broker, and a
+        # real Claude completion was metered from its token counts at the
+        # catalogue rate. Neither key is removed on the strength of the route
+        # merely existing -- an earlier attempt did that and would have left
+        # pods with no route and no credential.
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
         # authenticate to Orchestra and the hosted gateway with their own
         # per-assistant UNIFY_KEY against ownership-scoped routes, so a
