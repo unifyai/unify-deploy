@@ -67,6 +67,31 @@ def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
     }
 
 
+def test_llm_gateway_url_tracks_the_pod_s_own_orchestra() -> None:
+    """A hardcoded host would send one environment's pods at another's broker."""
+    env = _env_by_name(build_unity_job_manifest(job_name="llm-gateway-staging"))
+
+    orchestra_url = env["ORCHESTRA_URL"]["value"]
+    assert env["UNILLM_LLM_GATEWAY_URL"]["value"] == f"{orchestra_url}/llm"
+
+
+def test_the_provider_key_stays_mounted_alongside_gateway_routing() -> None:
+    """Routing and the key are separate steps, and this is the order.
+
+    Pointing pods at the broker changes where a call goes; it does not
+    change whether one can be made. Removing the key in the same breath
+    would turn any broker problem into a total inference outage, because
+    the platform default model routes through OpenRouter — so the key is
+    dropped only once brokered traffic is observed working.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="gateway-and-key-staging"))
+
+    assert "UNILLM_LLM_GATEWAY_URL" in env
+    assert env["OPENROUTER_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == (
+        "OPENROUTER_API_KEY"
+    )
+
+
 def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
     """CM and offline Jobs inherit scoped Orchestra EventBus persistence.
 

@@ -477,6 +477,21 @@ def build_unity_job_manifest(
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+        # Route the pod's OpenRouter traffic through Orchestra's server-side
+        # broker: unillm reads this and swaps api_base/api_key, authenticating
+        # as the pod's own UNIFY_KEY, and skips client-side deduction because
+        # the broker settles the spend. Derived from ORCHESTRA_URL — which
+        # already carries the ``/v0`` prefix — so it tracks the same
+        # per-environment host the pod is already proven to reach.
+        #
+        # Setting this alone changes only *where* the call goes, never whether
+        # it can be made: OPENROUTER_API_KEY stays mounted, so a broker that is
+        # missing or unhealthy is a routing failure to diagnose rather than an
+        # inference outage. Dropping the key is a separate step, and is safe
+        # only once brokered traffic is observed working in the environment —
+        # the platform default model routes through OpenRouter, so removing it
+        # early takes every assistant down with it.
+        {"name": "UNILLM_LLM_GATEWAY_URL", "value": f"{SETTINGS.orchestra_url}/llm"},
         # Console origin for user-facing links (canvas and dashboard views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
