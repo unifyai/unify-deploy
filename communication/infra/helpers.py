@@ -404,7 +404,12 @@ def build_unity_job_manifest(
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
         "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
+        # OPENROUTER_API_KEY is intentionally NOT mounted: OpenRouter traffic
+        # is brokered through the hosted LLM gateway (UNILLM_LLM_GATEWAY_URL
+        # above), authenticated with the pod's own UNIFY_KEY, so the raw
+        # provider key never lives in a tenant-controlled pod. ONLY safe once a
+        # Unity image built with gateway-capable unillm is live in the target
+        # environment — see the Phase 3 rollout order in the LLM-gateway spec.
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
         # authenticate to Orchestra and the hosted gateway with their own
         # per-assistant UNIFY_KEY against ownership-scoped routes, so a
@@ -473,6 +478,14 @@ def build_unity_job_manifest(
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+        # LLM gateway: route the pod's OpenRouter traffic through Orchestra's
+        # server-side broker (unillm reads this and swaps api_base/api_key,
+        # authenticating with the pod's own UNIFY_KEY) so the raw OpenRouter
+        # key no longer has to be mounted. Derived from ORCHESTRA_URL — which
+        # already includes the ``/v0`` prefix — so it tracks the same
+        # per-environment host the pod is proven to reach. Additive and safe:
+        # an older unillm without gateway support simply ignores it.
+        {"name": "UNILLM_LLM_GATEWAY_URL", "value": f"{SETTINGS.orchestra_url}/llm"},
         # Console origin for user-facing links (canvas and dashboard views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
