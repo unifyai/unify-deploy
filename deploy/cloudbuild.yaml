@@ -58,19 +58,15 @@ steps:
   - '-c'
   - |
     docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest || true
-    umask 077
-    trap 'rm -f /workspace/.gh_token' EXIT
-    printf '%s' "$$GITHUB_TOKEN" > /workspace/.gh_token
     UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/main | awk '{print $$1}')
     echo "Cache-busting comms unity layer with UNITY_SHA=$$UNITY_SHA"
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --secret id=github_token,src=/workspace/.gh_token --build-arg BRANCH_NAME=main \
+      --build-arg BRANCH_NAME=main \
       --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -98,17 +94,12 @@ steps:
   - '-c'
   - |
     docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest || true
-    umask 077
-    trap 'rm -f /workspace/.gh_token' EXIT
-    printf '%s' "$$GITHUB_TOKEN" > /workspace/.gh_token
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-link-tracker \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --secret id=github_token,src=/workspace/.gh_token \
       --build-arg BRANCH_NAME=main \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -140,13 +131,12 @@ steps:
 - name: 'gcr.io/cloud-builders/git'
   id: 'fetch-unity-integration-manifests'
   entrypoint: 'bash'
-  secretEnv: ['GITHUB_TOKEN']
   args:
   - '-c'
   - |
     set -euo pipefail
     SHA="$$(cat /workspace/unity_sha.txt)"
-    git clone --depth 1 --branch main https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-manifest-src
+    git clone --depth 1 --branch main https://github.com/unifyai/unify.git /workspace/unity-manifest-src
     if git -C /workspace/unity-manifest-src fetch --depth 1 origin "$$SHA"; then
       git -C /workspace/unity-manifest-src checkout --detach FETCH_HEAD
     fi
@@ -646,7 +636,5 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
-    env: 'GITHUB_TOKEN'
 
 timeout: '4800s'
