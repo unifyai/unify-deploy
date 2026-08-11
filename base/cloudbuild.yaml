@@ -94,15 +94,19 @@ steps:
     SYSTEM_SHA=$$(cat /workspace/system_repos_sha.txt)
     BRANDING_SHA=$$(cat /workspace/canvas_branding_sha.txt)
     umask 077
-    trap 'rm -f /workspace/.branding_deploy_key /workspace/.iso_deploy_key' EXIT
+    trap 'rm -f /workspace/.branding_deploy_key /workspace/.iso_deploy_key /workspace/.k_orchestra_build /workspace/.k_console_build' EXIT
     printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.branding_deploy_key
     printf '%s' "$$ISO_DEPLOY_KEY" > /workspace/.iso_deploy_key
+    printf '%s' "$$ORCHESTRA_DEPLOY_KEY" > /workspace/.k_orchestra_build
+    printf '%s' "$$CONSOLE_DEPLOY_KEY" > /workspace/.k_console_build
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       --secret id=branding_deploy_key,src=/workspace/.branding_deploy_key \
       --secret id=iso_deploy_key,src=/workspace/.iso_deploy_key \
+      --secret id=orchestra_deploy_key,src=/workspace/.k_orchestra_build \
+      --secret id=console_deploy_key,src=/workspace/.k_console_build \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
       --build-arg MAGNITUDE_SHA=$$MAGNITUDE_SHA \
       --build-arg SYSTEM_REPOS_SHA=$$SYSTEM_SHA \
@@ -111,7 +115,7 @@ steps:
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:$${UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       /workspace/unity-src
-  secretEnv: ['ORCHESTRA_API_KEY', 'BRANDING_DEPLOY_KEY', 'ISO_DEPLOY_KEY']
+  secretEnv: ['ORCHESTRA_API_KEY', 'BRANDING_DEPLOY_KEY', 'ISO_DEPLOY_KEY', 'ORCHESTRA_DEPLOY_KEY', 'CONSOLE_DEPLOY_KEY']
   waitFor: ['clone-unity', 'pull-cache', 'resolve-dep-shas']
 
   # Push Docker Image (SHA and latest tags in parallel)
