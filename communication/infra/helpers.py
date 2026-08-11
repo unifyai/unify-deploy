@@ -509,7 +509,13 @@ def build_unity_job_manifest(
         # only once brokered traffic is observed working in the environment —
         # the platform default model routes through OpenRouter, so removing it
         # early takes every assistant down with it.
-        {"name": "UNILLM_LLM_GATEWAY_URL", "value": f"{SETTINGS.orchestra_url}/llm"},
+        # Points at the broker sidecar over pod loopback, not at Orchestra.
+        # Orchestra still holds the metering, and the sidecar calls it for
+        # that -- but the generation itself now goes pod -> provider without
+        # a hop through a service that serves 400 concurrent requests in
+        # total, where one streamed call would occupy a slot for its whole
+        # duration and every voice turn would pay the round trip.
+        {"name": "UNILLM_LLM_GATEWAY_URL", "value": "http://127.0.0.1:8787/llm"},
         # Console origin for user-facing links (canvas and dashboard views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without

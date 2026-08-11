@@ -71,12 +71,19 @@ def test_openrouter_api_key_is_not_mounted_into_the_pod() -> None:
     )
 
 
-def test_llm_gateway_url_tracks_the_pod_s_own_orchestra() -> None:
-    """A hardcoded host would send one environment's pods at another's broker."""
+def test_llm_gateway_points_at_the_sidecar_over_loopback() -> None:
+    """The generation goes pod -> provider; only metering leaves the pod.
+
+    Previously this tracked ORCHESTRA_URL, which sent the bytes themselves
+    through a service that serves 400 concurrent requests in total -- one
+    streamed call held a slot for its whole duration, and every voice turn
+    paid the round trip. Loopback reaches the sidecar beside the runtime,
+    which holds the provider keys and calls Orchestra only to authorise and
+    to report what was spent.
+    """
     env = _env_by_name(build_unity_job_manifest(job_name="llm-gateway-staging"))
 
-    orchestra_url = env["ORCHESTRA_URL"]["value"]
-    assert env["UNILLM_LLM_GATEWAY_URL"]["value"] == f"{orchestra_url}/llm"
+    assert env["UNILLM_LLM_GATEWAY_URL"]["value"] == "http://127.0.0.1:8787/llm"
 
 
 def test_the_route_out_replaces_the_key_rather_than_accompanying_it() -> None:
