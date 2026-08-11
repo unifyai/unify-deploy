@@ -13,7 +13,7 @@ FROM node:22-slim AS canvas
 ARG BRANCH=main
 ARG CANVAS_BRANDING_SHA=unknown
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
@@ -23,28 +23,36 @@ COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
 # below: main→main, everything else→staging.
 #
 # branding and its packages/iso submodule are private and are each read with
-# their own repo-scoped read-only deploy key. Both are offered on one ssh
-# invocation, so github resolves whichever is authorised for the repository
-# being fetched. The keys arrive as mounted secrets rather than build
-# arguments: an argument is recorded verbatim in the metadata of every layer
-# that follows it, and a global git config would persist it in the image. The
-# rewrite maps the HTTPS form the toolchain clones to the SSH form the keys
-# serve, and the .gitmodules SSH URL is then already in the right form.
+# their own repo-scoped read-only deploy key. A deploy key authorises exactly
+# one repository and github binds the ssh session to the first key that
+# authenticates, so offering both on one connection would let whichever
+# answered first decide what the rest of the clone could reach. Each repository
+# therefore gets its own host alias bound to its own identity.
+#
+# The keys arrive as mounted secrets rather than build arguments: an argument is
+# recorded verbatim in the metadata of every layer that follows it, and a global
+# git config would persist the credential in the image itself. Both the aliases
+# and the rewrites are removed before the layer ends.
 RUN --mount=type=secret,id=branding_deploy_key \
     --mount=type=secret,id=iso_deploy_key \
     echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
     install -m 600 /run/secrets/branding_deploy_key /tmp/k_branding && \
     install -m 600 /run/secrets/iso_deploy_key /tmp/k_iso && \
-    export GIT_SSH_COMMAND="ssh -i /tmp/k_branding -i /tmp/k_iso -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" && \
-    git config --global url."git@github.com:".insteadOf "https://github.com/" && \
+    mkdir -p /root/.ssh && printf '%s\n' \
+        "Host branding.gh" "  HostName github.com" "  User git" "  IdentityFile /tmp/k_branding" "  IdentitiesOnly yes" "  StrictHostKeyChecking accept-new" \
+        "Host iso.gh" "  HostName github.com" "  User git" "  IdentityFile /tmp/k_iso" "  IdentitiesOnly yes" "  StrictHostKeyChecking accept-new" \
+        > /root/.ssh/config && \
+    git config --global url."git@branding.gh:unifyai/branding".insteadOf "https://github.com/unifyai/branding" && \
+    git config --global url."git@iso.gh:unifyai/iso-animation".insteadOf "git@github.com:unifyai/iso-animation" && \
     chmod +x /tmp/install-canvas-toolchain.sh && \
     /tmp/install-canvas-toolchain.sh \
         --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
         --toolchain /opt/canvas-toolchain \
         --host /opt/canvas-host; \
     status=$?; \
-    git config --global --unset-all url."git@github.com:".insteadOf; \
-    rm -f /tmp/k_branding /tmp/k_iso; \
+    git config --global --unset-all url."git@branding.gh:unifyai/branding".insteadOf; \
+    git config --global --unset-all url."git@iso.gh:unifyai/iso-animation".insteadOf; \
+    rm -f /tmp/k_branding /tmp/k_iso /root/.ssh/config; \
     exit $status
 
 
@@ -257,11 +265,12 @@ RUN --mount=type=secret,id=orchestra_deploy_key \
     echo "system_repos_sha=${SYSTEM_REPOS_SHA}" && \
     install -m 600 /run/secrets/orchestra_deploy_key /tmp/k_orch && \
     install -m 600 /run/secrets/console_deploy_key /tmp/k_con && \
-    export GIT_SSH_COMMAND="ssh -i /tmp/k_orch -i /tmp/k_con -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" && \
     SRC_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
     mkdir -p /opt/system-sources && \
     for repo in orchestra console; do \
-        git clone --depth 1 --branch $SRC_BRANCH git@github.com:unifyai/$repo.git /opt/system-sources/$repo && \
+        case "$repo" in orchestra) KEY=/tmp/k_orch ;; console) KEY=/tmp/k_con ;; esac; \
+        GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git clone --depth 1 --branch $SRC_BRANCH git@github.com:unifyai/$repo.git /opt/system-sources/$repo && \
         rm -rf /opt/system-sources/$repo/.git; \
     done && \
     git clone --depth 1 --branch $SRC_BRANCH https://github.com/unifyai/docs.git /opt/system-sources/docs && \

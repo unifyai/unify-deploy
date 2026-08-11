@@ -58,21 +58,25 @@ steps:
     printf '%s' "$$BRANDING_DEPLOY_KEY" > /workspace/.k_branding
     printf '%s' "$$ORCHESTRA_DEPLOY_KEY" > /workspace/.k_orchestra
     printf '%s' "$$CONSOLE_DEPLOY_KEY" > /workspace/.k_console
-    # One invocation offers every key; github resolves whichever is authorised
-    # for the repository being read.
-    export GIT_SSH_COMMAND="ssh -i /workspace/.k_branding -i /workspace/.k_orchestra -i /workspace/.k_console -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    # A deploy key authorises exactly one repository, and github binds the ssh
+    # session to the first key that authenticates -- so each lookup below runs
+    # with only its own identity rather than offering them all at once.
+    ssh_with() { GIT_SSH_COMMAND="ssh -i $$1 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git ls-remote "$$2" "$$3" | cut -f1; }
     UNIFY_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/main | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/main | cut -f1)
     MAGNITUDE_SHA=$$(git ls-remote https://github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
-    BRANDING_SHA=$$(git ls-remote git@github.com:unifyai/branding.git refs/heads/main | cut -f1)
+    BRANDING_SHA=$$(ssh_with /workspace/.k_branding git@github.com:unifyai/branding.git refs/heads/main)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
     echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
     SYSTEM_SHAS=""
     for repo in orchestra console docs; do
-      if [ "$${repo}" = "docs" ]; then URL="https://github.com/unifyai/docs.git"; else URL="git@github.com:unifyai/$${repo}.git"; fi
-      SHA=$$(git ls-remote "$${URL}" refs/heads/main | cut -f1)
+      case "$${repo}" in
+        docs) SHA=$$(git ls-remote https://github.com/unifyai/docs.git refs/heads/main | cut -f1) ;;
+        orchestra) SHA=$$(ssh_with /workspace/.k_orchestra git@github.com:unifyai/orchestra.git refs/heads/main) ;;
+        console) SHA=$$(ssh_with /workspace/.k_console git@github.com:unifyai/console.git refs/heads/main) ;;
+      esac
       SYSTEM_SHAS="$${SYSTEM_SHAS}$${SHA:0:12}-"
     done
     echo "$${SYSTEM_SHAS}" > /workspace/system_repos_sha.txt
