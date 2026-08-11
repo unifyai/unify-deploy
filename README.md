@@ -310,6 +310,41 @@ Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_A
 
 `VM_WILDCARD_FULLCHAIN` / `VM_WILDCARD_PRIVKEY` in `gcp-project-vms` Secret Manager (see §6).
 
+### 7.4 OpenRouter API keys (LLM spend inventory)
+
+OpenRouter is the only route to OpenAI-family models (see `AGENTS.md`) and the largest single spend surface in the estate. These keys are not a fourth secret plane — they are credentials distributed across §7.1 and §7.2 — but they rotate on their own cadence and are listed here because nothing else maps key → secret slot → consumer.
+
+The production OpenRouter account is **`shared@unify.ai`** ("Shared Account"), *not* `dan@unify.ai` (a separate, empty personal account — the two live in different Chrome profiles). All mint / rotate / cap / rename operations run programmatically against `https://openrouter.ai/api/v1/keys` with the management key in `OPENROUTER_MANAGEMENT_API_KEY` (`gcp-project-runtime`); no browser needed. `PATCH /api/v1/keys/{hash}` is a true partial update — omitted fields keep their values.
+
+| Key name | Hash | Cap | Held in | Consumer |
+|---|---|---|---|---|
+| `unify-prod-gateway-2026-08-11` | `e09094a1` | $40,000 ⚠️ **no reset** | `OPENROUTER_API_KEY` (gcp-project-runtime) + `ORCHESTRA_OPENROUTER_API_KEY` (saas) | **Production** — assistant pods + Orchestra |
+| `unify-staging-runtime` | `ea72ed20` | $4,000/mo | `OPENROUTER_API_KEY_STAGING` (gcp-project-runtime) | Staging assistant pods |
+| `unify-staging-orchestra` | `fb0ea371` | $4,000/mo | `ORCHESTRA_OPENROUTER_API_KEY_STAGING` (saas) | Staging Orchestra + trigger worker |
+| `unify-ci-orchestra-repo` | `4f5e1fc5` | $500/mo | GH secret `OPENROUTER_API_KEY_CI` | `unifyai/orchestra` CI |
+| `unify-ci-unify-repo` | `39e621a9` | $1,000/mo | GH secret `OPENROUTER_CI_API_KEY` | `unifyai/unify` CI |
+| `unify-ci-unillm-repo` | `b2d9f264` | $500/mo | GH secret `OPENROUTER_API_KEY` | `unifyai/unillm` CI |
+| `unify-canary-DO-NOT-DEPLOY` | `1ee9a059` | $100/mo | `OPENROUTER_CANARY_KEY` (gcp-project-runtime) | **Nothing — tripwire.** See below |
+| `unify-production-RETIRED-2026-08-11` | `cfcba7cb` | disabled | — | Was production 2026-08-10 → 08-11 |
+| `Default` | `d6370f6a` | disabled | — | Compromised; disabled 2026-08-10 at $32,381.27 |
+
+CI secret names are deliberately inconsistent across repos (`OPENROUTER_API_KEY_CI` / `OPENROUTER_CI_API_KEY` / `OPENROUTER_API_KEY`) — that is the live state, not a typo. Match by repo, not by name.
+
+**The canary is a detection control, not a spare.** `unify-canary-DO-NOT-DEPLOY` exists only as a Secret Manager entry and is deployed to no pod or service. If it ever shows usage, someone is reading Secret Manager directly; if it stays at $0 while deployed keys burn, the exposure is pod-environment access. Never deploy it.
+
+**To identify which key a secret currently holds** (the fastest way to answer "what is production actually using?"), hash the secret and match it against the `hash` field from `GET /api/v1/keys`:
+
+```bash
+gcloud secrets versions access latest --secret=OPENROUTER_API_KEY --project=gcp-project-runtime | tr -d '\n' | shasum -a 256
+```
+
+**⚠️ Known loose ends:**
+
+- **The production key's $40,000 cap does not reset.** Every other capped key uses `limit_reset: monthly`; this one is a one-time ceiling, so cumulative spend will hit it and stop production inference *permanently and silently* — at baseline volumes, within weeks of its 2026-08-11 mint. Either set `limit_reset: monthly` (auto-recovering, but permits $40k **per month**) or keep the hard stop and monitor usage against it deliberately. This is a live decision, not a settled design.
+- **`unifyai/orchestra` holds a second, older `OPENROUTER_API_KEY` secret** (set 2026-07-01, hours after `Default` was created) alongside its current `OPENROUTER_API_KEY_CI`. It most likely still contains the disabled `Default` key; GitHub never reveals secret values, so this can only be resolved by deleting or overwriting it. Any workflow still reading it will 401.
+- **`MCP: OpenRouter MCP: Claude Code (openrouter)`** (`e104bdd3`, $5 cap, $0 used) was auto-minted by an MCP integration on 2026-08-10 and is unattributed. Harmless, but it belongs to someone — attribute it or delete it.
+- Per-key caps sum to roughly $90k/month of theoretical headroom. There is no account-level cap.
+
 ---
 
 ## 8. CI/CD: Cloud Build, GitHub Actions, branches
