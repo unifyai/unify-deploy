@@ -18,6 +18,8 @@ class ControllerConfig:
     max_vm_readiness_retries: int
     vm_assignment_retry_interval_seconds: float
     vm_assignment_in_progress_timeout_seconds: float
+    vm_assignment_deadline_seconds: float
+    desktop_ready_pull_after_seconds: float
     desktop_liveness_failure_threshold: int
     image_hash_bucket: str
     image_hash_cache_ttl: float
@@ -49,6 +51,20 @@ class ControllerConfig:
             ),
             vm_assignment_in_progress_timeout_seconds=float(
                 os.environ.get("VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS", "60"),
+            ),
+            # Measured from the binding mint, so it has to absorb container
+            # bootstrap plus however long the pool takes to yield a VM — a cold
+            # or contended pool can legitimately keep a session queued for many
+            # minutes. This is a wedged-binding backstop, not a latency budget:
+            # it should only fire when assignment is never going to succeed.
+            vm_assignment_deadline_seconds=float(
+                os.environ.get("VM_ASSIGNMENT_DEADLINE_SECONDS", "1800"),
+            ),
+            # Long enough that a healthy guest wins the race and pushes its own
+            # readiness first (agent-service + Caddy come up well inside this),
+            # short enough to recover inside the VM readiness deadline.
+            desktop_ready_pull_after_seconds=float(
+                os.environ.get("DESKTOP_READY_PULL_AFTER_SECONDS", "90"),
             ),
             desktop_liveness_failure_threshold=int(
                 os.environ.get("DESKTOP_LIVENESS_FAILURE_THRESHOLD", "3"),

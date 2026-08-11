@@ -89,7 +89,8 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     monkeypatch.setattr(
         pool_controller,
         "trim_pool",
-        lambda vm_type: trim_calls.append(vm_type) or {"vm_type": vm_type},
+        lambda vm_type, extra_demand=0: trim_calls.append((vm_type, extra_demand))
+        or {"vm_type": vm_type},
     )
     monkeypatch.setattr(
         pool_controller,
@@ -114,7 +115,9 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
 
     assert job_replenish_calls == [(1, "controller.pool_reconcile")]
     assert replenish_calls == [("ubuntu", 2), ("windows", 0)]
-    assert trim_calls == ["windows"]
+    # Trim runs for every pool now, carrying the queue depth so it cannot stop
+    # capacity a waiting session needs.
+    assert trim_calls == [("ubuntu", 2), ("windows", 0)]
     assert result["unity_jobs"] == {
         "pending_sessions": 1,
         "replenish_extra_demand": 1,
@@ -147,7 +150,11 @@ def test_reconcile_pool_once_schedules_replenish_for_hash_deficit(monkeypatch):
         "replenish_pool",
         lambda vm_type, extra_demand=0: {"vm_type": vm_type},
     )
-    monkeypatch.setattr(pool_controller, "trim_pool", lambda vm_type: None)
+    monkeypatch.setattr(
+        pool_controller,
+        "trim_pool",
+        lambda vm_type, extra_demand=0: None,
+    )
     monkeypatch.setattr(
         pool_controller,
         "emit_observability_event",
@@ -198,7 +205,11 @@ def test_reconcile_pool_once_replenishes_each_regional_pool(monkeypatch):
         )
         or {"vm_type": vm_type},
     )
-    monkeypatch.setattr(pool_controller, "trim_pool", lambda _vm_type: {})
+    monkeypatch.setattr(
+        pool_controller,
+        "trim_pool",
+        lambda _vm_type, extra_demand=0: {},
+    )
     monkeypatch.setattr(
         pool_controller,
         "emit_observability_event",
@@ -214,3 +225,60 @@ def test_reconcile_pool_once_replenishes_each_regional_pool(monkeypatch):
         result["vm_pools"]["ubuntu:europe-west2:europe-west2-a"]["pending_sessions"]
         == 1
     )
+
+
+def test_reconcile_pool_once_merges_a_default_zone_placement_with_the_legacy_scope(
+    monkeypatch,
+):
+    """One physical pool must be reconciled once, with all of its demand.
+
+    A placement naming the default zone and the legacy ``None`` placement address
+    the same VMs. Iterating both gave the legacy scope its own demand count of
+    zero, so it trimmed the spare the placement scope had just replenished for a
+    queued session and the pool flapped that VM stopped/started every cycle.
+    """
+    placement = {
+        "poolLocation": SETTINGS.vm_region,
+        "region": SETTINGS.vm_region,
+        "zone": SETTINGS.vm_zone,
+    }
+    replenish_calls = []
+    trim_calls = []
+
+    class FakeCustomApi:
+        def list_namespaced_custom_object(self, **_kwargs):
+            return {"items": [_session("1", phase="PendingVM", placement=placement)]}
+
+    monkeypatch.setattr(
+        pool_controller,
+        "replenish_pool",
+        lambda vm_type, extra_demand=0: replenish_calls.append((vm_type, extra_demand))
+        or {"vm_type": vm_type},
+    )
+    monkeypatch.setattr(
+        pool_controller,
+        "trim_pool",
+        lambda vm_type, extra_demand=0: trim_calls.append((vm_type, extra_demand))
+        or {"vm_type": vm_type},
+    )
+    monkeypatch.setattr(
+        pool_controller,
+        "emit_observability_event",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(pool_controller, "_get_current_image_hash", lambda: None)
+    monkeypatch.setattr(
+        pool_controller,
+        "schedule_idle_job_pool_replenishment",
+        lambda **_kwargs: True,
+    )
+
+    result = pool_controller.reconcile_pool_once(FakeCustomApi(), "staging")
+
+    # Exactly one ubuntu scope, and it carries the demand rather than splitting
+    # it across a qualified scope and a zero-demand legacy one.
+    assert replenish_calls.count(("ubuntu", 1)) == 1
+    assert [call for call in replenish_calls if call[0] == "ubuntu"] == [("ubuntu", 1)]
+    assert [call for call in trim_calls if call[0] == "ubuntu"] == [("ubuntu", 1)]
+    ubuntu_keys = [key for key in result["vm_pools"] if key.startswith("ubuntu:")]
+    assert ubuntu_keys == [f"ubuntu:{SETTINGS.vm_region}:{SETTINGS.vm_zone}"]

@@ -32,6 +32,7 @@ from .runtime_clients import (
     get_pubsub_clients as _get_pubsub_clients,
     service_account_credentials as _service_account_credentials,
 )
+from .desktop_ready import publish_desktop_ready
 from .task_execution import router as task_execution_router
 from .dashboard_actions import router as dashboard_actions_router
 from .drain import router as drain_router
@@ -60,6 +61,7 @@ from .assistant_sessions import (
     binding_release_generation,
     binding_job_ref,
     binding_pod_ref,
+    binding_vm_assignment,
     binding_vm_ref,
     build_assistant_session_spec,
     build_binding_signal,
@@ -202,43 +204,17 @@ async def _publish_desktop_ready(
 ) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
-    Publishes a single inbound message for Unity. Unity's event handler
-    constructs the correct liveview URL (with ``/desktop/custom.html``)
-    and re-publishes to the ``assistant_desktop_ready`` thread that
-    Console's SSE subscription listens on.
-
-    Returns the Pub/Sub message ID.
+    Returns the Pub/Sub message ID. The wire shape is shared with the session
+    controller's readiness poll — see ``infra.desktop_ready``.
     """
-    publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
-
-    event: dict[str, Any] = {
-        "assistant_id": assistant_id,
-        "binding_id": binding_id,
-        "event_type": "assistant_desktop_ready",
-        "desktop_url": f"https://{hostname}",
-        "vm_type": vm_type,
-        "message": f"VM ({vm_type}) startup complete",
-    }
-    if desktop_secret:
-        event["desktop_secret"] = desktop_secret
-
-    message_data = json.dumps(
-        {
-            "thread": "unity_system_event",
-            "publish_timestamp": time.time(),
-            "event": event,
-        },
-    ).encode("utf-8")
-
-    future = publisher.publish(topic_path, data=message_data, thread="inbound")
-    message_id = await asyncio.to_thread(future.result)
-    logger.info(
-        f"Published assistant_desktop_ready for assistant {assistant_id} "
-        f"(message_id={message_id})",
+    return await asyncio.to_thread(
+        publish_desktop_ready,
+        assistant_id,
+        hostname,
+        vm_type,
+        binding_id=binding_id,
+        desktop_secret=desktop_secret,
     )
-    return message_id
 
 
 router = APIRouter()
@@ -292,8 +268,8 @@ def _resolve_session_desktop_requirements(
     assistant_id: str,
     desktop_mode: str,
     raw_desktop_required: str,
-) -> tuple[str, bool]:
-    """Resolve desktop mode and VM requirement from Orchestra entitlement."""
+) -> tuple[str, bool, bool]:
+    """Resolve desktop mode, entitlement, and VM requirement from Orchestra."""
     orchestra_assistant = get_assistant(assistant_id=assistant_id)
     entitled = managed_desktop_entitled(orchestra_assistant)
     effective_desktop_mode = orchestra_assistant.get("desktop_mode", "none")
@@ -305,7 +281,29 @@ def _resolve_session_desktop_requirements(
         session_desktop_required = entitled
     else:
         session_desktop_required = parsed_override and entitled
-    return effective_desktop_mode, session_desktop_required
+    return effective_desktop_mode, entitled, session_desktop_required
+
+
+def _session_desktop_binding_established(session: dict[str, Any] | None) -> bool:
+    """Return whether the session's current binding already holds a desktop VM.
+
+    The ``desktop_required=false`` override is a wake-time latency optimisation
+    for voice channels: it lets a call connect without waiting on VM assignment.
+    It is only meaningful before a VM is claimed. Honouring it afterwards makes
+    the controller clear the binding's vmRef while the pool VM and the attached
+    assistant disk stay labelled for that same binding, so the next assignment
+    deadlocks in ``ensure_disk_ready`` against its own leftover disk.
+
+    An in-progress assignment counts as established: the worker may already have
+    claimed the VM and attached the disk, and will persist the vmRef once it
+    finishes.
+    """
+    if session is None:
+        return False
+    binding = session_binding(session)
+    if binding_vm_ref(binding).get("name") or binding_desktop_url(binding):
+        return True
+    return str(binding_vm_assignment(binding).get("state", "") or "") == "in_progress"
 
 
 async def _resolve_dynamic_vm_placement(
@@ -1336,7 +1334,7 @@ async def start_job(
         batch_api, core_api, _, coord_api = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
         orchestra_assistant = get_assistant(assistant_id=assistant_id)
-        effective_desktop_mode, session_desktop_required = (
+        effective_desktop_mode, desktop_entitled, session_desktop_required = (
             _resolve_session_desktop_requirements(
                 assistant_id,
                 desktop_mode,
@@ -1491,6 +1489,24 @@ async def start_job(
                 and existing_activation_id != observed_activation_id
             ),
         )
+        if (
+            not session_desktop_required
+            and desktop_entitled
+            and not release_draining
+            and _session_desktop_binding_established(existing_session)
+        ):
+            # A voice wake arriving mid-session must not demote a binding that
+            # already owns a VM; promotion (false -> true) stays allowed.
+            emit_observability_event(
+                "infra.job_start.desktop_downgrade_refused",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                existing_phase=existing_phase,
+                medium=medium,
+                desktop_mode=effective_desktop_mode,
+                existing_vm_name=binding_vm_ref(existing_binding).get("name") or None,
+            )
+            session_desktop_required = True
         bootstrap_payload = _startup_payload_without_ephemeral_wake_reasons(
             startup_payload,
             keep_wake_reasons=not active_session_already_running,
