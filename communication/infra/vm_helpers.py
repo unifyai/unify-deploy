@@ -5725,8 +5725,13 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     return {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": actions}
 
 
-def trim_pool(vm_type: str) -> Dict[str, Any]:
+def trim_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     """Stop excess idle VMs to maintain POOL_TARGET_IDLE.
+
+    ``extra_demand`` carries demand this process cannot see in its own
+    ``_pending_claims`` counter — sessions waiting on capacity elsewhere. Without
+    it, a trim in one process undoes a replenish another process just made for a
+    queued session, and the pool flaps a VM between stopped and started.
 
     Uses a non-blocking per-vm_type lock so concurrent callers (fire-and-
     forget from release_pool_endpoint) don't duplicate work.
@@ -5735,7 +5740,7 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
     if not lock.acquire(blocking=False):
         return {"vm_type": vm_type, "actions": [], "skipped": True}
     try:
-        return _trim_pool_inner(vm_type)
+        return _trim_pool_inner(vm_type, extra_demand=extra_demand)
     finally:
         lock.release()
 
@@ -5762,7 +5767,7 @@ def _idle_vm_age_seconds(vm, *, now: Optional[datetime] = None) -> Optional[floa
     return None
 
 
-def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
+def _trim_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     """Uses label-first ordering: CAS-sets pool-role from idle to stopped
     before issuing the stop, so a concurrent claim that already flipped
     the label to assigned will cause the CAS to fail cleanly.
@@ -5771,8 +5776,8 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     reducing the pool below target cause the loop to break early.
 
     Demand-aware and grace-aware: keeps at least
-    ``max(POOL_TARGET_IDLE, pending_claims)`` idle VMs, and never stops an
-    idle VM younger than ``POOL_IDLE_TRIM_GRACE_SECONDS`` so cold-start
+    ``max(POOL_TARGET_IDLE, pending_claims, extra_demand)`` idle VMs, and never
+    stops an idle VM younger than ``POOL_IDLE_TRIM_GRACE_SECONDS`` so cold-start
     replenish in one process cannot be undone by trim in another.
     """
     client = compute_v1.InstancesClient()
@@ -5784,7 +5789,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
             with _pending_lock:
                 pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
-            target = max(POOL_TARGET_IDLE, pending)
+            target = max(POOL_TARGET_IDLE, pending, extra_demand)
             if len(idle_vms) <= target:
                 break
 

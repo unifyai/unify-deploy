@@ -175,6 +175,37 @@ def _pool_result_key(vm_type: str, placement: VmPlacement | None) -> str:
     return f"{vm_type}:{placement.location.id}:{placement.zone}"
 
 
+def _pool_zone_scopes(
+    demand: dict[tuple[str, VmPlacement | None], int],
+) -> tuple[
+    dict[tuple[str, str], VmPlacement | None],
+    dict[tuple[str, str], int],
+]:
+    """Collapse pending demand onto one scope per physical ``(vm_type, zone)`` pool.
+
+    A placement naming the default zone and the legacy ``None`` placement address
+    the same VMs. Iterating them as separate scopes gave each its own demand
+    number, so the legacy scope — which saw zero pending — trimmed the spare VM
+    the placement scope had just replenished for a queued session, and the pool
+    flapped that VM between stopped and started every couple of minutes.
+
+    Returns ``(scopes, zone_demand)``: one representative placement per physical
+    pool (preferring an explicit placement over the legacy default, so work runs
+    against a fully-qualified location) and the summed demand for it.
+    """
+
+    scopes: dict[tuple[str, str], VmPlacement | None] = {}
+    zone_demand: dict[tuple[str, str], int] = {}
+    for (vm_type, placement), count in demand.items():
+        key = (vm_type, placement.zone if placement else SETTINGS.vm_zone)
+        zone_demand[key] = zone_demand.get(key, 0) + count
+        if scopes.get(key) is None:
+            scopes[key] = placement
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        scopes.setdefault((vm_type, SETTINGS.vm_zone), None)
+    return scopes, zone_demand
+
+
 def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
     """Return the number of sessions blocked on idle Unity container capacity."""
 
@@ -265,21 +296,21 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
             error=f"{type(exc).__name__}: {exc}",
         )
     results["vm_pools"] = {}
-    pool_scopes = {
-        *demand,
-        *((vm_type, None) for vm_type in SUPPORTED_POOL_VM_TYPES),
-    }
+    pool_scopes, zone_demand = _pool_zone_scopes(demand)
     aggregate_demand = pending_vm_demand(sessions)
-    for vm_type, placement in sorted(
-        pool_scopes,
-        key=lambda item: _pool_result_key(*item),
+    for (vm_type, zone), placement in sorted(
+        pool_scopes.items(),
+        key=lambda item: _pool_result_key(item[0][0], item[1]),
     ):
-        pending = demand.get((vm_type, placement), 0)
+        pending = zone_demand.get((vm_type, zone), 0)
         pool_key = _pool_result_key(vm_type, placement)
         try:
             with vm_placement_scope(placement):
                 replenish_result = replenish_pool(vm_type, extra_demand=pending)
-                trim_result = trim_pool(vm_type) if pending == 0 else None
+                # Trim every cycle now that it knows the queue depth: gating it
+                # on "no pending sessions" was a stand-in for demand-awareness
+                # and left excess idle capacity running whenever anything queued.
+                trim_result = trim_pool(vm_type, extra_demand=pending)
             pool_result = {
                 "pending_sessions": pending,
                 "replenish": replenish_result,

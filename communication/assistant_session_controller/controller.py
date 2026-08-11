@@ -103,6 +103,7 @@ logger = logging.getLogger(__name__)
 
 DESKTOP_LIVENESS_FAILURE_THRESHOLD = CONFIG.desktop_liveness_failure_threshold
 DESKTOP_READY_PULL_AFTER_SECONDS = CONFIG.desktop_ready_pull_after_seconds
+VM_ASSIGNMENT_DEADLINE_SECONDS = CONFIG.vm_assignment_deadline_seconds
 RELEASE_REQUEST_TIMEOUT_SECONDS = POOL_RELEASE_TIMEOUT_SECONDS
 
 _batch_api: k8s_client.BatchV1Api | None = None
@@ -191,6 +192,12 @@ def _vm_readiness_deadline_seconds() -> float:
     """Return the shared guest-readiness deadline for all desktop modes."""
 
     return VM_READINESS_DEADLINE_SECONDS
+
+
+def _vm_assignment_deadline_seconds() -> float:
+    """Return how long a binding may go without acquiring a desktop VM."""
+
+    return VM_ASSIGNMENT_DEADLINE_SECONDS
 
 
 def _job_terminal_phase(job) -> str | None:
@@ -1431,6 +1438,101 @@ def _recover_timed_out_release_request(
 
     message = str(result.get("message", "") or result.get("reason", "") or "")
     return binding, release_requested_at, release_completed_at, message
+
+
+def _handle_vm_assignment_timeout(
+    *,
+    body: dict,
+    assistant_id: str,
+    session_name: str,
+    activation_id: str,
+    binding: dict,
+    job,
+    existing_conditions: list[dict],
+    desktop_required: bool,
+    bootstrap_retries: int,
+    vm_retries: int,
+    current_binding_id: str,
+    last_error: str,
+) -> None:
+    """Escalate a binding that spent the readiness deadline without a VM.
+
+    Re-mints the binding (or fails the session once retries are exhausted) so the
+    stall becomes visible in ``vm_retries`` / ``lastError`` instead of an endless
+    quiet retry. Suspending the bound Job first matches the other restart paths:
+    the fresh binding claims its own container, and an assignment attempt still
+    in flight for the old binding discards its result — releasing any VM it
+    managed to claim — because the binding it targeted is no longer current.
+    """
+
+    message = (
+        f"Binding did not acquire a desktop VM within "
+        f"{int(_vm_readiness_deadline_seconds())}s"
+    )
+    if last_error:
+        message = f"{message}: {last_error}"
+    _emit_binding_stage_event(
+        "controller.pending_vm_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        phase="PendingVM",
+        binding=binding,
+        desktop_required=desktop_required,
+        bootstrap_retries=bootstrap_retries,
+        vm_retries=vm_retries,
+        job=job,
+        pod_ref=binding_pod_ref(binding),
+        stage="vm_assignment_wait",
+        stage_state="timeout",
+        deadline_seconds=_vm_readiness_deadline_seconds(),
+    )
+    if job is not None:
+        try:
+            _suspend_bound_job(
+                job,
+                assistant_id=assistant_id,
+                binding_id=current_binding_id,
+                source="controller.vm_assignment_timeout",
+                intent=SUSPEND_INTENT_REPLACE,
+                source_reason="vm_assignment_timeout",
+            )
+        except Exception:  # pragma: no cover - best effort suspend
+            logger.exception(
+                "Failed to suspend Job for %s after VM assignment timeout",
+                assistant_id,
+            )
+    decision = _restart_binding_decision(
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        retry_count=vm_retries,
+        max_retries=MAX_VM_READINESS_RETRIES,
+        retry_field="vm_retries",
+        message=message,
+    )
+    patch_assistant_session_status(
+        _custom_api,
+        WATCH_NAMESPACE,
+        assistant_id,
+        phase=decision["phase"],
+        observed_activation_id=activation_id,
+        binding=decision["binding"],
+        last_error=decision["last_error"],
+        source="controller.reconcile",
+        bootstrap_retries=bootstrap_retries,
+        vm_retries=decision["vm_retries"],
+        desktop_probe_failures=0,
+        conditions=_condition_state(
+            existing_conditions,
+            decision["phase"],
+            desktop_required,
+            container_assigned=False,
+            container_ready=False,
+            vm_assigned=False,
+            desktop_ready=False,
+            reason="VMAssignmentTimeout",
+            message=decision["last_error"],
+        ),
+    )
 
 
 def _release_desktop_for_container_session(
@@ -3035,6 +3137,35 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         assignment_state = str(assignment.get("state", "") or "")
         assignment_message = str(assignment.get("message", "") or "")
         assignment_age = _signal_age_seconds(assignment)
+        if _binding_deadline_exceeded(
+            binding,
+            "createdAt",
+            _vm_assignment_deadline_seconds(),
+        ):
+            # Every other stage has a deadline; assignment had none, because both
+            # existing ones key off fields that only exist once a vmRef does. A
+            # binding that can never get a VM (a wedged disk, a pool that never
+            # yields one) therefore retried in silence indefinitely with
+            # vm_retries pinned at 0 — no escalation, and nothing to alert on.
+            #
+            # Measured from the binding mint rather than container-ready: the
+            # budget covers this binding's whole path to a bound VM, and it
+            # resets on every re-mint instead of inheriting an old clock.
+            _handle_vm_assignment_timeout(
+                body=body,
+                assistant_id=assistant_id,
+                session_name=session_name,
+                activation_id=activation_id,
+                binding=binding,
+                job=job,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                current_binding_id=current_binding_id,
+                last_error=assignment_message,
+            )
+            return
         if assignment_state == "in_progress" and (
             assignment_age is None
             or assignment_age < VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS
