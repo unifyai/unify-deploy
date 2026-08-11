@@ -404,11 +404,24 @@ def build_unity_job_manifest(
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
         "OPENAI_API_KEY",
-        # OpenRouter, like the other LLM provider keys, is mounted for the
-        # trusted runtime and stripped from every subprocess sandbox by
-        # ``build_sandbox_env`` (see provider_proxy.session). Sandbox LLM calls
-        # are RPC-brokered to the trusted parent, so user code never sees it.
-        "OPENROUTER_API_KEY",
+        # OPENROUTER_API_KEY is intentionally NOT mounted: the pod's OpenRouter
+        # traffic goes through Orchestra's broker (UNILLM_LLM_GATEWAY_URL
+        # below), authenticated as the pod's own UNIFY_KEY, so the raw provider
+        # key never enters a tenant-controlled pod at all.
+        #
+        # Scrubbing it from sandboxes was not enough. ``build_sandbox_env``
+        # covers subprocesses, and ``venv_runner`` brokers their LLM calls over
+        # RPC — but the default execute_code surface runs *in-process*, where
+        # ``execution_env`` hands user code the real ``unillm`` module inside
+        # the trusted parent, with os.environ intact. There is no subprocess to
+        # broker from and nothing to scrub, so a mounted key stays readable to
+        # the very code the scrub exists to contain. Absent, there is nothing
+        # to read: a compromised pod holds only its own spend-limited,
+        # attributable UNIFY_KEY.
+        #
+        # ANTHROPIC_API_KEY is deliberately still mounted above: the broker has
+        # no Anthropic leg yet, so removing it here would break every
+        # Claude-configured assistant rather than protect one.
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
         # authenticate to Orchestra and the hosted gateway with their own
         # per-assistant UNIFY_KEY against ownership-scoped routes, so a

@@ -58,13 +58,17 @@ def test_no_envFrom_bulk_secret_or_configmap_injection() -> None:
         assert "envFrom" not in container
 
 
-def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
-    manifest = build_unity_job_manifest(job_name="openrouter-key-staging")
-    entry = _env_by_name(manifest)["OPENROUTER_API_KEY"]
-    assert entry["valueFrom"]["secretKeyRef"] == {
-        "name": "unity-secrets",
-        "key": "OPENROUTER_API_KEY",
-    }
+def test_openrouter_api_key_is_not_mounted_into_the_pod() -> None:
+    """The pod brokers OpenRouter, so it holds no OpenRouter credential.
+
+    Scrubbing the key from sandboxes did not contain it: the default
+    execute_code surface runs in-process, inside the trusted parent, with
+    os.environ intact and the real ``unillm`` module in scope. Keeping the
+    key out of the pod is what makes that surface uninteresting to reach.
+    """
+    assert "OPENROUTER_API_KEY" not in _env_by_name(
+        build_unity_job_manifest(job_name="openrouter-key-staging"),
+    )
 
 
 def test_llm_gateway_url_tracks_the_pod_s_own_orchestra() -> None:
@@ -75,20 +79,32 @@ def test_llm_gateway_url_tracks_the_pod_s_own_orchestra() -> None:
     assert env["UNILLM_LLM_GATEWAY_URL"]["value"] == f"{orchestra_url}/llm"
 
 
-def test_the_provider_key_stays_mounted_alongside_gateway_routing() -> None:
-    """Routing and the key are separate steps, and this is the order.
+def test_the_route_out_replaces_the_key_rather_than_accompanying_it() -> None:
+    """Removing the key is only safe while the broker route is configured.
 
-    Pointing pods at the broker changes where a call goes; it does not
-    change whether one can be made. Removing the key in the same breath
-    would turn any broker problem into a total inference outage, because
-    the platform default model routes through OpenRouter — so the key is
-    dropped only once brokered traffic is observed working.
+    These two move together and in this order: routing arrives first and is
+    verified, then the key goes. A manifest carrying neither strands every
+    OpenRouter call with no way to make it — the platform default model
+    routes through OpenRouter, so that is total inference loss, and it
+    would read as an unrelated env cleanup rather than the outage it is.
     """
-    env = _env_by_name(build_unity_job_manifest(job_name="gateway-and-key-staging"))
+    env = _env_by_name(build_unity_job_manifest(job_name="gateway-swap-staging"))
 
     assert "UNILLM_LLM_GATEWAY_URL" in env
-    assert env["OPENROUTER_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == (
-        "OPENROUTER_API_KEY"
+    assert "OPENROUTER_API_KEY" not in env
+
+
+def test_anthropic_key_stays_mounted_until_the_broker_can_carry_it() -> None:
+    """The broker has no Anthropic leg, so dropping this breaks Claude models.
+
+    Anthropic has no OpenAI-compatible endpoint and reports usage in tokens
+    without a cost, so that leg needs a translation layer and server-side
+    pricing before the key can follow OpenRouter out of the pod.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="anthropic-key-staging"))
+
+    assert env["ANTHROPIC_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == (
+        "ANTHROPIC_API_KEY"
     )
 
 
