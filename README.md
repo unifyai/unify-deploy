@@ -342,7 +342,6 @@ Every key this estate deploys uses `limit_reset: monthly`, so a cap can throttle
 
 **⚠️ Known loose ends:**
 
-- **`unifyai/orchestra` holds a second, older `OPENROUTER_API_KEY` secret** (set 2026-07-01, hours after `Default` was created) alongside its current `OPENROUTER_API_KEY_CI`. It most likely still contains the disabled `Default` key; GitHub never reveals secret values, so this can only be resolved by deleting or overwriting it. Any workflow still reading it will 401.
 - **`MCP: OpenRouter MCP: Claude Code (openrouter)`** (`e104bdd3`, $5 cap, $0 used) was auto-minted by an MCP integration on 2026-08-10 and is unattributed. Harmless, but it belongs to someone — attribute it or delete it.
 - Per-key caps across the eight active keys sum to **$20,105/month** of theoretical headroom. There is no account-level cap, so that sum is the real ceiling — and the retired `cfcba7cb` still carries a $40,000 cap that would count toward it if anyone re-enabled the key.
 
