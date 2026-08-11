@@ -1,7 +1,6 @@
 FROM python:3.12-slim
 
 # Accept build arguments
-ARG GITHUB_TOKEN
 ARG BRANCH_NAME=main
 
 # Install system dependencies (git for private repo cloning)
@@ -11,15 +10,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Configure git to use GITHUB_TOKEN for private repo authentication
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-
-# Clone and install unillm + unisdk (private dependencies).
-RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unify && \
+# Private repos are cloned with a BuildKit secret mount rather than a build
+# argument. A build argument is recorded verbatim in the metadata of every
+# layer that follows it, and writing the credential into a global git config
+# would persist it in the image as well; a mounted secret exists only for the
+# duration of the RUN and reaches neither. The rewrite is applied per command
+# with `git -c` for the same reason — nothing is written to ~/.gitconfig.
+RUN --mount=type=secret,id=github_token \
+    DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    GH_TOKEN="$(cat /run/secrets/github_token)" && \
+    git -c url."https://$GH_TOKEN@github.com/".insteadOf="https://github.com/" \
+        clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unify && \
     pip install --no-cache-dir /tmp/unify
-RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
+RUN --mount=type=secret,id=github_token \
+    DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    GH_TOKEN="$(cat /run/secrets/github_token)" && \
+    git -c url."https://$GH_TOKEN@github.com/".insteadOf="https://github.com/" \
+        clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
 # Cache-buster for the unity clone+install layer below. The Cloud
@@ -52,9 +59,12 @@ ARG UNITY_SHA=unknown
 # unity's base deps but not needed by the gateway. Suppress them by
 # not running pip check; they're harmless because nothing the
 # gateway imports actually requires them.
-RUN echo "UNITY_SHA=${UNITY_SHA}" && \
+RUN --mount=type=secret,id=github_token \
+    echo "UNITY_SHA=${UNITY_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
+    GH_TOKEN="$(cat /run/secrets/github_token)" && \
+    git -c url."https://$GH_TOKEN@github.com/".insteadOf="https://github.com/" \
+        clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
     pip install --no-cache-dir --no-deps /tmp/unity && \
     pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
 

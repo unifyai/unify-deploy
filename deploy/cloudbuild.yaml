@@ -46,11 +46,9 @@ steps:
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['resolve-unity-sha']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -60,12 +58,15 @@ steps:
   - '-c'
   - |
     docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest || true
+    umask 077
+    trap 'rm -f /workspace/.gh_token' EXIT
+    printf '%s' "$$GITHUB_TOKEN" > /workspace/.gh_token
     UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/main | awk '{print $$1}')
     echo "Cache-busting comms unity layer with UNITY_SHA=$$UNITY_SHA"
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=main \
+      --secret id=github_token,src=/workspace/.gh_token --build-arg BRANCH_NAME=main \
       --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest .
@@ -84,12 +85,10 @@ steps:
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg BRANCH_NAME=main \
       --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -99,10 +98,13 @@ steps:
   - '-c'
   - |
     docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest || true
+    umask 077
+    trap 'rm -f /workspace/.gh_token' EXIT
+    printf '%s' "$$GITHUB_TOKEN" > /workspace/.gh_token
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-link-tracker \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+      --secret id=github_token,src=/workspace/.gh_token \
       --build-arg BRANCH_NAME=main \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_LINK_TRACKER_REPO}/${_LINK_TRACKER_SERVICE}:latest .
