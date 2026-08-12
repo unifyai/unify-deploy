@@ -52,7 +52,6 @@ class ResolvedAssistantDeployment:
     secrets_dirs: list[Path]
     knowledge_dirs: list[Path]
     custom_data_dirs: list[Path]
-    dashboards_dirs: list[Path]
     tasks_dirs: list[Path]
     files_dirs: list[Path]
     blacklist_dirs: list[Path]
@@ -159,15 +158,6 @@ def _append_custom_data_dir(
     if any(str(Path(existing).resolve()) == resolved for existing in dirs):
         return dirs
     return [*dirs, Path(custom_data_dir)]
-
-
-def _append_dashboards_dir(dirs: list[Path], dashboards_dir: Path | None) -> list[Path]:
-    if dashboards_dir is None:
-        return dirs
-    resolved = str(Path(dashboards_dir).resolve())
-    if any(str(Path(existing).resolve()) == resolved for existing in dirs):
-        return dirs
-    return [*dirs, Path(dashboards_dir)]
 
 
 def _append_tasks_dir(dirs: list[Path], tasks_dir: Path | None) -> list[Path]:
@@ -286,9 +276,6 @@ def _spec_to_resolved(
             custom_data_dirs,
             spec.custom_data_dir,
         )
-    dashboards_dirs: list[Path] = []
-    if spec.dashboards_dir is not None:
-        dashboards_dirs = _append_dashboards_dir(dashboards_dirs, spec.dashboards_dir)
     tasks_dirs: list[Path] = []
     if spec.tasks_dir is not None:
         tasks_dirs = _append_tasks_dir(tasks_dirs, spec.tasks_dir)
@@ -320,11 +307,6 @@ def _spec_to_resolved(
             custom_data_dirs = _append_custom_data_dir(
                 custom_data_dirs,
                 layer.custom_data_dir,
-            )
-        if layer.dashboards_dir is not None:
-            dashboards_dirs = _append_dashboards_dir(
-                dashboards_dirs,
-                layer.dashboards_dir,
             )
         if layer.tasks_dir is not None:
             tasks_dirs = _append_tasks_dir(tasks_dirs, layer.tasks_dir)
@@ -358,7 +340,6 @@ def _spec_to_resolved(
         secrets_dirs=secrets_dirs,
         knowledge_dirs=knowledge_dirs,
         custom_data_dirs=custom_data_dirs,
-        dashboards_dirs=dashboards_dirs,
         tasks_dirs=tasks_dirs,
         files_dirs=files_dirs,
         blacklist_dirs=blacklist_dirs,
@@ -498,7 +479,6 @@ def resolve(
         secrets_dirs=[],
         knowledge_dirs=[],
         custom_data_dirs=[],
-        dashboards_dirs=[],
         tasks_dirs=[],
         files_dirs=[],
         blacklist_dirs=[],

@@ -439,19 +439,14 @@ def test_extra_annotations_appear_on_both_job_and_pod_template() -> None:
     assert pod_anns["cluster-autoscaler.kubernetes.io/safe-to-evict"] == "false"
 
 
-def test_app_label_override_for_offline_and_dashboard_jobs() -> None:
-    """`task_execution` and `dashboard_actions` use distinct
-    ``app`` labels so the controller's idle-pool selector
-    (``app=unity``) doesn't accidentally pick up those one-shot Jobs.
+def test_app_label_override_for_offline_jobs() -> None:
+    """`task_execution` overrides the ``app`` label so the controller's
+    idle-pool selector (``app=unity``) doesn't accidentally pick up those
+    one-shot Jobs.
     """
     offline = build_unity_job_manifest(job_name="x", app_label="unity-offline")
-    dashboard = build_unity_job_manifest(
-        job_name="x",
-        app_label="unity-dashboard-action",
-    )
     assert offline["metadata"]["labels"]["app"] == "unity-offline"
     assert offline["spec"]["template"]["metadata"]["labels"]["app"] == "unity-offline"
-    assert dashboard["metadata"]["labels"]["app"] == "unity-dashboard-action"
 
 
 def test_ttl_and_active_deadline_only_appear_when_set() -> None:

@@ -99,12 +99,6 @@ class SeedLayer(BaseModel):
             "table is a subdirectory with meta.json and rows.jsonl."
         ),
     )
-    dashboards_dir: Optional[Path] = Field(
-        default=None,
-        description=(
-            "Directory containing deployment-defined dashboard tiles and layouts."
-        ),
-    )
     tasks_dir: Optional[Path] = Field(
         default=None,
         description="Directory containing tasks.jsonl for this layer.",
@@ -199,12 +193,6 @@ class DeploymentSpec(BaseModel):
         description=(
             "Directory containing deployment-defined DataManager tables. Each "
             "table is a subdirectory with meta.json and rows.jsonl."
-        ),
-    )
-    dashboards_dir: Optional[Path] = Field(
-        default=None,
-        description=(
-            "Directory containing deployment-defined dashboard tiles and layouts."
         ),
     )
     tasks_dir: Optional[Path] = Field(

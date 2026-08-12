@@ -335,8 +335,7 @@ def build_unity_job_manifest(
         priority_class_name: Pod priority class. Defaults to
             ``unity-idle``.
         app_label: Value of the ``app`` label on both Job and pod
-            template. Defaults to ``unity``; dashboard-action jobs use
-            ``unity-dashboard-action``.
+            template. Defaults to ``unity``.
         extra_labels: Merged into Job ``metadata.labels`` (does NOT
             propagate to the pod template).
         extra_annotations: Merged into both Job
@@ -516,7 +515,7 @@ def build_unity_job_manifest(
         # total, where one streamed call would occupy a slot for its whole
         # duration and every voice turn would pay the round trip.
         {"name": "UNILLM_LLM_GATEWAY_URL", "value": "http://127.0.0.1:8787/llm"},
-        # Console origin for user-facing links (canvas and dashboard views).
+        # Console origin for user-facing links (canvas views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
         # any per-environment configuration.
