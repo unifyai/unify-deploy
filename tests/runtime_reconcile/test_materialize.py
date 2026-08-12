@@ -89,15 +89,6 @@ class _FakeDataManager:
         return True
 
 
-class _FakeDashboardManager:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    def sync_custom(self, *, source_entities=None) -> bool:
-        self.calls.append({"source_entities": source_entities})
-        return True
-
-
 class _FakeTaskScheduler:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -147,7 +138,6 @@ def _install_materialize_fakes(
     secrets_model_collector,
     knowledge_collector,
     data_collector,
-    dashboards_collector,
     tasks_collector,
     files_collector,
     integration_registry_collector,
@@ -159,7 +149,6 @@ def _install_materialize_fakes(
     secret_manager: _FakeSecretManager,
     knowledge_manager: _FakeKnowledgeManager,
     data_manager: _FakeDataManager,
-    dashboard_manager: _FakeDashboardManager,
     task_scheduler: _FakeTaskScheduler,
     file_manager: _FakeFileManager,
     blacklist_manager: _FakeBlacklistManager,
@@ -228,14 +217,6 @@ def _install_materialize_fakes(
         custom_data,
     )
 
-    custom_dashboards = ModuleType("unify.dashboard_manager.custom_dashboards")
-    custom_dashboards.collect_dashboards_from_directories = dashboards_collector
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "unify.dashboard_manager.custom_dashboards",
-        custom_dashboards,
-    )
-
     custom_tasks = ModuleType("unify.task_scheduler.custom_tasks")
     custom_tasks.collect_tasks_from_directories = tasks_collector
     monkeypatch.setitem(
@@ -301,10 +282,6 @@ def _install_materialize_fakes(
             return data_manager
 
         @staticmethod
-        def get_dashboard_manager():
-            return dashboard_manager
-
-        @staticmethod
         def get_task_scheduler():
             return task_scheduler
 
@@ -331,7 +308,6 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     fake_sm = _FakeSecretManager()
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FakeDataManager()
-    fake_dash = _FakeDashboardManager()
     fake_ts = _FakeTaskScheduler()
     fake_file_mgr = _FakeFileManager()
     fake_registry_sync = _FakeIntegrationRegistrySync()
@@ -347,7 +323,6 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         secrets_model_collector=lambda _secrets: {},
         knowledge_collector=lambda _dirs: {},
         data_collector=lambda _dirs: {},
-        dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
         tasks_collector=lambda _dirs: {},
         files_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
@@ -359,7 +334,6 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
         secret_manager=fake_sm,
         knowledge_manager=fake_km,
         data_manager=fake_dm,
-        dashboard_manager=fake_dash,
         task_scheduler=fake_ts,
         file_manager=fake_file_mgr,
         blacklist_manager=fake_bm,
@@ -378,7 +352,6 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
             contacts_dirs=[],
             knowledge_dirs=[],
             custom_data_dirs=[],
-            dashboards_dirs=[],
             tasks_dirs=[],
             files_dirs=[],
             integration_registry=[],
@@ -395,7 +368,6 @@ def test_materialize_syncs_authoritative_empty_custom_sources(monkeypatch):
     assert result.contacts_changed is True
     assert result.knowledge_changed is True
     assert result.custom_data_changed is True
-    assert result.dashboards_changed is True
     assert result.tasks_changed is True
     assert result.files_changed is True
     assert result.secrets_changed is True
@@ -425,7 +397,6 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
     fake_sm = _FakeSecretManager()
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FakeDataManager()
-    fake_dash = _FakeDashboardManager()
     fake_ts = _FakeTaskScheduler()
     fake_file_mgr = _FakeFileManager()
     fake_bm = _FakeBlacklistManager()
@@ -444,7 +415,6 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         secrets_model_collector=lambda _secrets: {},
         knowledge_collector=lambda _dirs: {},
         data_collector=lambda _dirs: {},
-        dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
         tasks_collector=lambda _dirs: {},
         files_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
@@ -456,7 +426,6 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
         secret_manager=fake_sm,
         knowledge_manager=fake_km,
         data_manager=fake_dm,
-        dashboard_manager=fake_dash,
         task_scheduler=fake_ts,
         file_manager=fake_file_mgr,
         blacklist_manager=fake_bm,
@@ -475,7 +444,6 @@ def test_materialize_includes_enabled_integration_dirs(monkeypatch, tmp_path):
             contacts_dirs=[],
             knowledge_dirs=[],
             custom_data_dirs=[],
-            dashboards_dirs=[],
             tasks_dirs=[],
             files_dirs=[],
             integration_registry=[],
@@ -524,7 +492,6 @@ def test_materialize_continues_when_custom_function_sync_partially_fails(
     fake_sm = _FakeSecretManager()
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FakeDataManager()
-    fake_dash = _FakeDashboardManager()
     fake_ts = _FakeTaskScheduler()
     fake_file_mgr = _FakeFileManager()
     fake_bm = _FakeBlacklistManager()
@@ -543,7 +510,6 @@ def test_materialize_continues_when_custom_function_sync_partially_fails(
         secrets_model_collector=lambda _secrets: {},
         knowledge_collector=lambda _dirs: {},
         data_collector=lambda _dirs: {},
-        dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
         tasks_collector=lambda _dirs: {},
         files_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
@@ -555,7 +521,6 @@ def test_materialize_continues_when_custom_function_sync_partially_fails(
         secret_manager=fake_sm,
         knowledge_manager=fake_km,
         data_manager=fake_dm,
-        dashboard_manager=fake_dash,
         task_scheduler=fake_ts,
         file_manager=fake_file_mgr,
         blacklist_manager=fake_bm,
@@ -574,7 +539,6 @@ def test_materialize_continues_when_custom_function_sync_partially_fails(
             contacts_dirs=[],
             knowledge_dirs=[],
             custom_data_dirs=[],
-            dashboards_dirs=[],
             tasks_dirs=[],
             files_dirs=[],
             integration_registry=[],
@@ -620,7 +584,6 @@ def test_materialize_continues_when_parallel_custom_data_sync_fails(monkeypatch)
     fake_sm = _FakeSecretManager()
     fake_km = _FakeKnowledgeManager()
     fake_dm = _FailingDataManager()
-    fake_dash = _FakeDashboardManager()
     fake_ts = _FakeTaskScheduler()
     fake_file_mgr = _FakeFileManager()
     fake_bm = _FakeBlacklistManager()
@@ -640,7 +603,6 @@ def test_materialize_continues_when_parallel_custom_data_sync_fails(monkeypatch)
                 "rows": {"stargazer-v1": {"campaign_slug": "stargazer-v1"}},
             },
         },
-        dashboards_collector=lambda _dirs: {"tiles": {}, "layouts": {}},
         tasks_collector=lambda _dirs: {"campaign_runtime": {"enabled": True}},
         files_collector=lambda _dirs: {},
         integration_registry_collector=lambda _rows: {},
@@ -652,7 +614,6 @@ def test_materialize_continues_when_parallel_custom_data_sync_fails(monkeypatch)
         secret_manager=fake_sm,
         knowledge_manager=fake_km,
         data_manager=fake_dm,
-        dashboard_manager=fake_dash,
         task_scheduler=fake_ts,
         file_manager=fake_file_mgr,
         blacklist_manager=fake_bm,
@@ -671,7 +632,6 @@ def test_materialize_continues_when_parallel_custom_data_sync_fails(monkeypatch)
             contacts_dirs=[],
             knowledge_dirs=[],
             custom_data_dirs=[],
-            dashboards_dirs=[],
             tasks_dirs=[],
             files_dirs=[],
             integration_registry=[],
