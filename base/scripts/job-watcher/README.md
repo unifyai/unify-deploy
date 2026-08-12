@@ -48,8 +48,8 @@ It is used by both:
 
 The Dockerfile copies `assistant_jobs_api.py` from the Unity source tree
 at build time and clones/installs the `unify` SDK from GitHub (the deploy
-scripts set the Docker build context to the repo root and pass
-`GITHUB_TOKEN` for private repo access).
+scripts set the Docker build context to the repo root). `unisdk` is public,
+so the clone is unauthenticated and carries no credential.
 
 ## Responsibility split
 

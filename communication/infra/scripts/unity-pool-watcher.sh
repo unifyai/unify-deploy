@@ -402,19 +402,13 @@ do_update() {
 
     kill_agent_service
 
-    local github_token
     local deploy_env
-    github_token=$(get_metadata "github-token")
     deploy_env=$(get_deploy_env)
 
+    # Both repositories are public, so these clones are unauthenticated.
     local magnitude_url unity_url unity_branch
-    if [[ -n "$github_token" ]]; then
-        magnitude_url="https://${github_token}@github.com/unifyai/magnitude.git"
-        unity_url="https://${github_token}@github.com/unifyai/unity.git"
-    else
-        magnitude_url="https://github.com/unifyai/magnitude.git"
-        unity_url="https://github.com/unifyai/unity.git"
-    fi
+    magnitude_url="https://github.com/unifyai/magnitude.git"
+    unity_url="https://github.com/unifyai/unity.git"
     case "$deploy_env" in
         staging) unity_branch="staging" ;;
         *) unity_branch="main" ;;

@@ -13,7 +13,7 @@
 #
 # NOT included (runtime configuration):
 # - VNC password
-# - Magnitude/Agent Service (needs github-token)
+# - Magnitude/Agent Service (public repos, cloned at boot)
 # - API keys, hostname config
 # =============================================================================
 
