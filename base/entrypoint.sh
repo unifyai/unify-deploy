@@ -230,8 +230,8 @@ start_conversation_manager() {
 
 # One-shot offline task-run pods carry the full runner contract in the
 # container env (UNITY_OFFLINE_TASK_*); everything else is interactive.
-if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
-    echo "⬥ Offline task-run pod (mode=${UNITY_OFFLINE_TASK_MODE})"
+if [ -n "${UNITY_OFFLINE_RUN_KEY:-}" ]; then
+    echo "⬥ Offline task-run pod (run_key=${UNITY_OFFLINE_RUN_KEY})"
     echo "⬥ Fetching client bundle for offline task runner..."
     python3 -m unify_deploy.client_bundle.bootstrap || python3 -c "from unify_deploy.client_bundle.bootstrap import ensure_offline_client_bundle; ensure_offline_client_bundle()" || true
     echo "⬥ Starting offline task runner..."

@@ -473,7 +473,7 @@ For development source installs, run the direct worker path from the local
 
 ```bash
 cd ../orchestra
-poetry run python scripts/run_builtins_artifacts_seed_self_host.py \
+uv run python scripts/run_builtins_artifacts_seed_self_host.py \
   --manifest deploy/integrations/bootstrap.selfhost.toml \
   --backend-id composio \
   --workers 4 \

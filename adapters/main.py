@@ -6484,10 +6484,10 @@ def scheduled_infra_maintenance():
 
     Runs hourly via Cloud Scheduler.  Consolidates container pool
     replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
-    reconciliation, orphaned-disk reconciliation, quarantined-VM purge,
-    VM pool health (scrub + probe + replenish), and bounded terminal
-    AssistantSession pruning into a single scheduled endpoint so runtime
-    cleanup concerns live in one place.
+    reconciliation, orphaned-disk reconciliation, orphaned assistant DNS
+    reconciliation, quarantined-VM purge, VM pool health (scrub + probe +
+    replenish), and bounded terminal AssistantSession pruning into a single
+    scheduled endpoint so runtime cleanup concerns live in one place.
     """
     results: dict = {}
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
@@ -6569,6 +6569,24 @@ def scheduled_infra_maintenance():
     except Exception as exc:
         logger.exception("maintenance: orphan disk reconcile failed")
         results["orphan_disks_error"] = str(exc)
+
+    # 4c — Delete assistant DNS records whose owning address is gone. Release
+    #      deletes both together, so this covers records left by releases that
+    #      predate that pairing or that died between the two deletes.
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/assistant-static-ip/reconcile-orphan-dns",
+            params={"apply": True},
+            headers=headers,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            results["orphan_assistant_dns"] = resp.json()
+        else:
+            results["orphan_assistant_dns_error"] = resp.text
+    except Exception as exc:
+        logger.exception("maintenance: orphaned assistant DNS reconcile failed")
+        results["orphan_assistant_dns_error"] = str(exc)
 
     # 5 — Delete quarantined VMs so replenish_pool can create fresh replacements
     for vm_type in SUPPORTED_POOL_VM_TYPES:

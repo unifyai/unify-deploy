@@ -202,6 +202,16 @@ ASSISTANT_STATIC_IP_ASSISTANT_LABEL = "assistant-id"
 ASSISTANT_STATIC_IP_MANAGED_BY_VALUE = "communication"
 ASSISTANT_STATIC_IP_OWNER_VALUE = "assistant"
 ASSISTANT_STATIC_IP_ROTATION_OPERATION_LABEL = "rotation-operation"
+ORPHANED_ASSISTANT_DNS_MAX_DELETIONS = 200
+ORPHANED_ASSISTANT_DNS_DELETE_CHUNK = 25
+ASSISTANT_RESOURCE_ENV_SUFFIXES = ("-staging", "-preview")
+# Anchored so a production pass (empty env suffix) cannot match a ``-staging``
+# record, and so pool hostnames never parse as assistant hostnames.
+ASSISTANT_DNS_RECORD_PATTERN = re.compile(
+    r"^unity-assistant-(?P<id>[a-z0-9-]+?)"
+    rf"(?P<suffix>{'|'.join(ASSISTANT_RESOURCE_ENV_SUFFIXES)})?"
+    rf"\.{re.escape(DOMAIN_SUFFIX)}\.$",
+)
 
 
 class AssistantDiskInUseError(RuntimeError):
@@ -404,10 +414,19 @@ def release_assistant_static_ip(
     assistant_id: str,
     *,
     region: str | None = None,
-) -> bool:
-    """Idempotently release an assistant-owned regional external address."""
+) -> dict[str, bool]:
+    """Idempotently release an assistant-owned address and its DNS record.
+
+    An assistant's A record has exactly the lifetime of the address it names,
+    so release deletes both. The record goes first: it has no owner of its own,
+    and dropping the address ahead of it strands the record behind the missing
+    address short-circuit on every later retry. Releasing an assistant whose
+    address is already gone therefore still reaps a record left by an earlier
+    partial release.
+    """
 
     address_name = assistant_static_ip_name(assistant_id)
+    hostname = get_dns_hostname(assistant_id)
     region = region or _current_vm_placement().region
     client = compute_v1.AddressesClient()
     try:
@@ -417,9 +436,10 @@ def release_assistant_static_ip(
             address=address_name,
         )
     except NotFound:
-        return False
+        return {"released": False, "dns_deleted": _delete_dns_a_record(hostname)}
 
     _assert_assistant_static_ip_ownership(address, assistant_id)
+    dns_deleted = _delete_dns_a_record(hostname)
     try:
         client.delete(
             project=SETTINGS.vm_project_id,
@@ -427,8 +447,8 @@ def release_assistant_static_ip(
             address=address_name,
         ).result()
     except NotFound:
-        return False
-    return True
+        return {"released": False, "dns_deleted": dns_deleted}
+    return {"released": True, "dns_deleted": dns_deleted}
 
 
 def assistant_migration_snapshot_name(
@@ -1997,9 +2017,10 @@ def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, st
     if supervisord_conf_loader:
         metadata_updates["supervisord-conf"] = supervisord_conf_loader()
 
-    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
-    if github_token:
-        metadata_updates["github-token"] = github_token
+    # No github-token: the repositories a pool VM clones are public, and the
+    # startup scripts already fall back to unauthenticated URLs when the key is
+    # absent. Instance metadata is readable by anything running on the VM, so a
+    # credential placed there is available to every process on it.
 
     tls_cert = get_secret(VM_WILDCARD_CERT_SECRET) or ""
     tls_key = get_secret(VM_WILDCARD_KEY_SECRET) or ""
@@ -2041,8 +2062,8 @@ def _wait_for_pool_static_ip(ip_client, ip_name: str) -> str:
         time.sleep(POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS)
 
 
-def _delete_pool_dns_record(hostname: str) -> bool:
-    """Delete the pool hostname's A record if it still exists."""
+def _delete_dns_a_record(hostname: str) -> bool:
+    """Delete the hostname's A record if it still exists."""
 
     dns_client = dns.Client(project=SETTINGS.dns_project_id)
     zone = dns_client.zone(DNS_ZONE_NAME)
@@ -2391,7 +2412,7 @@ def _cleanup_deleted_pool_vm_network_resources(
     ip_deleted = False
 
     try:
-        dns_deleted = _delete_pool_dns_record(hostname)
+        dns_deleted = _delete_dns_a_record(hostname)
     except Exception as exc:
         logger.error("Failed to delete stale DNS record for %s: %s", hostname, exc)
         errors.append({"resource": hostname, "error": str(exc)})
@@ -3995,16 +4016,6 @@ def _assign_pool_vm(
                 vm_type=vm_type,
             )
 
-        current_stage = "load_github_token"
-        github_token = _run_vm_pool_stage(
-            operation="assign",
-            stage=current_stage,
-            fn=lambda: get_secret("DEVBOT_GITHUB_TOKEN") or "",
-            assistant_id=assistant_id,
-            binding_id=binding_id,
-            vm_name=vm_name,
-            vm_type=vm_type,
-        )
         # VncAuth (DES-based) only compares the first 8 bytes of the password,
         # but mint a longer secret anyway since it also feeds HMAC/signed uses.
         desktop_secret = secrets.token_urlsafe(16)
@@ -4017,7 +4028,6 @@ def _assign_pool_vm(
             "binding-id": binding_id,
             "hostname": hostname,
             RELEASE_GENERATION_METADATA_KEY: "",
-            "github-token": github_token,
         }
         if vm_type == "windows" and MAK_KEY:
             metadata["office-mak-key"] = MAK_KEY
@@ -4565,7 +4575,7 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
         ip_name = candidate["ip_name"]
         vm_name = candidate["vm_name"]
         try:
-            if _delete_pool_dns_record(hostname):
+            if _delete_dns_a_record(hostname):
                 deleted_dns.append(hostname)
                 actions.append(f"Deleted stale pool DNS {hostname}")
         except Exception as exc:
@@ -4601,6 +4611,154 @@ def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
         "deleted_dns": deleted_dns,
         "errors": errors,
         "actions": actions,
+    }
+
+
+def _assistant_ids_owning_addresses() -> set[str]:
+    """Return every assistant ID that appears to own a regional address.
+
+    Read from an aggregated list because assistant addresses are regional and
+    the fleet spans regions, and by label *and* name because neither signal is
+    complete on its own: rotation parks an assistant on an operation-scoped
+    name that only labels tie back to it, while addresses reserved before label
+    repair landed carry no labels and only their name identifies them.
+
+    Every imprecision here is deliberately in the same direction. The caller
+    only deletes a record whose assistant is *absent* from this set, so an
+    over-broad membership — a rotation name parsing to something wider than the
+    assistant, an ID colliding across environments — keeps a record that could
+    have been reaped. It can never drop a record that is still in service.
+    """
+
+    client = compute_v1.AddressesClient()
+    owned: set[str] = set()
+    for _scope, scoped_list in client.aggregated_list(project=SETTINGS.vm_project_id):
+        for address in getattr(scoped_list, "addresses", None) or []:
+            labels = dict(getattr(address, "labels", None) or {})
+            assistant = labels.get(ASSISTANT_STATIC_IP_ASSISTANT_LABEL, "")
+            if (
+                assistant
+                and labels.get(ASSISTANT_STATIC_IP_MANAGED_BY_LABEL)
+                == ASSISTANT_STATIC_IP_MANAGED_BY_VALUE
+                and labels.get(ASSISTANT_STATIC_IP_OWNER_LABEL)
+                == ASSISTANT_STATIC_IP_OWNER_VALUE
+            ):
+                owned.add(assistant)
+            from_name = _assistant_id_from_address_name(
+                str(getattr(address, "name", "") or ""),
+            )
+            if from_name:
+                owned.add(from_name)
+    return owned
+
+
+def _assistant_id_from_address_name(address_name: str) -> Optional[str]:
+    """Return the assistant component of an assistant-owned address name."""
+
+    prefix = "unity-assistant-ip-"
+    if not address_name.startswith(prefix):
+        return None
+    component = address_name[len(prefix) :]
+    for suffix in ASSISTANT_RESOURCE_ENV_SUFFIXES:
+        if component.endswith(suffix):
+            component = component[: -len(suffix)]
+            break
+    return component or None
+
+
+def _assistant_id_from_dns_record(fqdn: str) -> Optional[str]:
+    """Return the owning assistant ID for one of this env's assistant records.
+
+    Records belonging to another deploy environment — live or retired — resolve
+    to ``None`` so they are left to that environment's controller.
+    """
+
+    match = ASSISTANT_DNS_RECORD_PATTERN.match(fqdn)
+    if match is None:
+        return None
+    if (match.group("suffix") or "") != SETTINGS.env_suffix:
+        return None
+    return _assistant_static_ip_id_component(match.group("id"), max_length=63)
+
+
+def cleanup_orphaned_assistant_dns_records(
+    *,
+    apply: bool = False,
+    max_deletions: int = ORPHANED_ASSISTANT_DNS_MAX_DELETIONS,
+) -> Dict[str, Any]:
+    """Delete assistant A records whose owning address no longer exists.
+
+    An assistant's record is created only after its address is reserved, so an
+    address-less record cannot be an assignment in flight — it is the residue of
+    a release that predates DNS teardown, or of one that died between its two
+    deletes. ``apply`` defaults to reporting candidates without touching the
+    zone, and ``max_deletions`` bounds one pass.
+    """
+
+    owned = _assistant_ids_owning_addresses()
+    zone = dns.Client(project=SETTINGS.dns_project_id).zone(DNS_ZONE_NAME)
+    candidates = []
+    for record in zone.list_resource_record_sets():
+        if record.record_type != "A":
+            continue
+        assistant_id = _assistant_id_from_dns_record(record.name)
+        if assistant_id is None or assistant_id in owned:
+            continue
+        candidates.append(record)
+
+    deletable = candidates[:max_deletions]
+    hostnames = [record.name.rstrip(".") for record in candidates]
+    deleted: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    if apply:
+        for start in range(0, len(deletable), ORPHANED_ASSISTANT_DNS_DELETE_CHUNK):
+            chunk = deletable[start : start + ORPHANED_ASSISTANT_DNS_DELETE_CHUNK]
+            changes = zone.changes()
+            for record in chunk:
+                changes.delete_record_set(record)
+            chunk_hostnames = [record.name.rstrip(".") for record in chunk]
+            try:
+                changes.create()
+            except Exception as exc:
+                logger.error(
+                    "Failed to delete orphaned assistant DNS records %s: %s",
+                    ", ".join(chunk_hostnames),
+                    exc,
+                )
+                errors.extend(
+                    {"resource": hostname, "error": str(exc)}
+                    for hostname in chunk_hostnames
+                )
+                continue
+            deleted.extend(chunk_hostnames)
+            logger.info(
+                "Deleted orphaned assistant DNS records: %s",
+                ", ".join(chunk_hostnames),
+            )
+
+    truncated = len(candidates) - len(deletable)
+    if truncated:
+        logger.warning(
+            "Capped orphaned assistant DNS cleanup at %s of %s candidates",
+            len(deletable),
+            len(candidates),
+        )
+    _log_vm_pool_event(
+        "orphaned_assistant_dns_reconciled",
+        applied=apply,
+        found=len(candidates),
+        deleted=len(deleted),
+        truncated=truncated,
+        cleanup_errors=len(errors),
+    )
+    return {
+        "applied": apply,
+        "found": len(candidates),
+        "candidates": hostnames,
+        "deleted": deleted,
+        "truncated": truncated,
+        "errors": errors,
     }
 
 
@@ -5363,9 +5521,8 @@ def _start_one_stopped_vm(client, vm) -> bool:
     VM that is legitimately booting. The startup script transitions
     starting → idle via mark-idle once boot completes.
 
-    Restores the github-token metadata before starting, because the
-    previous boot's startup script wipes it for security. Without it,
-    the startup script can't clone private repos and crashes (set -e).
+    Refreshes the boot metadata before starting, since the previous boot's
+    startup script wipes the sensitive entries once it no longer needs them.
     """
     vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     try:

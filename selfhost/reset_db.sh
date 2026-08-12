@@ -94,8 +94,8 @@ cd "$ORCHESTRA_REPO_PATH"
 python_bin="python3"
 if [[ -x "$ORCHESTRA_REPO_PATH/.venv/bin/python" ]]; then
   python_bin="$ORCHESTRA_REPO_PATH/.venv/bin/python"
-elif command -v poetry >/dev/null 2>&1; then
-  python_bin="poetry run python"
+elif command -v uv >/dev/null 2>&1; then
+  python_bin="uv run python"
 fi
 
 $python_bin <<'PY'

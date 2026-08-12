@@ -15,7 +15,7 @@
 #   7. Mark pool VM as idle
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   hostname, orchestra-url, comms-url, unity-environment,
 #   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #

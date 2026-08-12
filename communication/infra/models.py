@@ -46,6 +46,7 @@ class AssistantStaticIPReleaseResponse(BaseModel):
     assistant_id: str
     name: str
     released: bool
+    dns_deleted: bool
 
 
 class AssistantPlacementResolveRequest(BaseModel):

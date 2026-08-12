@@ -48,8 +48,8 @@ ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
 UNITY_BRANCH="${UNITY_BRANCH:-staging}"
 
-# Ensure user-local tool dirs are on PATH. `uv` and tools `uv` installs
-# (e.g. poetry) land here, and in a fresh shell they may not be picked up.
+# Ensure user-local tool dirs are on PATH. `uv` lands here, and in a fresh
+# shell it may not be picked up.
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # --- Colors / logging -----------------------------------------------------
@@ -201,26 +201,14 @@ ensure_docker() {
     log_success "Docker: $(docker --version 2>/dev/null | head -1)"
 }
 
-# --- Poetry (for orchestra) -----------------------------------------------
-ensure_poetry() {
-    if command -v poetry >/dev/null 2>&1; then
-        log_success "poetry: $(poetry --version 2>/dev/null)"
+# --- uv (for orchestra) -----------------------------------------------------
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        log_success "uv: $(uv --version 2>/dev/null)"
         return 0
     fi
-    if ! command -v uv >/dev/null 2>&1; then
-        log_error "uv not on PATH. scripts/install.sh should have installed it; re-run install.sh?"
-        return 1
-    fi
-    log_info "Installing poetry via uv tool..."
-    uv tool install poetry >/dev/null 2>&1 || {
-        log_error "Failed to install poetry via uv tool"
-        return 1
-    }
-    # uv tool installs into ~/.local/bin
-    if ! command -v poetry >/dev/null 2>&1 && [ -x "$HOME/.local/bin/poetry" ]; then
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
-    log_success "poetry installed: $(poetry --version 2>/dev/null)"
+    log_error "uv not on PATH. scripts/install.sh should have installed it; re-run install.sh?"
+    return 1
 }
 
 # --- orchestra repo (cloned by install.sh; sync here) ----------------------
@@ -238,70 +226,26 @@ ensure_orchestra_repo() {
     return 0
 }
 
-# --- Python 3.12 selection for poetry --------------------------------------
-# orchestra pins itself to ~3.12 because several backend deps (asyncpg,
-# tiktoken, ...) ship no Python 3.13 wheels. Locate a 3.12 interpreter
-# ourselves and tell poetry to use it explicitly, so users on a 3.13-default
-# system don't get surprise build errors.
-find_python312() {
-    # 1. uv-managed Python (uv is required upstream by install.sh)
-    if command -v uv >/dev/null 2>&1; then
-        local uv_py
-        uv_py=$(uv python find 3.12 2>/dev/null || true)
-        if [ -n "$uv_py" ] && [ -x "$uv_py" ]; then
-            echo "$uv_py"
-            return 0
-        fi
-        log_info "Installing Python 3.12 via uv (orchestra requires it)..."
-        uv python install 3.12 >/dev/null 2>&1 || true
-        uv_py=$(uv python find 3.12 2>/dev/null || true)
-        if [ -n "$uv_py" ] && [ -x "$uv_py" ]; then
-            echo "$uv_py"
-            return 0
-        fi
-    fi
-    # 2. system python3.12 on PATH
-    if command -v python3.12 >/dev/null 2>&1; then
-        command -v python3.12
-        return 0
-    fi
-    return 1
-}
-
 install_orchestra_deps() {
-    log_info "Installing orchestra dependencies via poetry (first run may take several minutes)..."
-
-    local py312
-    py312="$(find_python312)" || {
-        log_error "Couldn't locate a Python 3.12 interpreter."
-        log_info "orchestra requires Python 3.12.x. Install one with:"
-        log_info "  uv python install 3.12        (uv was installed by install.sh)"
-        log_info "  brew install python@3.12      (macOS via Homebrew)"
-        log_info "  sudo apt-get install python3.12 python3.12-venv   (Debian/Ubuntu)"
-        return 1
-    }
-    log_info "Using Python 3.12 at $py312"
-
-    (cd "$ORCHESTRA_REPO" && poetry env use "$py312" >/dev/null 2>&1) || {
-        log_warn "Couldn't pin poetry env to $py312 — proceeding (may fail)."
-    }
+    log_info "Installing orchestra dependencies via uv (first run may take several minutes)..."
 
     # Capture install output so a failure surfaces the actual cause instead
-    # of an opaque "poetry install failed" message.
+    # of an opaque "uv sync failed" message. uv provisions a managed Python
+    # 3.12 automatically when the system lacks one.
     local install_log
     install_log="$(mktemp)"
-    if (cd "$ORCHESTRA_REPO" && poetry install --no-interaction) >"$install_log" 2>&1; then
+    if (cd "$ORCHESTRA_REPO" && uv sync --frozen) >"$install_log" 2>&1; then
         rm -f "$install_log"
         log_success "orchestra dependencies installed"
     else
-        log_error "poetry install failed in $ORCHESTRA_REPO"
+        log_error "uv sync failed in $ORCHESTRA_REPO"
         echo ""
-        echo "  --- Last 40 lines of poetry output ---"
+        echo "  --- Last 40 lines of uv output ---"
         tail -40 "$install_log" | sed 's/^/  /'
         echo "  --------------------------------------"
         echo "  Full log: $install_log"
         echo ""
-        log_info "Try manually:  cd $ORCHESTRA_REPO && poetry install"
+        log_info "Try manually:  cd $ORCHESTRA_REPO && uv sync"
         return 1
     fi
 }
@@ -669,7 +613,7 @@ main() {
     fi
 
     ensure_docker || exit 1
-    ensure_poetry || exit 1
+    ensure_uv || exit 1
     if [[ -f "$SCRIPT_DIR/ensure_prereqs.sh" ]]; then
         # shellcheck disable=SC1090
         source "$SCRIPT_DIR/ensure_prereqs.sh"
@@ -685,7 +629,7 @@ main() {
     progress_step_end_success
     progress_repo_line "orchestra" "$(git -C "$ORCHESTRA_REPO" rev-parse --short HEAD)"
 
-    if ! progress_step_run 4 "Installing orchestra Python dependencies (poetry)" \
+    if ! progress_step_run 4 "Installing orchestra Python dependencies (uv)" \
         install_orchestra_deps; then
         exit 1
     fi

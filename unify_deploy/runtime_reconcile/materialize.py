@@ -31,7 +31,6 @@ class RuntimeStateResult:
     contacts_changed: bool = False
     knowledge_changed: bool = False
     custom_data_changed: bool = False
-    dashboards_changed: bool = False
     tasks_changed: bool = False
     files_changed: bool = False
     blacklist_changed: bool = False
@@ -94,10 +93,6 @@ def compute_runtime_state_fingerprint(
         "custom_data_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
             for path in resolved.custom_data_dirs
-        ],
-        "dashboards_dirs": [
-            {"path": str(path), "digest": _hash_path(path)}
-            for path in resolved.dashboards_dirs
         ],
         "tasks_dirs": [
             {"path": str(path), "digest": _hash_path(path)}
@@ -705,9 +700,6 @@ def materialize_runtime_state(
         collect_knowledge_from_directories,
     )
     from unify.data_manager.custom_data import collect_data_from_directories
-    from unify.dashboard_manager.custom_dashboards import (
-        collect_dashboards_from_directories,
-    )
     from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
     from unify.file_manager.custom_files import collect_files_from_directories
 
@@ -717,7 +709,6 @@ def materialize_runtime_state(
     cmgr = ManagerRegistry.get_contact_manager()
     km = ManagerRegistry.get_knowledge_manager()
     dm = ManagerRegistry.get_data_manager()
-    dbm = ManagerRegistry.get_dashboard_manager()
     tm = ManagerRegistry.get_task_scheduler()
     file_mgr = ManagerRegistry.get_file_manager()
     sm = ManagerRegistry.get_secret_manager()
@@ -734,9 +725,6 @@ def materialize_runtime_state(
     )
     source_data = collect_data_from_directories(
         _dedupe_paths(resolved.custom_data_dirs),
-    )
-    source_dashboards = collect_dashboards_from_directories(
-        _dedupe_paths(resolved.dashboards_dirs),
     )
     source_tasks = collect_tasks_from_directories(
         _dedupe_paths(resolved.tasks_dirs),
@@ -791,10 +779,6 @@ def materialize_runtime_state(
                 lambda: dm.sync_custom(source_tables=source_data),
             ),
             (
-                "syncing_custom_dashboards",
-                lambda: dbm.sync_custom(source_entities=source_dashboards),
-            ),
-            (
                 "syncing_custom_tasks",
                 lambda: _sync_custom_tasks_with_log(
                     tm,
@@ -838,7 +822,6 @@ def materialize_runtime_state(
     contacts_changed = _changed("syncing_custom_contacts")
     knowledge_changed = _changed("syncing_custom_knowledge")
     custom_data_changed = _changed("syncing_custom_data")
-    dashboards_changed = _changed("syncing_custom_dashboards")
     tasks_changed = _changed("syncing_custom_tasks")
     files_changed = _changed("syncing_custom_files")
     secrets_changed = _changed("syncing_custom_secrets")
@@ -859,7 +842,6 @@ def materialize_runtime_state(
         "syncing_custom_contacts": "contacts",
         "syncing_custom_knowledge": "knowledge",
         "syncing_custom_data": "data",
-        "syncing_custom_dashboards": "dashboards",
         "syncing_custom_tasks": "tasks",
         "syncing_custom_files": "files",
         "syncing_custom_secrets": "secrets",
@@ -871,7 +853,6 @@ def materialize_runtime_state(
         ("syncing_custom_contacts", contacts_changed, "sync_custom_contacts"),
         ("syncing_custom_knowledge", knowledge_changed, "sync_custom_knowledge"),
         ("syncing_custom_data", custom_data_changed, "sync_custom_data"),
-        ("syncing_custom_dashboards", dashboards_changed, "sync_custom_dashboards"),
         ("syncing_custom_tasks", tasks_changed, "sync_custom_tasks"),
         ("syncing_custom_files", files_changed, "sync_custom_files"),
         ("syncing_custom_secrets", secrets_changed, "sync_custom_secrets"),
@@ -895,7 +876,6 @@ def materialize_runtime_state(
             "guidance": "ready",
             "knowledge": "ready",
             "data": "ready",
-            "dashboards": "ready",
             "tasks": "ready",
             "files": "ready",
             "secrets": "ready",
@@ -925,7 +905,7 @@ def materialize_runtime_state(
             data_freshness="ready" if setup_ready else "partial",
         )
     logger.info(
-        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s dashboards_changed=%s tasks_changed=%s files_changed=%s secrets_changed=%s blacklist_changed=%s",
+        "Runtime reconcile complete: assistant=%s revision=%s integration_registry_changed=%s custom_changed=%s guidance_changed=%s contacts_changed=%s knowledge_changed=%s custom_data_changed=%s tasks_changed=%s files_changed=%s secrets_changed=%s blacklist_changed=%s",
         identity.assistant_id,
         revision[:16],
         integration_registry_changed,
@@ -934,7 +914,6 @@ def materialize_runtime_state(
         contacts_changed,
         knowledge_changed,
         custom_data_changed,
-        dashboards_changed,
         tasks_changed,
         files_changed,
         secrets_changed,
@@ -951,7 +930,6 @@ def materialize_runtime_state(
         contacts_changed=contacts_changed,
         knowledge_changed=knowledge_changed,
         custom_data_changed=custom_data_changed,
-        dashboards_changed=dashboards_changed,
         tasks_changed=tasks_changed,
         files_changed=files_changed,
         blacklist_changed=blacklist_changed,

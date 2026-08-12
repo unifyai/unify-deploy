@@ -1623,7 +1623,7 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
     )
     monkeypatch.setattr(
         vm_helpers_module,
-        "_delete_pool_dns_record",
+        "_delete_dns_a_record",
         lambda hostname: deleted_dns.append(hostname) or True,
     )
     monkeypatch.setattr(
@@ -1664,6 +1664,200 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
         ),
     }
     assert set(ubuntu_result["deleted_addresses"]) == {legacy_ip_name, preview_ip_name}
+
+
+class _FakeDnsChanges:
+    """Records one batched Cloud DNS change instead of applying it."""
+
+    def __init__(self, applied: list[list[str]], fail: bool):
+        self._applied = applied
+        self._fail = fail
+        self._pending: list[str] = []
+
+    def delete_record_set(self, record):
+        self._pending.append(record.name)
+
+    def create(self):
+        if self._fail:
+            raise RuntimeError("cloud dns rejected the change")
+        self._applied.append(list(self._pending))
+
+
+class _FakeDnsZone:
+    def __init__(self, records, applied: list[list[str]], fail: bool = False):
+        self._records = records
+        self._applied = applied
+        self._fail = fail
+
+    def list_resource_record_sets(self):
+        return list(self._records)
+
+    def changes(self):
+        return _FakeDnsChanges(self._applied, self._fail)
+
+
+def _dns_record(fqdn: str, record_type: str = "A"):
+    return SimpleNamespace(name=fqdn, record_type=record_type)
+
+
+def _assistant_address(assistant_id: str, *, operation_id: str | None = None):
+    labels = (
+        vm_helpers_module._assistant_rotation_labels(assistant_id, operation_id)
+        if operation_id
+        else vm_helpers_module.assistant_static_ip_labels(assistant_id)
+    )
+    name = (
+        vm_helpers_module.assistant_static_ip_rotation_name(assistant_id, operation_id)
+        if operation_id
+        else vm_helpers_module.assistant_static_ip_name(assistant_id)
+    )
+    return SimpleNamespace(name=name, labels=labels)
+
+
+def _install_assistant_dns_fixture(
+    monkeypatch,
+    *,
+    addresses_by_region: dict[str, list],
+    records,
+    fail: bool = False,
+) -> list[list[str]]:
+    """Wire a fake multi-region address estate and DNS zone; return applied batches."""
+
+    applied: list[list[str]] = []
+    address_client = MagicMock()
+    address_client.aggregated_list.return_value = [
+        (f"regions/{region}", SimpleNamespace(addresses=addresses))
+        for region, addresses in addresses_by_region.items()
+    ]
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.AddressesClient",
+        lambda: address_client,
+    )
+    dns_client = MagicMock()
+    dns_client.zone.return_value = _FakeDnsZone(records, applied, fail)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.dns.Client",
+        lambda project: dns_client,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_log_vm_pool_event",
+        lambda *_args, **_kwargs: None,
+    )
+    return applied
+
+
+def test_cleanup_orphaned_assistant_dns_keeps_owned_rotating_and_foreign_env(
+    monkeypatch,
+):
+    suffix = vm_helpers_module.SETTINGS.env_suffix
+    foreign_suffix = "-staging" if suffix != "-staging" else ""
+    orphan = f"unity-assistant-4001{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+    owned = f"unity-assistant-4002{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+    rotating = f"unity-assistant-4003{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+    foreign = f"unity-assistant-4004{foreign_suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+    pool = f"{vm_helpers_module._pool_vm_name('ubuntu', 1)}.{vm_helpers_module.DOMAIN_SUFFIX}."
+
+    applied = _install_assistant_dns_fixture(
+        monkeypatch,
+        addresses_by_region={
+            "us-central1": [_assistant_address("4002")],
+            # A rotating assistant owns only an operation-scoped candidate, in
+            # whichever region its desktop currently lives.
+            "europe-west2": [_assistant_address("4003", operation_id="op-7")],
+        },
+        records=[
+            _dns_record(orphan),
+            _dns_record(owned),
+            _dns_record(rotating),
+            _dns_record(foreign),
+            _dns_record(pool),
+            _dns_record(orphan, record_type="TXT"),
+        ],
+    )
+
+    result = vm_helpers_module.cleanup_orphaned_assistant_dns_records(apply=True)
+
+    assert applied == [[orphan]]
+    assert result["found"] == 1
+    assert result["deleted"] == [orphan.rstrip(".")]
+    assert result["candidates"] == [orphan.rstrip(".")]
+    assert result["errors"] == []
+
+
+def test_cleanup_orphaned_assistant_dns_keeps_records_of_unlabeled_addresses(
+    monkeypatch,
+):
+    """An address reserved before label repair landed still confers ownership.
+
+    Ownership would otherwise be invisible for those addresses and their live
+    records would read as orphans.
+    """
+
+    suffix = vm_helpers_module.SETTINGS.env_suffix
+    unlabeled = SimpleNamespace(
+        name=vm_helpers_module.assistant_static_ip_name("4006"),
+        labels={},
+    )
+    record = f"unity-assistant-4006{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+
+    applied = _install_assistant_dns_fixture(
+        monkeypatch,
+        addresses_by_region={"us-central1": [unlabeled]},
+        records=[_dns_record(record)],
+    )
+
+    result = vm_helpers_module.cleanup_orphaned_assistant_dns_records(apply=True)
+
+    assert applied == []
+    assert result["found"] == 0
+
+
+def test_cleanup_orphaned_assistant_dns_dry_run_reports_without_deleting(monkeypatch):
+    suffix = vm_helpers_module.SETTINGS.env_suffix
+    orphan = f"unity-assistant-4005{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}."
+
+    applied = _install_assistant_dns_fixture(
+        monkeypatch,
+        addresses_by_region={"us-central1": []},
+        records=[_dns_record(orphan)],
+    )
+
+    result = vm_helpers_module.cleanup_orphaned_assistant_dns_records()
+
+    assert applied == []
+    assert result["applied"] is False
+    assert result["candidates"] == [orphan.rstrip(".")]
+    assert result["deleted"] == []
+
+
+def test_cleanup_orphaned_assistant_dns_caps_and_reports_batch_failure(monkeypatch):
+    suffix = vm_helpers_module.SETTINGS.env_suffix
+    records = [
+        _dns_record(
+            f"unity-assistant-41{index:02d}{suffix}.{vm_helpers_module.DOMAIN_SUFFIX}.",
+        )
+        for index in range(4)
+    ]
+    applied = _install_assistant_dns_fixture(
+        monkeypatch,
+        addresses_by_region={"us-central1": []},
+        records=records,
+        fail=True,
+    )
+
+    result = vm_helpers_module.cleanup_orphaned_assistant_dns_records(
+        apply=True,
+        max_deletions=2,
+    )
+
+    assert applied == []
+    assert result["found"] == 4
+    assert result["truncated"] == 2
+    assert result["deleted"] == []
+    assert [error["resource"] for error in result["errors"]] == [
+        record.name.rstrip(".") for record in records[:2]
+    ]
 
 
 def test_pool_identity_parsers_accept_historical_prefixes_and_retired_suffixes(
@@ -1712,7 +1906,7 @@ def test_cleanup_deleted_pool_vm_network_resources_uses_historical_ip_name(
     deleted_dns = []
     monkeypatch.setattr(
         vm_helpers_module,
-        "_delete_pool_dns_record",
+        "_delete_dns_a_record",
         lambda hostname: deleted_dns.append(hostname) or True,
     )
     monkeypatch.setattr(

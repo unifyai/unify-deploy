@@ -23,7 +23,7 @@ def _spec(name: str, console_config: dict | None = None) -> DeploymentSpec:
 def _registry() -> dict[str, ClientDeploymentEntry]:
     console_config = {
         "version": "1",
-        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "layout": {"mode": "standard", "defaultTab": "canvas"},
     }
     return {
         "client_alpha": ClientDeploymentEntry(
@@ -71,18 +71,42 @@ def test_build_control_plane_plan_upserts_and_clears_assistant_targets():
         registry=_registry(),
     )
 
-    assert [op.assistant_id for op in operations] == ["1851", "1516"]
+    assert [(op.assistant_id, op.field) for op in operations] == [
+        ("1851", "console_config"),
+        ("1851", "deployment_target"),
+        ("1516", "console_config"),
+        ("1516", "deployment_target"),
+    ]
     assert operations[0].action == "upsert"
     assert operations[0].path == "/admin/assistant/1851"
     assert operations[0].payload == {
         "console_config": {
             "version": "1",
-            "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+            "layout": {"mode": "standard", "defaultTab": "canvas"},
         },
     }
-    assert operations[1].action == "clear"
-    assert operations[1].path == "/admin/assistant/1516"
-    assert operations[1].payload == {"console_config": None}
+    assert operations[2].action == "clear"
+    assert operations[2].path == "/admin/assistant/1516"
+    assert operations[2].payload == {"console_config": None}
+
+
+def test_build_control_plane_plan_protects_required_targets_only():
+    """The delete guard tracks what the deployments declare, reconcile by reconcile."""
+    registry = _registry()
+    registry["client_alpha"].mapping.targets[1].missing_ok = True
+
+    operations = reconcile.build_control_plane_plan(
+        environment="staging",
+        client="client_alpha",
+        registry=registry,
+    )
+
+    protection = {
+        op.assistant_id: op.payload["is_deployment_target"]
+        for op in operations
+        if op.field == "deployment_target"
+    }
+    assert protection == {"1851": True, "1516": False}
 
 
 def test_build_control_plane_plan_filters_by_assistant_id():
@@ -92,8 +116,8 @@ def test_build_control_plane_plan_filters_by_assistant_id():
         registry=_registry(),
     )
 
-    assert len(operations) == 1
-    assert operations[0].assistant_id == "1851"
+    assert {op.assistant_id for op in operations} == {"1851"}
+    assert [op.field for op in operations] == ["console_config", "deployment_target"]
 
 
 def test_build_control_plane_plan_filters_by_client():
@@ -103,9 +127,8 @@ def test_build_control_plane_plan_filters_by_client():
         registry=_registry(),
     )
 
-    assert len(operations) == 1
-    assert operations[0].client_name == "other_client"
-    assert operations[0].assistant_id == "999"
+    assert {op.client_name for op in operations} == {"other_client"}
+    assert {op.assistant_id for op in operations} == {"999"}
 
 
 def test_build_control_plane_plan_does_not_emit_task_execution_ops():
@@ -139,7 +162,7 @@ def test_build_control_plane_plan_does_not_emit_task_execution_ops():
     )
 
     assert all(op.field != "task_execution" for op in operations)
-    assert all(op.field == "console_config" for op in operations)
+    assert {op.field for op in operations} == {"console_config", "deployment_target"}
 
 
 def test_build_control_plane_plan_skips_environment_mismatch():
@@ -169,11 +192,8 @@ def test_apply_operations_patches_each_assistant(monkeypatch):
 
     responses = reconcile.apply_operations(operations)
 
-    assert len(responses) == 2
-    assert captured == [
-        (operations[0].path, operations[0].payload),
-        (operations[1].path, operations[1].payload),
-    ]
+    assert len(responses) == len(operations)
+    assert captured == [(op.path, op.payload) for op in operations]
 
 
 def test_apply_operations_posts_communication_operations(monkeypatch):
@@ -329,5 +349,12 @@ def test_apply_operations_keeps_missing_required_assistant_fatal(monkeypatch):
         payload={"console_config": {"version": "1"}},
     )
 
-    with pytest.raises(orchestra_client.OrchestraClientError):
+    with pytest.raises(RuntimeError) as excinfo:
         reconcile.apply_operations([operation])
+
+    message = str(excinfo.value)
+    assert "1851" in message
+    assert "client_alpha" in message
+    assert "routing_manifest.yaml" in message
+    assert "substitution" in message
+    assert isinstance(excinfo.value.__cause__, orchestra_client.OrchestraClientError)

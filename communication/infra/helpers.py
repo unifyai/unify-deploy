@@ -335,8 +335,7 @@ def build_unity_job_manifest(
         priority_class_name: Pod priority class. Defaults to
             ``unity-idle``.
         app_label: Value of the ``app`` label on both Job and pod
-            template. Defaults to ``unity``; dashboard-action jobs use
-            ``unity-dashboard-action``.
+            template. Defaults to ``unity``.
         extra_labels: Merged into Job ``metadata.labels`` (does NOT
             propagate to the pod template).
         extra_annotations: Merged into both Job
@@ -384,7 +383,6 @@ def build_unity_job_manifest(
     # Marking these optional keeps the pod up; browser meetings are simply
     # unavailable there rather than the whole assistant failing to start.
     optional_unity_secret_keys = {
-        "RECALL_API_KEY",
         "RECALL_RELAY_SECRET",
         # Only the tenants that pin browser egress to a region configure these.
         "UNITY_EGRESS_PROXY_SERVER",
@@ -397,15 +395,24 @@ def build_unity_job_manifest(
         # ANTHROPIC_API_KEY, like OPENROUTER_API_KEY below, is intentionally
         # NOT mounted: Claude models are reached through the broker's native
         # Anthropic leg, authenticated as the pod's own UNIFY_KEY.
-        "CARTESIA_API_KEY",
-        "DEEPGRAM_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "ELEVEN_API_KEY",
+        #
+        # CARTESIA_API_KEY, DEEPGRAM_API_KEY and ELEVEN_API_KEY are likewise NOT
+        # mounted: the voice STT/TTS plugins open their WebSocket through the
+        # broker sidecar's /voice/<provider> passthrough (see call.py
+        # _voice_broker_kwargs), so the runtime holds no voice key either.
+        #
+        # DEEPSEEK_API_KEY, OPENAI_API_KEY and VERTEXAI_CREDENTIALS are
+        # intentionally NOT mounted: like OPENROUTER/ANTHROPIC they are held only
+        # by the broker sidecar, so no tenant-controlled process holds them. None
+        # is used today -- every model (incl. gemini) resolves to an
+        # OpenRouter/Anthropic alias -- but they are kept (in the isolated
+        # container, not deleted) because these provider SDKs were used before
+        # and may be again. Reintroducing direct use needs a broker route for
+        # that provider, not just the parked key.
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
-        "OPENAI_API_KEY",
         # OPENROUTER_API_KEY is intentionally NOT mounted: the pod's OpenRouter
         # traffic goes through Orchestra's broker (UNILLM_LLM_GATEWAY_URL
         # below), authenticated as the pod's own UNIFY_KEY, so the raw provider
@@ -434,12 +441,15 @@ def build_unity_job_manifest(
         # stays on controllers / Cloud Run / reconcile jobs only.
         # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
         # writes go through /infra/assistant-jobs/* (admin key on comms).
-        "RECALL_API_KEY",
+        # RECALL_API_KEY and TAVILY_API_KEY are NOT mounted: both are reached
+        # through the broker sidecar's /proxy/<provider> header-swap, so the
+        # runtime holds neither. RECALL_RELAY_SECRET stays -- it signs the relay
+        # URL locally on the pod and has no broker leg yet.
+        #
         # Without this the pod builds no relay URL, so the bot is never told
         # where to push participant events and the assistant receives none --
         # no inbound chat, no speaker attribution, no roster.
         "RECALL_RELAY_SECRET",
-        "TAVILY_API_KEY",
         # Read by the agent-service (Node), which entrypoint.sh starts before
         # Python's SecretManager syncs anything, so these cannot come from the
         # Orchestra Secrets path the way brain's own settings do.
@@ -450,7 +460,6 @@ def build_unity_job_manifest(
         # the only thing stating where that endpoint leaves from; without it
         # egressPolicy.ts refuses the session rather than guess.
         "UNITY_EGRESS_PROXY_REGIONS",
-        "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",
     ):
@@ -516,7 +525,17 @@ def build_unity_job_manifest(
         # total, where one streamed call would occupy a slot for its whole
         # duration and every voice turn would pay the round trip.
         {"name": "UNILLM_LLM_GATEWAY_URL", "value": "http://127.0.0.1:8787/llm"},
-        # Console origin for user-facing links (canvas and dashboard views).
+        # Refuse the agent-service ``/exec`` command-execution endpoint on the
+        # pod. It runs as a process inside this container, so /exec would be
+        # arbitrary shell in the process that holds the platform secrets, and
+        # its only auth is this pod's UNIFY_KEY -- which in-process sandbox code
+        # reads straight from its own environment, so the check is no boundary.
+        # The pod never calls /exec (the actor's local shell runs in-process);
+        # only the remote desktop surfaces use it, and they run the agent-service
+        # on their own machine and leave this unset. See agent-service
+        # ``requireExecEnabled``.
+        {"name": "AGENT_SERVICE_DISABLE_EXEC", "value": "1"},
+        # Console origin for user-facing links (canvas views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
         # any per-environment configuration.
@@ -609,8 +628,32 @@ def build_unity_job_manifest(
             "name": key,
             "valueFrom": {"secretKeyRef": {"name": "unity-secrets", "key": key}},
         }
-        for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
+        # OPENROUTER/ANTHROPIC are brokered today. OPENAI/DEEPSEEK are parked
+        # here rather than in the runtime: unused now (models route via
+        # OpenRouter), but held in the key-isolated container so that if the
+        # OpenAI/DeepSeek SDKs are used again the credential is already off the
+        # tenant-controlled runtime. The broker does not read them until a route
+        # for that provider is added -- parking the key is not wiring it up.
+        for key in (
+            "OPENROUTER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "VERTEXAI_CREDENTIALS",
+            # Voice keys the sidecar reads for its /voice/<provider> WebSocket
+            # passthrough. Actively used (unlike the parked LLM keys above): the
+            # pod's STT/TTS plugins stream through the sidecar over loopback.
+            "CARTESIA_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "ELEVEN_API_KEY",
+            # REST keys the sidecar reads for its /proxy/<provider> header-swap.
+            "TAVILY_API_KEY",
+            "RECALL_API_KEY",
+        )
     )
+    # Recall's upstream host is region-scoped, so the sidecar needs the region
+    # (not a secret) to know where to forward. Plain value, mirrors the runtime.
+    broker_env_vars.append({"name": "RECALL_REGION", "value": "eu-central-1"})
 
     image_pull_policy = (
         "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"

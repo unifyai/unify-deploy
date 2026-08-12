@@ -20,7 +20,7 @@ def _staging_env(monkeypatch):
 
 def test_resolve_unify_company_operator_staging():
     # Only the brain-operator assistant receives this bundle (not the whole org).
-    target = resolve_client_bundle_target(assistant_id=7367)
+    target = resolve_client_bundle_target(assistant_id=8081)
     assert target is not None
     assert target.client_name == "unify_company"
     assert target.deployment == "default"

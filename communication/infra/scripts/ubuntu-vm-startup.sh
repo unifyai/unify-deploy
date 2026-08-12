@@ -16,7 +16,7 @@
 #   7. Start supervisord
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   hostname, orchestra-url, comms-url, unity-environment,
 #   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
@@ -103,13 +103,11 @@ apt-get install -y --no-install-recommends xdotool scrot wmctrl
 echo ""
 echo "Reading GCP metadata..."
 CONFIG_HOSTNAME=$(get_metadata "hostname")
-GITHUB_TOKEN=$(get_metadata "github-token")
 DEPLOY_ENV=$(get_deploy_env)
 TLS_FULLCHAIN=$(get_metadata "tls-fullchain")
 TLS_PRIVKEY=$(get_metadata "tls-privkey")
 
 echo "  Hostname:       ${CONFIG_HOSTNAME:-(not configured)}"
-echo "  GitHub Token:   ${GITHUB_TOKEN:+(set)}"
 echo "  Deploy Env:     ${DEPLOY_ENV}"
 echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 
@@ -269,13 +267,11 @@ echo "VNC default password configured"
 # =============================================================================
 # Build repo URLs
 # =============================================================================
-if [[ -n "$GITHUB_TOKEN" ]]; then
-    MAGNITUDE_URL="https://${GITHUB_TOKEN}@github.com/unifyai/magnitude.git"
-    UNITY_URL="https://${GITHUB_TOKEN}@github.com/unifyai/unity.git"
-else
-    MAGNITUDE_URL="https://github.com/unifyai/magnitude.git"
-    UNITY_URL="https://github.com/unifyai/unity.git"
-fi
+# Both repositories are public, so these clones are unauthenticated. Instance
+# metadata is readable by every process on the VM, so a credential placed there
+# to reach them would be available to all of them for nothing.
+MAGNITUDE_URL="https://github.com/unifyai/magnitude.git"
+UNITY_URL="https://github.com/unifyai/unity.git"
 case "$DEPLOY_ENV" in
     staging) UNITY_BRANCH="staging" ;;
     *) UNITY_BRANCH="main" ;;
@@ -289,7 +285,6 @@ echo "=== Updating Magnitude ==="
 
 if [[ -d "/magnitude/.git" ]]; then
     cd /magnitude
-    [[ -n "$GITHUB_TOKEN" ]] && git remote set-url origin "$MAGNITUDE_URL" 2>/dev/null || true
     git fetch --depth 1 origin main 2>&1 || true
     git reset --hard origin/main 2>&1 || true
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")

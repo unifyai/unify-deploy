@@ -18,7 +18,6 @@ from unify.knowledge_manager.custom_knowledge import (
     knowledge_titles_from_source,
 )
 from unify.data_manager.custom_data import list_data_table_contexts
-from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
 from unify.logger import LOGGER as logger
 from unify_deploy.timing import log_startup_timing
 from unify_deploy.utils.orchestra_client import OrchestraClientError, patch_json
@@ -140,7 +139,7 @@ def ensure_deployment_runtime(
         (
             "⏱️ [StartupTiming] unify_deploy.ensure_deployment_runtime resolved "
             "contacts=%d secrets_dirs=%d supplemental_secrets=%d guidance_dirs=%d "
-            "knowledge_claims=%d custom_data_tables=%d dashboard_entities=%d "
+            "knowledge_claims=%d custom_data_tables=%d "
             "tasks_dirs=%d files_dirs=%d blacklist_dirs=%d "
             "function_dirs=%d venv_dirs=%d integrations=%d"
         ),
@@ -154,10 +153,6 @@ def ensure_deployment_runtime(
             ),
         ),
         len(list_data_table_contexts(resolved.custom_data_dirs)),
-        sum(
-            len(names)
-            for names in list_dashboard_entity_ids(resolved.dashboards_dirs).values()
-        ),
         len(resolved.tasks_dirs),
         len(resolved.files_dirs),
         len(resolved.blacklist_dirs),

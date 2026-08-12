@@ -50,7 +50,7 @@ gcloud compute instances create my-windows-vm \
   --boot-disk-type=pd-ssd \
   --enable-display-device \
   --metadata-from-file=windows-startup-script-ps1=communication/infra/scripts/windows-vm-startup.ps1 \
-  --metadata=vnc-password=mypassword,hostname=vm.example.com,windows-username=unify,windows-password=SecurePass123,github-token=ghp_xxx,unify-key=xxx,orchestra-url=https://api.unify.ai
+  --metadata=vnc-password=mypassword,hostname=vm.example.com,windows-username=unify,windows-password=SecurePass123,unify-key=xxx,orchestra-url=https://api.unify.ai
 ```
 
 ## Time Comparison
@@ -75,7 +75,7 @@ gcloud compute instances create my-windows-vm \
 ## What Startup Script Configures
 
 - TightVNC Server (with password)
-- Magnitude & Agent Service repos (with github-token)
+- Magnitude & Agent Service repos (public, cloned without a credential)
 - Windows user + auto-logon
 - Agent Service .env (API keys)
 - Caddyfile (hostname)
