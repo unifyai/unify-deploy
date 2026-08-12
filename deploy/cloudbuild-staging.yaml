@@ -585,7 +585,7 @@ substitutions:
   _UNITY_COORDINATOR_EMAIL_ADDRESS: 'staging-twin@unify.ai'
   # Brain commit / branch installed into the overlay image (staging tracks main).
   # brain_operator: assistant id from Cloud Build substitutions.
-  _BRAIN_OPERATOR_ASSISTANT_ID: '7367'
+  _BRAIN_OPERATOR_ASSISTANT_ID: '8081'
 
 availableSecrets:
   secretManager:

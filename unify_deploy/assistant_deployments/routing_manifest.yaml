@@ -73,7 +73,7 @@ clients:
       staging:
         targets:
         - scope: assistant
-          scope_id: "7367"
+          scope_id: "8081"
           deployment: default
       production:
         targets:

@@ -32,10 +32,10 @@ def test_assistant_id_defaults_to_production_1406(monkeypatch):
     assert mod._operator_assistant_id() == "1406"
 
 
-def test_assistant_id_defaults_to_staging_7367(monkeypatch):
+def test_assistant_id_defaults_to_staging_8081(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
     mod = _reload()
-    assert mod._operator_assistant_id() == "7367"
+    assert mod._operator_assistant_id() == "8081"
 
 
 def test_assistant_id_unset_on_unknown_environment(monkeypatch):
