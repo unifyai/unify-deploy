@@ -88,6 +88,26 @@ def build_control_plane_plan(
                     missing_ok=target.missing_ok,
                 ),
             )
+            # A required target is one this client cannot run without, so
+            # Orchestra refuses to delete it. Deriving the flag from
+            # ``missing_ok`` on every reconcile keeps the protected set equal
+            # to what the deployments actually declare, and demoting a target
+            # to optional releases it again.
+            required = not target.missing_ok
+            operations.append(
+                ReconcileOperation(
+                    client_name=client_name,
+                    assistant_id=target_assistant_id,
+                    deployment=target.deployment,
+                    field="deployment_target",
+                    action="upsert" if required else "clear",
+                    path=_ASSISTANT_UPDATE_PATH.format(
+                        assistant_id=target_assistant_id,
+                    ),
+                    payload={"is_deployment_target": required},
+                    missing_ok=target.missing_ok,
+                ),
+            )
 
     return operations
 
