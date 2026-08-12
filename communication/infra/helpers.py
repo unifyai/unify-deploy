@@ -397,8 +397,12 @@ def build_unity_job_manifest(
         # ANTHROPIC_API_KEY, like OPENROUTER_API_KEY below, is intentionally
         # NOT mounted: Claude models are reached through the broker's native
         # Anthropic leg, authenticated as the pod's own UNIFY_KEY.
-        "CARTESIA_API_KEY",
-        "DEEPGRAM_API_KEY",
+        #
+        # CARTESIA_API_KEY, DEEPGRAM_API_KEY and ELEVEN_API_KEY are likewise NOT
+        # mounted: the voice STT/TTS plugins open their WebSocket through the
+        # broker sidecar's /voice/<provider> passthrough (see call.py
+        # _voice_broker_kwargs), so the runtime holds no voice key either.
+        #
         # DEEPSEEK_API_KEY, OPENAI_API_KEY and VERTEXAI_CREDENTIALS are
         # intentionally NOT mounted: like OPENROUTER/ANTHROPIC they are held only
         # by the broker sidecar, so no tenant-controlled process holds them. None
@@ -407,7 +411,6 @@ def build_unity_job_manifest(
         # container, not deleted) because these provider SDKs were used before
         # and may be again. Reintroducing direct use needs a broker route for
         # that provider, not just the parked key.
-        "ELEVEN_API_KEY",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "LIVEKIT_SIP_URI",
@@ -636,6 +639,12 @@ def build_unity_job_manifest(
             "OPENAI_API_KEY",
             "DEEPSEEK_API_KEY",
             "VERTEXAI_CREDENTIALS",
+            # Voice keys the sidecar reads for its /voice/<provider> WebSocket
+            # passthrough. Actively used (unlike the parked LLM keys above): the
+            # pod's STT/TTS plugins stream through the sidecar over loopback.
+            "CARTESIA_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "ELEVEN_API_KEY",
         )
     )
 
