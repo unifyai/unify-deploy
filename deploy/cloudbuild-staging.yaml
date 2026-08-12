@@ -49,11 +49,9 @@ steps:
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       --build-arg BRAIN_OPERATOR_ASSISTANT_ID=${_BRAIN_OPERATOR_ASSISTANT_ID} \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:$$SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_OVERLAY_REPO}/${_OVERLAY_IMAGE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['resolve-unity-sha']
 
   # Comms app (bundles unity.gateway; clones unity inside Dockerfile-comms).
@@ -69,11 +67,10 @@ steps:
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=staging \
+      --build-arg BRANCH_NAME=staging \
       --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_COMMS_REPO}/${_COMMS_SERVICE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
   # Adapters (does not bundle unity; inbound webhooks + infra control plane).
@@ -89,12 +86,10 @@ steps:
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg BRANCH_NAME=staging \
       --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ADAPTERS_REPO}/${_ADAPTERS_SERVICE}:latest .
-  secretEnv: ['GITHUB_TOKEN']
   waitFor: ['guard']
 
   # Assistant session controller (shares the comms repo + communication/ source).
@@ -129,13 +124,12 @@ steps:
 - name: 'gcr.io/cloud-builders/git'
   id: 'fetch-unity-integration-manifests'
   entrypoint: 'bash'
-  secretEnv: ['GITHUB_TOKEN']
   args:
   - '-c'
   - |
     set -euo pipefail
     SHA="$$(cat /workspace/unity_sha.txt)"
-    git clone --depth 1 --branch staging https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-manifest-src
+    git clone --depth 1 --branch staging https://github.com/unifyai/unify.git /workspace/unity-manifest-src
     if git -C /workspace/unity-manifest-src fetch --depth 1 origin "$$SHA"; then
       git -C /workspace/unity-manifest-src checkout --detach FETCH_HEAD
     fi
@@ -591,13 +585,11 @@ substitutions:
   _UNITY_COORDINATOR_EMAIL_ADDRESS: 'staging-twin@unify.ai'
   # Brain commit / branch installed into the overlay image (staging tracks main).
   # brain_operator: assistant id from Cloud Build substitutions.
-  _BRAIN_OPERATOR_ASSISTANT_ID: '7367'
+  _BRAIN_OPERATOR_ASSISTANT_ID: '8081'
 
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
-    env: 'GITHUB_TOKEN'
 
 timeout: '4800s'

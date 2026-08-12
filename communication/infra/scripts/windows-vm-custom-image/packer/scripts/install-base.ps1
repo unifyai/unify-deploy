@@ -16,7 +16,7 @@
 #
 # NOT INSTALLED (handled by startup script at instance boot):
 #   - TightVNC (needs password at install time)
-#   - Magnitude / Agent Service repos (needs github-token, staging flag)
+#   - Magnitude / Agent Service repos (public; staging flag selects branch)
 #   - Windows user setup / auto-logon
 #   - Caddyfile (needs hostname)
 #   - Agent Service .env (needs API keys)
@@ -595,7 +595,7 @@ Write-Host "  - RDP (port 3389) - always available for remote access"
 Write-Host ""
 Write-Host "NOT installed (handled by startup script at instance boot):" -ForegroundColor Yellow
 Write-Host "  - TightVNC Server (needs password)"
-Write-Host "  - Magnitude / Agent Service repos (needs github-token)"
+Write-Host "  - Magnitude / Agent Service repos (public, no credential)"
 Write-Host "  - Windows user / auto-logon (needs credentials)"
 Write-Host "  - Caddyfile (needs hostname)"
 Write-Host "  - Agent Service .env (needs API keys)"

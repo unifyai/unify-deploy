@@ -1,20 +1,20 @@
 FROM python:3.12-slim
 
 # Accept build arguments
-ARG GITHUB_TOKEN
 ARG BRANCH_NAME=main
 
-# Install system dependencies (git for private repo cloning)
+# Install system dependencies (git for cloning the dependency repos)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Configure git to use GITHUB_TOKEN for private repo authentication
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-
-# Clone and install unillm + unisdk (private dependencies).
+# The dependency repos are public, so these clones are unauthenticated. Do not
+# reintroduce a credential here: a build argument is recorded verbatim in the
+# metadata of every layer that follows it, and a token embedded in a clone URL
+# reaches the build log. If one of these ever goes private again, mount a
+# BuildKit secret for the single RUN that needs it rather than passing an ARG.
 RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unify && \
     pip install --no-cache-dir /tmp/unify
@@ -54,7 +54,7 @@ ARG UNITY_SHA=unknown
 # gateway imports actually requires them.
 RUN echo "UNITY_SHA=${UNITY_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
-    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unify.git /tmp/unity && \
     pip install --no-cache-dir --no-deps /tmp/unity && \
     pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
 

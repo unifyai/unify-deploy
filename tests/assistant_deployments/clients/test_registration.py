@@ -787,7 +787,7 @@ class TestUnifyCompanyRouting:
             "https://internal.example.com/v0",
         )
 
-        matched = resolve_from_deployments(assistant_id=7367)
+        matched = resolve_from_deployments(assistant_id=8081)
         assert matched is not None
         assert _guidance_titles(matched) >= {
             "CRM stage hygiene",
@@ -805,17 +805,17 @@ class TestUnifyCompanyRouting:
         )
 
         assert resolve_from_deployments(assistant_id=999) is not None
-        assert resolve_from_deployments(assistant_id=7367) is None
+        assert resolve_from_deployments(assistant_id=8081) is None
 
     def test_operator_target_is_assistant_scoped_default(self, monkeypatch):
         uc = self._reload_unify_company(
             monkeypatch,
             "https://internal.example.com/v0",
-            brain_operator_assistant_id="7367",
+            brain_operator_assistant_id="8081",
         )
         assert all(t.deployment == "default" for t in uc._MAPPING.targets)
         assert all(t.scope == "assistant" for t in uc._MAPPING.targets)
-        assert any(t.scope_id == "7367" for t in uc._MAPPING.targets)
+        assert any(t.scope_id == "8081" for t in uc._MAPPING.targets)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

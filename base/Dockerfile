@@ -10,29 +10,50 @@
 # host assets are the same bytes the canvas origin serves, so what the assistant
 # reviews is what a viewer sees.
 FROM node:22-slim AS canvas
-ARG GITHUB_TOKEN
 ARG BRANCH=main
 ARG CANVAS_BRANDING_SHA=unknown
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
 
 # CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
 # kit would be baked in indefinitely. Branch logic mirrors the dependency clones
-# below: main→main, everything else→staging. The second insteadOf covers the
-# packages/iso submodule, whose .gitmodules URL is SSH-form; without it the
-# submodule init cannot authenticate and the kit build loses @unity/iso.
-RUN echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
-    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
-    git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:" && \
+# below: main→main, everything else→staging.
+#
+# branding and its packages/iso submodule are private and are each read with
+# their own repo-scoped read-only deploy key. A deploy key authorises exactly
+# one repository and github binds the ssh session to the first key that
+# authenticates, so offering both on one connection would let whichever
+# answered first decide what the rest of the clone could reach. Each repository
+# therefore gets its own host alias bound to its own identity.
+#
+# The keys arrive as mounted secrets rather than build arguments: an argument is
+# recorded verbatim in the metadata of every layer that follows it, and a global
+# git config would persist the credential in the image itself. Both the aliases
+# and the rewrites are removed before the layer ends.
+RUN --mount=type=secret,id=branding_deploy_key \
+    --mount=type=secret,id=iso_deploy_key \
+    echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
+    install -m 600 /run/secrets/branding_deploy_key /tmp/k_branding && \
+    install -m 600 /run/secrets/iso_deploy_key /tmp/k_iso && \
+    mkdir -p /root/.ssh && printf '%s\n' \
+        "Host branding.gh" "  HostName github.com" "  User git" "  IdentityFile /tmp/k_branding" "  IdentitiesOnly yes" "  StrictHostKeyChecking accept-new" \
+        "Host iso.gh" "  HostName github.com" "  User git" "  IdentityFile /tmp/k_iso" "  IdentitiesOnly yes" "  StrictHostKeyChecking accept-new" \
+        > /root/.ssh/config && \
+    git config --global url."git@branding.gh:unifyai/branding".insteadOf "https://github.com/unifyai/branding" && \
+    git config --global url."git@iso.gh:unifyai/iso-animation".insteadOf "git@github.com:unifyai/iso-animation" && \
     chmod +x /tmp/install-canvas-toolchain.sh && \
     /tmp/install-canvas-toolchain.sh \
         --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
         --toolchain /opt/canvas-toolchain \
-        --host /opt/canvas-host && \
-    git config --global --unset-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+        --host /opt/canvas-host; \
+    status=$?; \
+    git config --global --unset-all url."git@branding.gh:unifyai/branding".insteadOf; \
+    git config --global --unset-all url."git@iso.gh:unifyai/iso-animation".insteadOf; \
+    rm -f /tmp/k_branding /tmp/k_iso /root/.ssh/config; \
+    exit $status
 
 
 # Use Python 3.12 slim image as base
@@ -40,7 +61,6 @@ FROM python:3.12-slim
 
 # Accept build arguments
 ARG UNIFY_KEY
-ARG GITHUB_TOKEN
 ARG BRANCH=main
 
 # Set working directory
@@ -70,8 +90,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 # Copy dependency files
 COPY pyproject.toml uv.lock ./
 
-# Configure git to use GITHUB_TOKEN for private repo authentication
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+# The dependency repositories cloned below are public, so no credential is
+# configured here. Only the canvas and system-source stages reach private
+# repositories, and each uses a repo-scoped deploy key.
 
 # Install PyTorch CPU-only first (smaller and faster for containers)
 RUN uv pip install --system --no-cache torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -110,12 +131,10 @@ WORKDIR /app
 # builds the unillm git dependency, which carries a private submodule
 # (.agents/global-rules -> github.com/unifyai/global-agent-rules).
 # `git submodule update --init` clones that over HTTPS and fails with
-# "could not read Username" if the token rewrite has already been unset.
-# The credentials are scrubbed immediately after the install (still before the
-# final image), preserving the security-best-practice posture.
+# "could not read Username" if a credential rewrite were needed here; the
+# dependencies this resolves are public, so none is configured.
 COPY . /app
-RUN uv pip install --system --no-cache . && \
-    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+RUN uv pip install --system --no-cache .
 
 # Link pre-built magnitude into the workspace (agent-service references ../magnitude)
 RUN ln -sfn /opt/magnitude magnitude
@@ -237,15 +256,26 @@ RUN mkdir -p /root/.vnc && chmod 777 /root /root/.vnc && \
 # credential rewrite is scoped to this single layer (set + unset), mirroring
 # the install step.
 ARG SYSTEM_REPOS_SHA=unknown
-RUN echo "system_repos_sha=${SYSTEM_REPOS_SHA}" && \
-    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+# orchestra and console are private and are read with their own repo-scoped
+# read-only deploy keys; docs is public and needs none. Both keys are offered
+# on one ssh invocation, so github resolves whichever is authorised for the
+# repository being cloned.
+RUN --mount=type=secret,id=orchestra_deploy_key \
+    --mount=type=secret,id=console_deploy_key \
+    echo "system_repos_sha=${SYSTEM_REPOS_SHA}" && \
+    install -m 600 /run/secrets/orchestra_deploy_key /tmp/k_orch && \
+    install -m 600 /run/secrets/console_deploy_key /tmp/k_con && \
     SRC_BRANCH=$([ "$BRANCH" = "main" ] && echo "main" || echo "staging") && \
     mkdir -p /opt/system-sources && \
-    for repo in orchestra console docs; do \
-        git clone --depth 1 --branch $SRC_BRANCH https://github.com/unifyai/$repo.git /opt/system-sources/$repo && \
+    for repo in orchestra console; do \
+        case "$repo" in orchestra) KEY=/tmp/k_orch ;; console) KEY=/tmp/k_con ;; esac; \
+        GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git clone --depth 1 --branch $SRC_BRANCH git@github.com:unifyai/$repo.git /opt/system-sources/$repo && \
         rm -rf /opt/system-sources/$repo/.git; \
     done && \
-    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf && \
+    git clone --depth 1 --branch $SRC_BRANCH https://github.com/unifyai/docs.git /opt/system-sources/docs && \
+    rm -rf /opt/system-sources/docs/.git && \
+    rm -f /tmp/k_orch /tmp/k_con && \
     chmod -R a-w /opt/system-sources
 
 # Create non-root user for runtime

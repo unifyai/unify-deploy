@@ -58,14 +58,14 @@ ORCHESTRA_ADMIN_KEY=… \
 # Staging
 ORCHESTRA_ADMIN_KEY=… \
   UNITY_COMMS_URL=https://service.a.run.app \
-  deploy/scripts/dev/restart_assistant.sh 7367 graceful
+  deploy/scripts/dev/restart_assistant.sh 8081 graceful
 
 # Every assistant mapped to a client bundle
 ORCHESTRA_ADMIN_KEY=… \
   deploy/scripts/dev/drain_bundle_assistants.sh unify_company production <sha>
 ```
 
-`unify_company` → assistant **1406** (production) / **7367** (staging).
+`unify_company` → assistant **1406** (production) / **8081** (staging).
 
 Canonical hosts:
 

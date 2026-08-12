@@ -393,7 +393,9 @@ def build_unity_job_manifest(
     }
     unity_secret_env = []
     for key in (
-        "ANTHROPIC_API_KEY",
+        # ANTHROPIC_API_KEY, like OPENROUTER_API_KEY below, is intentionally
+        # NOT mounted: Claude models are reached through the broker's native
+        # Anthropic leg, authenticated as the pod's own UNIFY_KEY.
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
         "DEEPSEEK_API_KEY",
@@ -403,11 +405,27 @@ def build_unity_job_manifest(
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
         "OPENAI_API_KEY",
-        # OpenRouter, like the other LLM provider keys, is mounted for the
-        # trusted runtime and stripped from every subprocess sandbox by
-        # ``build_sandbox_env`` (see provider_proxy.session). Sandbox LLM calls
-        # are RPC-brokered to the trusted parent, so user code never sees it.
-        "OPENROUTER_API_KEY",
+        # OPENROUTER_API_KEY is intentionally NOT mounted: the pod's OpenRouter
+        # traffic goes through Orchestra's broker (UNILLM_LLM_GATEWAY_URL
+        # below), authenticated as the pod's own UNIFY_KEY, so the raw provider
+        # key never enters a tenant-controlled pod at all.
+        #
+        # Scrubbing it from sandboxes was not enough. ``build_sandbox_env``
+        # covers subprocesses, and ``venv_runner`` brokers their LLM calls over
+        # RPC — but the default execute_code surface runs *in-process*, where
+        # ``execution_env`` hands user code the real ``unillm`` module inside
+        # the trusted parent, with os.environ intact. There is no subprocess to
+        # broker from and nothing to scrub, so a mounted key stays readable to
+        # the very code the scrub exists to contain. Absent, there is nothing
+        # to read: a compromised pod holds only its own spend-limited,
+        # attributable UNIFY_KEY.
+        #
+        # Both keys leave together only because both legs are proven: a live
+        # pod's brain calls were observed settling through the broker, and a
+        # real Claude completion was metered from its token counts at the
+        # catalogue rate. Neither key is removed on the strength of the route
+        # merely existing -- an earlier attempt did that and would have left
+        # pods with no route and no credential.
         # ORCHESTRA_ADMIN_KEY is intentionally NOT mounted: assistant pods
         # authenticate to Orchestra and the hosted gateway with their own
         # per-assistant UNIFY_KEY against ownership-scoped routes, so a
@@ -476,6 +494,27 @@ def build_unity_job_manifest(
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+        # Route the pod's OpenRouter traffic through Orchestra's server-side
+        # broker: unillm reads this and swaps api_base/api_key, authenticating
+        # as the pod's own UNIFY_KEY, and skips client-side deduction because
+        # the broker settles the spend. Derived from ORCHESTRA_URL — which
+        # already carries the ``/v0`` prefix — so it tracks the same
+        # per-environment host the pod is already proven to reach.
+        #
+        # Setting this alone changes only *where* the call goes, never whether
+        # it can be made: OPENROUTER_API_KEY stays mounted, so a broker that is
+        # missing or unhealthy is a routing failure to diagnose rather than an
+        # inference outage. Dropping the key is a separate step, and is safe
+        # only once brokered traffic is observed working in the environment —
+        # the platform default model routes through OpenRouter, so removing it
+        # early takes every assistant down with it.
+        # Points at the broker sidecar over pod loopback, not at Orchestra.
+        # Orchestra still holds the metering, and the sidecar calls it for
+        # that -- but the generation itself now goes pod -> provider without
+        # a hop through a service that serves 400 concurrent requests in
+        # total, where one streamed call would occupy a slot for its whole
+        # duration and every voice turn would pay the round trip.
+        {"name": "UNILLM_LLM_GATEWAY_URL", "value": "http://127.0.0.1:8787/llm"},
         # Console origin for user-facing links (canvas views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
@@ -550,6 +589,28 @@ def build_unity_job_manifest(
         ]
     env_vars = _merge_env_overrides(env_vars, extra_env)
 
+    # The broker sidecar's environment, kept deliberately small. It needs the
+    # provider credentials and somewhere to report spend, and nothing else:
+    # every additional variable here is one more thing sharing a process with
+    # the keys, which is the one property this container exists to hold.
+    #
+    # Sourced from the same Secret the runtime uses, because the boundary is
+    # the process, not the Secret -- what changes is which container's
+    # environment the value is read into.
+    # Sourced from the Secret directly rather than copied from the runtime's
+    # environment, because the runtime no longer has these to copy: they were
+    # removed from it precisely so no tenant-controlled process holds one.
+    broker_env_vars = [
+        entry for entry in env_vars if entry.get("name") == "ORCHESTRA_URL"
+    ]
+    broker_env_vars.extend(
+        {
+            "name": key,
+            "valueFrom": {"secretKeyRef": {"name": "unity-secrets", "key": key}},
+        }
+        for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
+    )
+
     image_pull_policy = (
         "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
     )
@@ -597,6 +658,17 @@ def build_unity_job_manifest(
                     "serviceAccountName": "assistant-runtime-sa",
                     "terminationGracePeriodSeconds": termination_grace_period_seconds,
                     "priorityClassName": (priority_class_name or "unity-idle"),
+                    # The separation between the runtime and the broker sidecar
+                    # is a process-namespace boundary, and this is the flag that
+                    # decides whether that boundary exists. Sharing the
+                    # namespace would put the broker's /proc -- and so the
+                    # provider credentials in its environment -- back within
+                    # reach of code running in the runtime container, which is
+                    # the thing the sidecar exists to prevent. False is also
+                    # Kubernetes' default; it is stated because a default is
+                    # not a decision, and nothing would fail loudly if it were
+                    # changed.
+                    "shareProcessNamespace": False,
                     "containers": [
                         {
                             "name": "unity-assistant",
@@ -617,16 +689,24 @@ def build_unity_job_manifest(
                             # Autopilot's 1:6.5 vCPU:memory ratio bumps CPU up
                             # at 16 GiB. At 8 GiB the requested 2 vCPU is
                             # honoured as-is, so this also drops effective CPU.
+                            # The broker sidecar's request is taken out of this
+                            # allocation rather than added to the pod, so the
+                            # pod still totals 2 vCPU / 8 GiB / 10 GiB and
+                            # Autopilot -- which bills per pod on requests --
+                            # charges exactly what it did before. What is spent
+                            # is headroom, not money: p999 CPU is 0.25 cores, so
+                            # 1.75 still leaves ~7x, and 7.5 GiB stays ~34% above
+                            # the 30-day maximum of 5.6 GiB rather than ~43%.
                             "resources": {
                                 "requests": {
-                                    "cpu": "2",
-                                    "memory": "8Gi",
-                                    "ephemeral-storage": "10Gi",
+                                    "cpu": "1750m",
+                                    "memory": "7680Mi",
+                                    "ephemeral-storage": "9Gi",
                                 },
                                 "limits": {
-                                    "cpu": "2",
-                                    "memory": "8Gi",
-                                    "ephemeral-storage": "10Gi",
+                                    "cpu": "1750m",
+                                    "memory": "7680Mi",
+                                    "ephemeral-storage": "9Gi",
                                 },
                             },
                             "volumeMounts": [
@@ -635,6 +715,74 @@ def build_unity_job_manifest(
                                     "mountPath": "/tmp",
                                 },
                             ],
+                        },
+                        # Holds the provider credentials so the runtime beside
+                        # it does not have to. Containers in a pod share a
+                        # network namespace but not a process one, so the
+                        # runtime can reach this over loopback and have it make
+                        # a call, while code running there cannot read this
+                        # process's environment to lift the key out and spend it
+                        # elsewhere. Scrubbing sandboxes could never achieve
+                        # that: the default execute_code surface runs in-process,
+                        # inside the runtime itself, with nothing to scrub.
+                        #
+                        # Runs the same image as the runtime, under a different
+                        # command. A second image would need its own build and
+                        # its own rollout, and could drift from the runtime it
+                        # is supposed to match.
+                        {
+                            "name": "llm-broker",
+                            "image": image,
+                            "imagePullPolicy": image_pull_policy,
+                            "command": ["python", "-m", "unify.llm_broker"],
+                            "env": broker_env_vars,
+                            # The pod's restartPolicy is Never, so a broker
+                            # that dies is gone for the rest of the pod's life
+                            # and every LLM call after it fails. Nothing can
+                            # restart it here, but a probe makes the pod say
+                            # so: without one the container reports Ready
+                            # whatever state it is in, and the symptom reaching
+                            # anyone is inference failing for no visible
+                            # reason.
+                            # Exec, not httpGet. The kubelet runs an httpGet
+                            # probe from the node and reaches the container by
+                            # pod IP, so it cannot see a listener bound to
+                            # loopback -- it reports connection refused however
+                            # healthy the broker is. Binding wider to satisfy
+                            # the probe would publish the broker on a
+                            # cluster-routable address, which is the one thing
+                            # this container must not do. An exec probe runs
+                            # inside the container, where loopback is the
+                            # broker.
+                            "readinessProbe": {
+                                "exec": {
+                                    "command": [
+                                        "python",
+                                        "-c",
+                                        (
+                                            "import urllib.request as u;"
+                                            "u.urlopen("
+                                            "'http://127.0.0.1:8787/healthz',"
+                                            "timeout=3)"
+                                        ),
+                                    ],
+                                },
+                                "initialDelaySeconds": 5,
+                                "periodSeconds": 10,
+                                "failureThreshold": 3,
+                            },
+                            "resources": {
+                                "requests": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                                "limits": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                            },
                         },
                     ],
                     "volumes": [

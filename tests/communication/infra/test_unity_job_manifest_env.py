@@ -58,13 +58,60 @@ def test_no_envFrom_bulk_secret_or_configmap_injection() -> None:
         assert "envFrom" not in container
 
 
-def test_openrouter_api_key_sourced_from_unity_secrets() -> None:
-    manifest = build_unity_job_manifest(job_name="openrouter-key-staging")
-    entry = _env_by_name(manifest)["OPENROUTER_API_KEY"]
-    assert entry["valueFrom"]["secretKeyRef"] == {
-        "name": "unity-secrets",
-        "key": "OPENROUTER_API_KEY",
-    }
+def test_openrouter_api_key_is_not_mounted_into_the_pod() -> None:
+    """The pod brokers OpenRouter, so it holds no OpenRouter credential.
+
+    Scrubbing the key from sandboxes did not contain it: the default
+    execute_code surface runs in-process, inside the trusted parent, with
+    os.environ intact and the real ``unillm`` module in scope. Keeping the
+    key out of the pod is what makes that surface uninteresting to reach.
+    """
+    assert "OPENROUTER_API_KEY" not in _env_by_name(
+        build_unity_job_manifest(job_name="openrouter-key-staging"),
+    )
+
+
+def test_llm_gateway_points_at_the_sidecar_over_loopback() -> None:
+    """The generation goes pod -> provider; only metering leaves the pod.
+
+    Previously this tracked ORCHESTRA_URL, which sent the bytes themselves
+    through a service that serves 400 concurrent requests in total -- one
+    streamed call held a slot for its whole duration, and every voice turn
+    paid the round trip. Loopback reaches the sidecar beside the runtime,
+    which holds the provider keys and calls Orchestra only to authorise and
+    to report what was spent.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="llm-gateway-staging"))
+
+    assert env["UNILLM_LLM_GATEWAY_URL"]["value"] == "http://127.0.0.1:8787/llm"
+
+
+def test_the_route_out_replaces_the_key_rather_than_accompanying_it() -> None:
+    """Removing the key is only safe while the broker route is configured.
+
+    These two move together and in this order: routing arrives first and is
+    verified, then the key goes. A manifest carrying neither strands every
+    OpenRouter call with no way to make it — the platform default model
+    routes through OpenRouter, so that is total inference loss, and it
+    would read as an unrelated env cleanup rather than the outage it is.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="gateway-swap-staging"))
+
+    assert "UNILLM_LLM_GATEWAY_URL" in env
+    assert "OPENROUTER_API_KEY" not in env
+
+
+def test_no_provider_billing_key_is_mounted_into_the_pod() -> None:
+    """Both providers are brokered, so the pod holds neither credential.
+
+    Named individually rather than checked as a set: each was removed only
+    once its own leg was proven end to end, and a future provider added to
+    the mount list should fail here until the same is true of it.
+    """
+    env = _env_by_name(build_unity_job_manifest(job_name="provider-keys-staging"))
+
+    assert "OPENROUTER_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
 
 
 def test_eventbus_orchestra_persist_allowlist_on_assistant_jobs() -> None:
@@ -426,20 +473,39 @@ def test_termination_grace_period_override() -> None:
     assert longer["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] == 120
 
 
-def test_container_resources_are_right_sized() -> None:
-    """Pins the 2 vCPU / 8 GiB / 10 GiB ephemeral shape applied in
-    the 2026-04 rightsizing. Tests against accidental regression to
-    the previous 2 vCPU / 16 GiB / 100 GiB shape (which was actually
-    billed as 2.46 vCPU on Autopilot's 1:6.5 ratio).
+def _millicores(value: str) -> int:
+    return int(value[:-1]) if value.endswith("m") else int(float(value) * 1000)
+
+
+def _mebibytes(value: str) -> int:
+    return int(value[:-2]) * (1024 if value.endswith("Gi") else 1)
+
+
+def test_pod_totals_the_right_sized_allocation() -> None:
+    """Pins what Autopilot actually bills: the sum across containers.
+
+    Autopilot charges a pod for the resources it requests, so the total is
+    the cost and any one container's share is an implementation detail. The
+    2 vCPU / 8 GiB / 10 GiB shape is the 2026-04 rightsizing; the earlier
+    2 vCPU / 16 GiB was billed as 2.46 vCPU under Autopilot's 1:6.5 ratio,
+    which is the regression this guards against.
+
+    Adding the broker sidecar deliberately did not move this number -- its
+    request came out of the runtime's headroom rather than onto the bill.
     """
-    resources = _container(build_unity_job_manifest(job_name="x"))["resources"]
-    expected = {
-        "cpu": "2",
-        "memory": "8Gi",
-        "ephemeral-storage": "10Gi",
-    }
-    assert resources["requests"] == expected
-    assert resources["limits"] == expected
+    containers = build_unity_job_manifest(job_name="x")["spec"]["template"]["spec"][
+        "containers"
+    ]
+
+    for field in ("requests", "limits"):
+        cpu = sum(_millicores(c["resources"][field]["cpu"]) for c in containers)
+        memory = sum(_mebibytes(c["resources"][field]["memory"]) for c in containers)
+        storage = sum(
+            _mebibytes(c["resources"][field]["ephemeral-storage"]) for c in containers
+        )
+        assert cpu == 2000, f"{field} cpu"
+        assert memory == 8 * 1024, f"{field} memory"
+        assert storage == 10 * 1024, f"{field} ephemeral-storage"
 
 
 def test_job_top_level_shape() -> None:
@@ -637,3 +703,85 @@ def test_workflows_dir_is_not_stamped_from_this_image() -> None:
     """
     manifest = build_unity_job_manifest(job_name="workflows-dir-staging")
     assert "UNITY_WORKFLOWS_DIR" not in _env_by_name(manifest)
+
+
+# ---------------------------------------------------------------------------
+# Provider-key broker sidecar
+# ---------------------------------------------------------------------------
+
+
+def _sidecar(manifest: dict) -> dict:
+    containers = manifest["spec"]["template"]["spec"]["containers"]
+    return next(c for c in containers if c["name"] == "llm-broker")
+
+
+def test_process_namespace_is_not_shared_with_the_sidecar() -> None:
+    """This flag is the boundary; without it the sidecar is decorative.
+
+    Sharing the namespace would put the broker's /proc — and the provider
+    credentials in its environment — back within reach of code running in
+    the runtime container, which is the entire thing it exists to prevent.
+    Kubernetes defaults it to false, but a default is not a decision and
+    flipping it would fail silently.
+    """
+    spec = build_unity_job_manifest(job_name="ns-staging")["spec"]["template"]["spec"]
+    assert spec["shareProcessNamespace"] is False
+
+
+def test_the_sidecar_runs_the_runtime_image_under_its_own_command() -> None:
+    """A second image would need its own build and could drift from the runtime."""
+    manifest = build_unity_job_manifest(job_name="sidecar-image-staging")
+    sidecar = _sidecar(manifest)
+    assert sidecar["image"] == _container(manifest)["image"]
+    assert sidecar["command"] == ["python", "-m", "unify.llm_broker"]
+
+
+def test_the_sidecar_carries_the_provider_credentials() -> None:
+    env = {
+        e["name"]: e for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        assert env[key]["valueFrom"]["secretKeyRef"]["key"] == key
+
+
+def test_the_sidecar_environment_stays_minimal() -> None:
+    """Every extra variable shares a process with the keys.
+
+    The sidecar needs credentials and somewhere to report spend. Anything
+    else widens what a compromise of it would yield, for no benefit.
+    """
+    env_names = {
+        e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    assert env_names == {"ORCHESTRA_URL", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}
+
+
+def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
+    """It brokers calls; it is not a second copy of the assistant.
+
+    UNIFY_KEY is the runtime's identity and is what Orchestra meters
+    against. The broker is handed one per request by its caller, so holding
+    a standing copy would only add a credential to the blast radius.
+    """
+    env_names = {
+        e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
+    }
+    assert "UNIFY_KEY" not in env_names
+
+
+def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
+    """restartPolicy is Never, so a dead broker cannot recover -- only report.
+
+    The probe must exec inside the container. An httpGet probe is run by the
+    kubelet from the node and reaches a container by pod IP, so it cannot see
+    the broker's loopback-bound listener and fails however healthy the broker
+    is -- staging showed exactly that. Binding wider to satisfy it would
+    publish the broker on a cluster-routable address, which is the one thing
+    this container must not do.
+    """
+    probe = _sidecar(build_unity_job_manifest(job_name="probe-staging"))[
+        "readinessProbe"
+    ]
+
+    assert "httpGet" not in probe
+    assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])

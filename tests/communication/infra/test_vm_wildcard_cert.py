@@ -70,7 +70,6 @@ class TestPoolVmWildcardCert:
             return {
                 "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
                 "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
-                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
             }.get(name)
 
         mock_get_secret.side_effect = _secret
@@ -97,8 +96,6 @@ class TestPoolVmWildcardCert:
         mock_addr,
     ):
         def _secret(name, **kw):
-            if name == "DEVBOT_GITHUB_TOKEN":
-                return "ghp_fake"
             return None
 
         mock_get_secret.side_effect = _secret
@@ -128,7 +125,6 @@ class TestPoolVmWildcardCert:
             return {
                 "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
                 "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
-                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
             }.get(name)
 
         mock_get_secret.side_effect = _secret
@@ -160,7 +156,6 @@ class TestPoolVmWildcardCert:
             return {
                 "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
                 "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
-                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
             }.get(name)
 
         mock_get_secret.side_effect = _secret
@@ -201,8 +196,6 @@ class TestPoolVmWildcardCert:
         mock_addr,
     ):
         def _secret(name, **kw):
-            if name == "DEVBOT_GITHUB_TOKEN":
-                return "ghp_fake"
             return None
 
         mock_get_secret.side_effect = _secret
@@ -234,7 +227,6 @@ class TestPoolVmWildcardCert:
             return {
                 "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
                 "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
-                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
             }.get(name)
 
         mock_get_secret.side_effect = _secret

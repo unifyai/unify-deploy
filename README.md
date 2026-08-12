@@ -310,6 +310,41 @@ Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_A
 
 `VM_WILDCARD_FULLCHAIN` / `VM_WILDCARD_PRIVKEY` in `gcp-project-vms` Secret Manager (see §6).
 
+### 7.4 OpenRouter API keys (LLM spend inventory)
+
+OpenRouter is the only route to OpenAI-family models (see `AGENTS.md`) and the largest single spend surface in the estate. These keys are not a fourth secret plane — they are credentials distributed across §7.1 and §7.2 — but they rotate on their own cadence and are listed here because nothing else maps key → secret slot → consumer.
+
+The production OpenRouter account is **`shared@unify.ai`** ("Shared Account"), *not* `dan@unify.ai` (a separate, empty personal account — the two live in different Chrome profiles). All mint / rotate / cap / rename operations run programmatically against `https://openrouter.ai/api/v1/keys` with the management key in `OPENROUTER_MANAGEMENT_API_KEY` (`gcp-project-runtime`); no browser needed. `PATCH /api/v1/keys/{hash}` is a true partial update — omitted fields keep their values.
+
+| Key name | Hash | Cap | Held in | Consumer |
+|---|---|---|---|---|
+| `unify-prod-gateway-2026-08-11` | `e09094a1` | $10,000/mo | `OPENROUTER_API_KEY` (gcp-project-runtime) + `ORCHESTRA_OPENROUTER_API_KEY` (saas) | **Production** — assistant pods + Orchestra |
+| `unify-staging-runtime` | `ea72ed20` | $4,000/mo | `OPENROUTER_API_KEY_STAGING` (gcp-project-runtime) | Staging assistant pods |
+| `unify-staging-orchestra` | `fb0ea371` | $4,000/mo | `ORCHESTRA_OPENROUTER_API_KEY_STAGING` (saas) | Staging Orchestra + trigger worker |
+| `unify-ci-orchestra-repo` | `4f5e1fc5` | $500/mo | GH secret `OPENROUTER_API_KEY_CI` | `unifyai/orchestra` CI |
+| `unify-ci-unify-repo` | `39e621a9` | $1,000/mo | GH secret `OPENROUTER_CI_API_KEY` | `unifyai/unify` CI |
+| `unify-ci-unillm-repo` | `b2d9f264` | $500/mo | GH secret `OPENROUTER_API_KEY` | `unifyai/unillm` CI |
+| `unify-canary-DO-NOT-DEPLOY` | `1ee9a059` | $100/mo | `OPENROUTER_CANARY_KEY` (gcp-project-runtime) | **Nothing — tripwire.** See below |
+| `unify-production-RETIRED-2026-08-11` | `cfcba7cb` | disabled | — | Was production 2026-08-10 → 08-11 |
+| `Default` | `d6370f6a` | disabled | — | Compromised; disabled 2026-08-10 at $32,381.27 |
+
+CI secret names are deliberately inconsistent across repos (`OPENROUTER_API_KEY_CI` / `OPENROUTER_CI_API_KEY` / `OPENROUTER_API_KEY`) — that is the live state, not a typo. Match by repo, not by name.
+
+**The canary is a detection control, not a spare.** `unify-canary-DO-NOT-DEPLOY` exists only as a Secret Manager entry and is deployed to no pod or service. If it ever shows usage, someone is reading Secret Manager directly; if it stays at $0 while deployed keys burn, the exposure is pod-environment access. Never deploy it.
+
+**To identify which key a secret currently holds** (the fastest way to answer "what is production actually using?"), hash the secret and match it against the `hash` field from `GET /api/v1/keys`:
+
+```bash
+gcloud secrets versions access latest --secret=OPENROUTER_API_KEY --project=gcp-project-runtime | tr -d '\n' | shasum -a 256
+```
+
+Every key this estate deploys uses `limit_reset: monthly`, so a cap can throttle spend but can never cause a permanent silent outage. Keep it that way when minting: a one-time ceiling on a production key is an outage with a countdown on it.
+
+**⚠️ Known loose ends:**
+
+- **`MCP: OpenRouter MCP: Claude Code (openrouter)`** (`e104bdd3`, $5 cap, $0 used) was auto-minted by an MCP integration on 2026-08-10 and is unattributed. Harmless, but it belongs to someone — attribute it or delete it.
+- Per-key caps across the eight active keys sum to **$20,105/month** of theoretical headroom. There is no account-level cap, so that sum is the real ceiling — and the retired `cfcba7cb` still carries a $40,000 cap that would count toward it if anyone re-enabled the key.
+
 ---
 
 ## 8. CI/CD: Cloud Build, GitHub Actions, branches
@@ -334,9 +369,46 @@ Each build clones `unity` (matching branch), overlays this package, pushes to Ar
 - **console:** `ghcr-selfhost.yml` (→ `ghcr.io/unifyai/console-selfhost`), `code-quality.yml`, `security.yml`.
 - **unillm:** `pypi.yml` (publish on tag).
 
+### The assistant image is built in two stages, and the first one is manual
+
+This is the single most surprising thing about this pipeline, and it is easy to lose hours to. **A push to `unity` does not put that code on assistant pods.** Pods resolve their image from a GCS pointer, and reaching that pointer takes two builds:
+
+| Stage | Trigger | Fires | Writes |
+|---|---|---|---|
+| 1. Base | `unity-base-staging-private` / `unity-base-production-private` | **Manual only** (`gcloud builds triggers run … --branch=staging\|main`) | `unity-base*` image, and the baked commit to `gs://bucket/unity_base_sha[_staging].txt` |
+| 2. Overlay | `unity-deploy-staging` / `unity-deploy` | On push to this repo | Overlay image, `gs://bucket/image_hash[_staging].txt`, comms deploy, idle-pool refresh |
+
+Stage 1 clones `unity` at the branch (`_UNITY_REF`, default `main`) and is what actually picks up new brain code. It has **no push trigger** — nothing runs it automatically, so `unity` commits sit unshipped until someone runs it. `unity/deploy/REBUILD_MARKER.md` exists only to nudge this along; it changes `unity`'s SHA and nothing else.
+
+Symptom of forgetting: a `unity` build reports SUCCESS, no image appears under that commit, and pods keep running the old code. Read the two pointers before believing anything else:
+
+```bash
+gsutil cat gs://bucket/unity_base_sha_staging.txt   # what the base image baked
+gsutil cat gs://bucket/image_hash_staging.txt       # what pods actually run
+```
+
 ### Branch promotion
 
 Land changes on `staging`, let staging deploy/validate, then promote `staging` → `main`. Never merge a feature branch directly into `main`/`master`.
+
+**When a change spans `unity` and this repo, the order is not interchangeable.** The pod manifest lives here; the code its containers run lives in `unity`. Promote this repo first and production spawns pods whose manifest references code the image does not contain — and because such changes usually also remove the thing the old shape relied on (a provider key, an env var), there is no fallback: every new pod fails, and `restartPolicy: Never` means each one stays failed.
+
+```
+1. unity        → main
+2. run unity-base-production-private --branch=main
+3. verify the image really contains the change (below)
+4. unity-deploy → main
+```
+
+Step 3 is not ceremony. Verifying against a local checkout is not verifying what ships — run the new base image and import the thing you added:
+
+```bash
+kubectl run img-check -n production --rm -i --restart=Never \
+  --image=us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-base:<sha> \
+  -- python -c "import unify.llm_broker; print('present')"
+```
+
+This ordering was learned the hard way on 2026-08-11: this repo reached `main` ahead of `unity` while landing the broker sidecar, leaving production one build away from every new pod crashlooping with no provider keys. It was caught by chance mid-deploy, not by any check — nothing in CI enforces the ordering, which is why it is written down here.
 
 ---
 

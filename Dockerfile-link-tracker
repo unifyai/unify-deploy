@@ -1,16 +1,16 @@
 FROM python:3.12-slim
 
-ARG GITHUB_TOKEN
 ARG BRANCH_NAME=main
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
-RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 # unisdk is the only Orchestra dependency this service needs; the redirect must
-# stay small enough to start fast and simple enough to reason about.
+# stay small enough to start fast and simple enough to reason about. unisdk is
+# public, so this clone is unauthenticated — do not reintroduce a credential
+# here (see Dockerfile-comms for why a build argument is the wrong shape).
 RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unisdk.git /tmp/unisdk && \
     pip install --no-cache-dir /tmp/unisdk

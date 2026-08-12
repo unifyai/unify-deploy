@@ -556,16 +556,11 @@ function Invoke-Update {
 
     Stop-AgentService
 
-    $githubToken = (Get-Metadata "github-token").Trim()
     $deployEnv = Get-DeployEnv
 
-    if ($githubToken) {
-        $magnitudeUrl = "https://${githubToken}@github.com/unifyai/magnitude.git"
-        $unityUrl = "https://${githubToken}@github.com/unifyai/unity.git"
-    } else {
-        $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
-        $unityUrl = "https://github.com/unifyai/unity.git"
-    }
+    # Both repositories are public, so these clones are unauthenticated.
+    $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
+    $unityUrl = "https://github.com/unifyai/unity.git"
     $unityBranch = switch ($deployEnv) {
         "staging" { "staging" }
         default { "main" }
@@ -597,7 +592,6 @@ function Invoke-Update {
         Write-Log "Magnitude updating ($magSaved -> $magRemote)"
         if (Test-Path "$magnitudeDir\.git") {
             Push-Location $magnitudeDir
-            if ($githubToken) { git remote set-url origin $magnitudeUrl 2>$null }
             git fetch --depth 1 origin main 2>&1
             git reset --hard origin/main 2>&1
             $commit = (git rev-parse --short=12 HEAD 2>&1)
@@ -706,7 +700,7 @@ function Invoke-Update {
             Save-CommitHash $agentServiceDir $commit
             Write-Log "Agent Service cloned (commit: $commit)"
         } else {
-            Write-Log "WARNING: Agent Service clone failed (check github-token metadata)"
+            Write-Log "WARNING: Agent Service clone failed"
         }
         if (Test-Path $tmpDir) {
             cmd /c "rmdir /s /q `"$tmpDir`"" 2>&1 | Out-Null

@@ -58,7 +58,7 @@ def test_assistants_for_bundle_unify_company():
         bundle_key="unify_company",
         environment="staging",
     )
-    assert "7367" in ids_staging
+    assert "8081" in ids_staging
 
 
 @pytest.mark.asyncio
