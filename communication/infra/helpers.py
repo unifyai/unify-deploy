@@ -516,6 +516,16 @@ def build_unity_job_manifest(
         # total, where one streamed call would occupy a slot for its whole
         # duration and every voice turn would pay the round trip.
         {"name": "UNILLM_LLM_GATEWAY_URL", "value": "http://127.0.0.1:8787/llm"},
+        # Refuse the agent-service ``/exec`` command-execution endpoint on the
+        # pod. It runs as a process inside this container, so /exec would be
+        # arbitrary shell in the process that holds the platform secrets, and
+        # its only auth is this pod's UNIFY_KEY -- which in-process sandbox code
+        # reads straight from its own environment, so the check is no boundary.
+        # The pod never calls /exec (the actor's local shell runs in-process);
+        # only the remote desktop surfaces use it, and they run the agent-service
+        # on their own machine and leave this unset. See agent-service
+        # ``requireExecEnabled``.
+        {"name": "AGENT_SERVICE_DISABLE_EXEC", "value": "1"},
         # Console origin for user-facing links (canvas and dashboard views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
