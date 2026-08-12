@@ -183,6 +183,7 @@ from common.adapter_auth import (
     require_admin_or_user_key,
     require_assistant_ownership,
 )
+from common.assistant_lookup import assistant_may_start_runtime
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -3079,6 +3080,17 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             "success": True,
             "status": "skipped",
             "reason": "destination_membership_revoked",
+        }
+    if not await asyncio.to_thread(assistant_may_start_runtime, assistant_data):
+        logger.info(
+            "Skipping task_due delivery for assistant %s because its account may "
+            "not start metered runtime work while spending free credit",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "payment_required",
         }
 
     assistant_id = assistant_data["assistant_id"]
