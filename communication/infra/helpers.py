@@ -384,7 +384,6 @@ def build_unity_job_manifest(
     # Marking these optional keeps the pod up; browser meetings are simply
     # unavailable there rather than the whole assistant failing to start.
     optional_unity_secret_keys = {
-        "RECALL_API_KEY",
         "RECALL_RELAY_SECRET",
         # Only the tenants that pin browser egress to a region configure these.
         "UNITY_EGRESS_PROXY_SERVER",
@@ -443,12 +442,15 @@ def build_unity_job_manifest(
         # stays on controllers / Cloud Run / reconcile jobs only.
         # SHARED_UNIFY_KEY is intentionally NOT mounted: AssistantJobs
         # writes go through /infra/assistant-jobs/* (admin key on comms).
-        "RECALL_API_KEY",
+        # RECALL_API_KEY and TAVILY_API_KEY are NOT mounted: both are reached
+        # through the broker sidecar's /proxy/<provider> header-swap, so the
+        # runtime holds neither. RECALL_RELAY_SECRET stays -- it signs the relay
+        # URL locally on the pod and has no broker leg yet.
+        #
         # Without this the pod builds no relay URL, so the bot is never told
         # where to push participant events and the assistant receives none --
         # no inbound chat, no speaker attribution, no roster.
         "RECALL_RELAY_SECRET",
-        "TAVILY_API_KEY",
         # Read by the agent-service (Node), which entrypoint.sh starts before
         # Python's SecretManager syncs anything, so these cannot come from the
         # Orchestra Secrets path the way brain's own settings do.
@@ -645,8 +647,14 @@ def build_unity_job_manifest(
             "CARTESIA_API_KEY",
             "DEEPGRAM_API_KEY",
             "ELEVEN_API_KEY",
+            # REST keys the sidecar reads for its /proxy/<provider> header-swap.
+            "TAVILY_API_KEY",
+            "RECALL_API_KEY",
         )
     )
+    # Recall's upstream host is region-scoped, so the sidecar needs the region
+    # (not a secret) to know where to forward. Plain value, mirrors the runtime.
+    broker_env_vars.append({"name": "RECALL_REGION", "value": "eu-central-1"})
 
     image_pull_policy = (
         "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
