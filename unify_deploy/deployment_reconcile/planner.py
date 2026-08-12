@@ -36,10 +36,6 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
         knowledge_titles_from_source,
     )
     from unify.data_manager.custom_data import list_data_table_contexts
-
-    from unify.dashboard_manager.custom_dashboards import list_dashboard_entity_ids
-
-    dashboard_entities = list_dashboard_entity_ids(resolved.dashboards_dirs)
     from unify.task_scheduler.custom_tasks import collect_tasks_from_directories
     from unify.file_manager.custom_files import collect_files_from_directories
 
@@ -52,9 +48,6 @@ def _runtime_summary(resolved: Any) -> dict[str, Any]:
         "knowledge_dirs": len(resolved.knowledge_dirs),
         "custom_data_tables": list_data_table_contexts(resolved.custom_data_dirs),
         "custom_data_dirs": len(resolved.custom_data_dirs),
-        "dashboard_tiles": dashboard_entities["tiles"],
-        "dashboard_layouts": dashboard_entities["layouts"],
-        "dashboards_dirs": len(resolved.dashboards_dirs),
         "tasks_dirs": len(resolved.tasks_dirs),
         "custom_tasks": len(collect_tasks_from_directories(resolved.tasks_dirs)),
         "files_dirs": len(resolved.files_dirs),

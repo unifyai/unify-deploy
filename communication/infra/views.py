@@ -34,7 +34,6 @@ from .runtime_clients import (
 )
 from .desktop_ready import publish_desktop_ready
 from .task_execution import router as task_execution_router
-from .dashboard_actions import router as dashboard_actions_router
 from .drain import router as drain_router
 from .drain import admission_blocked as assistant_admission_blocked
 from .assistant_sessions import (
@@ -219,7 +218,6 @@ async def _publish_desktop_ready(
 
 router = APIRouter()
 router.include_router(task_execution_router)
-router.include_router(dashboard_actions_router)
 router.include_router(drain_router)
 
 # Routes a pod may call for its OWN assistant are attached to

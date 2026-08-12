@@ -39,7 +39,7 @@ def test_sync_console_config_repairs_assistant_console_config(monkeypatch):
 
     console_config = {
         "version": "1",
-        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "layout": {"mode": "standard", "defaultTab": "canvas"},
     }
     hook._sync_console_config(123, console_config)
 
@@ -83,7 +83,6 @@ def _resolved_startup_spec():
         guidance_dirs=[],
         knowledge_dirs=[],
         custom_data_dirs=[],
-        dashboards_dirs=[],
         tasks_dirs=[],
         files_dirs=[],
         secrets=[],

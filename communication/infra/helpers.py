@@ -335,8 +335,7 @@ def build_unity_job_manifest(
         priority_class_name: Pod priority class. Defaults to
             ``unity-idle``.
         app_label: Value of the ``app`` label on both Job and pod
-            template. Defaults to ``unity``; dashboard-action jobs use
-            ``unity-dashboard-action``.
+            template. Defaults to ``unity``.
         extra_labels: Merged into Job ``metadata.labels`` (does NOT
             propagate to the pod template).
         extra_annotations: Merged into both Job
@@ -477,7 +476,7 @@ def build_unity_job_manifest(
         {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
         {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
-        # Console origin for user-facing links (canvas and dashboard views).
+        # Console origin for user-facing links (canvas views).
         # Derived from the deploy environment like the artifact bucket below,
         # so links point at the Console that can actually serve them without
         # any per-environment configuration.

@@ -23,7 +23,7 @@ def _spec(name: str, console_config: dict | None = None) -> DeploymentSpec:
 def _registry() -> dict[str, ClientDeploymentEntry]:
     console_config = {
         "version": "1",
-        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "layout": {"mode": "standard", "defaultTab": "canvas"},
     }
     return {
         "client_alpha": ClientDeploymentEntry(
@@ -77,7 +77,7 @@ def test_build_control_plane_plan_upserts_and_clears_assistant_targets():
     assert operations[0].payload == {
         "console_config": {
             "version": "1",
-            "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+            "layout": {"mode": "standard", "defaultTab": "canvas"},
         },
     }
     assert operations[1].action == "clear"

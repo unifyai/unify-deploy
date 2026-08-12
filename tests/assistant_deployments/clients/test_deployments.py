@@ -138,7 +138,7 @@ class TestDeploymentStructure:
 
         layout = cfg.get("layout")
         assert isinstance(layout, dict)
-        assert layout.get("mode") in {"standard", "dashboard-centric"}
+        assert layout.get("mode") == "standard"
         if "defaultTab" in layout:
             assert isinstance(layout["defaultTab"], str)
 

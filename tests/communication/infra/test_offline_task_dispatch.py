@@ -226,7 +226,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
         run_key="offline:scheduled:assistant-123:101:abc123def456:once",
         job_name="unity-task-execution-abc123def456",
         offline_env={
-            "UNITY_OFFLINE_TASK_MODE": "actor",
+            "UNITY_OFFLINE_TASK_WAKE": "scheduled",
             "ASSISTANT_ID": "123",
             "UNIFY_KEY": "secret-key",
         },
@@ -266,12 +266,12 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     # Credentials must never appear inline in the pod spec.
     inline_env_names = {var["name"] for var in container["env"]}
     assert "UNIFY_KEY" not in inline_env_names
-    assert "UNITY_OFFLINE_TASK_MODE" not in inline_env_names
+    assert "UNITY_OFFLINE_TASK_WAKE" not in inline_env_names
 
     secret_body = core_api.create_namespaced_secret.call_args.kwargs["body"]
     assert secret_body.metadata.name == "unity-task-execution-abc123def456"
     assert secret_body.string_data["UNIFY_KEY"] == "secret-key"
-    assert secret_body.string_data["UNITY_OFFLINE_TASK_MODE"] == "actor"
+    assert secret_body.string_data["UNITY_OFFLINE_TASK_WAKE"] == "scheduled"
 
     # The Job adopts the Secret so both garbage-collect together.
     owner_patch = core_api.patch_namespaced_secret.call_args.kwargs["body"]
@@ -1098,7 +1098,6 @@ def test_offline_runner_env_carries_agentic_execution_without_function_id():
         job_name="unity-assistant-abc",
     )
 
-    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
     assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
     assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Daily summary"
 
@@ -1116,7 +1115,6 @@ def test_offline_runner_env_carries_symbolic_function_id():
         job_name="unity-assistant-abc",
     )
 
-    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
     assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
 

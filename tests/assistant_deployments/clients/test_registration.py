@@ -655,7 +655,7 @@ class TestIsolatedResolution:
 
         console_config = {
             "version": "1",
-            "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+            "layout": {"mode": "standard", "defaultTab": "canvas"},
             "tabs": {"hidden": ["memory", "secrets"]},
         }
         spec = _make_spec(
