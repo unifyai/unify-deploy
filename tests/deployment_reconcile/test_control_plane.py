@@ -329,5 +329,12 @@ def test_apply_operations_keeps_missing_required_assistant_fatal(monkeypatch):
         payload={"console_config": {"version": "1"}},
     )
 
-    with pytest.raises(orchestra_client.OrchestraClientError):
+    with pytest.raises(RuntimeError) as excinfo:
         reconcile.apply_operations([operation])
+
+    message = str(excinfo.value)
+    assert "1851" in message
+    assert "client_alpha" in message
+    assert "routing_manifest.yaml" in message
+    assert "substitution" in message
+    assert isinstance(excinfo.value.__cause__, orchestra_client.OrchestraClientError)

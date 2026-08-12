@@ -154,19 +154,41 @@ def apply_operations(operations: list[ReconcileOperation]) -> list[dict[str, Any
                 )
             else:
                 responses.append(patch_json(operation.path, operation.payload))
-        except OrchestraClientError as exc:
-            if not (operation.missing_ok and exc.status_code == 404):
+        except (OrchestraClientError, httpx.HTTPStatusError) as exc:
+            status_code = (
+                exc.status_code
+                if isinstance(exc, OrchestraClientError)
+                else exc.response.status_code
+            )
+            if status_code != 404:
                 raise
-            reason = f"assistant target {operation.assistant_id} not found"
-            missing_optional_assistants.add(operation.assistant_id)
-            skip_missing(operation, reason)
-        except httpx.HTTPStatusError as exc:
-            if not (operation.missing_ok and exc.response.status_code == 404):
-                raise
+            if not operation.missing_ok:
+                raise RuntimeError(_missing_required_target(operation)) from exc
             reason = f"assistant target {operation.assistant_id} not found"
             missing_optional_assistants.add(operation.assistant_id)
             skip_missing(operation, reason)
     return responses
+
+
+def _missing_required_target(operation: ReconcileOperation) -> str:
+    """Explain a vanished required target in terms of the edit that fixes it.
+
+    A required target is one its client declares it cannot run without, so a
+    missing assistant row stops the deploy. The id is recorded in several
+    places that have to agree, and naming them here is the difference between
+    a bare 404 and a message someone can act on.
+    """
+    return (
+        f"Deployment target assistant {operation.assistant_id} does not exist "
+        f"in Orchestra (client {operation.client_name!r}, deployment "
+        f"{operation.deployment!r}, field {operation.field!r}). This target is "
+        "required, so reconciliation stops rather than deploying a client with "
+        "no assistant behind it. Either recreate the assistant, or repoint the "
+        "client at a live one by updating its id everywhere the deployment "
+        "records it: the client's own operator-id mapping, "
+        "unify_deploy/assistant_deployments/routing_manifest.yaml, and this "
+        "environment's Cloud Build assistant-id substitution."
+    )
 
 
 def _post_communication_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
