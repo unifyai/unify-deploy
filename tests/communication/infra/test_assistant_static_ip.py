@@ -1,6 +1,7 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import NotFound
@@ -77,16 +78,82 @@ def test_release_assistant_static_ip_is_idempotent_and_checks_ownership():
     assistant_id = "assistant-123"
     client = MagicMock()
     client.get.side_effect = [_address(assistant_id), NotFound("missing")]
+    dns_delete = MagicMock(side_effect=[True, False])
 
-    with patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client):
-        assert vm_helpers.release_assistant_static_ip(assistant_id) is True
-        assert vm_helpers.release_assistant_static_ip(assistant_id) is False
+    with (
+        patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client),
+        patch.object(vm_helpers, "_delete_dns_a_record", dns_delete),
+    ):
+        assert vm_helpers.release_assistant_static_ip(assistant_id) == {
+            "released": True,
+            "dns_deleted": True,
+        }
+        assert vm_helpers.release_assistant_static_ip(assistant_id) == {
+            "released": False,
+            "dns_deleted": False,
+        }
 
     client.delete.assert_called_once_with(
         project=vm_helpers.SETTINGS.vm_project_id,
         region=vm_helpers.SETTINGS.vm_region,
         address=vm_helpers.assistant_static_ip_name(assistant_id),
     )
+    # A release whose address is already gone still reaps the record, so a
+    # partial release cannot strand one forever.
+    hostname = vm_helpers.get_dns_hostname(assistant_id)
+    assert dns_delete.call_args_list == [call(hostname), call(hostname)]
+
+
+def test_release_assistant_static_ip_deletes_dns_before_address():
+    """The record must go first, or a failed address delete strands it.
+
+    With the address deleted first, its ``NotFound`` short-circuit on the retry
+    returns before the record is ever considered.
+    """
+
+    assistant_id = "assistant-123"
+    order: list[str] = []
+
+    def delete_address(**_):
+        order.append("address")
+        return MagicMock()
+
+    def delete_record(hostname: str) -> bool:
+        order.append("dns")
+        return True
+
+    client = MagicMock()
+    client.get.return_value = _address(assistant_id)
+    client.delete.side_effect = delete_address
+
+    with (
+        patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client),
+        patch.object(vm_helpers, "_delete_dns_a_record", delete_record),
+    ):
+        vm_helpers.release_assistant_static_ip(assistant_id)
+
+    assert order == ["dns", "address"]
+
+
+def test_release_assistant_static_ip_keeps_record_of_foreign_address():
+    assistant_id = "assistant-123"
+    foreign = _address(assistant_id)
+    foreign.labels = {
+        **vm_helpers.assistant_static_ip_labels("someone-else"),
+    }
+    client = MagicMock()
+    client.get.return_value = foreign
+    dns_delete = MagicMock()
+
+    with (
+        patch.object(vm_helpers.compute_v1, "AddressesClient", return_value=client),
+        patch.object(vm_helpers, "_delete_dns_a_record", dns_delete),
+        pytest.raises(ValueError),
+    ):
+        vm_helpers.release_assistant_static_ip(assistant_id)
+
+    dns_delete.assert_not_called()
+    client.delete.assert_not_called()
 
 
 def _vm_with_external_ip(name: str, ip: str) -> SimpleNamespace:
@@ -241,14 +308,21 @@ def test_assistant_static_ip_routes_reconcile_read_and_release():
             return_value={**state, "created": True},
         ),
         patch.object(views, "get_assistant_static_ip", return_value=state),
-        patch.object(views, "release_assistant_static_ip", return_value=True),
+        patch.object(
+            views,
+            "release_assistant_static_ip",
+            return_value={"released": True, "dns_deleted": True},
+        ),
     ):
         reconcile = client.post(
             "/infra/vm/assistant-static-ip/reconcile",
             json={"assistant_id": "assistant-123"},
         )
         read = client.get("/infra/vm/assistant-static-ip/assistant-123")
-        release = client.delete("/infra/vm/assistant-static-ip/assistant-123")
+        release = client.delete(
+            "/infra/vm/assistant-static-ip/assistant-123",
+            params={"region": "us-central1"},
+        )
 
     assert reconcile.status_code == 200
     assert reconcile.json()["created"] is True
@@ -257,6 +331,7 @@ def test_assistant_static_ip_routes_reconcile_read_and_release():
         "assistant_id": "assistant-123",
         "name": vm_helpers.assistant_static_ip_name("assistant-123"),
         "released": True,
+        "dns_deleted": True,
     }
 
 

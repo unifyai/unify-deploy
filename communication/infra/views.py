@@ -97,9 +97,11 @@ from .observability import (
     push_causal_context,
 )
 from .vm_helpers import (
+    ORPHANED_ASSISTANT_DNS_MAX_DELETIONS,
     AssistantDiskInUseError,
     attach_assistant_static_ip_to_pool_vm,
     assistant_static_ip_name,
+    cleanup_orphaned_assistant_dns_records,
     complete_pool_vm_release,
     finalize_assistant_static_ip_rotation,
     get_dns_hostname,
@@ -3016,7 +3018,7 @@ async def release_assistant_static_ip_endpoint(
     """Idempotently release an assistant-owned regional GCP address."""
 
     try:
-        released = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             release_assistant_static_ip,
             assistant_id,
             region=region,
@@ -3026,7 +3028,8 @@ async def release_assistant_static_ip_endpoint(
     return AssistantStaticIPReleaseResponse(
         assistant_id=assistant_id,
         name=assistant_static_ip_name(assistant_id),
-        released=released,
+        released=result["released"],
+        dns_deleted=result["dns_deleted"],
     )
 
 
@@ -4175,6 +4178,25 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
         all_regions=True,
     )
     return result
+
+
+@router.post("/vm/assistant-static-ip/reconcile-orphan-dns")
+async def cleanup_orphaned_assistant_dns_endpoint(
+    apply: bool = False,
+    max_deletions: int = ORPHANED_ASSISTANT_DNS_MAX_DELETIONS,
+):
+    """Delete ``unity-assistant-*`` A records whose owning address is gone.
+
+    Release deletes an assistant's record with its address, so this only has
+    work to do for releases that predate that pairing or died between the two
+    deletes. ``apply=false`` (default) reports candidates without touching the
+    zone. Only this deploy environment's records are ever considered.
+    """
+    return await asyncio.to_thread(
+        cleanup_orphaned_assistant_dns_records,
+        apply=apply,
+        max_deletions=max_deletions,
+    )
 
 
 @router.post("/vm/pool/reap-inactive-regions")
