@@ -399,13 +399,19 @@ def build_unity_job_manifest(
         # Anthropic leg, authenticated as the pod's own UNIFY_KEY.
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
-        "DEEPSEEK_API_KEY",
+        # DEEPSEEK_API_KEY, OPENAI_API_KEY and VERTEXAI_CREDENTIALS are
+        # intentionally NOT mounted: like OPENROUTER/ANTHROPIC they are held only
+        # by the broker sidecar, so no tenant-controlled process holds them. None
+        # is used today -- every model (incl. gemini) resolves to an
+        # OpenRouter/Anthropic alias -- but they are kept (in the isolated
+        # container, not deleted) because these provider SDKs were used before
+        # and may be again. Reintroducing direct use needs a broker route for
+        # that provider, not just the parked key.
         "ELEVEN_API_KEY",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
         "LIVEKIT_SIP_URI",
         "LIVEKIT_URL",
-        "OPENAI_API_KEY",
         # OPENROUTER_API_KEY is intentionally NOT mounted: the pod's OpenRouter
         # traffic goes through Orchestra's broker (UNILLM_LLM_GATEWAY_URL
         # below), authenticated as the pod's own UNIFY_KEY, so the raw provider
@@ -450,7 +456,6 @@ def build_unity_job_manifest(
         # the only thing stating where that endpoint leaves from; without it
         # egressPolicy.ts refuses the session rather than guess.
         "UNITY_EGRESS_PROXY_REGIONS",
-        "VERTEXAI_CREDENTIALS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",
     ):
@@ -619,7 +624,19 @@ def build_unity_job_manifest(
             "name": key,
             "valueFrom": {"secretKeyRef": {"name": "unity-secrets", "key": key}},
         }
-        for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
+        # OPENROUTER/ANTHROPIC are brokered today. OPENAI/DEEPSEEK are parked
+        # here rather than in the runtime: unused now (models route via
+        # OpenRouter), but held in the key-isolated container so that if the
+        # OpenAI/DeepSeek SDKs are used again the credential is already off the
+        # tenant-controlled runtime. The broker does not read them until a route
+        # for that provider is added -- parking the key is not wiring it up.
+        for key in (
+            "OPENROUTER_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "VERTEXAI_CREDENTIALS",
+        )
     )
 
     image_pull_policy = (
