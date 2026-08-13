@@ -3046,7 +3046,7 @@ def test_delete_handler_deletes_secret_after_runtime_cleanup_completes(monkeypat
     update_status.assert_called_once()
     core_api.delete_namespaced_secret.assert_called_once_with(
         name="assistant-session-bootstrap-1207",
-        namespace=controller.WATCH_NAMESPACE,
+        namespace=f"{controller.WATCH_NAMESPACE}-sessions",
     )
 
 
