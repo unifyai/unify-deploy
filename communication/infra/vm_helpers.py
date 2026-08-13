@@ -1610,6 +1610,13 @@ def probe_vm_agent_service_authenticated(
 
     This is stricter than plain HTTPS reachability: it proves the agent
     process is up and accepts the key that the session expects.
+
+    Unlike :func:`probe_vm_agent_service`, TLS is verified here: the request
+    carries the session's bearer token to a command-execution endpoint, so
+    the certificate has to prove the host is the VM we assigned. Pool VMs
+    serve the pre-issued ``*.vm.unify.ai`` wildcard pushed through instance
+    metadata, so a verification failure means the VM never received that
+    cert — which is a VM that is not ready, not a probe to loosen.
     """
     if not api_key:
         return False
@@ -1619,7 +1626,6 @@ def probe_vm_agent_service_authenticated(
             headers={"Authorization": f"Bearer {api_key}"},
             json={"command": "echo assistant-session-ready", "timeout": 5000},
             timeout=timeout,
-            verify=False,
         )
         return 200 <= resp.status_code < 300
     except requests.RequestException:

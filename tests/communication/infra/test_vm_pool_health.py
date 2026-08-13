@@ -2332,3 +2332,56 @@ def test_reconcile_records_delete_race_as_error(monkeypatch):
     assert result["deleted"] == 0
     assert len(result["errors"]) == 1
     assert result["errors"][0]["disk"] == "unity-disk-racing-staging"
+
+
+def test_authenticated_probe_verifies_tls(monkeypatch):
+    """The bearer token must only go out over a verified TLS connection.
+
+    ``/api/exec`` runs commands on the VM, so a probe that skipped
+    verification would hand the session key to whatever answers the DNS name.
+    """
+    captured = {}
+
+    def _fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(vm_helpers_module.requests, "post", _fake_post)
+
+    assert vm_helpers_module.probe_vm_agent_service_authenticated(
+        "unity-pool-ubuntu-2.vm.unify.ai",
+        "session-key-123",
+    )
+
+    assert captured["url"].startswith("https://")
+    assert captured["kwargs"].get("verify", True) is True
+    assert captured["kwargs"]["headers"]["Authorization"] == "Bearer session-key-123"
+
+
+def test_authenticated_probe_not_ready_when_tls_untrusted(monkeypatch):
+    """A VM missing the wildcard cert reads as not-ready, not as an error."""
+
+    def _fake_post(*_args, **_kwargs):
+        raise vm_helpers_module.requests.exceptions.SSLError("self-signed certificate")
+
+    monkeypatch.setattr(vm_helpers_module.requests, "post", _fake_post)
+
+    assert not vm_helpers_module.probe_vm_agent_service_authenticated(
+        "unity-pool-ubuntu-2.vm.unify.ai",
+        "session-key-123",
+    )
+
+
+def test_authenticated_probe_skips_request_without_key(monkeypatch):
+    """No key means nothing to verify — do not touch the VM at all."""
+
+    def _fake_post(*_args, **_kwargs):
+        raise AssertionError("probe must not call the VM without an api_key")
+
+    monkeypatch.setattr(vm_helpers_module.requests, "post", _fake_post)
+
+    assert not vm_helpers_module.probe_vm_agent_service_authenticated(
+        "unity-pool-ubuntu-2.vm.unify.ai",
+        "",
+    )
