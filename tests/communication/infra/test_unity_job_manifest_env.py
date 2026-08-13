@@ -797,12 +797,35 @@ def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
     assert "UNIFY_KEY" not in env_names
 
 
-def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
-    """A broker that is up but not serving fails every call for no visible reason.
+def test_the_runtime_does_not_start_before_the_broker_serves() -> None:
+    """Only a startupProbe sequences a sidecar against the containers after it.
 
-    The probe also gates startup: the runtime container does not begin until
-    a sidecar reports Ready, so the first LLM call cannot race the broker's
-    boot.
+    A sidecar does not have to exit for the pod to proceed -- that rule is for
+    ordinary init containers -- so without this the kubelet moves on as soon
+    as the broker process exists and the runtime can issue its first LLM call
+    before anything is listening. A readinessProbe cannot stand in: on an init
+    container it decides the pod's ready state and nothing about sequencing.
+    """
+    probe = _sidecar(build_unity_job_manifest(job_name="startup-staging"))[
+        "startupProbe"
+    ]
+
+    assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])
+    # The boot budget, and the point at which a hung broker is restarted
+    # instead of waited on forever.
+    assert probe["periodSeconds"] * probe["failureThreshold"] == 60
+
+
+def test_a_broker_that_stops_answering_is_restarted_rather_than_reported() -> None:
+    """A sidecar can be restarted, so reporting is no longer the best it can do.
+
+    The process exiting is already covered by the container's own
+    restartPolicy; what nothing else notices is a broker still running and no
+    longer answering. A readinessProbe would set the pod's ready state and
+    nothing else -- no Service selects these pods and nothing in the control
+    plane reads that condition -- so it would report a broken broker to no
+    one. It was the right probe only while the broker was an ordinary
+    container that could not be restarted.
 
     The probe must exec inside the container. An httpGet probe is run by the
     kubelet from the node and reaches a container by pod IP, so it cannot see
@@ -811,9 +834,11 @@ def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
     publish the broker on a cluster-routable address, which is the one thing
     this container must not do.
     """
-    probe = _sidecar(build_unity_job_manifest(job_name="probe-staging"))[
-        "readinessProbe"
-    ]
+    sidecar = _sidecar(build_unity_job_manifest(job_name="probe-staging"))
+    probe = sidecar["livenessProbe"]
 
+    assert "readinessProbe" not in sidecar
     assert "httpGet" not in probe
     assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])
+    # Half a minute unresponsive before a restart lands mid-flight.
+    assert probe["periodSeconds"] * probe["failureThreshold"] == 30
