@@ -1,4 +1,70 @@
 ---
+# ── Bootstrap Secret isolation (k8s-secret-bypass fix) ────────────────────────
+# Per-session bootstrap Secrets move here, out of `production`, so actor pods can
+# read their own bootstrap WITHOUT read access to production Secrets (unity-secrets
+# / comm-sa key / ORCHESTRA_ADMIN_KEY). See epic artifact `k8s-secret-bypass-fix`.
+# Writer = comms-app as comm-sa (GCP cluster-admin, needs no Role here); controller
+# reads + GC-deletes via its KSA; actor pods GET their own Secret by exact name only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production-sessions
+  labels:
+    app: unity
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bootstrap-reader
+  namespace: production-sessions
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-bootstrap-reader
+  namespace: production-sessions
+subjects:
+- kind: ServiceAccount
+  name: assistant-runtime-sa
+  namespace: production          # cross-namespace subject: pod SA lives in production
+roleRef:
+  kind: Role
+  name: bootstrap-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bootstrap-manager
+  namespace: production-sessions
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: controller-bootstrap-manager
+  namespace: production-sessions
+subjects:
+- kind: ServiceAccount
+  name: assistant-session-controller
+  namespace: production
+roleRef:
+  kind: Role
+  name: bootstrap-manager
+  apiGroup: rbac.authorization.k8s.io
+# PHASE 2 (apply only after the fleet has drained onto the new pod image and no
+# bootstrap Secret remains in `production`): drop the pod SA's `production` secret
+# read by rebinding `assistant-runtime-sa` to a minimal Role identical to
+# `assistant-session-runtime` MINUS the `secrets` rule. That is the step that
+# actually closes the bypass; keeping it separate avoids breaking in-flight reads.
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

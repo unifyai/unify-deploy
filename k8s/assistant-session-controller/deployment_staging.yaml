@@ -1,4 +1,64 @@
 ---
+# ── Bootstrap Secret isolation (k8s-secret-bypass fix) — staging twin ──────────
+# See the production manifest for the rationale. Bootstrap Secrets move to
+# `staging-sessions`; actor pods GET their own Secret there without `staging` access.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging-sessions
+  labels:
+    app: unity
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bootstrap-reader
+  namespace: staging-sessions
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-bootstrap-reader
+  namespace: staging-sessions
+subjects:
+- kind: ServiceAccount
+  name: assistant-runtime-sa
+  namespace: staging
+roleRef:
+  kind: Role
+  name: bootstrap-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bootstrap-manager
+  namespace: staging-sessions
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: controller-bootstrap-manager
+  namespace: staging-sessions
+subjects:
+- kind: ServiceAccount
+  name: assistant-session-controller
+  namespace: staging
+roleRef:
+  kind: Role
+  name: bootstrap-manager
+  apiGroup: rbac.authorization.k8s.io
+# PHASE 2 (after drain): drop the pod SA's `staging` secret read (rebind
+# assistant-runtime-sa to a minimal Role without the `secrets` rule).
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
