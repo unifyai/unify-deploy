@@ -186,13 +186,18 @@ def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
     monkeypatch.setattr(SETTINGS, "orchestra_url", "https://orchestra.test")
 
     calls: list[tuple[str, str, dict]] = []
+    # Every call is bounded, so one hung upstream costs a single assistant
+    # rather than stalling the cron until Cloud Run 504s the whole sweep.
+    timeouts: list[float | None] = []
 
-    def fake_put(url, json, headers):
+    def fake_put(url, json, headers, timeout=None):
         calls.append(("PUT", url, json))
+        timeouts.append(timeout)
         return _Resp(404, "missing")
 
-    def fake_post(url, json, headers):
+    def fake_post(url, json, headers, timeout=None):
         calls.append(("POST", url, json))
+        timeouts.append(timeout)
         return _Resp(201, "created")
 
     from adapters import main
@@ -222,6 +227,7 @@ def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
             {"secret_name": "FAKE_ACCESS_TOKEN", "secret_value": "token"},
         ),
     ]
+    assert timeouts and all(t for t in timeouts), "secret writes must be bounded"
 
 
 def test_store_refreshed_oauth_secrets_fails_on_persistence_error(monkeypatch):

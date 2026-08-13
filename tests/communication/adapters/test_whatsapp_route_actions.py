@@ -486,6 +486,10 @@ def test_recording_complete_updates_session_and_publishes_session_fields(monkeyp
     )
     published = _FakePubSub()
     monkeypatch.setattr(main, "get_pubsub_client", lambda: published)
+    # The handler offers every recording to the phone session first and only
+    # falls back to WhatsApp when that finds nothing. A WhatsApp room has no
+    # phone session, so None is what production answers here.
+    monkeypatch.setattr(main, "update_phone_call_session", lambda _payload: None)
 
     with TestClient(main.app) as client:
         response = client.post(
@@ -532,6 +536,7 @@ def test_recording_complete_omits_the_anchor_when_livekit_does_not_report_it(
             "is_job_running": False,
         },
     )
+    monkeypatch.setattr(main, "update_phone_call_session", lambda _payload: None)
     monkeypatch.setattr(main, "update_whatsapp_call_session", lambda payload: payload)
     published = _FakePubSub()
     monkeypatch.setattr(main, "get_pubsub_client", lambda: published)
