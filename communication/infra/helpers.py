@@ -713,6 +713,141 @@ def build_unity_job_manifest(
                     # not a decision, and nothing would fail loudly if it were
                     # changed.
                     "shareProcessNamespace": False,
+                    # Holds the provider credentials so the runtime beside it
+                    # does not have to. Containers in a pod share a network
+                    # namespace but not a process one, so the runtime can reach
+                    # this over loopback and have it make a call, while code
+                    # running there cannot read this process's environment to
+                    # lift the key out and spend it elsewhere. Scrubbing
+                    # sandboxes could never achieve that: the default
+                    # execute_code surface runs in-process, inside the runtime
+                    # itself, with nothing to scrub.
+                    #
+                    # Runs the same image as the runtime, under a different
+                    # command. A second image would need its own build and its
+                    # own rollout, and could drift from the runtime it is
+                    # supposed to match.
+                    #
+                    # Declared as a *native sidecar* -- an init container
+                    # carrying its own restartPolicy -- rather than an ordinary
+                    # container, because this pod is a Job. A Job pod completes
+                    # only once every ordinary container has exited, and a
+                    # broker is a proxy with no exit condition: it never
+                    # returns. As an ordinary container it therefore held every
+                    # finished runtime pod open until the 12-hour maintenance
+                    # sweep reaped the Job, which at one point was 38 of the 60
+                    # running pods in production doing nothing but holding their
+                    # requests. The kubelet terminates sidecars for us once the
+                    # runtime container exits, so the pod completes on its own.
+                    #
+                    # The same declaration is what makes a dying broker
+                    # survivable: a sidecar's restartPolicy is its own, so this
+                    # one is restarted even though the pod's is Never, where an
+                    # ordinary container that died was gone for the rest of the
+                    # pod's life and failed every LLM call after it.
+                    "initContainers": [
+                        {
+                            "name": "llm-broker",
+                            "image": image,
+                            "imagePullPolicy": image_pull_policy,
+                            "command": ["python", "-m", "unify.llm_broker"],
+                            "env": broker_env_vars,
+                            "restartPolicy": "Always",
+                            # What actually gates the runtime container's
+                            # start. A sidecar does not have to exit for the
+                            # pod to proceed -- that rule is for ordinary init
+                            # containers -- so without this the kubelet moves
+                            # on as soon as the broker *process* exists, and
+                            # the runtime can issue its first LLM call before
+                            # anything is listening on 8787. A readinessProbe
+                            # cannot close that window: on an init container it
+                            # decides the pod's ready state and nothing about
+                            # sequencing.
+                            #
+                            # failureThreshold x periodSeconds is the boot
+                            # budget; past it the kubelet restarts the
+                            # container, which for a broker that has hung is
+                            # the right answer.
+                            "startupProbe": {
+                                "exec": {
+                                    "command": [
+                                        "python",
+                                        "-c",
+                                        (
+                                            "import urllib.request as u;"
+                                            "u.urlopen("
+                                            "'http://127.0.0.1:8787/healthz',"
+                                            "timeout=3)"
+                                        ),
+                                    ],
+                                },
+                                "periodSeconds": 2,
+                                "failureThreshold": 30,
+                            },
+                            # And once it is serving, this restarts it if it
+                            # stops. A container whose process exits is already
+                            # restarted by the policy above; what nothing else
+                            # notices is a broker still running but no longer
+                            # answering, which fails every LLM call for no
+                            # visible reason.
+                            #
+                            # Liveness rather than readiness because a sidecar
+                            # can be restarted. A readinessProbe here would set
+                            # the pod's ready state and nothing else -- no
+                            # Service selects these pods and nothing in the
+                            # control plane reads that condition, so it would
+                            # report a broken broker to no one. It was the
+                            # right probe only while the broker was an ordinary
+                            # container that could not be restarted.
+                            #
+                            # Three failures at ten seconds, so a broker has to
+                            # be unresponsive for half a minute before it is
+                            # killed mid-flight; healthz touches nothing, so
+                            # failing it means the event loop is blocked, which
+                            # is the condition worth restarting for. The
+                            # startupProbe above suspends this until the broker
+                            # has served once, so a slow boot cannot trip it.
+                            #
+                            # Exec, not httpGet. The kubelet runs an httpGet
+                            # probe from the node and reaches the container by
+                            # pod IP, so it cannot see a listener bound to
+                            # loopback -- it reports connection refused however
+                            # healthy the broker is. Binding wider to satisfy
+                            # the probe would publish the broker on a
+                            # cluster-routable address, which is the one thing
+                            # this container must not do. An exec probe runs
+                            # inside the container, where loopback is the
+                            # broker.
+                            "livenessProbe": {
+                                "exec": {
+                                    "command": [
+                                        "python",
+                                        "-c",
+                                        (
+                                            "import urllib.request as u;"
+                                            "u.urlopen("
+                                            "'http://127.0.0.1:8787/healthz',"
+                                            "timeout=3)"
+                                        ),
+                                    ],
+                                },
+                                "periodSeconds": 10,
+                                "failureThreshold": 3,
+                            },
+                            "resources": {
+                                "requests": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                                "limits": {
+                                    "cpu": "250m",
+                                    "memory": "512Mi",
+                                    "ephemeral-storage": "1Gi",
+                                },
+                            },
+                        },
+                    ],
                     "containers": [
                         {
                             "name": "unity-assistant",
@@ -759,74 +894,6 @@ def build_unity_job_manifest(
                                     "mountPath": "/tmp",
                                 },
                             ],
-                        },
-                        # Holds the provider credentials so the runtime beside
-                        # it does not have to. Containers in a pod share a
-                        # network namespace but not a process one, so the
-                        # runtime can reach this over loopback and have it make
-                        # a call, while code running there cannot read this
-                        # process's environment to lift the key out and spend it
-                        # elsewhere. Scrubbing sandboxes could never achieve
-                        # that: the default execute_code surface runs in-process,
-                        # inside the runtime itself, with nothing to scrub.
-                        #
-                        # Runs the same image as the runtime, under a different
-                        # command. A second image would need its own build and
-                        # its own rollout, and could drift from the runtime it
-                        # is supposed to match.
-                        {
-                            "name": "llm-broker",
-                            "image": image,
-                            "imagePullPolicy": image_pull_policy,
-                            "command": ["python", "-m", "unify.llm_broker"],
-                            "env": broker_env_vars,
-                            # The pod's restartPolicy is Never, so a broker
-                            # that dies is gone for the rest of the pod's life
-                            # and every LLM call after it fails. Nothing can
-                            # restart it here, but a probe makes the pod say
-                            # so: without one the container reports Ready
-                            # whatever state it is in, and the symptom reaching
-                            # anyone is inference failing for no visible
-                            # reason.
-                            # Exec, not httpGet. The kubelet runs an httpGet
-                            # probe from the node and reaches the container by
-                            # pod IP, so it cannot see a listener bound to
-                            # loopback -- it reports connection refused however
-                            # healthy the broker is. Binding wider to satisfy
-                            # the probe would publish the broker on a
-                            # cluster-routable address, which is the one thing
-                            # this container must not do. An exec probe runs
-                            # inside the container, where loopback is the
-                            # broker.
-                            "readinessProbe": {
-                                "exec": {
-                                    "command": [
-                                        "python",
-                                        "-c",
-                                        (
-                                            "import urllib.request as u;"
-                                            "u.urlopen("
-                                            "'http://127.0.0.1:8787/healthz',"
-                                            "timeout=3)"
-                                        ),
-                                    ],
-                                },
-                                "initialDelaySeconds": 5,
-                                "periodSeconds": 10,
-                                "failureThreshold": 3,
-                            },
-                            "resources": {
-                                "requests": {
-                                    "cpu": "250m",
-                                    "memory": "512Mi",
-                                    "ephemeral-storage": "1Gi",
-                                },
-                                "limits": {
-                                    "cpu": "250m",
-                                    "memory": "512Mi",
-                                    "ephemeral-storage": "1Gi",
-                                },
-                            },
                         },
                     ],
                     "volumes": [

@@ -492,10 +492,16 @@ def test_pod_totals_the_right_sized_allocation() -> None:
 
     Adding the broker sidecar deliberately did not move this number -- its
     request came out of the runtime's headroom rather than onto the bill.
+
+    Native sidecars are summed here alongside ordinary containers because
+    that is how Kubernetes computes the pod's effective request: an init
+    container that carries a restartPolicy runs for the pod's whole life, so
+    it is added to the total rather than merely peaked against it. Moving the
+    broker into initContainers therefore changed where it is declared and not
+    what it costs.
     """
-    containers = build_unity_job_manifest(job_name="x")["spec"]["template"]["spec"][
-        "containers"
-    ]
+    spec = build_unity_job_manifest(job_name="x")["spec"]["template"]["spec"]
+    containers = [*spec["containers"], *spec["initContainers"]]
 
     for field in ("requests", "limits"):
         cpu = sum(_millicores(c["resources"][field]["cpu"]) for c in containers)
@@ -711,8 +717,30 @@ def test_workflows_dir_is_not_stamped_from_this_image() -> None:
 
 
 def _sidecar(manifest: dict) -> dict:
-    containers = manifest["spec"]["template"]["spec"]["containers"]
+    containers = manifest["spec"]["template"]["spec"]["initContainers"]
     return next(c for c in containers if c["name"] == "llm-broker")
+
+
+def test_the_sidecar_is_native_so_the_job_pod_can_complete() -> None:
+    """An ordinary container here never lets a Job pod finish.
+
+    A Job pod completes once every ordinary container has exited, and the
+    broker is a proxy with no exit condition. Declared alongside the runtime
+    it held every finished pod open until the 12-hour maintenance sweep
+    reaped the Job -- 38 of production's 60 running pods at one point, each
+    holding its full requests while the runtime inside had exited cleanly
+    hours earlier. A native sidecar is terminated by the kubelet once the
+    runtime container exits.
+    """
+    spec = build_unity_job_manifest(job_name="native-sidecar-staging")["spec"][
+        "template"
+    ]["spec"]
+
+    assert [c["name"] for c in spec["initContainers"]] == ["llm-broker"]
+    assert "llm-broker" not in {c["name"] for c in spec["containers"]}
+    # What makes an init container a sidecar rather than a startup step: it
+    # keeps running beside the runtime instead of having to exit first.
+    assert spec["initContainers"][0]["restartPolicy"] == "Always"
 
 
 def test_process_namespace_is_not_shared_with_the_sidecar() -> None:
@@ -769,8 +797,35 @@ def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:
     assert "UNIFY_KEY" not in env_names
 
 
-def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
-    """restartPolicy is Never, so a dead broker cannot recover -- only report.
+def test_the_runtime_does_not_start_before_the_broker_serves() -> None:
+    """Only a startupProbe sequences a sidecar against the containers after it.
+
+    A sidecar does not have to exit for the pod to proceed -- that rule is for
+    ordinary init containers -- so without this the kubelet moves on as soon
+    as the broker process exists and the runtime can issue its first LLM call
+    before anything is listening. A readinessProbe cannot stand in: on an init
+    container it decides the pod's ready state and nothing about sequencing.
+    """
+    probe = _sidecar(build_unity_job_manifest(job_name="startup-staging"))[
+        "startupProbe"
+    ]
+
+    assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])
+    # The boot budget, and the point at which a hung broker is restarted
+    # instead of waited on forever.
+    assert probe["periodSeconds"] * probe["failureThreshold"] == 60
+
+
+def test_a_broker_that_stops_answering_is_restarted_rather_than_reported() -> None:
+    """A sidecar can be restarted, so reporting is no longer the best it can do.
+
+    The process exiting is already covered by the container's own
+    restartPolicy; what nothing else notices is a broker still running and no
+    longer answering. A readinessProbe would set the pod's ready state and
+    nothing else -- no Service selects these pods and nothing in the control
+    plane reads that condition -- so it would report a broken broker to no
+    one. It was the right probe only while the broker was an ordinary
+    container that could not be restarted.
 
     The probe must exec inside the container. An httpGet probe is run by the
     kubelet from the node and reaches a container by pod IP, so it cannot see
@@ -779,9 +834,11 @@ def test_the_sidecar_reports_whether_it_is_actually_serving() -> None:
     publish the broker on a cluster-routable address, which is the one thing
     this container must not do.
     """
-    probe = _sidecar(build_unity_job_manifest(job_name="probe-staging"))[
-        "readinessProbe"
-    ]
+    sidecar = _sidecar(build_unity_job_manifest(job_name="probe-staging"))
+    probe = sidecar["livenessProbe"]
 
+    assert "readinessProbe" not in sidecar
     assert "httpGet" not in probe
     assert "127.0.0.1:8787/healthz" in " ".join(probe["exec"]["command"])
+    # Half a minute unresponsive before a restart lands mid-flight.
+    assert probe["periodSeconds"] * probe["failureThreshold"] == 30

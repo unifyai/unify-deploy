@@ -1747,7 +1747,14 @@ def expire_all_stale_jobs(
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
-                "label_selector": "app=unity,unity-status in (running,done)",
+                # ``idle`` is included so a pool member on a superseded image
+                # cannot outlive its usefulness. The controller only ever
+                # claims idle Jobs whose image hash is current, so a
+                # stale-hash member will never be assigned to anyone -- and
+                # nothing else reaps it, because an unassigned pod is exempt
+                # from the in-pod idle timer by design (its lifetime belongs
+                # to the pool). Two sat in staging for nineteen days.
+                "label_selector": "app=unity,unity-status in (running,done,idle)",
             },
             headers=headers,
         )
@@ -1794,6 +1801,11 @@ def expire_all_stale_jobs(
     if not stale:
         return {"total_running": len(all_jobs), "expired": 0}
 
+    # Read once, not per job: the idle branch below compares every candidate
+    # against it, and a None (comms unreachable) must leave idle members
+    # alone rather than read as "no hash matches, delete them all".
+    current_image_hash = _fetch_current_image_hash(headers)
+
     stale_running = []
     stale_done = []
     for job in stale:
@@ -1809,6 +1821,21 @@ def expire_all_stale_jobs(
         )
         if unity_status == "done":
             stale_done.append(job)
+        elif unity_status == "idle":
+            # Only the provably unclaimable ones. A current-hash idle member
+            # is warm capacity however old it is, and reaping it would just
+            # make the pool controller build a replacement; a stale-hash one
+            # can never be claimed, so age is beside the point and deleting
+            # it is safe. It owns no session and no binding, so it goes the
+            # direct route rather than the session-aware one below.
+            if (
+                current_image_hash
+                and job.get("labels", {}).get(
+                    _IMAGE_HASH_LABEL,
+                )
+                != current_image_hash
+            ):
+                stale_done.append(job)
         else:
             stale_running.append(job)
 
