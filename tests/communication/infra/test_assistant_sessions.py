@@ -107,7 +107,9 @@ def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
             self.created_ns = namespace
 
     create_api = CreateApi()
-    create_or_update_bootstrap_secret(create_api, "production", "1", "act-1", {"api_key": "k"})
+    create_or_update_bootstrap_secret(
+        create_api, "production", "1", "act-1", {"api_key": "k"}
+    )
     assert create_api.created_ns == "production-sessions"
 
     # read tries the sessions namespace first, then falls back to the session namespace
@@ -122,7 +124,9 @@ def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
             return _fake_secret({"api_key": "legacy"})
 
     read_api = ReadApi()
-    payload = read_bootstrap_secret(read_api, "production", "assistant-session-bootstrap-1-act-1")
+    payload = read_bootstrap_secret(
+        read_api, "production", "assistant-session-bootstrap-1-act-1"
+    )
     assert payload == {"api_key": "legacy"}
     assert read_api.read_ns == ["production-sessions", "production"]
 
@@ -142,7 +146,9 @@ def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
             if namespace == "production-sessions":
                 raise ApiException(status=404)
             return _fake_secret(
-                {}, name="assistant-session-bootstrap-1-act-1", annotations=owned,
+                {},
+                name="assistant-session-bootstrap-1-act-1",
+                annotations=owned,
             )
 
         def delete_namespaced_secret(self, name, namespace):

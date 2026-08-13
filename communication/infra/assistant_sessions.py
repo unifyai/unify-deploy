@@ -1045,7 +1045,9 @@ def create_or_update_bootstrap_secret(
     activation_id: str,
     payload: dict[str, Any],
 ) -> str:
-    namespace = bootstrap_namespace(namespace)  # bootstrap Secrets live in the sessions ns
+    namespace = bootstrap_namespace(
+        namespace
+    )  # bootstrap Secrets live in the sessions ns
     secret_name = assistant_session_secret_name(assistant_id, activation_id)
     body = k8s_client.V1Secret(
         metadata=k8s_client.V1ObjectMeta(
