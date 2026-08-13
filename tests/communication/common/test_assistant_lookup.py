@@ -8,6 +8,10 @@ from common.assistant_lookup import (
     assistant_may_start_runtime,
     get_assistant,
 )
+from common.coordinator_voice import (
+    COORDINATOR_DEFAULT_VOICE_ID,
+    COORDINATOR_DEFAULT_VOICE_PROVIDER,
+)
 
 
 def test_assistant_payload_coerces_nullable_runtime_strings():
@@ -65,8 +69,13 @@ def test_assistant_payload_coerces_nullable_runtime_strings():
     assert payload["assistant_email_provider"] == "google_workspace"
     assert payload["user_number"] == ""
     assert payload["user_whatsapp_number"] == "+4915550100009"
-    assert payload["voice_provider"] == ""
-    assert payload["voice_id"] == ""
+    # Voice is resolved, not coerced: this fixture is a coordinator with
+    # nothing configured, so the payload carries the coordinator default
+    # rather than an empty string. Asserted through the constants so the
+    # default can move without this test caring; the resolver's own
+    # branches are covered in test_coordinator_voice.py.
+    assert payload["voice_provider"] == COORDINATOR_DEFAULT_VOICE_PROVIDER
+    assert payload["voice_id"] == COORDINATOR_DEFAULT_VOICE_ID
     assert payload["self_contact_id"] == 0
     assert payload["boss_contact_id"] == 1
 
