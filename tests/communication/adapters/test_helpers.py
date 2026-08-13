@@ -1141,7 +1141,7 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
             params = kwargs.get("params") or {}
             assert "hours" not in params, params
             assert params.get("label_selector") == (
-                "app=unity,unity-status in (running,done)"
+                "app=unity,unity-status in (running,done,idle)"
             )
             return _Response(
                 200,
@@ -1152,6 +1152,8 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
                     ],
                 },
             )
+        if url.endswith("/infra/image"):
+            return _Response(200, {"commit_hash": "current"})
         if url.endswith("/infra/session/aid-1"):
             return _Response(
                 200,
@@ -1643,3 +1645,105 @@ def test_start_job_form_keeps_a_user_owned_assistant_personal():
 
     assert data["owner_team_id"] == ""
     assert _decode_owner_team_id_form(data["owner_team_id"]) is None
+
+
+def _stale_idle_job(*, job_name: str, image_hash: str) -> dict:
+    """An idle pool member old enough for the sweep to consider it."""
+    job = _stale_job(job_name=job_name, assistant_id="", status="idle")
+    job["labels"]["unity-image-hash"] = image_hash
+    return job
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.assistant_has_active_call", return_value=False)
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers._fetch_current_image_hash", return_value="current")
+def test_expire_all_stale_jobs_reaps_only_unclaimable_idle_members(
+    _mock_fetch_hash,
+    mock_get,
+    mock_post,
+    mock_delete,
+    _mock_active_call,
+):
+    """An idle pod on a superseded image is dead weight nothing else collects.
+
+    The controller only claims idle Jobs whose image hash is current, so a
+    stale-hash member will never be assigned; and an unassigned pod is exempt
+    from the in-pod idle timer by design, because its lifetime belongs to the
+    pool. Between the two, nothing reaped them: two ran in staging for
+    nineteen days. A current-hash member is warm capacity however old it is,
+    and deleting it would only make the pool build a replacement.
+    """
+    deleted = []
+
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_idle_job(job_name="unity-idle-stale", image_hash="old"),
+                        _stale_idle_job(
+                            job_name="unity-idle-current",
+                            image_hash="current",
+                        ),
+                    ],
+                },
+            )
+        if url.endswith("/infra/image"):
+            return _Response(200, {"commit_hash": "current"})
+        raise AssertionError(f"unexpected GET {url}")
+
+    mock_get.side_effect = _get
+    mock_post.side_effect = lambda url, *a, **k: _Response(200, {})
+    mock_delete.side_effect = lambda url, *a, **k: (
+        deleted.append(k["data"]["job_name"]),
+        _Response(200, {}),
+    )[1]
+
+    result = expire_all_stale_jobs()
+
+    assert deleted == ["unity-idle-stale"]
+    assert result["cleaned_jobs"] == ["unity-idle-stale"]
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.assistant_has_active_call", return_value=False)
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers._fetch_current_image_hash", return_value=None)
+def test_an_unreadable_image_hash_leaves_every_idle_member_alone(
+    _mock_fetch_hash,
+    mock_get,
+    mock_post,
+    mock_delete,
+    _mock_active_call,
+):
+    """No hash means no evidence, and "matches nothing" would empty the pool."""
+    deleted = []
+
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_idle_job(job_name="unity-idle-stale", image_hash="old"),
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    mock_get.side_effect = _get
+    mock_post.side_effect = lambda url, *a, **k: _Response(200, {})
+    mock_delete.side_effect = lambda url, *a, **k: (
+        deleted.append(k["data"]["job_name"]),
+        _Response(200, {}),
+    )[1]
+
+    expire_all_stale_jobs()
+
+    assert deleted == []
