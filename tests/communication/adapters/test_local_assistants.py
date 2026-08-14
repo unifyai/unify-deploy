@@ -130,7 +130,6 @@ def _assistant_data(*, is_local: bool) -> dict:
         "user_desktops": [],
         "team_ids": [],
         "org_id": "",
-        "deploy_env": "staging",
         "is_coordinator": False,
         "is_local": is_local,
         "self_contact_id": TEST_SELF_CONTACT_ID,

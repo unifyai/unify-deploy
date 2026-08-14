@@ -33,7 +33,6 @@ def _assistant_data() -> dict:
         "user_desktops": [],
         "team_ids": [],
         "org_id": None,
-        "deploy_env": "staging",
         "is_local": False,
     }
 
