@@ -33,6 +33,7 @@ from communication.infra.assistant_sessions import (
     claim_binding_vm_assignment_attempt,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
+    _write_bootstrap_secret,
     delete_assistant_session,
     delete_bootstrap_secret_if_owned,
     read_bootstrap_secret,
@@ -95,22 +96,27 @@ def test_assistant_session_names_are_sanitized():
 def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
     assert bootstrap_namespace("production") == "production-sessions"
 
-    # create writes to the sessions namespace, not the session namespace
+    # create writes the sessions namespace and mirrors into the session
+    # namespace, so a pod on either image generation finds its bootstrap
     class CreateApi:
         def __init__(self):
-            self.created_ns = None
+            self.created_ns = []
 
         def read_namespaced_secret(self, name, namespace):
             raise ApiException(status=404)
 
         def create_namespaced_secret(self, namespace, body):
-            self.created_ns = namespace
+            self.created_ns.append(namespace)
 
     create_api = CreateApi()
     create_or_update_bootstrap_secret(
-        create_api, "production", "1", "act-1", {"api_key": "k"}
+        create_api,
+        "production",
+        "1",
+        "act-1",
+        {"api_key": "k"},
     )
-    assert create_api.created_ns == "production-sessions"
+    assert create_api.created_ns == ["production-sessions", "production"]
 
     # read tries the sessions namespace first, then falls back to the session namespace
     class ReadApi:
@@ -125,7 +131,9 @@ def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
 
     read_api = ReadApi()
     payload = read_bootstrap_secret(
-        read_api, "production", "assistant-session-bootstrap-1-act-1"
+        read_api,
+        "production",
+        "assistant-session-bootstrap-1-act-1",
     )
     assert payload == {"api_key": "legacy"}
     assert read_api.read_ns == ["production-sessions", "production"]
@@ -1057,12 +1065,13 @@ def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_
             self.resource_version = str(int(self.resource_version) + 1)
 
     core_api = FakeCoreApi()
-    secret_name = create_or_update_bootstrap_secret(
+    secret_name = _write_bootstrap_secret(
         core_api,
-        "staging",
-        "1207",
-        "act-1",
-        requested_payload,
+        "staging-sessions",
+        assistant_id="1207",
+        activation_id="act-1",
+        payload=requested_payload,
+        secret_name=assistant_session_secret_name("1207", "act-1"),
     )
 
     assert secret_name == "assistant-session-bootstrap-1207-act-1"
@@ -1096,12 +1105,13 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
             )
             self.resource_version = str(int(self.resource_version) + 1)
 
-    secret_name = create_or_update_bootstrap_secret(
+    secret_name = _write_bootstrap_secret(
         FakeCoreApi(),
-        "staging",
-        "1207",
-        "act-1",
-        requested_payload,
+        "staging-sessions",
+        assistant_id="1207",
+        activation_id="act-1",
+        payload=requested_payload,
+        secret_name=assistant_session_secret_name("1207", "act-1"),
     )
 
     assert secret_name == "assistant-session-bootstrap-1207-act-1"
@@ -1128,12 +1138,13 @@ def test_create_or_update_bootstrap_secret_replaces_when_owner_annotations_stale
         def replace_namespaced_secret(self, **kwargs):
             replace_calls.append(kwargs["body"])
 
-    secret_name = create_or_update_bootstrap_secret(
+    secret_name = _write_bootstrap_secret(
         FakeCoreApi(),
-        "staging",
-        "1207",
-        "act-new",
-        requested_payload,
+        "staging-sessions",
+        assistant_id="1207",
+        activation_id="act-new",
+        payload=requested_payload,
+        secret_name=assistant_session_secret_name("1207", "act-new"),
     )
 
     assert secret_name == "assistant-session-bootstrap-1207-act-new"
