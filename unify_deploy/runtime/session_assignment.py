@@ -151,38 +151,27 @@ def read_assistant_session(session_name: str) -> dict[str, Any]:
 def read_session_bootstrap_secret_record(secret_name: str) -> BootstrapSecretRecord:
     """Read a bootstrap Secret together with its owner annotations.
 
-    Reads the dedicated sessions namespace first and falls back to the pod's own
-    namespace for Secrets written before the move. Both namespaces appear in the
-    failure, because a bootstrap read that 404s stalls the whole session and the
-    namespace is the only thing that distinguishes "not written yet" from
-    "written somewhere this pod does not look".
+    Reads only the dedicated ``{ns}-sessions`` namespace, where the writer
+    (``communication.infra.assistant_sessions``) now places every bootstrap. The
+    pod SA has Secret access there and nowhere else, so the pod's own namespace is
+    neither readable nor written to anymore (the migration mirror + fallback were
+    removed together). A 404 here means the bootstrap has not been written yet.
     """
 
     _load_clients()
     assert _core_api is not None
-    namespaces = (_bootstrap_namespace(), _namespace())
-    for index, namespace in enumerate(namespaces):
-        try:
-            secret = _core_api.read_namespaced_secret(
-                name=secret_name,
-                namespace=namespace,
-            )
-        except ApiException as e:
-            if e.status != 404:
-                raise
-            continue
-        if index:
-            logger.info(
-                "bootstrap Secret %s served from legacy namespace %s",
-                secret_name,
-                namespace,
-            )
-        break
-    else:
-        raise RuntimeError(
-            f"Bootstrap Secret {secret_name} not found in any of "
-            f"{', '.join(namespaces)}",
+    try:
+        secret = _core_api.read_namespaced_secret(
+            name=secret_name,
+            namespace=_bootstrap_namespace(),
         )
+    except ApiException as e:
+        if e.status == 404:
+            raise RuntimeError(
+                f"Bootstrap Secret {secret_name} not found in "
+                f"{_bootstrap_namespace()}",
+            ) from e
+        raise
     data = secret.data or {}
     raw = data.get("startup.json", "")
     metadata = getattr(secret, "metadata", None)

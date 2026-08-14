@@ -1049,27 +1049,16 @@ def create_or_update_bootstrap_secret(
 ) -> str:
     """Write one activation's bootstrap Secret and return its name.
 
-    Written to the sessions namespace and mirrored into the session namespace,
-    because a pod reads whichever namespace *its own image* knows about and the
-    fleet is never uniformly on one image: idle containers outlive a rollout, so
-    a single-namespace write strands every pod built before the move. The mirror
-    is deleted alongside the primary by ``delete_bootstrap_secret_if_owned``, and
-    stops being needed once no pod reads the session namespace — drop it together
-    with the reader's fallback, never one without the other.
+    Written only to the dedicated ``{ns}-sessions`` namespace. The whole fleet now
+    reads there first (the reader's ``{ns}`` fallback and this writer's ``{ns}``
+    mirror were the migration bridge; both were removed together once no pod read
+    the session namespace, and the pod SA no longer has Secret access in ``{ns}``).
     """
 
     secret_name = assistant_session_secret_name(assistant_id, activation_id)
     _write_bootstrap_secret(
         core_api,
         bootstrap_namespace(namespace),
-        assistant_id=assistant_id,
-        activation_id=activation_id,
-        payload=payload,
-        secret_name=secret_name,
-    )
-    _write_bootstrap_secret(
-        core_api,
-        namespace,
         assistant_id=assistant_id,
         activation_id=activation_id,
         payload=payload,

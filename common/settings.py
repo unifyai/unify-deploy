@@ -118,6 +118,20 @@ class Settings:
         self.offline_task_job_ttl_seconds: int = int(
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
+        # The longest an offline run may hold a pod, whatever its task asked
+        # for. `max_runtime_seconds` is per-task, defaults to None, nothing
+        # sets it, and None meant unbounded -- so every offline job in the
+        # fleet ran with no ceiling at all. Five were found still going eight
+        # days past their scheduled moment, one looping LLM calls inside its
+        # storage-review pass long after the task itself had failed.
+        #
+        # Twelve hours is well past any legitimate run and matches the
+        # maintenance sweep's own staleness cutoff, so a job cannot outlive
+        # the sweep that would have reported it. A task needing less sets its
+        # own max_runtime_seconds; it cannot set more.
+        self.offline_task_max_runtime_seconds: int = int(
+            os.environ.get("UNITY_OFFLINE_TASK_MAX_RUNTIME_SECONDS", "43200"),
+        )
         self.provider_event_dispatch_request_ttl_seconds: int = int(
             os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
         )

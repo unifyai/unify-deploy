@@ -1181,7 +1181,10 @@ def _offline_job_lifecycle_safeguards() -> dict[str, Any]:
     """Return the Kubernetes safeguards required for offline task jobs."""
 
     return {
-        "active_deadline_seconds": "per-task max_runtime_seconds (None = unbounded)",
+        "active_deadline_seconds": (
+            "per-task max_runtime_seconds, floored at "
+            f"{SETTINGS.offline_task_max_runtime_seconds}s"
+        ),
         "ttl_seconds_after_finished": SETTINGS.offline_task_job_ttl_seconds,
         "backoff_limit": OFFLINE_TASK_JOB_BACKOFF_LIMIT,
         "durable_terminal_state": "Tasks/Executions and Tasks rows",
@@ -1436,6 +1439,22 @@ def _adopt_offline_env_secret(
     )
 
 
+def _bounded_offline_runtime(max_runtime_seconds: int | None) -> int:
+    """Return the run's deadline, floored against the platform ceiling.
+
+    A task may bound itself tighter than the platform does; it may not opt
+    out. Asking for nothing is the common case -- `max_runtime_seconds`
+    defaults to None on every task and nothing sets it -- and used to mean
+    unbounded, which is how offline jobs reached eight days.
+    """
+
+    ceiling = int(SETTINGS.offline_task_max_runtime_seconds)
+    if max_runtime_seconds is None:
+        return ceiling
+    requested = int(max_runtime_seconds)
+    return min(requested, ceiling) if requested > 0 else ceiling
+
+
 def _launch_offline_task_job(
     *,
     batch_api: Any,
@@ -1448,8 +1467,13 @@ def _launch_offline_task_job(
 ) -> bool:
     """Create the one-shot Kubernetes Job for one offline run attempt.
 
-    ``max_runtime_seconds`` is the task's own execution bound; ``None`` leaves
-    the Job unbounded (long-running scrapes legitimately run for days).
+    ``max_runtime_seconds`` is the task's own execution bound, floored against
+    the platform ceiling: a task may ask for less than
+    ``offline_task_max_runtime_seconds`` but never more, and one that asks for
+    nothing gets the ceiling rather than forever. Unbounded was the previous
+    behaviour, and the reason five jobs were found eight days into runs
+    scheduled for a single morning.
+
     Returns True when this call created the Job, False when a Job with the
     same name already exists (another delivery of the same attempt won the
     race). Any other Kubernetes failure raises.
@@ -1467,7 +1491,7 @@ def _launch_offline_task_job(
         job_name=job_name,
         namespace=SETTINGS.default_namespace,
         ttl_seconds_after_finished=SETTINGS.offline_task_job_ttl_seconds,
-        active_deadline_seconds=max_runtime_seconds,
+        active_deadline_seconds=_bounded_offline_runtime(max_runtime_seconds),
         unity_status="offline",
         priority_class_name="unity-idle",
         app_label="unity-task-execution",

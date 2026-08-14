@@ -96,8 +96,9 @@ def test_assistant_session_names_are_sanitized():
 def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
     assert bootstrap_namespace("production") == "production-sessions"
 
-    # create writes the sessions namespace and mirrors into the session
-    # namespace, so a pod on either image generation finds its bootstrap
+    # create writes ONLY the sessions namespace now (the {env} mirror was dropped
+    # together with the runtime reader's {env} fallback once the whole fleet reads
+    # the sessions namespace and the pod SA lost {env} Secret access)
     class CreateApi:
         def __init__(self):
             self.created_ns = []
@@ -116,7 +117,7 @@ def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
         "act-1",
         {"api_key": "k"},
     )
-    assert create_api.created_ns == ["production-sessions", "production"]
+    assert create_api.created_ns == ["production-sessions"]
 
     # read tries the sessions namespace first, then falls back to the session namespace
     class ReadApi:
