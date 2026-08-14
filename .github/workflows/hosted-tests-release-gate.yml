@@ -1,0 +1,79 @@
+name: Hosted tests release gate
+run-name: >-
+  ${{
+    github.event_name == 'pull_request' && 'Hosted tests (staging → main gate)' ||
+    'Hosted tests (manual gate)'
+  }}
+
+# Dedicated staging -> main release gate for the deterministic hosted suites:
+# the adapters, the shared communication helpers, the unify attachment surface,
+# and the deployment reconcilers. No model, no live stack, no cluster -- around
+# 340 tests that finish in seconds.
+#
+# Why it exists: "Integration smoke" was this repo's only functional gate, and
+# it drives the real staging stack, so it is slow, expensive, and structurally
+# unable to catch a deterministic contract break. Five tests here were red on
+# staging for six weeks -- three of them since June -- and one was firing real
+# HTTP at Orchestra from a unit test. Nothing was looking, because nothing
+# required these suites to be green.
+#
+# This workflow must only ever trigger on pull_request(main) or
+# workflow_dispatch -- never push. GitHub Actions publishes a "skipped" check
+# run for a job whose `if` evaluates false, and branch protection treats a
+# skipped required check as satisfied. A staging -> main PR shares its head SHA
+# with the last push to staging, so a gate living in a push-triggered workflow
+# would attach that push's verdict to the release PR and let it merge before
+# the real run answered. Scoping only the aggregator job's `if:` is NOT enough
+# (see AGENTS.md); the file itself must never run on a push, so that an
+# ordinary push produces no check run under this context at all -- pending,
+# not a stale pass.
+#
+# hosted-tests.yml is the separate, non-gating ad-hoc runner for a [run-tests]
+# push or manual verification; it does not define this context.
+#
+# It calls that workflow rather than provisioning its own copy: the setup there
+# (private-repo git config, brain checkout, portaudio, uv sync) is exercised on
+# every tagged push, and a required check should not sit behind provisioning
+# nothing else runs.
+
+on:
+  pull_request:
+    branches:
+    - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A running gate finishes rather than being replaced: cancelling it mid-flight
+# leaves the required context unanswered on the release PR.
+concurrency:
+  group: hosted-tests-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  suites:
+    name: Hosted tests (run)
+    uses: ./.github/workflows/hosted-tests.yml
+    with:
+      release_tier: true
+    secrets: inherit
+
+  gate:
+    name: Hosted tests
+    needs: suites
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the hosted suites to have passed
+      run: |
+        result="${{ needs.suites.result }}"
+        echo "hosted tests result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::The hosted suites did not run for this commit, so the"
+          echo "::error::release gate cannot pass."
+        fi
+        exit 1

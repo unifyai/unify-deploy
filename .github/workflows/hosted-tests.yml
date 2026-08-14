@@ -1,6 +1,20 @@
 name: Hosted infrastructure tests
 
 on:
+  # Called by hosted-tests-release-gate.yml to publish the required
+  # "Hosted tests" context. The gate calls this workflow rather than
+  # provisioning its own copy: the setup below (private-repo git config,
+  # brain checkout, portaudio, uv sync) is exercised on every tagged push,
+  # and a required check should not sit behind provisioning nothing else
+  # runs.
+  workflow_call:
+    inputs:
+      release_tier:
+        description: Run the deterministic suites unconditionally, for the release gate
+        required: false
+        default: false
+        type: boolean
+
   # Manual trigger - always runs tests
   workflow_dispatch:
     inputs:
@@ -34,8 +48,19 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
+        RELEASE_TIER: ${{ inputs.release_tier }}
       run: |
         echo "run_live_endpoint_tests=false" >> "$GITHUB_OUTPUT"
+
+        # The release gate calls this workflow, so the caller's event is the
+        # PR that asked for it, not workflow_call. Keying off the input rather
+        # than the event is what stops the gate falling through to the
+        # [run-tests] title check below and skipping itself green.
+        if [[ "$RELEASE_TIER" == "true" ]]; then
+          echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          echo "Tests triggered by the release gate"
+          exit 0
+        fi
 
         # workflow_dispatch always runs tests
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -186,6 +211,27 @@ jobs:
 
     - name: Run unify attachment tests
       run: .venv/bin/python -m pytest -vs tests/communication/unify/
+      env:
+        ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
+        GCP_PROJECT_ID: gcp-project-runtime
+
+    # The shared helpers and the meet surfaces every adapter builds on. No job
+    # ran these until now, which is how a voice contract and four other stale
+    # tests sat red on staging for six weeks without anything noticing.
+    #
+    # A separate invocation rather than paths appended above: tests/communication
+    # is itself a package named `communication`, so collecting these alongside
+    # the suites above shadows the real top-level package and the import of
+    # communication.infra.views fails.
+    - name: Run shared communication tests
+      run: |
+        .venv/bin/python -m pytest -vs \
+          tests/communication/common/ \
+          tests/communication/test_dependencies_auth.py \
+          tests/communication/test_meet_bridge.py \
+          tests/communication/test_meet_desktop_page.py \
+          tests/communication/test_meet_events.py \
+          tests/communication/test_meet_screenshare.py
       env:
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         GCP_PROJECT_ID: gcp-project-runtime
