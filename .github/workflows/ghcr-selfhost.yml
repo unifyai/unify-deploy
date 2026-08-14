@@ -139,12 +139,12 @@ jobs:
         cp -R deploy/selfhost/. "$dest/deploy/selfhost/"
         printf '%s\n' "${GITHUB_SHA}" > "$dest/deploy/selfhost/.unity-deploy-sha"
 
-    # The step below resolves three public repos and one private one, so a
-    # token that is empty, malformed, or unable to see private repositories
-    # gets three quarters of the way through and then fails on `branding`
-    # with "Repository not found" -- GitHub's answer for a repository you
-    # cannot see is the same as for one that does not exist. Naming the
-    # cause here keeps that from reading as a missing repo.
+    # Fails here, naming the cause, rather than three steps later against a
+    # repository that plainly exists. The dependency resolve below reads three
+    # public repos and one private one, so a credential that cannot reach
+    # private repositories gets most of the way through and then reports
+    # "Repository not found" -- GitHub's answer for a repository you cannot
+    # see is the same as for one that is not there.
     - name: CLONE_TOKEN can read a private dependency
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
@@ -154,46 +154,13 @@ jobs:
           echo "::error::or this repository is outside its access list."
           exit 1
         fi
-        # The value is masked in logs; its length is not, and distinguishes a
-        # truncated or whitespace-padded paste from a well-formed token.
-        echo "CLONE_TOKEN present, length ${#GH_TOKEN}."
-        # Which account the token authenticates as. A well-formed token that
-        # cannot see a private repo usually belongs to a different account
-        # than intended, and nothing else in the failure says so.
-        who="$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
-          https://api.github.com/user | sed -n 's/.*"login": *"\([^"]*\)".*/\1/p' | head -1)"
-        echo "CLONE_TOKEN authenticates as: ${who:-<none - token rejected by the API>}"
-        # Ask the API directly: it distinguishes causes that git cannot.
-        # A token needing SAML authorisation is refused with an X-GitHub-SSO
-        # header naming the organisation, where git only ever says 404.
-        code="$(curl -sS -o /tmp/probe.json -D /tmp/probe.head -w '%{http_code}' \
-          -H "Authorization: token ${GH_TOKEN}" \
-          https://api.github.com/repos/unifyai/branding || echo 000)"
-        echo "API GET /repos/unifyai/branding -> HTTP ${code}"
-        grep -i '^x-github-sso' /tmp/probe.head || echo "  (no X-GitHub-SSO header)"
-        sed -n 's/.*"message": *"\([^"]*\)".*/  message: \1/p' /tmp/probe.json | head -1
-
-        # Probed against a second private repo as well: one failure is a
-        # permission on that repo, both is the credential's reach.
-        for probe in orchestra branding; do
-          if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/${probe}.git" >/dev/null 2>&1; then
-            echo "  can read unifyai/${probe}"
-          else
-            echo "  CANNOT read unifyai/${probe}"
-          fi
-          if git -c http.https://github.com/.extraheader= \
-               ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/${probe}.git" >/dev/null 2>&1; then
-            echo "  can read unifyai/${probe} WITH the checkout header cleared"
-          else
-            echo "  CANNOT read unifyai/${probe} even with the header cleared"
-          fi
-        done
-        if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" >/dev/null 2>&1; then
+        if git -c http.https://github.com/.extraheader= \
+             ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" \
+             >/dev/null 2>&1; then
           echo "CLONE_TOKEN can read unifyai/branding."
         else
           echo "::error::CLONE_TOKEN is set but cannot read unifyai/branding."
-          echo "::error::Check the token's scope, and that it belongs to an"
-          echo "::error::account with access to that repository."
+          echo "::error::Check the token's scope and that its account has access."
           exit 1
         fi
 
