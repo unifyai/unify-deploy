@@ -15,7 +15,10 @@ import json
 import pytest
 from kubernetes.client.rest import ApiException
 
-from communication.infra.assistant_sessions import bootstrap_namespace
+from communication.infra.assistant_sessions import (
+    bootstrap_namespace,
+    create_or_update_bootstrap_secret,
+)
 from unify_deploy.runtime import session_assignment
 
 
@@ -49,6 +52,52 @@ def test_reader_resolves_the_namespace_the_writer_writes(pod_namespace):
     assert session_assignment._bootstrap_namespace() == bootstrap_namespace(
         pod_namespace,
     )
+
+
+def test_writer_targets_and_reader_attempts_stay_in_lockstep(
+    monkeypatch,
+    pod_namespace,
+):
+    """Every namespace the writer writes is one the reader tries, in order.
+
+    The mirror write and the reader's legacy fallback are one migration, held in
+    two packages that ship on different cadences — comms in a Cloud Run deploy,
+    the reader in an assistant image. Retiring either half alone recreates the
+    outage in one direction or leaves the session api_key in a namespace nothing
+    reads in the other, so this fails until both halves move together.
+    """
+
+    written = []
+
+    class WriteCapturingApi:
+        def read_namespaced_secret(self, name, namespace):
+            raise ApiException(status=404)
+
+        def create_namespaced_secret(self, namespace, body):
+            written.append(namespace)
+
+    create_or_update_bootstrap_secret(
+        WriteCapturingApi(),
+        pod_namespace,
+        "2103",
+        "act-1",
+        {"api_key": "k"},
+    )
+
+    attempted = []
+
+    class ReadCapturingApi:
+        def read_namespaced_secret(self, name, namespace):
+            attempted.append(namespace)
+            raise ApiException(status=404)
+
+    monkeypatch.setattr(session_assignment, "_core_api", ReadCapturingApi())
+    with pytest.raises(RuntimeError):
+        session_assignment.read_session_bootstrap_secret_record(
+            "assistant-session-bootstrap-2103-act-1",
+        )
+
+    assert written == attempted
 
 
 def test_reader_prefers_the_sessions_namespace(monkeypatch, pod_namespace):
