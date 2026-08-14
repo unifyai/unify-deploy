@@ -27,18 +27,39 @@ created-assistant reaper and a staging reconcile pass so runs stay leak-neutral.
 
 ## One-time setup
 
-1. **GitHub registration token.** Create a PAT (or GitHub App installation
-   token) with `repo` + `admin:org`/`admin:repo_hook` runner-registration scope
-   and store it in Secret Manager:
+1. **GitHub App registration credential.** Registration authenticates as an
+   **org-owned GitHub App**, not a user PAT. This is deliberate: a PAT belongs
+   to whoever created it, so it dies with that person's account or credential
+   rotation, and it carries a hard expiry that silently takes the merge gate
+   down (see "Why an App, not a PAT" below).
+
+   Create the App under the **`unifyai` org** (Settings → Developer settings →
+   GitHub Apps → New GitHub App):
+
+   - Repository permissions **Administration: Read and write** and
+     **Metadata: Read-only** — the pair Actions Runner Controller documents
+     for repo-level runner registration, and all it needs. GitHub selects
+     Metadata automatically once any repository permission is set. Nothing
+     else; in particular it needs no code, contents, or org-level access.
+     (An *org*-level runner would instead need **Self-hosted runners: Read
+     and write**.)
+   - Uncheck **Webhook → Active**.
+   - **Only on this account** for installation scope.
+   - After creating it, **Generate a private key** (downloads a `.pem`), then
+     **Install App** onto `unifyai/unify-deploy` only.
+
+   Store the private key in Secret Manager and set the App ID in
+   `deployment.yaml` (`APP_ID` — not secret):
 
    ```bash
-   gcloud secrets create CI_RUNNER_GITHUB_TOKEN --project=gcp-project-runtime
-   printf '%s' "<PAT>" | gcloud secrets versions add CI_RUNNER_GITHUB_TOKEN \
-     --data-file=- --project=gcp-project-runtime
+   gcloud secrets create CI_RUNNER_GITHUB_APP_PRIVATE_KEY \
+     --project=gcp-project-runtime
+   gcloud secrets versions add CI_RUNNER_GITHUB_APP_PRIVATE_KEY \
+     --data-file=<app-private-key>.pem --project=gcp-project-runtime
    ```
 
-   The `external-secrets` GCP credential must be able to read it (same
-   ClusterSecretStore used by `deploy/k8s/secrets/`).
+   `external-secrets-reader@gcp-project-runtime` holds project-level
+   `secretAccessor`, so no per-secret IAM grant is required.
 
 2. **GCP access.** The runner mounts the existing `comm-sa-key` Secret (the
    `comm-sa@gcp-project-runtime` JSON key) for GCE pool VMs + Pub/Sub. No
@@ -72,6 +93,28 @@ created-assistant reaper and a staging reconcile pass so runs stay leak-neutral.
 
 6. Confirm the runner registered: GitHub → repo → Settings → Actions → Runners
    shows a runner with labels `self-hosted, unity-cluster, staging`.
+
+## Why an App, not a PAT
+
+The runner's credential is the single point of failure for the whole merge
+gate, and a PAT fails in the two ways that are hardest to diagnose:
+
+- **It expires.** When it does, the runner stops accepting jobs, the required
+  `Integration smoke` context is never published, and every `staging -> main`
+  release PR blocks on a check that just sits pending. Nothing reports an
+  authentication error, so the symptom looks nothing like an expired
+  credential.
+- **It belongs to a person.** Shared CI infrastructure that depends on one
+  engineer's account breaks when they leave or rotate their credentials.
+
+An org-owned App fixes both: it is owned by `unifyai` rather than an
+individual, and its private key has no expiry. The entrypoint exchanges the
+key for a short-lived installation token on **every** registration, so the
+token's 1h lifetime is not a constraint even though this runner is ephemeral
+and re-registers after each job.
+
+`APP_ID`/`APP_LOGIN`/`APP_PRIVATE_KEY` are mutually exclusive with
+`ACCESS_TOKEN`/`RUNNER_TOKEN`; setting both styles makes the entrypoint exit.
 
 ## Required status check
 
