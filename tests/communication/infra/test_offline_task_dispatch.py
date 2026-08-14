@@ -249,8 +249,14 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     )
     assert manifest["spec"]["backoffLimit"] > 0
     assert "ttlSecondsAfterFinished" in manifest["spec"]
-    # No per-task bound means the run is unbounded: no activeDeadlineSeconds.
-    assert "activeDeadlineSeconds" not in manifest["spec"]
+    # A task that names no bound of its own gets the platform ceiling. This
+    # used to assert the opposite -- no activeDeadlineSeconds at all -- which
+    # is how offline jobs reached eight days.
+    from common.settings import SETTINGS
+
+    assert manifest["spec"]["activeDeadlineSeconds"] == int(
+        SETTINGS.offline_task_max_runtime_seconds,
+    )
     # Offline Jobs need grace above SmartLead's 60s HTTP timeout so SIGTERM
     # writeback can finish before kubelet SIGKILLs the runner.
     assert (
@@ -785,6 +791,8 @@ def test_task_execution_health_summarizes_blocking_conditions():
             },
         )
 
+    from common.settings import SETTINGS
+
     assert response.status_code == 200
     summary = response.json()["summary"]
     assert summary["total"] == 1
@@ -793,7 +801,8 @@ def test_task_execution_health_summarizes_blocking_conditions():
     assert summary["blocking_conditions"] == {"stale_running_run": 1}
     assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 2
     assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] == (
-        "per-task max_runtime_seconds (None = unbounded)"
+        "per-task max_runtime_seconds, floored at "
+        f"{SETTINGS.offline_task_max_runtime_seconds}s"
     )
     assert summary["job_lifecycle_safeguards"]["ttl_seconds_after_finished"] > 0
 
@@ -1815,3 +1824,27 @@ def test_offline_task_job_terminal_endpoint():
     assert response.status_code == 200
     assert response.json()["success"] is True
     mock_terminalize.assert_called_once()
+
+
+def test_an_offline_run_cannot_hold_a_pod_indefinitely() -> None:
+    """`max_runtime_seconds` bounds a run downward; it cannot opt out.
+
+    It defaults to None on every task and nothing sets it, and None used to
+    leave the Job with no activeDeadlineSeconds at all. Five offline jobs were
+    found eight days into runs scheduled for a single morning, one still
+    issuing LLM calls inside its storage-review pass long after the task it
+    belonged to had failed.
+    """
+    from common.settings import SETTINGS
+    from communication.infra.task_execution import _bounded_offline_runtime
+
+    ceiling = int(SETTINGS.offline_task_max_runtime_seconds)
+
+    # Asking for nothing is the common case, and no longer means forever.
+    assert _bounded_offline_runtime(None) == ceiling
+    # A task may bound itself tighter than the platform does.
+    assert _bounded_offline_runtime(900) == 900
+    # It may not bound itself looser.
+    assert _bounded_offline_runtime(ceiling * 10) == ceiling
+    # A nonsensical bound is not a way to ask for forever either.
+    assert _bounded_offline_runtime(0) == ceiling
