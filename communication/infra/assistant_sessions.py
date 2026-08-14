@@ -985,6 +985,7 @@ def delete_bootstrap_secret_if_owned(
             )
             emit_observability_event(
                 "assistantsession.bootstrap_secret_delete_skipped",
+                namespace=ns,
                 assistant_id=assistant_id,
                 activation_id=activation_id,
                 secret_name=secret_name,
@@ -1004,6 +1005,7 @@ def delete_bootstrap_secret_if_owned(
             raise
         emit_observability_event(
             "assistantsession.bootstrap_secret_deleted",
+            namespace=ns,
             assistant_id=assistant_id,
             activation_id=activation_id,
             secret_name=secret_name,
@@ -1045,10 +1047,45 @@ def create_or_update_bootstrap_secret(
     activation_id: str,
     payload: dict[str, Any],
 ) -> str:
-    namespace = bootstrap_namespace(
-        namespace
-    )  # bootstrap Secrets live in the sessions ns
+    """Write one activation's bootstrap Secret and return its name.
+
+    Written to the sessions namespace and mirrored into the session namespace,
+    because a pod reads whichever namespace *its own image* knows about and the
+    fleet is never uniformly on one image: idle containers outlive a rollout, so
+    a single-namespace write strands every pod built before the move. The mirror
+    is deleted alongside the primary by ``delete_bootstrap_secret_if_owned`` and
+    retires with the Phase-2 lockdown, once no pod reads the session namespace.
+    """
+
     secret_name = assistant_session_secret_name(assistant_id, activation_id)
+    _write_bootstrap_secret(
+        core_api,
+        bootstrap_namespace(namespace),
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        payload=payload,
+        secret_name=secret_name,
+    )
+    _write_bootstrap_secret(
+        core_api,
+        namespace,
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        payload=payload,
+        secret_name=secret_name,
+    )
+    return secret_name
+
+
+def _write_bootstrap_secret(
+    core_api,
+    namespace: str,
+    *,
+    assistant_id: str,
+    activation_id: str,
+    payload: dict[str, Any],
+    secret_name: str,
+) -> str:
     body = k8s_client.V1Secret(
         metadata=k8s_client.V1ObjectMeta(
             name=secret_name,
@@ -1067,6 +1104,7 @@ def create_or_update_bootstrap_secret(
             core_api.create_namespaced_secret(namespace=namespace, body=body)
             emit_observability_event(
                 "assistantsession.bootstrap_secret_created",
+                namespace=namespace,
                 assistant_id=assistant_id,
                 activation_id=activation_id,
                 secret_name=secret_name,
@@ -1077,6 +1115,7 @@ def create_or_update_bootstrap_secret(
                 raise
             emit_observability_event(
                 "assistantsession.bootstrap_secret_create_conflict",
+                namespace=namespace,
                 assistant_id=assistant_id,
                 activation_id=activation_id,
                 secret_name=secret_name,
@@ -1097,6 +1136,7 @@ def create_or_update_bootstrap_secret(
         ):
             emit_observability_event(
                 "assistantsession.bootstrap_secret_already_current",
+                namespace=namespace,
                 assistant_id=assistant_id,
                 activation_id=activation_id,
                 secret_name=secret_name,
@@ -1111,6 +1151,7 @@ def create_or_update_bootstrap_secret(
             )
             emit_observability_event(
                 "assistantsession.bootstrap_secret_replaced",
+                namespace=namespace,
                 assistant_id=assistant_id,
                 activation_id=activation_id,
                 secret_name=secret_name,
@@ -1122,6 +1163,7 @@ def create_or_update_bootstrap_secret(
                 raise
             emit_observability_event(
                 "assistantsession.bootstrap_secret_replace_conflict",
+                namespace=namespace,
                 assistant_id=assistant_id,
                 secret_name=secret_name,
                 attempt=_attempt + 1,
@@ -1140,6 +1182,7 @@ def create_or_update_bootstrap_secret(
     ):
         emit_observability_event(
             "assistantsession.bootstrap_secret_converged_after_conflicts",
+            namespace=namespace,
             assistant_id=assistant_id,
             activation_id=activation_id,
             secret_name=secret_name,

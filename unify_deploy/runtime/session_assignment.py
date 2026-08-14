@@ -50,6 +50,18 @@ def _namespace() -> str:
     return SETTINGS.DEPLOY_ENV
 
 
+def _bootstrap_namespace() -> str:
+    """Namespace holding this pod's bootstrap Secret.
+
+    Must match ``communication.infra.assistant_sessions.bootstrap_namespace()``.
+    The Secret is isolated out of the session namespace so the pod can be
+    granted ``get`` on its own bootstrap without read access to every Secret in
+    ``production`` (unity-secrets / comm-sa key / ORCHESTRA_ADMIN_KEY).
+    """
+
+    return f"{_namespace()}-sessions"
+
+
 def _session_name_from_job(job) -> str | None:
     labels = job.metadata.labels or {}
     annotations = job.metadata.annotations or {}
@@ -137,11 +149,40 @@ def read_assistant_session(session_name: str) -> dict[str, Any]:
 
 
 def read_session_bootstrap_secret_record(secret_name: str) -> BootstrapSecretRecord:
-    """Read a bootstrap Secret together with its owner annotations."""
+    """Read a bootstrap Secret together with its owner annotations.
+
+    Reads the dedicated sessions namespace first and falls back to the pod's own
+    namespace for Secrets written before the move. Both namespaces appear in the
+    failure, because a bootstrap read that 404s stalls the whole session and the
+    namespace is the only thing that distinguishes "not written yet" from
+    "written somewhere this pod does not look".
+    """
 
     _load_clients()
     assert _core_api is not None
-    secret = _core_api.read_namespaced_secret(name=secret_name, namespace=_namespace())
+    namespaces = (_bootstrap_namespace(), _namespace())
+    for index, namespace in enumerate(namespaces):
+        try:
+            secret = _core_api.read_namespaced_secret(
+                name=secret_name,
+                namespace=namespace,
+            )
+        except ApiException as e:
+            if e.status != 404:
+                raise
+            continue
+        if index:
+            logger.info(
+                "bootstrap Secret %s served from legacy namespace %s",
+                secret_name,
+                namespace,
+            )
+        break
+    else:
+        raise RuntimeError(
+            f"Bootstrap Secret {secret_name} not found in any of "
+            f"{', '.join(namespaces)}",
+        )
     data = secret.data or {}
     raw = data.get("startup.json", "")
     metadata = getattr(secret, "metadata", None)
