@@ -109,6 +109,28 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "create", "update"]
 ---
+# Phase 2 pod Role: `assistant-session-runtime` MINUS the `secrets` rule. Bound to
+# the actor pod SA `assistant-runtime-sa`; the pod reads its own bootstrap from
+# `staging-sessions` only and can read NO `staging` Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-session-runtime-pod
+  namespace: staging
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update"]
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -190,7 +212,7 @@ subjects:
   namespace: staging
 roleRef:
   kind: Role
-  name: assistant-session-runtime
+  name: assistant-session-runtime-pod
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1
