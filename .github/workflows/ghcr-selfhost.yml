@@ -181,6 +181,12 @@ jobs:
           else
             echo "  CANNOT read unifyai/${probe}"
           fi
+          if git -c http.https://github.com/.extraheader= \
+               ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/${probe}.git" >/dev/null 2>&1; then
+            echo "  can read unifyai/${probe} WITH the checkout header cleared"
+          else
+            echo "  CANNOT read unifyai/${probe} even with the header cleared"
+          fi
         done
         if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" >/dev/null 2>&1; then
           echo "CLONE_TOKEN can read unifyai/branding."
@@ -201,13 +207,23 @@ jobs:
         if [[ "${UNITY_REF}" == "main" || "${{ needs.resolve.outputs.channel_tag }}" == "main" ]]; then
           dep_branch="main"
         fi
-        UNISDK_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
-        UNILLM_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
-        MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/main" | cut -f1)"
+        # actions/checkout leaves an Authorization header configured for
+        # github.com, carrying this job's GITHUB_TOKEN, and git prefers it over
+        # credentials in the URL. That token is scoped to this repository alone,
+        # so every ls-remote below authenticated as the wrong identity and the
+        # private dependency answered 404 -- while the same PAT worked through
+        # the API, which never reads git config. Clearing the header for these
+        # calls is what lets the URL's credential be the one that is used.
+        ls_remote() {
+          git -c http.https://github.com/.extraheader= ls-remote "$@"
+        }
+        UNISDK_SHA="$(ls_remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
+        UNILLM_SHA="$(ls_remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
+        MAGNITUDE_SHA="$(ls_remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/main" | cut -f1)"
         # The canvas stage clones branding, whose clone command is static text, so
         # without this the layer is served from cache indefinitely and the image
         # keeps shipping whatever component kit it was first built with.
-        BRANDING_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" "refs/heads/${dep_branch}" | cut -f1)"
+        BRANDING_SHA="$(ls_remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" "refs/heads/${dep_branch}" | cut -f1)"
         echo "DEP_REPOS_SHA=${UNISDK_SHA}-${UNILLM_SHA}" >> "$GITHUB_ENV"
         echo "MAGNITUDE_SHA=${MAGNITUDE_SHA}" >> "$GITHUB_ENV"
         echo "CANVAS_BRANDING_SHA=${BRANDING_SHA}" >> "$GITHUB_ENV"
