@@ -163,6 +163,16 @@ jobs:
         who="$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
           https://api.github.com/user | sed -n 's/.*"login": *"\([^"]*\)".*/\1/p' | head -1)"
         echo "CLONE_TOKEN authenticates as: ${who:-<none - token rejected by the API>}"
+        # Ask the API directly: it distinguishes causes that git cannot.
+        # A token needing SAML authorisation is refused with an X-GitHub-SSO
+        # header naming the organisation, where git only ever says 404.
+        code="$(curl -sS -o /tmp/probe.json -D /tmp/probe.head -w '%{http_code}' \
+          -H "Authorization: token ${GH_TOKEN}" \
+          https://api.github.com/repos/unifyai/branding || echo 000)"
+        echo "API GET /repos/unifyai/branding -> HTTP ${code}"
+        grep -i '^x-github-sso' /tmp/probe.head || echo "  (no X-GitHub-SSO header)"
+        sed -n 's/.*"message": *"\([^"]*\)".*/  message: \1/p' /tmp/probe.json | head -1
+
         # Probed against a second private repo as well: one failure is a
         # permission on that repo, both is the credential's reach.
         for probe in orchestra branding; do
