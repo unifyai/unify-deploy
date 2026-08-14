@@ -373,12 +373,13 @@ An absent `github-authentication-token-expiration` header means the PAT does not
 
 **Direction of travel: these PATs are being retired.** GitHub has no API for creating a personal access token, so rotating one means signing into the web UI *as its owning account* — which for a bot-owned token means holding the bot's password and 2FA, and for a person-owned token means only that person can do it. Sharing a login is not the answer; a **GitHub App** is. An App has no login, password or 2FA at all: it signs a JWT with a private key and exchanges it for an installation token that expires in an hour, scoped to chosen repos and permissions. Rotation becomes a key swap, and a leaked token dies within the hour.
 
-The self-hosted CI runner migrates first (its credential is a personal PAT expiring **2026-09-23**), with `CLONE_TOKEN`'s six consuming repos — `unify`, `unify-deploy`, `console`, `unisdk`, `unillm`, `brain` — to follow. Until that lands, the slots above are what exists: **document them, do not add to them.**
+The self-hosted CI runner has migrated: it registers as org-owned GitHub App **`unifyai-ci-runner`** (App ID `4597891`), installed on `unify-deploy` alone with `Administration: write` + `Metadata: read`, its key in Secret Manager as `CI_RUNNER_GITHUB_APP_PRIVATE_KEY` (see [`deploy/k8s/ci-runner/`](deploy/k8s/ci-runner/)). `CLONE_TOKEN`'s six consuming repos — `unify`, `unify-deploy`, `console`, `unisdk`, `unillm`, `brain` — are to follow. Until that lands, the slots above are what exists: **document them, do not add to them.**
 
 **⚠️ Known loose ends:**
 
 - `gcp-project-saas` holds the same token as **two** enabled versions (`1` and `3`). `latest` is authoritative; version `1` is redundant and should be disabled.
-- `UNIFY_DEPLOY_CI_RUNNER_GITHUB_TOKEN` (saas, fine-grained, expires **2027-08-13**) and `CI_RUNNER_GITHUB_TOKEN` (gcp-project-runtime, classic `repo`, expires **2026-09-23**) are owned by the *human* account `YushaArif99`, not by a machine account — so they expire on a personal cadence and nobody else can rotate them. `CI_RUNNER_GITHUB_TOKEN` ([`deploy/k8s/ci-runner/`](deploy/k8s/ci-runner/)) is the near-term one and is the first migration target for the GitHub App above; it should move rather than be renewed.
+- `UNIFY_DEPLOY_CI_RUNNER_GITHUB_TOKEN` (saas, fine-grained, expires **2027-08-13**) is owned by the *human* account `YushaArif99`, not by a machine account — so it expires on a personal cadence and nobody else can rotate it. Despite the name it is **not** what the CI runner uses; the runner reads the GitHub App key from `gcp-project-runtime`. Confirm what still consumes it before renewing, and prefer moving it onto an App.
+- `CI_RUNNER_GITHUB_TOKEN` (gcp-project-runtime, classic `repo`, `YushaArif99`-owned, would have expired **2026-09-23**) is **superseded and disabled** — the runner cold-starts without it. Retained only as a rollback path; delete once a release PR has gone green on the App.
 
 ---
 
