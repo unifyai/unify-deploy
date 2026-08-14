@@ -1,8 +1,11 @@
 ---
 # ServiceAccount + RBAC for the in-cluster self-hosted GitHub Actions runner
-# that executes the `Integration smoke` merge gate (.github/workflows/
-# integration-smoke.yml). The runner reaches the Kubernetes API via in-cluster
-# config, so it needs the namespaced permissions the merge_gate tests exercise
+# that executes the merge_gate integration suite: the `staging -> main` release
+# gate in .github/workflows/integration-smoke-release-gate.yml, which publishes
+# the required `Integration smoke` check, and the ad-hoc runs in
+# integration-smoke.yml, which publish no required context (see
+# deploy/k8s/ci-runner/README.md). The runner reaches the Kubernetes API via
+# in-cluster config, so it needs the namespaced permissions the tests exercise
 # directly: creating/deleting Jobs (stale-job injection + cleanup), reading
 # Pods/Secrets (runtime + bootstrap inspection), and reading/deleting
 # AssistantSession custom objects (teardown verification).
