@@ -59,11 +59,12 @@ roleRef:
   kind: Role
   name: bootstrap-manager
   apiGroup: rbac.authorization.k8s.io
-# PHASE 2 (apply only after the fleet has drained onto the new pod image and no
-# bootstrap Secret remains in `production`): drop the pod SA's `production` secret
-# read by rebinding `assistant-runtime-sa` to a minimal Role identical to
-# `assistant-session-runtime` MINUS the `secrets` rule. That is the step that
-# actually closes the bypass; keeping it separate avoids breaking in-flight reads.
+# PHASE 2 (k8s-secret-bypass CLOSURE — applied 2026-08-14): the actor pod SA is
+# bound to `assistant-session-runtime-pod` below, identical to
+# `assistant-session-runtime` MINUS the `secrets` rule. The pod reads its OWN
+# bootstrap from `production-sessions` (bootstrap-reader Role above) and can read
+# NO `production` Secret — closing unity-secrets → comm-sa key / ORCHESTRA_ADMIN_KEY.
+# comm-sa keeps the secrets-bearing `assistant-session-runtime`.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -108,6 +109,28 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get"]
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update"]
+---
+# Phase 2 pod Role: `assistant-session-runtime` MINUS the `secrets` rule. Bound to
+# the actor pod SA `assistant-runtime-sa`; the pod reads its own bootstrap from
+# `production-sessions` only and can read NO `production` Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-session-runtime-pod
+  namespace: production
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
@@ -194,6 +217,11 @@ subjects:
 - kind: ServiceAccount
   name: assistant-runtime-sa
   namespace: production
+# roleRef is immutable. The API server rejects any change to it with `cannot
+# change roleRef`, which fails this apply and, under `set -eu`, the whole
+# deploy-session-controller step that deploy-comms waits on. Narrowing what this
+# ServiceAccount may read means adding a binding under its own name and deleting
+# this one -- never editing the value below.
 roleRef:
   kind: Role
   name: assistant-session-runtime

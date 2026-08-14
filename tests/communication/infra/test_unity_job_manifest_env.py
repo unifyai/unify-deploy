@@ -385,8 +385,11 @@ def test_recall_api_key_is_an_optional_secret_key() -> None:
 
     Same contract as the Meet twin credentials: absent key means the pod comes
     up and stays on the agent-service provider rather than failing to start.
+    The key is read on the broker sidecar, which is where every provider
+    credential now lives — see ``test_provider_credentials_live_only_on_the_sidecar``.
     """
-    env = _env_by_name(build_unity_job_manifest(job_name="recall-staging"))
+    manifest = build_unity_job_manifest(job_name="recall-staging")
+    env = {entry["name"]: entry for entry in _sidecar(manifest)["env"]}
     secret_ref = env["RECALL_API_KEY"]["valueFrom"]["secretKeyRef"]
     assert secret_ref["name"] == "unity-secrets"
     assert secret_ref["key"] == "RECALL_API_KEY"
@@ -772,16 +775,41 @@ def test_the_sidecar_carries_the_provider_credentials() -> None:
         assert env[key]["valueFrom"]["secretKeyRef"]["key"] == key
 
 
-def test_the_sidecar_environment_stays_minimal() -> None:
+def test_the_sidecar_environment_carries_credentials_and_nothing_else() -> None:
     """Every extra variable shares a process with the keys.
 
-    The sidecar needs credentials and somewhere to report spend. Anything
-    else widens what a compromise of it would yield, for no benefit.
+    The sidecar needs provider credentials and somewhere to report spend.
+    Anything else widens what a compromise of it would yield, for no benefit —
+    so this pins the shape (credentials plus ORCHESTRA_URL) rather than a
+    frozen list, which every new provider would otherwise break.
     """
     env_names = {
         e["name"] for e in _sidecar(build_unity_job_manifest(job_name="k"))["env"]
     }
-    assert env_names == {"ORCHESTRA_URL", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"}
+    assert "ORCHESTRA_URL" in env_names
+    non_credentials = {
+        name
+        for name in env_names - {"ORCHESTRA_URL"}
+        if not name.endswith(("_API_KEY", "_CREDENTIALS", "_REGION"))
+    }
+    assert non_credentials == set()
+
+
+def test_provider_credentials_live_only_on_the_sidecar() -> None:
+    """The runtime container the actor runs in holds no provider key.
+
+    This is the whole point of the broker: the actor executes model-authored
+    code in-process, so any credential mounted beside it is reachable by that
+    code. Every provider key belongs to the sidecar, which runs no plan.
+    """
+    manifest = build_unity_job_manifest(job_name="k")
+    sidecar_credentials = {
+        e["name"]
+        for e in _sidecar(manifest)["env"]
+        if e["name"].endswith(("_API_KEY", "_CREDENTIALS"))
+    }
+    assert sidecar_credentials, "the sidecar is meant to hold the provider keys"
+    assert sidecar_credentials.isdisjoint(set(_env_names(manifest)))
 
 
 def test_the_sidecar_is_not_given_the_pods_own_identity() -> None:

@@ -109,6 +109,28 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "create", "update"]
 ---
+# Phase 2 pod Role: `assistant-session-runtime` MINUS the `secrets` rule. Bound to
+# the actor pod SA `assistant-runtime-sa`; the pod reads its own bootstrap from
+# `staging-sessions` only and can read NO `staging` Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-session-runtime-pod
+  namespace: staging
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update"]
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -188,6 +210,11 @@ subjects:
 - kind: ServiceAccount
   name: assistant-runtime-sa
   namespace: staging
+# roleRef is immutable. The API server rejects any change to it with `cannot
+# change roleRef`, which fails this apply and, under `set -eu`, the whole
+# deploy-session-controller step that deploy-comms waits on. Narrowing what this
+# ServiceAccount may read means adding a binding under its own name and deleting
+# this one -- never editing the value below.
 roleRef:
   kind: Role
   name: assistant-session-runtime
