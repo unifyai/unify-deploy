@@ -163,6 +163,15 @@ jobs:
         who="$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
           https://api.github.com/user | sed -n 's/.*"login": *"\([^"]*\)".*/\1/p' | head -1)"
         echo "CLONE_TOKEN authenticates as: ${who:-<none - token rejected by the API>}"
+        # Probed against a second private repo as well: one failure is a
+        # permission on that repo, both is the credential's reach.
+        for probe in orchestra branding; do
+          if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/${probe}.git" >/dev/null 2>&1; then
+            echo "  can read unifyai/${probe}"
+          else
+            echo "  CANNOT read unifyai/${probe}"
+          fi
+        done
         if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" >/dev/null 2>&1; then
           echo "CLONE_TOKEN can read unifyai/branding."
         else
