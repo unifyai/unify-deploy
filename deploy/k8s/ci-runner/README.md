@@ -1,7 +1,16 @@
 # CI integration runner (Integration smoke merge gate)
 
 A self-hosted GitHub Actions runner that lives **inside the `unity` GKE cluster**
-(namespace `staging`) and executes `.github/workflows/integration-smoke.yml`.
+(namespace `staging`) and executes the `merge-gate` job of both integration-smoke
+workflows:
+
+- `.github/workflows/integration-smoke-release-gate.yml` — the `staging -> main`
+  release gate. Triggers on `pull_request` against `main` and
+  `workflow_dispatch` only; its aggregator job publishes the required
+  `Integration smoke` status check.
+- `.github/workflows/integration-smoke.yml` — the everyday, non-gating ad-hoc
+  runner. Triggers on `workflow_dispatch` and on a push whose commit message
+  carries the `[run-integration]` tag. It publishes no required context.
 
 It must run in-cluster because the merge-gate tests call internal Orchestra
 (`https://internal.example.com`) and the private-node cluster API
@@ -67,8 +76,26 @@ created-assistant reaper and a staging reconcile pass so runs stay leak-neutral.
 ## Required status check
 
 `Integration smoke` is configured as a required status check on `main`, so a
-`staging -> main` PR cannot merge until the gate passes. On unrelated PRs the
-job's `if:` condition makes it skip (which branch protection treats as passing).
+`staging -> main` PR cannot merge until the gate passes. The context is
+published by the `integration-smoke-required` aggregator job in
+`integration-smoke-release-gate.yml`, which runs `if: always()` and **fails**
+unless the `merge-gate` job it depends on reported `success`. A skipped or
+failed run is therefore an explicit red, never an implicit pass.
+
+The gate is fail-closed because that workflow file has **no `push` trigger at
+all** — only `pull_request: branches: [main]` and `workflow_dispatch`. An
+ordinary push produces no check run under this context whatsoever, so the
+required check stays genuinely `pending` until the real PR-triggered run answers
+it.
+
+Scoping the aggregator job's own `if:` instead is **not** sufficient and must not
+be reintroduced: GitHub Actions still publishes a *skipped* check run for a job
+whose `if:` evaluates false, and branch protection treats a skipped required
+check as satisfied — which is how unify-deploy#128 merged on a stale pass. For
+the same reason the ad-hoc workflow's test job is named `Integration smoke (run)`,
+distinct from the required `Integration smoke` context; a job name that collides
+with the required context recreates the same bug from a different file. See
+AGENTS.md § "Staging→Main Release Gates Are Fail-Closed".
 
 ## Cost / cleanup model
 
