@@ -109,6 +109,9 @@ jobs:
         gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
         gcloud config set project "$TEST_GCP_PROJECT_ID"
 
+    - name: Resolve Orchestra and Unify keys
+      run: bash scripts/resolve_ci_orchestra_keys.sh
+
     - name: Configure git for private repos
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"

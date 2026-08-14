@@ -172,12 +172,16 @@ jobs:
       env:
         BRAIN_REPO_URL: https://github.com/unifyai/brain.git
 
+    - name: Checkout first-party path dependencies
+      env:
+        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+      run: bash scripts/checkout_ci_path_deps.sh
+
     - name: Set up Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y portaudio19-dev
         pip install uv
-        python3 scripts/configure_ci_uv_sources.py
         uv sync --all-groups --all-extras
 
     - name: Run deploy tests
@@ -210,12 +214,16 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
 
+    - name: Checkout first-party path dependencies
+      env:
+        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+      run: bash scripts/checkout_ci_path_deps.sh
+
     - name: Set up Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y portaudio19-dev
         pip install uv
-        python3 scripts/configure_ci_uv_sources.py
         uv sync --all-groups --all-extras
 
     - name: Run adapter tests
@@ -284,12 +292,16 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
 
+    - name: Checkout first-party path dependencies
+      env:
+        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+      run: bash scripts/checkout_ci_path_deps.sh
+
     - name: Set up Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y portaudio19-dev
         pip install uv
-        python3 scripts/configure_ci_uv_sources.py
         uv sync --all-groups --all-extras
 
     - name: Run live adapter endpoint tests
