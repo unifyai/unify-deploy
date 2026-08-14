@@ -280,6 +280,7 @@ class AssistantSessionComponentHarness:
     job_name: str = "unity-job-1"
     pod_name: str = "unity-job-1-pod"
     vm_name: str = "unity-pool-ubuntu-1-staging"
+    vm_zone: str = "us-central1-a"
     vm_hostname: str = "vm-1.vm.unify.ai"
     user_api_key: str = "user-key"
     assignment_mode: str = "assigned"
@@ -313,7 +314,22 @@ class AssistantSessionComponentHarness:
                 "assistantId": self.assistant_id,
                 "activationId": self.activation_id,
                 "desiredState": "Running",
-                "desktop": {"required": True, "mode": "ubuntu"},
+                "desktop": {
+                    "required": True,
+                    "mode": "ubuntu",
+                    # Assignment refuses to fall back to the default pool
+                    # location, so a session without a complete placement never
+                    # binds a VM. Comms stamps this at activation; seeding it
+                    # here keeps the component flow exercising VM binding
+                    # rather than the refusal path.
+                    "placement": {
+                        "poolLocation": "us-central1",
+                        "region": "us-central1",
+                        "zone": "us-central1-a",
+                        "resolution": "nearest_capable",
+                        "timezone": "Etc/UTC",
+                    },
+                },
                 "startupSecretRef": self.secret_name,
             },
             "status": {
@@ -360,10 +376,14 @@ class AssistantSessionComponentHarness:
         app = FastAPI()
         app.include_router(tunnel_router, prefix="/infra")
         app.include_router(vm_self_router, prefix="/infra")
+        # The self-report endpoints derive the caller's pool location from the
+        # verified GCE identity token, so the zone claim is part of the contract
+        # a fake identity has to satisfy — not decoration.
         app.dependency_overrides[authenticate_vm_identity] = lambda: {
             "google": {
                 "compute_engine": {
                     "instance_name": self.vm_name,
+                    "zone": f"projects/1/zones/{self.vm_zone}",
                 },
             },
         }
@@ -469,7 +489,17 @@ class AssistantSessionComponentHarness:
         binding_id: str,
         unify_apikey: str,
         vm_type: str,
+        placement,
+        attach_static_ip: bool = True,
     ) -> dict:
+        """Mirror ``vm_helpers.assign_pool_vm``, placement arguments included.
+
+        The controller compares the returned location against the placement it
+        asked for and re-derives the binding's placement when they differ, so a
+        fake that omits those keys does not fail loudly — the assignment is
+        recorded as a failure and the session simply stays in PendingVM with no
+        vmRef, which reads as a product bug rather than harness drift.
+        """
         assert assistant_id == self.assistant_id
         assert unify_apikey == self.user_api_key
         if self.assignment_mode == "capacity":
@@ -482,6 +512,7 @@ class AssistantSessionComponentHarness:
         self.runtime_vm_present = True
         self.runtime_binding_id = binding_id
         self.runtime_pool_role = "assigned"
+        self.attached_static_ip = attach_static_ip
         self.vm_labels = {
             "assistant-id": assistant_id,
             "binding-id": binding_id,
@@ -492,6 +523,9 @@ class AssistantSessionComponentHarness:
             "hostname": self.vm_hostname,
             "desktop_url": f"https://{self.vm_hostname}",
             "vm_type": vm_type,
+            "pool_location": placement.location.id,
+            "region": placement.region,
+            "zone": placement.zone,
         }
 
     def probe_vm_agent_service(self, _hostname: str, timeout: float = 3.0) -> bool:
@@ -507,6 +541,7 @@ class AssistantSessionComponentHarness:
         *,
         vm_name: str,
         release_generation: int | None = None,
+        placement=None,
     ) -> dict:
         assert assistant_id == self.assistant_id
         if (
@@ -532,6 +567,8 @@ class AssistantSessionComponentHarness:
         vm_name: str,
         binding_id: str,
         assistant_id: str,
+        *,
+        placement=None,
     ) -> dict | None:
         if self.force_assignment_loss:
             return None
@@ -552,6 +589,7 @@ class AssistantSessionComponentHarness:
         vm_type: str,
         *,
         binding_id: str,
+        desktop_secret: str | None = None,
     ) -> str:
         self.published_ready_events.append(
             {
@@ -559,6 +597,7 @@ class AssistantSessionComponentHarness:
                 "hostname": hostname,
                 "vm_type": vm_type,
                 "binding_id": binding_id,
+                "desktop_secret": desktop_secret,
             },
         )
         return f"message-{len(self.published_ready_events)}"
@@ -586,7 +625,13 @@ class AssistantSessionComponentHarness:
             return self.vm_name
         return None
 
-    def complete_pool_vm_release(self, vm_name: str, binding_id: str) -> dict:
+    def complete_pool_vm_release(
+        self,
+        vm_name: str,
+        binding_id: str,
+        *,
+        placement=None,
+    ) -> dict:
         if (
             not self.runtime_vm_present
             or vm_name != self.vm_name
