@@ -139,6 +139,33 @@ jobs:
         cp -R deploy/selfhost/. "$dest/deploy/selfhost/"
         printf '%s\n' "${GITHUB_SHA}" > "$dest/deploy/selfhost/.unity-deploy-sha"
 
+    # The step below resolves three public repos and one private one, so a
+    # token that is empty, malformed, or unable to see private repositories
+    # gets three quarters of the way through and then fails on `branding`
+    # with "Repository not found" -- GitHub's answer for a repository you
+    # cannot see is the same as for one that does not exist. Naming the
+    # cause here keeps that from reading as a missing repo.
+    - name: CLONE_TOKEN can read a private dependency
+      env:
+        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+      run: |
+        if [ -z "${GH_TOKEN}" ]; then
+          echo "::error::CLONE_TOKEN is empty here. Either the secret is unset,"
+          echo "::error::or this repository is outside its access list."
+          exit 1
+        fi
+        # The value is masked in logs; its length is not, and distinguishes a
+        # truncated or whitespace-padded paste from a well-formed token.
+        echo "CLONE_TOKEN present, length ${#GH_TOKEN}."
+        if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" >/dev/null 2>&1; then
+          echo "CLONE_TOKEN can read unifyai/branding."
+        else
+          echo "::error::CLONE_TOKEN is set but cannot read unifyai/branding."
+          echo "::error::Check the token's scope, and that it belongs to an"
+          echo "::error::account with access to that repository."
+          exit 1
+        fi
+
     - name: Resolve dependency SHAs (cache bust)
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
