@@ -208,23 +208,26 @@ metadata:
   annotations:
     iam.gke.io/gcp-service-account: service-account@example.iam.gserviceaccount.com
 ---
+# k8s-secret-bypass CLOSURE: the pod SA is bound to the secrets-LESS
+# `assistant-session-runtime-pod` Role. It reads its own bootstrap from
+# `production-sessions` (bootstrap-reader Role above) and can read NO `production`
+# Secret (unity-secrets / comm-sa key / ORCHESTRA_ADMIN_KEY). A NEW binding name
+# is used (not editing the old `assistant-session-runtime-assistant-sa`) because
+# roleRef is immutable -- the API server rejects an in-place roleRef change with
+# `cannot change roleRef`, which failed the deploy under `set -eu`. The old
+# binding was deleted live during the cutover and is intentionally absent here.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: assistant-session-runtime-assistant-sa
+  name: assistant-session-runtime-pod-assistant-sa
   namespace: production
 subjects:
 - kind: ServiceAccount
   name: assistant-runtime-sa
   namespace: production
-# roleRef is immutable. The API server rejects any change to it with `cannot
-# change roleRef`, which fails this apply and, under `set -eu`, the whole
-# deploy-session-controller step that deploy-comms waits on. Narrowing what this
-# ServiceAccount may read means adding a binding under its own name and deleting
-# this one -- never editing the value below.
 roleRef:
   kind: Role
-  name: assistant-session-runtime
+  name: assistant-session-runtime-pod
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1

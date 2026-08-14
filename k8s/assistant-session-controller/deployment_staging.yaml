@@ -204,20 +204,19 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: assistant-session-runtime-assistant-sa
+  name: assistant-session-runtime-pod-assistant-sa
   namespace: staging
 subjects:
 - kind: ServiceAccount
   name: assistant-runtime-sa
   namespace: staging
-# roleRef is immutable. The API server rejects any change to it with `cannot
-# change roleRef`, which fails this apply and, under `set -eu`, the whole
-# deploy-session-controller step that deploy-comms waits on. Narrowing what this
-# ServiceAccount may read means adding a binding under its own name and deleting
-# this one -- never editing the value below.
+# k8s-secret-bypass CLOSURE: pod SA bound to the secrets-LESS
+# `assistant-session-runtime-pod` Role (reads its bootstrap from `staging-sessions`
+# only, no `staging` Secret access). New binding name because roleRef is immutable;
+# the old `assistant-session-runtime-assistant-sa` was deleted live at cutover.
 roleRef:
   kind: Role
-  name: assistant-session-runtime
+  name: assistant-session-runtime-pod
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1

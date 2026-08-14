@@ -116,34 +116,30 @@ def test_reader_prefers_the_sessions_namespace(monkeypatch, pod_namespace):
     assert asked == ["staging-sessions"]
 
 
-def test_reader_falls_back_to_the_session_namespace(monkeypatch, pod_namespace):
-    """A Secret written before the move is still readable."""
+def test_reader_does_not_fall_back_to_the_session_namespace(monkeypatch, pod_namespace):
+    """The migration fallback is gone: a 404 in the sessions namespace raises
+    without ever reading the pod's own namespace (the pod SA has no Secret access
+    there anymore)."""
 
     asked = []
 
     class FakeCoreApi:
         def read_namespaced_secret(self, name, namespace):
             asked.append(namespace)
-            if namespace == "staging-sessions":
-                raise ApiException(status=404)
-            return _secret({"api_key": "legacy"})
+            raise ApiException(status=404)
 
     monkeypatch.setattr(session_assignment, "_core_api", FakeCoreApi())
-    record = session_assignment.read_session_bootstrap_secret_record(
-        "assistant-session-bootstrap-2103-act-1",
-    )
+    with pytest.raises(RuntimeError):
+        session_assignment.read_session_bootstrap_secret_record(
+            "assistant-session-bootstrap-2103-act-1",
+        )
 
-    assert record.payload == {"api_key": "legacy"}
-    assert asked == ["staging-sessions", "staging"]
+    assert asked == ["staging-sessions"]
 
 
-def test_missing_bootstrap_names_every_namespace_tried(monkeypatch, pod_namespace):
-    """The failure has to say where it looked.
-
-    A bare 404 carrying only the Secret name cannot distinguish "the writer has
-    not written it yet" from "the writer wrote it somewhere this pod does not
-    read". Those two need different fixes, and only the namespace separates them.
-    """
+def test_missing_bootstrap_names_the_namespace_tried(monkeypatch, pod_namespace):
+    """The failure has to say where it looked, so a 404 is legible as "the writer
+    has not written it yet" rather than a bare Secret-not-found."""
 
     class FakeCoreApi:
         def read_namespaced_secret(self, name, namespace):
@@ -155,9 +151,7 @@ def test_missing_bootstrap_names_every_namespace_tried(monkeypatch, pod_namespac
             "assistant-session-bootstrap-2103-act-1",
         )
 
-    message = str(excinfo.value)
-    assert "staging-sessions" in message
-    assert "staging" in message
+    assert "staging-sessions" in str(excinfo.value)
 
 
 def test_non_404_errors_are_not_swallowed_by_the_fallback(monkeypatch, pod_namespace):
