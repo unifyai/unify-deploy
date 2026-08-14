@@ -182,7 +182,7 @@ After adding a scope, wait a few minutes for propagation, then run `python3 depl
 
 **Pub/Sub:** infra topics `unity-ingest`, `unity-parse`, `unity-dead-letter` (+`-staging`); per-assistant `unity-<id>[-staging]` (new) and `unity-<id>[-staging]` (legacy) ⚠️. ~1,590 topics / ~6,222 subs total, ~84% still `unity-*`.
 
-**Secret Manager (names):** `UNITY_ADAPTERS_URL{,_PREVIEW,_STAGING}`, `UNITY_COMMS_URL{,_PREVIEW,_STAGING}` ⚠️, `UNITY_ADAPTERS_URL_{PRODUCTION,STAGING}`, plus provider/integration secrets (`ANTHROPIC_API_KEY`, `LIVEKIT_*`, `TWILIO_*`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `VM_WILDCARD_FULLCHAIN/PRIVKEY`, `gcp-sa-key`, `github-pat`, `DEVBOT_GITHUB_TOKEN`, …). Cluster runtime secret = `unity-secrets` (see §7).
+**Secret Manager (names):** `UNITY_ADAPTERS_URL{,_PREVIEW,_STAGING}`, `UNITY_COMMS_URL{,_PREVIEW,_STAGING}` ⚠️, `UNITY_ADAPTERS_URL_{PRODUCTION,STAGING}`, plus provider/integration secrets (`ANTHROPIC_API_KEY`, `LIVEKIT_*`, `TWILIO_*`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `VM_WILDCARD_FULLCHAIN/PRIVKEY`, `gcp-sa-key`, `github-pat`, `DEVBOT_GITHUB_TOKEN` ⚠️ **dead here — the live copy is in `gcp-project-saas`, see [§7.5](#75-github-machine-account-credentials)**, …). Cluster runtime secret = `unity-secrets` (see §7).
 
 ### 4.2 `gcp-project-vms` — desktop VM pool
 
@@ -344,6 +344,39 @@ Every key this estate deploys uses `limit_reset: monthly`, so a cap can throttle
 
 - **`MCP: OpenRouter MCP: Claude Code (openrouter)`** (`e104bdd3`, $5 cap, $0 used) was auto-minted by an MCP integration on 2026-08-10 and is unattributed. Harmless, but it belongs to someone — attribute it or delete it.
 - Per-key caps across the eight active keys sum to **$20,105/month** of theoretical headroom. There is no account-level cap, so that sum is the real ceiling — and the retired `cfcba7cb` still carries a $40,000 cap that would count toward it if anyone re-enabled the key.
+
+### 7.5 GitHub machine-account credentials
+
+`unifyai` has two machine accounts with deliberately different jobs (see `AGENTS.md`): **`approver-bot`** approves PRs and holds *no* stored credential in this estate — it is a `gh` CLI login only — while **`ci-bot`** does CI automation and owns the one credential below. It is a **classic PAT**, `repo` scope, **no expiry**, stored under the same name in three projects, one of which is dead.
+
+| Secret slot | Project | State | Consumer |
+|---|---|---|---|
+| `DEVBOT_GITHUB_TOKEN` | `gcp-project-saas` | ✅ **live — authoritative** | Console Cloud Build (`unify-console`, `unify-console-redesign`, us-central1) mounts `versions/latest`; Console runtime reads it in `/api/assistant/local/download` |
+| `DEVBOT_GITHUB_TOKEN` | `gcp-project-vms` | ✅ live — byte-identical token | Pool VM provisioning ([§4.2](#42-gcp-project-vms--desktop-vm-pool)) |
+| `DEVBOT_GITHUB_TOKEN` | `gcp-project-runtime` | ❌ **dead — all versions disabled** | Nothing. Appears in [§4.1](#41-gcp-project-runtime--main-runtime) by name only |
+| `DEVBOT_GITHUB_TOKEN` | GH repo secret, `unifyai/console` | ✅ live | `ghcr-selfhost.yml` clones private repos as `x-access-token` |
+
+**The dead copy is the trap.** `versions access` against `gcp-project-runtime` fails outright, and an unchecked fetch carries an empty string into `git clone`, which GitHub answers with `Repository not found` — the same 404-instead-of-403 that hid an expired `CLONE_TOKEN` for ten days. An empty secret and a missing repo look identical from the error alone, so confirm the project before concluding the credential is broken:
+
+```bash
+gcloud secrets versions list DEVBOT_GITHUB_TOKEN --project=gcp-project-saas
+```
+
+**To confirm which account and scopes a copy carries**, without printing it:
+
+```bash
+TOK=$(gcloud secrets versions access latest --secret=DEVBOT_GITHUB_TOKEN --project=gcp-project-saas)
+curl -s -o /dev/null -D - -H "Authorization: Bearer $TOK" https://api.github.com/user | grep -iE 'x-oauth-scopes|token-expiration'
+```
+
+An absent `github-authentication-token-expiration` header means the PAT does not expire.
+
+**Rotation cannot be scripted.** GitHub has no API for minting a personal access token — web UI only. Every rotation needs the `ci-bot` password and 2FA at a browser, then a new version pushed to each live slot above. Budget for that; it is a standing bottleneck.
+
+**⚠️ Known loose ends:**
+
+- `gcp-project-saas` holds the same token as **two** enabled versions (`1` and `3`). `latest` is authoritative; version `1` is redundant and should be disabled.
+- `UNIFY_DEPLOY_CI_RUNNER_GITHUB_TOKEN` (saas, fine-grained, expires **2027-08-13**) and `CI_RUNNER_GITHUB_TOKEN` (gcp-project-runtime, classic `repo`, expires **2026-09-23**) are owned by the *human* account `YushaArif99`, not by a machine account. They expire on a personal cadence and cannot be rotated without that person — the near-term one is the CI runner's ([`deploy/k8s/ci-runner/`](deploy/k8s/ci-runner/)).
 
 ---
 
