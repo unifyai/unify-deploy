@@ -19,12 +19,16 @@ ASSISTANT_LOOKUP_TIMEOUT_SECONDS = 30
 #: Bounded tightly: this runs inline on the dispatch path, and a slow
 #: answer delays a scheduled run for every account, not just a gated one.
 RUNTIME_ACCESS_TIMEOUT_SECONDS = 10
+#: Every name here must be a field Orchestra's ``/admin/assistant`` accepts:
+#: one unknown name 422s the whole request, which ``get_assistant`` degrades
+#: to the local-assistant stub — silently breaking every email- and
+#: phone-keyed lookup in hosted comms.
 ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
     "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
-    "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
+    "surname,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "assistant_has_ms_teams_bot,assistant_ms_teams_tenant_id,"
     "age,nationality,"
@@ -100,7 +104,6 @@ def _runtime_str(value: object) -> str:
 def _local_assistant_data() -> dict[str, Any]:
     return {
         "assistant_id": "local-assistant",
-        "deploy_env": None,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
@@ -147,7 +150,6 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "assistant_id": _runtime_str(assistant["agent_id"]),
-        "deploy_env": assistant.get("deploy_env"),
         "user_id": _runtime_str(assistant["user_id"]),
         "api_key": _runtime_str(assistant["api_key"]),
         "user_first_name": _runtime_str(assistant["user_first_name"]),
@@ -285,6 +287,17 @@ def get_assistant(
     )
 
     if "detail" in response:
+        # An error body is an Orchestra rejection (auth, validation), not a
+        # miss — a miss returns an empty ``info`` list. Degrading to the
+        # local stub keeps webhooks answering, but the rejection itself must
+        # be loud: a request-shape bug here silently breaks every email- and
+        # phone-keyed lookup fleet-wide. The detail text is Orchestra's own
+        # error message and carries no credentials.
+        logger.error(
+            "get_assistant rejected by Orchestra lookup_type=%s detail=%s",
+            lookup_type,
+            response["detail"],
+        )
         return {**local_assistant_data, "assistant_id": None}
     assistants = response["info"]
     if len(assistants) == 0:

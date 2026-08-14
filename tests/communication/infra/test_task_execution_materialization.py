@@ -993,7 +993,6 @@ def test_shared_get_assistant_fetches_orchestra_admin_directly(monkeypatch):
                 "info": [
                     {
                         "agent_id": "assistant-123",
-                        "deploy_env": "staging",
                         "user_id": "user-123",
                         "api_key": "assistant-api-key",
                         "user_first_name": "Test",

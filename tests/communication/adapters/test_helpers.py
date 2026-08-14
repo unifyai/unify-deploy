@@ -298,7 +298,6 @@ def _create_mock_assistant_data(desktop_mode="none"):
 def _orchestra_assistant_record(**overrides):
     record = {
         "agent_id": "12345",
-        "deploy_env": None,
         "user_id": "user-123",
         "api_key": "test-api-key",
         "user_first_name": "Test",
@@ -477,7 +476,6 @@ def test_get_assistant_preserves_team_ids(mock_get):
                 "info": [
                     {
                         "agent_id": "assistant-123",
-                        "deploy_env": "staging",
                         "user_id": "user-123",
                         "api_key": "test-api-key",
                         "user_first_name": "Test",

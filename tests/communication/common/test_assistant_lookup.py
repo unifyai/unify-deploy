@@ -17,7 +17,6 @@ from common.coordinator_voice import (
 def test_assistant_payload_coerces_nullable_runtime_strings():
     assistant = {
         "agent_id": 110,
-        "deploy_env": None,
         "user_id": "user-123",
         "api_key": "key",
         "user_first_name": None,
@@ -163,6 +162,49 @@ def test_get_assistant_passes_from_fields_for_email_lookup(monkeypatch):
         "email": "byod@example.com",
         "from_fields": ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
     }
+
+
+def test_contact_lookup_from_fields_omits_purged_assistant_fields():
+    """Orchestra 422s the whole request on one unknown field name, and
+    ``get_assistant`` degrades that to the local stub — every email- and
+    phone-keyed lookup fleet-wide silently resolves to nothing. Fields
+    removed from Orchestra's Assistant read model must leave this list in
+    the same changeset; ``deploy_env`` (purged 2026-06-10) got stuck here
+    and broke exactly that way in production.
+    """
+    assert "deploy_env" not in ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+
+
+def test_get_assistant_logs_orchestra_rejection_loudly(monkeypatch, caplog):
+    class Response:
+        def json(self):
+            return {"detail": "Invalid field name(s): deploy_env"}
+
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_url",
+        "https://api.test",
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup.SETTINGS.orchestra_admin_key",
+        "admin-key",
+    )
+    monkeypatch.setattr(
+        "common.assistant_lookup.requests.get",
+        lambda *_args, **_kwargs: Response(),
+    )
+    caplog.set_level(logging.INFO, logger="common.assistant_lookup")
+
+    result = get_assistant(email_address="byod@example.com")
+
+    assert result["assistant_id"] is None
+    rejection_records = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+        and "rejected by Orchestra" in record.getMessage()
+    ]
+    assert len(rejection_records) == 1
+    assert "Invalid field name(s): deploy_env" in rejection_records[0].getMessage()
 
 
 def test_get_assistant_does_not_log_sensitive_response_fields(monkeypatch, caplog):
