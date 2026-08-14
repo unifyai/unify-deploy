@@ -16,6 +16,7 @@ import pytest
 from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unify_deploy.assistant_deployments.clients import (
     _CLIENT_DEPLOYMENTS,
+    _ensure_embedded_clients_registered,
     resolve,
     resolve_from_deployments,
 )
@@ -165,6 +166,12 @@ def _guidance_keys(resolved) -> set[str]:
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Snapshot and restore the client deployment registry so tests don't leak."""
+    # ``resolve()`` imports the embedded client subpackages lazily, and those
+    # imports call ``register_client`` at module scope. Force them here, before
+    # any test body patches ``load_deployment``, so a first-time client import
+    # can never land inside a patch that only knows the test's own deployment
+    # names. Setup ordering guarantees this runs before the test body.
+    _ensure_embedded_clients_registered()
     saved_clients = dict(_CLIENT_DEPLOYMENTS)
     _CLIENT_DEPLOYMENTS.clear()
     yield
