@@ -184,11 +184,12 @@ jobs:
         pip install uv
         uv sync --all-groups --all-extras
 
+    # No credentials: these suites reach no backend. The sync tests are served
+    # by an in-memory Orchestra and the rest set whatever environment they
+    # assert on. A required check that carries a key fails whenever that key
+    # rotates or lapses, for reasons that have nothing to do with the diff.
     - name: Run deploy tests
       run: .venv/bin/python -m pytest -vs tests/deployment_reconcile tests/assistant_deployments
-      env:
-        UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-        ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
 
   adapter_tests:
     runs-on: ubuntu-latest

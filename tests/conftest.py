@@ -44,8 +44,15 @@ def _check_orchestra_available() -> bool:
         health_url = f"{orchestra_url}/v0/projects"
     try:
         with httpx.Client(timeout=5.0) as client:
-            resp = client.get(health_url)
-            _check_orchestra_available._cached = resp.status_code in (200, 401, 403)
+            # Authenticated, and only 200 counts. These tests create projects
+            # and write rows; a server that answers 401 can host none of that,
+            # so treating "something is listening" as available just moves the
+            # failure from a clean skip to an auth error mid-suite.
+            resp = client.get(
+                health_url,
+                headers={"Authorization": f"Bearer {os.environ.get('UNIFY_KEY', '')}"},
+            )
+            _check_orchestra_available._cached = resp.status_code == 200
     except Exception:
         _check_orchestra_available._cached = False
 

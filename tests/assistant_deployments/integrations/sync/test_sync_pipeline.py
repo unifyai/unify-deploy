@@ -1,8 +1,10 @@
 """End-to-end tests verifying integration data flows into real managers.
 
 These tests exercise the full path: manifest -> loader -> guidance.jsonl /
-typed Secret models -> manager CRUD. They use the real Unity test
-infrastructure (Unify context, actual manager instances) rather than mocks.
+typed Secret models -> manager CRUD. The managers are the real ones, reading
+and writing through the ordinary unisdk calls; only their storage is the
+in-memory Orchestra, so what the loader produces has to survive a genuine
+reconcile rather than a recorded one.
 """
 
 from __future__ import annotations
@@ -14,7 +16,6 @@ from uuid import uuid4
 import pytest
 import yaml
 
-from tests.helpers import _handle_project
 from unify.guidance_manager.custom_guidance import (
     GUIDANCE_JSONL_FILENAME,
     collect_custom_guidance,
@@ -120,7 +121,6 @@ class TestLoaderTypedOutput:
         assert len(entries) == 2
 
 
-@_handle_project
 @pytest.mark.asyncio
 async def test_loaded_guidance_syncs_to_manager(github_integration):
     manifest, root = github_integration
@@ -140,7 +140,6 @@ async def test_loaded_guidance_syncs_to_manager(github_integration):
     gm.clear()
 
 
-@_handle_project
 @pytest.mark.asyncio
 async def test_integration_secrets_sync_to_manager(github_integration):
     manifest, root = github_integration
