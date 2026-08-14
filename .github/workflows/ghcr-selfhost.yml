@@ -206,6 +206,27 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    # The canvas stage reads branding and iso-animation over SSH, each under
+    # its own deploy key, mounted as build secrets so neither lands in a layer.
+    # Cloud Build satisfies the same Dockerfile from Secret Manager; Actions
+    # cannot read that store, so the keys are staged here from repository
+    # secrets. The runner is ephemeral and these never enter the image.
+    - name: Stage the canvas deploy keys
+      env:
+        BRANDING_DEPLOY_KEY: ${{ secrets.BRANDING_DEPLOY_KEY }}
+        ISO_ANIMATION_DEPLOY_KEY: ${{ secrets.ISO_ANIMATION_DEPLOY_KEY }}
+      run: |
+        umask 077
+        if [ -z "${BRANDING_DEPLOY_KEY}" ] || [ -z "${ISO_ANIMATION_DEPLOY_KEY}" ]; then
+          echo "::error::BRANDING_DEPLOY_KEY / ISO_ANIMATION_DEPLOY_KEY are not"
+          echo "::error::set on this repository; the canvas stage cannot clone."
+          exit 1
+        fi
+        # printf, not echo, so the file ends in exactly one newline whether or
+        # not the stored value carried one -- OpenSSH rejects a key without it.
+        printf '%s\n' "${BRANDING_DEPLOY_KEY}" > "${RUNNER_TEMP}/branding_deploy_key"
+        printf '%s\n' "${ISO_ANIMATION_DEPLOY_KEY}" > "${RUNNER_TEMP}/iso_deploy_key"
+
     - name: Build and push unity-selfhost (${{ matrix.arch_tag }})
       uses: docker/build-push-action@v6
       with:
@@ -220,14 +241,13 @@ jobs:
           DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}
           MAGNITUDE_SHA=${{ env.MAGNITUDE_SHA }}
           CANVAS_BRANDING_SHA=${{ env.CANVAS_BRANDING_SHA }}
-        # The canvas stage reads branding and iso-animation over SSH, each
-        # under its own deploy key, and mounts them as build secrets so they
-        # never land in a layer. Cloud Build satisfies the same Dockerfile from
-        # Secret Manager; this is the equivalent route for Actions, which has
-        # no access to that store.
-        secrets: |
-          branding_deploy_key=${{ secrets.BRANDING_DEPLOY_KEY }}
-          iso_deploy_key=${{ secrets.ISO_ANIMATION_DEPLOY_KEY }}
+        # Passed as files rather than inline values: a PEM is multi-line, and
+        # interpolating one into the `secrets:` list splits it across entries,
+        # so the key reaches the build truncated and OpenSSH rejects it with
+        # "error in libcrypto".
+        secret-files: |
+          branding_deploy_key=${{ runner.temp }}/branding_deploy_key
+          iso_deploy_key=${{ runner.temp }}/iso_deploy_key
         cache-from: type=gha,scope=unity-selfhost-${{ matrix.arch_tag }}
         cache-to: type=gha,mode=max,scope=unity-selfhost-${{ matrix.arch_tag }}
 
