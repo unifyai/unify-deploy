@@ -16,11 +16,34 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-subscriber = pubsub_v1.SubscriberClient()
-subscription_path = subscriber.subscription_path(
-    os.getenv("GCP_PROJECT_ID"),
-    "unity-default-test-assistant-staging-sub",
-)
+
+# Built on first use rather than at import. A SubscriberClient resolves
+# application-default credentials in its constructor, and pytest imports every
+# file it collects -- including the ones a marker then deselects. Building it
+# here at module level therefore made `-m "not live"` unable to run this
+# directory at all without cloud credentials, which is why the deterministic
+# adapters job authenticated to GCP it never used, and why the suite could not
+# be collected on a laptop.
+class _LazySubscriber:
+    _client = None
+
+    def _resolve(self):
+        if _LazySubscriber._client is None:
+            _LazySubscriber._client = pubsub_v1.SubscriberClient()
+        return _LazySubscriber._client
+
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+
+
+subscriber = _LazySubscriber()
+
+
+def _subscription_path() -> str:
+    return subscriber.subscription_path(
+        os.getenv("GCP_PROJECT_ID"),
+        "unity-default-test-assistant-staging-sub",
+    )
 
 
 def test_twilio_call_status_webhook(test_client):
@@ -37,7 +60,7 @@ def test_twilio_call_status_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -55,7 +78,7 @@ def test_twilio_call_status_webhook(test_client):
         assert data["event"]["assistant_number"] == assistant_number
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_twilio_call_webhook(test_client):
@@ -74,7 +97,7 @@ def test_twilio_call_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -101,7 +124,7 @@ def test_twilio_call_webhook(test_client):
         assert data["event"]["call_metadata"]["twilio_number"] == assistant_number
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_twilio_sms_webhook(test_client):
@@ -123,7 +146,7 @@ def test_twilio_sms_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -141,7 +164,7 @@ def test_twilio_sms_webhook(test_client):
         assert data["event"]["body"] == body
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_twilio_whatsapp_webhook(test_client):
@@ -163,7 +186,7 @@ def test_twilio_whatsapp_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -181,7 +204,7 @@ def test_twilio_whatsapp_webhook(test_client):
         assert data["event"]["body"] == body
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_unify_message_webhook(test_client):
@@ -224,7 +247,7 @@ def test_unify_message_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -243,7 +266,7 @@ def test_unify_message_webhook(test_client):
         assert data["event"].get("body") == body or data["event"].get("content") == body
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_log_pre_hire_chats_webhook(test_client):
@@ -270,7 +293,7 @@ def test_log_pre_hire_chats_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -288,7 +311,7 @@ def test_log_pre_hire_chats_webhook(test_client):
         assert data["event"]["body"][0] == body[0]
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_unify_meet_webhook(test_client):
@@ -330,7 +353,7 @@ def test_unify_meet_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -352,7 +375,7 @@ def test_unify_meet_webhook(test_client):
     except AssertionError as e:
         print(e)
         raise
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_unify_meet_webhook_rejects_sessionless_dispatch(test_client):
@@ -422,7 +445,7 @@ def test_unify_meet_webhook_org_call_participants(test_client):
     assert response.status_code == 200
 
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -435,7 +458,7 @@ def test_unify_meet_webhook_org_call_participants(test_client):
         assert "livekit_agent_name" not in event
         assert event["participants"] == participants
     finally:
-        subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+        subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_unity_system_event_webhook(test_client):
@@ -459,7 +482,7 @@ def test_unity_system_event_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     pubsub_msg = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = pubsub_msg.ack_id
@@ -477,7 +500,7 @@ def test_unity_system_event_webhook(test_client):
         assert data["event"]["message"] == message
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_email_notification_processor(test_client):
@@ -535,7 +558,7 @@ def test_assistant_update_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -556,7 +579,7 @@ def test_assistant_update_webhook(test_client):
         assert event["assistant_timezone"] == "UTC"
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])
 
 
 def test_health_check(test_client):
@@ -1014,7 +1037,7 @@ def test_livekit_recording_webhook_happy_path(test_client):
 
     # Check that the recording_ready message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path,
+        subscription=_subscription_path(),
         max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
@@ -1034,4 +1057,4 @@ def test_livekit_recording_webhook_happy_path(test_client):
         assert f"{room_name}.mp3" in data["event"]["recording_url"]
     except AssertionError as e:
         print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+    subscriber.acknowledge(subscription=_subscription_path(), ack_ids=[ack_id])

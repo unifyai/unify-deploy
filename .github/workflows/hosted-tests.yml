@@ -133,19 +133,14 @@ jobs:
     - name: Required secrets are present
       env:
         CLONE_TOKEN: ${{ secrets.CLONE_TOKEN }}
-        GCP_CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON || secrets.GCP_SA_KEY }}
       run: |
-        missing=()
-        [ -n "$CLONE_TOKEN" ] || missing+=("CLONE_TOKEN (clones brain/unisdk/branding)")
-        [ -n "$GCP_CREDENTIALS" ] || missing+=("GCP_SERVICE_ACCOUNT_JSON or GCP_SA_KEY")
-        if [ ${#missing[@]} -gt 0 ]; then
-          for secret in "${missing[@]}"; do
-            echo "::error::Missing repository/organization secret: ${secret}"
-          done
-          echo "::error::Set these on unifyai/unify-deploy before these suites can run."
+        if [ -z "$CLONE_TOKEN" ]; then
+          echo "::error::Missing secret CLONE_TOKEN, which clones the private"
+          echo "::error::dependencies (brain, branding). Set it on"
+          echo "::error::unifyai/unify-deploy before these suites can run."
           exit 1
         fi
-        echo "All required secrets are present."
+        echo "CLONE_TOKEN is present."
 
   deploy_tests:
     runs-on: ubuntu-latest
@@ -198,10 +193,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Auth into Google Cloud
-      uses: 'google-github-actions/auth@v2'
-      with:
-        credentials_json: '${{ secrets.GCP_SERVICE_ACCOUNT_JSON || secrets.GCP_SA_KEY }}'
+    # No GCP auth: every test this job runs is deselected from the live tier
+    # and touches no cloud service. It authenticated only because collecting
+    # test_endpoints.py built a Pub/Sub client at import, which is now deferred
+    # to first use. The one job that genuinely needs a cloud credential still
+    # authenticates for itself, below.
 
     - name: Set up Python
       uses: actions/setup-python@v5
