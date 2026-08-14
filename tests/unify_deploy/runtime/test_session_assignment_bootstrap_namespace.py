@@ -2,11 +2,10 @@
 
 These two live in different packages — the writer in ``communication.infra``,
 the reader installed into the assistant image as ``unify_deploy.runtime`` — and
-they are only correct relative to each other. When the writer moved Secrets into
-``{env}-sessions`` the reader kept reading the pod's own namespace, so every
-bootstrap 404'd, every session hit BootstrapTimeout, and no assistant in the
-environment could start. Nothing failed at build time; the two namespaces are
-only compared at runtime, which is what these tests do here instead.
+they are only correct relative to each other. If they name different namespaces,
+every bootstrap read 404s, every session hits BootstrapTimeout, and no assistant
+in the environment can start. Nothing catches that at build time: the two
+namespaces are only compared at runtime, which is what these tests do instead.
 """
 
 import base64
@@ -60,11 +59,11 @@ def test_writer_targets_and_reader_attempts_stay_in_lockstep(
 ):
     """Every namespace the writer writes is one the reader tries, in order.
 
-    The mirror write and the reader's legacy fallback are one migration, held in
-    two packages that ship on different cadences — comms in a Cloud Run deploy,
-    the reader in an assistant image. Retiring either half alone recreates the
-    outage in one direction or leaves the session api_key in a namespace nothing
-    reads in the other, so this fails until both halves move together.
+    The mirror write and the reader's legacy fallback are two halves of one
+    migration, held in packages that ship on different cadences — comms in a
+    Cloud Run deploy, the reader in an assistant image. Dropping the mirror alone
+    strands every pod not yet replaced; dropping the fallback alone leaves the
+    session api_key in a namespace nothing reads. This fails until both move.
     """
 
     written = []
@@ -143,8 +142,7 @@ def test_missing_bootstrap_names_every_namespace_tried(monkeypatch, pod_namespac
 
     A bare 404 carrying only the Secret name cannot distinguish "the writer has
     not written it yet" from "the writer wrote it somewhere this pod does not
-    read" — the ambiguity that hid the namespace split for the length of an
-    outage.
+    read". Those two need different fixes, and only the namespace separates them.
     """
 
     class FakeCoreApi:

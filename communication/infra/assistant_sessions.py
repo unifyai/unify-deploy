@@ -1053,8 +1053,9 @@ def create_or_update_bootstrap_secret(
     because a pod reads whichever namespace *its own image* knows about and the
     fleet is never uniformly on one image: idle containers outlive a rollout, so
     a single-namespace write strands every pod built before the move. The mirror
-    is deleted alongside the primary by ``delete_bootstrap_secret_if_owned`` and
-    retires with the Phase-2 lockdown, once no pod reads the session namespace.
+    is deleted alongside the primary by ``delete_bootstrap_secret_if_owned``, and
+    stops being needed once no pod reads the session namespace — drop it together
+    with the reader's fallback, never one without the other.
     """
 
     secret_name = assistant_session_secret_name(assistant_id, activation_id)
