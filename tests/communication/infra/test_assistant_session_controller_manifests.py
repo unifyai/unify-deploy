@@ -1,10 +1,20 @@
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+# tests/communication/infra/<this file> — the repo root is four parents up. An
+# off-by-one does not show up as a wrong answer: every assertion below reads a
+# file, so a bad root raises FileNotFoundError and the secret-scoping checks
+# these tests are named for never run against a manifest at all.
+ROOT = Path(__file__).resolve().parents[3]
 CONTROLLER_MANIFESTS = [
     ROOT / "k8s/assistant-session-controller/deployment_staging.yaml",
     ROOT / "k8s/assistant-session-controller/deployment.yaml",
 ]
+
+
+def test_controller_manifests_resolve() -> None:
+    """Pins the paths, so a bad root cannot quietly disable the checks below."""
+    for manifest in CONTROLLER_MANIFESTS:
+        assert manifest.is_file(), manifest
 
 
 def test_assistant_session_controllers_do_not_import_broad_unity_secrets() -> None:
