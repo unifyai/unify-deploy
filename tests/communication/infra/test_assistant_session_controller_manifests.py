@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 # tests/communication/infra/<this file> — the repo root is four parents up. An
 # off-by-one does not show up as a wrong answer: every assertion below reads a
 # file, so a bad root raises FileNotFoundError and the secret-scoping checks
@@ -31,3 +33,26 @@ def test_assistant_session_controllers_allowlist_required_secret() -> None:
         assert "secretKeyRef:" in text
         assert "name: unity-secrets" in text
         assert "key: ORCHESTRA_ADMIN_KEY" in text
+
+
+def test_the_live_pod_rolebinding_keeps_the_roleref_it_was_created_with() -> None:
+    """``roleRef`` is immutable, so this binding can never be re-pointed here.
+
+    The API server rejects any change with ``cannot change roleRef`` — RBAC
+    forbids it so a binding cannot be quietly aimed at a more privileged Role.
+    ``kubectl apply`` has no way around it, and the deploy step runs under
+    ``set -eu``, so editing this value does not merely fail to take effect: it
+    fails ``deploy-session-controller``, which gates ``deploy-comms``, and wedges
+    the whole pipeline for every environment sharing these manifests.
+
+    Re-scoping the pod SA is therefore a two-step cutover against a *differently
+    named* binding — create the new one (RBAC is additive, so no gap), then
+    delete this one — never an in-place edit of this roleRef.
+    """
+    for manifest in CONTROLLER_MANIFESTS:
+        for doc in yaml.safe_load_all(manifest.read_text()):
+            if not doc or doc.get("kind") != "RoleBinding":
+                continue
+            if doc["metadata"]["name"] != "assistant-session-runtime-assistant-sa":
+                continue
+            assert doc["roleRef"]["name"] == "assistant-session-runtime", manifest
