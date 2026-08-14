@@ -620,13 +620,30 @@ def build_unity_job_manifest(
     # Sourced from the Secret directly rather than copied from the runtime's
     # environment, because the runtime no longer has these to copy: they were
     # removed from it precisely so no tenant-controlled process holds one.
+    # Every ref below one is optional, because the broker is a *native* sidecar:
+    # a missing key on a required ref fails the container at config time, and a
+    # native sidecar that cannot start blocks the runtime container behind it —
+    # so one absent credential grounds every assistant in the environment rather
+    # than degrading the one feature that needed it. OPENROUTER_API_KEY is the
+    # exception on purpose: all model traffic routes through it, so an
+    # environment missing it should fail at boot where the manifest can be read,
+    # not at the first LLM call inside a plan.
+    broker_required_secret_keys = {"OPENROUTER_API_KEY"}
     broker_env_vars = [
         entry for entry in env_vars if entry.get("name") == "ORCHESTRA_URL"
     ]
     broker_env_vars.extend(
         {
             "name": key,
-            "valueFrom": {"secretKeyRef": {"name": "unity-secrets", "key": key}},
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": "unity-secrets",
+                    "key": key,
+                    **(
+                        {} if key in broker_required_secret_keys else {"optional": True}
+                    ),
+                },
+            },
         }
         # OPENROUTER/ANTHROPIC are brokered today. OPENAI/DEEPSEEK are parked
         # here rather than in the runtime: unused now (models route via
