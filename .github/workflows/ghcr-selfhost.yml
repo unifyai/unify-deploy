@@ -157,6 +157,12 @@ jobs:
         # The value is masked in logs; its length is not, and distinguishes a
         # truncated or whitespace-padded paste from a well-formed token.
         echo "CLONE_TOKEN present, length ${#GH_TOKEN}."
+        # Which account the token authenticates as. A well-formed token that
+        # cannot see a private repo usually belongs to a different account
+        # than intended, and nothing else in the failure says so.
+        who="$(curl -sS -H "Authorization: token ${GH_TOKEN}" \
+          https://api.github.com/user | sed -n 's/.*"login": *"\([^"]*\)".*/\1/p' | head -1)"
+        echo "CLONE_TOKEN authenticates as: ${who:-<none - token rejected by the API>}"
         if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" >/dev/null 2>&1; then
           echo "CLONE_TOKEN can read unifyai/branding."
         else
