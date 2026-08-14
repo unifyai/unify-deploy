@@ -210,9 +210,14 @@ subjects:
 - kind: ServiceAccount
   name: assistant-runtime-sa
   namespace: staging
+# roleRef is immutable. The API server rejects any change to it with `cannot
+# change roleRef`, which fails this apply and, under `set -eu`, the whole
+# deploy-session-controller step that deploy-comms waits on. Narrowing what this
+# ServiceAccount may read means adding a binding under its own name and deleting
+# this one -- never editing the value below.
 roleRef:
   kind: Role
-  name: assistant-session-runtime-pod
+  name: assistant-session-runtime
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1
