@@ -220,6 +220,14 @@ jobs:
           DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}
           MAGNITUDE_SHA=${{ env.MAGNITUDE_SHA }}
           CANVAS_BRANDING_SHA=${{ env.CANVAS_BRANDING_SHA }}
+        # The canvas stage reads branding and iso-animation over SSH, each
+        # under its own deploy key, and mounts them as build secrets so they
+        # never land in a layer. Cloud Build satisfies the same Dockerfile from
+        # Secret Manager; this is the equivalent route for Actions, which has
+        # no access to that store.
+        secrets: |
+          branding_deploy_key=${{ secrets.BRANDING_DEPLOY_KEY }}
+          iso_deploy_key=${{ secrets.ISO_ANIMATION_DEPLOY_KEY }}
         cache-from: type=gha,scope=unity-selfhost-${{ matrix.arch_tag }}
         cache-to: type=gha,mode=max,scope=unity-selfhost-${{ matrix.arch_tag }}
 
