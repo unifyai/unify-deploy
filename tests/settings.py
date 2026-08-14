@@ -61,6 +61,7 @@ class TestingSettings(ProductionSettings):
     UNIFY_TESTS_RAND_PROJ: bool = False
     UNIFY_TESTS_DELETE_PROJ_ON_START: bool = True
     UNIFY_TESTS_DELETE_PROJ_ON_EXIT: bool = False
+    UNIFY_TESTS_ALLOW_PROD: bool = False  # Let requires_orchestra reach hosted
     UNITY_CACHE_STATS: bool = False
     UNIFY_PRETEST_CONTEXT_CREATE: bool = False
     UNIFY_TEST_TAGS: str = ""  # Comma-separated list of tags for duration logging
