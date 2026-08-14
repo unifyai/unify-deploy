@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
 ASSISTANT_LOOKUP_TIMEOUT_SECONDS = 30
+#: Bounded tightly: this runs inline on the dispatch path, and a slow
+#: answer delays a scheduled run for every account, not just a gated one.
+RUNTIME_ACCESS_TIMEOUT_SECONDS = 10
 ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
@@ -37,6 +40,51 @@ def managed_desktop_entitled(assistant: dict[str, Any]) -> bool:
         desktop_mode in ("ubuntu", "windows")
         and assistant.get("managed_desktop_status") == "active"
     )
+
+
+def assistant_may_start_runtime(assistant: dict[str, Any]) -> bool:
+    """Whether metered runtime work may be started for this assistant's owner.
+
+    Orchestra refuses a *caller* that asks for a runtime while spending
+    free credit, reading the origin off that caller's request. Scheduled
+    work carries no such request: the schedule is armed once and fired
+    from then on by Cloud Tasks, so a dispatcher arrives holding an
+    assistant and nothing else. This asks the same question keyed on the
+    account, which is all a dispatcher can answer with.
+
+    An unreachable Orchestra allows the start. The spend is gated
+    separately and more strictly -- the pod's broker refuses any call it
+    cannot get authorization for -- so the worst case here is a pod that
+    boots and can do nothing, against the alternative of silently
+    stopping every customer's scheduled work for the length of an
+    unrelated outage.
+    """
+    user_id = assistant.get("user_id")
+    if not user_id:
+        return True
+
+    params = {"user_id": str(user_id)}
+    organization_id = assistant.get("organization_id") or assistant.get("org_id")
+    if organization_id:
+        params["organization_id"] = str(organization_id)
+
+    try:
+        response = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/billing/runtime-access",
+            params=params,
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=RUNTIME_ACCESS_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(
+            "Runtime-access lookup failed for user %s; allowing start: %s",
+            user_id,
+            exc,
+        )
+        return True
+
+    return bool(response.json().get("allowed", True))
 
 
 def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:

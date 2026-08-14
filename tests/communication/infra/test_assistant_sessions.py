@@ -29,10 +29,13 @@ from communication.infra.assistant_sessions import (
     binding_desktop_secret,
     binding_vm_assignment,
     binding_vm_ref,
+    bootstrap_namespace,
     claim_binding_vm_assignment_attempt,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     delete_assistant_session,
+    delete_bootstrap_secret_if_owned,
+    read_bootstrap_secret,
     desktop_url_matches_vm_ref,
     get_latest_unity_image,
     merge_conditions,
@@ -87,6 +90,81 @@ def test_assistant_session_names_are_sanitized():
         assistant_session_secret_name("ABC_123", "Act_456")
         == "assistant-session-bootstrap-abc-123-act-456"
     )
+
+
+def test_bootstrap_secret_ops_use_sessions_namespace_with_migration_fallback():
+    assert bootstrap_namespace("production") == "production-sessions"
+
+    # create writes to the sessions namespace, not the session namespace
+    class CreateApi:
+        def __init__(self):
+            self.created_ns = None
+
+        def read_namespaced_secret(self, name, namespace):
+            raise ApiException(status=404)
+
+        def create_namespaced_secret(self, namespace, body):
+            self.created_ns = namespace
+
+    create_api = CreateApi()
+    create_or_update_bootstrap_secret(
+        create_api, "production", "1", "act-1", {"api_key": "k"}
+    )
+    assert create_api.created_ns == "production-sessions"
+
+    # read tries the sessions namespace first, then falls back to the session namespace
+    class ReadApi:
+        def __init__(self):
+            self.read_ns = []
+
+        def read_namespaced_secret(self, name, namespace):
+            self.read_ns.append(namespace)
+            if namespace == "production-sessions":
+                raise ApiException(status=404)
+            return _fake_secret({"api_key": "legacy"})
+
+    read_api = ReadApi()
+    payload = read_bootstrap_secret(
+        read_api, "production", "assistant-session-bootstrap-1-act-1"
+    )
+    assert payload == {"api_key": "legacy"}
+    assert read_api.read_ns == ["production-sessions", "production"]
+
+    # delete owner-guards and targets whichever namespace holds the Secret
+    owned = {
+        SESSION_REF_ANNOTATION: assistant_session_name("1"),
+        ACTIVATION_ID_ANNOTATION: "act-1",
+    }
+
+    class DeleteApi:
+        def __init__(self):
+            self.read_ns = []
+            self.deleted_ns = None
+
+        def read_namespaced_secret(self, name, namespace):
+            self.read_ns.append(namespace)
+            if namespace == "production-sessions":
+                raise ApiException(status=404)
+            return _fake_secret(
+                {},
+                name="assistant-session-bootstrap-1-act-1",
+                annotations=owned,
+            )
+
+        def delete_namespaced_secret(self, name, namespace):
+            self.deleted_ns = namespace
+
+    delete_api = DeleteApi()
+    deleted = delete_bootstrap_secret_if_owned(
+        delete_api,
+        "production",
+        assistant_id="1",
+        activation_id="act-1",
+        secret_name="assistant-session-bootstrap-1-act-1",
+    )
+    assert deleted is True
+    assert delete_api.read_ns == ["production-sessions", "production"]
+    assert delete_api.deleted_ns == "production"
 
 
 def test_build_assistant_session_spec_sets_desktop_required():

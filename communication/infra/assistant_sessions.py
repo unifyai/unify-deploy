@@ -68,6 +68,19 @@ def assistant_session_name(assistant_id: str) -> str:
     return f"assistant-session-{_sanitize_for_k8s(assistant_id)}"
 
 
+def bootstrap_namespace(namespace: str) -> str:
+    """Dedicated namespace holding per-session bootstrap Secrets.
+
+    Isolated from the session/job namespace so actor pods can be granted `get`
+    on their bootstrap Secret without gaining read access to `production`
+    Secrets (unity-secrets / comm-sa key / ORCHESTRA_ADMIN_KEY). Readers and the
+    teardown GC also check the original namespace as a migration fallback until
+    all legacy bootstrap Secrets have drained.
+    """
+
+    return f"{namespace}-sessions"
+
+
 def assistant_session_secret_name(assistant_id: str, activation_id: str) -> str:
     """Return the activation-scoped bootstrap Secret name for a session."""
 
@@ -951,46 +964,52 @@ def delete_bootstrap_secret_if_owned(
     activation_id: str,
     secret_name: str,
 ) -> bool:
-    """Delete a bootstrap Secret only when it still belongs to that activation."""
+    """Delete a bootstrap Secret only when it still belongs to that activation.
 
-    secret = _read_secret_or_none(core_api, namespace, secret_name)
-    if secret is None:
-        return False
-    if not bootstrap_secret_owned_by_session(
-        secret,
-        assistant_id=assistant_id,
-        activation_id=activation_id,
-        secret_name=secret_name,
-    ):
-        annotations = (
-            getattr(getattr(secret, "metadata", None), "annotations", None) or {}
-        )
-        emit_observability_event(
-            "assistantsession.bootstrap_secret_delete_skipped",
+    Checks the dedicated sessions namespace first, then the session namespace as
+    a migration fallback for legacy Secrets, and deletes from whichever holds it.
+    """
+
+    for ns in (bootstrap_namespace(namespace), namespace):
+        secret = _read_secret_or_none(core_api, ns, secret_name)
+        if secret is None:
+            continue
+        if not bootstrap_secret_owned_by_session(
+            secret,
             assistant_id=assistant_id,
             activation_id=activation_id,
             secret_name=secret_name,
-            secret_owner_session_name=(
-                str(annotations.get(SESSION_REF_ANNOTATION, "") or "") or None
-            ),
-            secret_owner_activation_id=(
-                str(annotations.get(ACTIVATION_ID_ANNOTATION, "") or "") or None
-            ),
-        )
-        return False
-    try:
-        core_api.delete_namespaced_secret(name=secret_name, namespace=namespace)
-    except ApiException as e:
-        if e.status == 404:
+        ):
+            annotations = (
+                getattr(getattr(secret, "metadata", None), "annotations", None) or {}
+            )
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_delete_skipped",
+                assistant_id=assistant_id,
+                activation_id=activation_id,
+                secret_name=secret_name,
+                secret_owner_session_name=(
+                    str(annotations.get(SESSION_REF_ANNOTATION, "") or "") or None
+                ),
+                secret_owner_activation_id=(
+                    str(annotations.get(ACTIVATION_ID_ANNOTATION, "") or "") or None
+                ),
+            )
             return False
-        raise
-    emit_observability_event(
-        "assistantsession.bootstrap_secret_deleted",
-        assistant_id=assistant_id,
-        activation_id=activation_id,
-        secret_name=secret_name,
-    )
-    return True
+        try:
+            core_api.delete_namespaced_secret(name=secret_name, namespace=ns)
+        except ApiException as e:
+            if e.status == 404:
+                return False
+            raise
+        emit_observability_event(
+            "assistantsession.bootstrap_secret_deleted",
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            secret_name=secret_name,
+        )
+        return True
+    return False
 
 
 def delete_assistant_session(
@@ -1026,6 +1045,9 @@ def create_or_update_bootstrap_secret(
     activation_id: str,
     payload: dict[str, Any],
 ) -> str:
+    namespace = bootstrap_namespace(
+        namespace
+    )  # bootstrap Secrets live in the sessions ns
     secret_name = assistant_session_secret_name(assistant_id, activation_id)
     body = k8s_client.V1Secret(
         metadata=k8s_client.V1ObjectMeta(
@@ -1133,7 +1155,11 @@ def read_bootstrap_secret(
     namespace: str,
     secret_name: str,
 ) -> dict[str, Any]:
-    secret = core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
+    secret = _read_secret_or_none(core_api, bootstrap_namespace(namespace), secret_name)
+    if secret is None:
+        # Migration fallback: legacy bootstrap Secrets written before the move
+        # still live in the session namespace. Remove once none remain there.
+        secret = core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
     return _secret_startup_payload(secret)
 
 

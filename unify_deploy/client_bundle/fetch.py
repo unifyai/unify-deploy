@@ -100,9 +100,12 @@ def _download_signed_url(url: str, destination: Path) -> None:
 
 
 def unpack_bundle(archive_path: Path, destination: Path) -> None:
+    # The sha256 check upstream proves the archive is the one comms named, not
+    # that its members are safe to write, so members are still held to the
+    # data filter — no absolute paths, no traversal, no links out of the tree.
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive_path, mode="r:gz") as archive:
-        archive.extractall(destination)
+        archive.extractall(destination, filter="data")
 
 
 def ensure_client_bundle(

@@ -276,3 +276,68 @@ def test_scheduled_task_due_sets_desktop_required_for_resource_flags():
     wake_reasons = mock_dispatch.call_args.kwargs["wake_reasons"]
     assert wake_reasons[0]["requires_computer"] is True
     assert wake_reasons[0]["requires_filesystem"] is False
+
+
+def test_scheduled_task_due_skips_account_without_runtime_access():
+    """A schedule cannot start runtime work the account may not pay for."""
+
+    client = TestClient(app)
+
+    with (
+        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch("adapters.main.get_assistant", return_value=_assistant_data()),
+        patch("adapters.main.assistant_may_start_runtime", return_value=False),
+        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
+        patch("adapters.main._publish_unity_system_event") as mock_publish,
+    ):
+        response = client.post(
+            "/scheduled/tasks/due",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json=_task_due_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "status": "skipped",
+        "reason": "payment_required",
+    }
+    # The local-runtime branch publishes instead of dispatching, so both
+    # have to stay untouched for the skip to mean the work never began.
+    mock_dispatch.assert_not_called()
+    mock_publish.assert_not_called()
+
+
+def test_scheduled_task_due_starts_when_runtime_access_is_unknown():
+    """An unreachable ledger must not stop a paying customer's schedule."""
+
+    client = TestClient(app)
+    start_response = MagicMock(status_code=200)
+    start_response.json.return_value = {
+        "success": True,
+        "activation_id": "activation-1",
+        "active_session_already_running": False,
+    }
+
+    with (
+        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch("adapters.main.get_assistant", return_value=_assistant_data()),
+        # What the helper returns when Orchestra cannot be reached at all.
+        patch("adapters.main.assistant_may_start_runtime", return_value=True),
+        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch(
+            "adapters.main.dispatch_unity_start_intent",
+            return_value=start_response,
+        ) as mock_dispatch,
+        patch("adapters.main._publish_unity_system_event"),
+    ):
+        response = client.post(
+            "/scheduled/tasks/due",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json=_task_due_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] != "skipped"
+    mock_dispatch.assert_called_once()

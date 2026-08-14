@@ -191,13 +191,17 @@ def _topic_exists(publisher, topic_path: str) -> bool:
 
 
 def _secret_exists(core_api, secret_name: str) -> bool:
-    try:
-        core_api.read_namespaced_secret(name=secret_name, namespace=NAMESPACE)
-    except ApiException as exc:
-        if exc.status == 404:
-            return False
-        raise
-    return True
+    # Bootstrap Secrets live in the sessions namespace now; also check the session
+    # namespace so this leak-detection still catches an orphaned legacy Secret.
+    for namespace in (f"{NAMESPACE}-sessions", NAMESPACE):
+        try:
+            core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                continue
+            raise
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

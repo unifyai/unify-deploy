@@ -578,9 +578,26 @@ steps:
     previous_parse_rs="$$(latest_replicaset unity-parse-worker production || true)"
     previous_ingest_rs="$$(latest_replicaset unity-ingest-worker production || true)"
 
-    echo "Triggering rolling restart to pick up new image..."
-    kubectl rollout restart deployment/unity-parse-worker -n production
-    kubectl rollout restart deployment/unity-ingest-worker -n production
+    # Pin to the SHA-tagged overlay rather than leaning on the manifest's
+    # floating :latest, so the running spec names the exact image this build
+    # produced and `rollout undo` has a distinct image to go back to. The
+    # cronjobs above are pinned the same way. Setting the image is what starts
+    # the rollout; a re-run of an already-deployed SHA is a no-op, so fall back
+    # to a restart there to keep producing the new ReplicaSet the waits expect.
+    echo "Pinning workers to $$OVERLAY and rolling out..."
+    pin_worker() {
+      deployment="$$1"
+      container="$$2"
+      current="$$(kubectl get "deployment/$$deployment" -n production \
+        -o jsonpath="{.spec.template.spec.containers[?(@.name=='$$container')].image}")"
+      if [ "$$current" = "$$OVERLAY" ]; then
+        kubectl rollout restart "deployment/$$deployment" -n production
+      else
+        kubectl set image "deployment/$$deployment" "$$container=$$OVERLAY" -n production
+      fi
+    }
+    pin_worker unity-parse-worker parse-worker
+    pin_worker unity-ingest-worker ingest-worker
 
     wait_for_new_replicaset_available unity-parse-worker production "$$previous_parse_rs"
     wait_for_new_replicaset_available unity-ingest-worker production "$$previous_ingest_rs"

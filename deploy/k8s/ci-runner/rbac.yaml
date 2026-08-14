@@ -59,3 +59,38 @@ roleRef:
   kind: Role
   name: ci-integration-runner
   apiGroup: rbac.authorization.k8s.io
+---
+# Bootstrap Secrets moved to the dedicated {env}-sessions namespace; the merge_gate
+# tests inspect them (read_bootstrap_secret / teardown checks), so the runner needs
+# read access there too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-integration-runner-sessions
+  namespace: staging-sessions
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-integration-runner-sessions
+  namespace: staging-sessions
+  labels:
+    app: ci-integration-runner
+    component: ci-runner
+    environment: staging
+subjects:
+- kind: ServiceAccount
+  name: ci-integration-runner
+  namespace: staging
+roleRef:
+  kind: Role
+  name: ci-integration-runner-sessions
+  apiGroup: rbac.authorization.k8s.io

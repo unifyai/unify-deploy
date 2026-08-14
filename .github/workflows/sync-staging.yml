@@ -5,6 +5,10 @@ on:
     branches:
     - main
 
+# Writing refs/heads/staging via the gh api PATCH below.
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
