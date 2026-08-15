@@ -187,6 +187,13 @@ RECYCLEABLE_STALE_POOL_ROLES = frozenset(
         "quarantined",
     },
 )
+# Roles a stuck-release retire may destroy. "quarantined" belongs here because
+# the health scrubber reaches a VM whose guest never finished releasing before
+# the session's own recovery does, and quarantining clears "assistant-id" while
+# leaving "binding-id" intact. Excluding that role stranded the session: retire
+# skipped as vm_not_owned on every reconcile tick, the disk stayed attached, and
+# the session never left Releasing.
+RETIRABLE_RELEASE_ROLES = frozenset({"assigned", POOL_ROLE_RELEASING, "quarantined"})
 INFLIGHT_ROLE_TIMEOUT_SECONDS = {
     "provisioning": POOL_BOOT_TIMEOUT_SECONDS,
     "booting": POOL_BOOT_TIMEOUT_SECONDS,
@@ -5197,10 +5204,21 @@ def retire_pool_vm_release(
         vm_type = labels.get("vm-type", "ubuntu")
 
         if (
-            current_assistant_id != sanitized
-            or current_binding_id != binding_label
-            or current_role not in {"assigned", POOL_ROLE_RELEASING}
+            current_binding_id != binding_label
+            or (current_assistant_id and current_assistant_id != sanitized)
+            or current_role not in RETIRABLE_RELEASE_ROLES
         ):
+            _log_vm_pool_event(
+                "release_retire_skipped",
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=vm_name,
+                vm_type=vm_type,
+                current_role=current_role or None,
+                current_assistant_id=current_assistant_id or None,
+                current_binding_id=current_binding_id or None,
+                reason="vm_not_owned",
+            )
             return {
                 "released": False,
                 "assistant_id": assistant_id,
