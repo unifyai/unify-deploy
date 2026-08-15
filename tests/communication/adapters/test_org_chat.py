@@ -10,12 +10,6 @@ os.environ["GCP_SA_KEY"] = '{"type": "service_account", "project_id": "test"}'
 os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
-# Topic names carry the deployment's suffix -- production none, anything else
-# "-{env}" -- and the assertions below name topics exactly. Left to the
-# ambient value, the same tests pass on a laptop and fail wherever DEPLOY_ENV
-# is set, which is every CI runner. Pinned here with the rest of the module's
-# environment so the expected names are a property of the test.
-os.environ["DEPLOY_ENV"] = "production"
 
 
 @pytest.fixture(scope="module")
