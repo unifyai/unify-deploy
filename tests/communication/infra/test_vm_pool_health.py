@@ -1863,10 +1863,7 @@ def test_cleanup_orphaned_assistant_dns_caps_and_reports_batch_failure(monkeypat
 def test_pool_identity_parsers_accept_historical_prefixes_and_retired_suffixes(
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        "",
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     assert vm_helpers_module._parse_pool_vm_identity(
         "droid-pool-ubuntu-3",
         "ubuntu",
@@ -2056,11 +2053,7 @@ def _install_disk_reconcile_env(
         "communication.infra.vm_helpers._assistant_archive_info",
         lambda assistant_id: archive_info_map.get(assistant_id, (False, None)),
     )
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        env_suffix,
-        raising=False,
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "staging" if env_suffix else "production")
     return delete_calls
 
 
@@ -2317,11 +2310,7 @@ def test_reconcile_records_delete_race_as_error(monkeypatch):
         "communication.infra.vm_helpers._assistant_archive_info",
         lambda assistant_id: (True, fresh_archive),
     )
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        "-staging",
-        raising=False,
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
 
     result = vm_helpers_module.reconcile_orphaned_disks(
         max_age_hours=72,

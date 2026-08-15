@@ -1,12 +1,13 @@
 """Focused tests for assistant update event publishing."""
 
+import os
+
 import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from adapters.main import app
-from common.settings import SETTINGS
 
 
 class _PublishFuture:
@@ -79,7 +80,7 @@ def _published_payload(publisher: _Publisher) -> dict:
 
 def _post_assistant_update(*, data: dict, assistant_data: dict, publisher: _Publisher):
     with (
-        patch.object(SETTINGS, "orchestra_admin_key", "test-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-key"}),
         patch("adapters.main.get_pubsub_client", return_value=publisher),
         patch("adapters.helpers.get_assistant", return_value=assistant_data),
         patch("adapters.helpers.get_contacts", return_value=_contacts_payload()),
@@ -230,7 +231,7 @@ def test_general_update_publishes_no_null_runtime_strings():
 def test_invalid_update_kind_returns_400():
     """The update discriminator accepts only the runtime-supported values."""
 
-    with patch.object(SETTINGS, "orchestra_admin_key", "test-key"):
+    with patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-key"}):
         response = _client().post(
             "/assistant/update",
             data={"assistant_id": "assistant-123", "update_kind": "config"},

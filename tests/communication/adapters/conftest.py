@@ -23,12 +23,9 @@ os.environ.setdefault("OAUTH_STATE_SIGNING_KEY", "test-oauth-signing-key")
 os.environ.setdefault("ORCHESTRA_ADMIN_KEY", "test-admin-key")
 
 # Topic and job names carry the deployment's suffix -- production none,
-# anything else "-{env}" -- and the suites here name them exactly. The value
-# has to be fixed before anything imports ``common.settings``, which builds
-# its ``SETTINGS`` singleton from the environment at import time: pinned in a
-# single test module instead, it only holds when that module happens to be
-# imported first, so alphabetical collection decides whether the suite passes.
-# An assignment rather than setdefault, because the runner exports staging.
+# anything else "-{env}" -- and the suites here name them exactly, so the
+# environment they are named for belongs to the package rather than to the
+# runner. An assignment rather than setdefault, because CI exports staging.
 os.environ["DEPLOY_ENV"] = "production"
 
 # Add the project root to the Python path so tests can import modules

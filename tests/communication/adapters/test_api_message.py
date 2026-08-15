@@ -65,7 +65,7 @@ def client(app_module, mock_pubsub, mock_webhook_context):
             "build_webhook_context",
             return_value=mock_webhook_context,
         ),
-        patch.object(app_module.SETTINGS, "orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
     ):
         test_client = TestClient(app_module.app)
         test_client.headers["Authorization"] = "Bearer test-admin-key"
@@ -269,7 +269,7 @@ class TestApiMessage:
                 "build_webhook_context",
                 return_value=mock_ctx,
             ) as mock_bwc,
-            patch.object(app_module.SETTINGS, "orchestra_admin_key", "test-admin-key"),
+            patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         ):
             tc = TestClient(app_module.app)
             tc.headers["Authorization"] = "Bearer test-admin-key"

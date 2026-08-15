@@ -30,17 +30,11 @@ def _job(name: str, *, assistant_id: str, binding_id: str):
 
 @pytest.fixture
 def client(monkeypatch):
-    from common.settings import SETTINGS
     from communication.infra.views import assistant_self_router, router
 
     # /session/{id}/stop is now a self-scoped route; send the admin key so the
     # admin short-circuit applies (these tests target status logic, not auth).
-    monkeypatch.setattr(
-        SETTINGS,
-        "orchestra_admin_key",
-        "TEST-ADMIN-KEY",
-        raising=False,
-    )
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "TEST-ADMIN-KEY")
     app = FastAPI()
     app.include_router(router, prefix="/infra")
     app.include_router(assistant_self_router, prefix="/infra")

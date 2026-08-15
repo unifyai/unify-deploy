@@ -10,8 +10,6 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-from common.settings import SETTINGS
-
 # =============================================================================
 # MODULE-LEVEL MOCKS - Applied before any adapters imports
 # =============================================================================
@@ -127,7 +125,7 @@ def client(app_module, mock_gcs, mock_pubsub, mock_webhook_context, mock_get_ass
             "build_webhook_context",
             return_value=mock_webhook_context,
         ),
-        patch.object(SETTINGS, "orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
     ):
         test_client = TestClient(app_module.app)
         test_client.headers["Authorization"] = "Bearer test-admin-key"

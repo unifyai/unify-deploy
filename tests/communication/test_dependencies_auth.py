@@ -5,13 +5,12 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from common.settings import SETTINGS
 from communication import dependencies as deps
 
 
 @pytest.fixture
 def _admin_key(monkeypatch):
-    monkeypatch.setattr(SETTINGS, "orchestra_admin_key", "ADMIN-KEY", raising=False)
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "ADMIN-KEY")
     return "ADMIN-KEY"
 
 

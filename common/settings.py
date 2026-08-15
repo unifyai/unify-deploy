@@ -1,18 +1,22 @@
 """
 Centralized configuration for the Communication service.
 
-All environment-based settings are read once at import time and exposed
-via the module-level ``SETTINGS`` instance.  Other modules should import
-from here instead of calling ``os.getenv`` directly::
+Every setting resolves from the environment at the moment it is read, so a
+value exported after this module is imported is still the value callers see::
 
     from common.settings import SETTINGS
 
     namespace = SETTINGS.default_namespace
 
-``load_dotenv`` is called before ``Settings`` is instantiated so that
-``.env`` values are available regardless of import order (the app's
-``main.py`` calls ``load_dotenv`` after its imports, which would be too
-late for module-level singletons).
+Reading them once into instance state instead made configuration a snapshot of
+the environment as it stood when whichever module imported this one first ran.
+Import order is not something callers choose -- under pytest it follows
+alphabetical collection -- so that snapshot silently decided things like
+whether Pub/Sub topic names carried the ``-staging`` suffix, and a suite could
+pass file-by-file and fail as a directory.
+
+``load_dotenv`` runs at import so ``.env`` values are present in the
+environment before anything reads a setting.
 """
 
 import os
@@ -67,187 +71,273 @@ def _image_hash_blob_name(*, deploy_env: str) -> str:
 
 
 class Settings:
-    """Read-only configuration populated from environment variables.
+    """Read-only configuration resolved from environment variables on access.
 
     ``deploy_env`` is the canonical environment identifier:
     ``"production"`` or ``"staging"``.  Use it everywhere instead
     of the legacy ``is_staging`` boolean.
+
+    The class holds no environment-derived state.  Settings that never depend
+    on the environment are plain class attributes; everything else is a
+    property, so tests set the variable (``monkeypatch.setenv``) rather than
+    assigning to the attribute.
     """
 
-    def __init__(self) -> None:
-        self.deploy_env: str = _get_deploy_env()
-        self.env_suffix: str = (
-            f"-{self.deploy_env}" if self.deploy_env != "production" else ""
-        )
+    # Fixed infrastructure identifiers, the same in every environment.
+    default_region: str = "us-central1"
+    vm_project_id: str = "gcp-project-vms"
+    dns_project_id: str = "gcp-project-dns"
+    vm_region: str = "us-central1"
 
-        # GCP identifiers
-        self.gcp_project_id: str = os.environ.get(
-            "GCP_PROJECT_ID",
-            "gcp-project-runtime",
-        )
-        self.default_region: str = "us-central1"
-        self.gke_cluster_name: str = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
-        self.default_namespace: str = self.deploy_env
+    # K8s Lease-based assignment
+    lease_duration_seconds: int = 60
 
-        # Service URLs
-        self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
-        self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
-        self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
-        self.task_due_queue_location: str = os.environ.get(
-            "UNITY_TASK_DUE_QUEUE_LOCATION",
-            self.default_region,
-        )
-        self.task_due_queue_name: str = os.environ.get(
+    # AssistantSession control plane
+    assistant_session_group: str = "infra.unify.ai"
+    assistant_session_version: str = "v1alpha1"
+    assistant_session_plural: str = "assistantsessions"
+    assistant_session_kind: str = "AssistantSession"
+    assistant_session_protocol_version: str = "v1"
+
+    @property
+    def deploy_env(self) -> str:
+        return _get_deploy_env()
+
+    @property
+    def env_suffix(self) -> str:
+        deploy_env = self.deploy_env
+        return f"-{deploy_env}" if deploy_env != "production" else ""
+
+    # GCP identifiers
+
+    @property
+    def gcp_project_id(self) -> str:
+        return os.environ.get("GCP_PROJECT_ID", "gcp-project-runtime")
+
+    @property
+    def gke_cluster_name(self) -> str:
+        return os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
+
+    @property
+    def default_namespace(self) -> str:
+        return self.deploy_env
+
+    # Service URLs
+
+    @property
+    def orchestra_url(self) -> str:
+        return _service_url("ORCHESTRA_URL", "orchestra")
+
+    @property
+    def comms_url(self) -> str:
+        return _service_url("UNITY_COMMS_URL", "comms")
+
+    @property
+    def adapters_url(self) -> str:
+        return _service_url("UNITY_ADAPTERS_URL", "adapters")
+
+    @property
+    def task_due_queue_location(self) -> str:
+        return os.environ.get("UNITY_TASK_DUE_QUEUE_LOCATION", self.default_region)
+
+    @property
+    def task_due_queue_name(self) -> str:
+        return os.environ.get(
             "UNITY_TASK_DUE_QUEUE_NAME",
             f"unity-task-due{self.env_suffix}",
         )
-        self.task_offline_queue_name: str = os.environ.get(
+
+    @property
+    def task_offline_queue_name(self) -> str:
+        return os.environ.get(
             "UNITY_TASK_OFFLINE_QUEUE_NAME",
             f"unity-task-offline{self.env_suffix}",
         )
-        self.task_execution_repair_queue_name: str = os.environ.get(
+
+    @property
+    def task_execution_repair_queue_name(self) -> str:
+        return os.environ.get(
             "UNITY_TASK_EXECUTION_REPAIR_QUEUE_NAME",
             f"unity-task-execution-repair{self.env_suffix}",
         )
-        self.task_due_dispatch_deadline_seconds: int = int(
-            os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
-        )
-        self.task_execution_horizon_days: int = int(
-            os.environ.get("UNITY_TASK_EXECUTION_HORIZON_DAYS", "29"),
-        )
-        self.offline_task_job_ttl_seconds: int = int(
-            os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
-        )
-        # The longest an offline run may hold a pod, whatever its task asked
-        # for. `max_runtime_seconds` is per-task, defaults to None, nothing
-        # sets it, and None meant unbounded -- so every offline job in the
-        # fleet ran with no ceiling at all. Five were found still going eight
-        # days past their scheduled moment, one looping LLM calls inside its
-        # storage-review pass long after the task itself had failed.
-        #
-        # Twelve hours is well past any legitimate run and matches the
-        # maintenance sweep's own staleness cutoff, so a job cannot outlive
-        # the sweep that would have reported it. A task needing less sets its
-        # own max_runtime_seconds; it cannot set more.
-        self.offline_task_max_runtime_seconds: int = int(
-            os.environ.get("UNITY_OFFLINE_TASK_MAX_RUNTIME_SECONDS", "43200"),
-        )
-        self.provider_event_dispatch_request_ttl_seconds: int = int(
+
+    @property
+    def task_due_dispatch_deadline_seconds(self) -> int:
+        return int(os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"))
+
+    @property
+    def task_execution_horizon_days(self) -> int:
+        return int(os.environ.get("UNITY_TASK_EXECUTION_HORIZON_DAYS", "29"))
+
+    @property
+    def offline_task_job_ttl_seconds(self) -> int:
+        return int(os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"))
+
+    @property
+    def offline_task_max_runtime_seconds(self) -> int:
+        """The longest an offline run may hold a pod, whatever its task asked
+        for.
+
+        ``max_runtime_seconds`` is per-task, defaults to None, nothing sets it,
+        and None meant unbounded -- so every offline job in the fleet ran with
+        no ceiling at all. Five were found still going eight days past their
+        scheduled moment, one looping LLM calls inside its storage-review pass
+        long after the task itself had failed.
+
+        Twelve hours is well past any legitimate run and matches the
+        maintenance sweep's own staleness cutoff, so a job cannot outlive the
+        sweep that would have reported it. A task needing less sets its own
+        max_runtime_seconds; it cannot set more.
+        """
+        return int(os.environ.get("UNITY_OFFLINE_TASK_MAX_RUNTIME_SECONDS", "43200"))
+
+    @property
+    def provider_event_dispatch_request_ttl_seconds(self) -> int:
+        return int(
             os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
         )
 
-        # Auth keys
-        self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    # Auth keys
 
-        # Recall.ai realtime relay. Recall opens the websocket outbound to us
-        # and authenticates with a query-parameter token (it cannot present a
-        # header), so this shared secret is the only credential on that socket.
-        # Empty disables the relay outright rather than accepting anonymous
-        # connections that could publish into any assistant's LiveKit room.
-        self.recall_relay_secret: str = os.environ.get("RECALL_RELAY_SECRET", "")
+    @property
+    def orchestra_admin_key(self) -> str:
+        return os.environ.get("ORCHESTRA_ADMIN_KEY", "")
 
-        # Google Workspace Events bridge (Pub/Sub push -> Orchestra
-        # native_google ingress). Google delivers Meet/Drive/Chat events only
-        # via Cloud Pub/Sub; the push subscription attaches an OIDC token
-        # minted for ``workspace_events_push_auth_service_account`` with the
-        # Adapters base URL as audience, which the bridge verifies before
-        # re-emitting a Unify-shaped, HMAC-signed body.
-        # ``native_google_webhook_secret`` holds the same value Orchestra
-        # verifies with (env:NATIVE_GOOGLE_WEBHOOK_SECRET).
-        self.native_google_webhook_secret: str = os.environ.get(
-            "NATIVE_GOOGLE_WEBHOOK_SECRET",
-            "",
-        )
-        # Microsoft Graph native trigger bridge (HTTPS notify -> Orchestra
-        # native_microsoft ingress). Same secret Orchestra uses for HMAC verify
-        # and Graph clientState (env:NATIVE_MICROSOFT_WEBHOOK_SECRET).
-        self.native_microsoft_webhook_secret: str = os.environ.get(
-            "NATIVE_MICROSOFT_WEBHOOK_SECRET",
-            "",
-        )
-        self.workspace_events_push_auth_service_account: str = os.environ.get(
+    @property
+    def recall_relay_secret(self) -> str:
+        """Recall.ai realtime relay shared secret.
+
+        Recall opens the websocket outbound to us and authenticates with a
+        query-parameter token (it cannot present a header), so this shared
+        secret is the only credential on that socket. Empty disables the relay
+        outright rather than accepting anonymous connections that could publish
+        into any assistant's LiveKit room.
+        """
+        return os.environ.get("RECALL_RELAY_SECRET", "")
+
+    @property
+    def native_google_webhook_secret(self) -> str:
+        """HMAC secret for the Google Workspace Events bridge.
+
+        Google delivers Meet/Drive/Chat events only via Cloud Pub/Sub; the push
+        subscription attaches an OIDC token minted for
+        ``workspace_events_push_auth_service_account`` with the Adapters base
+        URL as audience, which the bridge verifies before re-emitting a
+        Unify-shaped, HMAC-signed body. This holds the same value Orchestra
+        verifies with (env:NATIVE_GOOGLE_WEBHOOK_SECRET).
+        """
+        return os.environ.get("NATIVE_GOOGLE_WEBHOOK_SECRET", "")
+
+    @property
+    def native_microsoft_webhook_secret(self) -> str:
+        """HMAC secret for the Microsoft Graph native trigger bridge.
+
+        The same secret Orchestra uses for HMAC verify and Graph clientState
+        (env:NATIVE_MICROSOFT_WEBHOOK_SECRET).
+        """
+        return os.environ.get("NATIVE_MICROSOFT_WEBHOOK_SECRET", "")
+
+    @property
+    def workspace_events_push_auth_service_account(self) -> str:
+        return os.environ.get(
             "UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA",
             f"comm-sa@{self.gcp_project_id}.iam.gserviceaccount.com",
         )
 
-        # Slack Events API signing secret. App-level (one value shared across
-        # all workspace installs of the Slack app), set in the Slack-app
-        # manifest. Used by the adapter's /slack/events webhook to HMAC-verify
-        # inbound payloads before forwarding them to Orchestra. Per-workspace
-        # bot tokens are stored in Orchestra (slack_installs), not here.
-        self.slack_signing_secret: str = os.environ.get("SLACK_SIGNING_SECRET", "")
+    @property
+    def slack_signing_secret(self) -> str:
+        """Slack Events API signing secret.
 
-        # Microsoft Teams (Bot Framework) multi-tenant app credentials.
-        # App-level (one registration shared across every tenant that
-        # installs the Teams app). ``ms_teams_bot_app_id`` is the audience
-        # the /ms-teams-bot/messages webhook validates inbound activity JWTs
-        # against; ``ms_teams_bot_app_secret`` mints a Bot Connector token for
-        # the one proactive send we originate here — the install-welcome DM
-        # (every other outbound reply is minted+sent by the gateway). The bot
-        # is a single-tenant registration in Unify's home tenant, so the token
-        # is minted from ``ms365_admin_tenant_id``'s authority. Per-tenant
-        # install state (service_url, conversation references) lives in
-        # Orchestra (ms_teams_bot_installs).
-        self.ms_teams_bot_app_id: str = os.environ.get("MS_TEAMS_BOT_APP_ID", "")
-        self.ms_teams_bot_app_secret: str = os.environ.get(
-            "MS_TEAMS_BOT_APP_SECRET",
-            "",
-        )
+        App-level (one value shared across all workspace installs of the Slack
+        app), set in the Slack-app manifest. Used by the adapter's
+        /slack/events webhook to HMAC-verify inbound payloads before forwarding
+        them to Orchestra. Per-workspace bot tokens are stored in Orchestra
+        (slack_installs), not here.
+        """
+        return os.environ.get("SLACK_SIGNING_SECRET", "")
 
-        # Cleanup / Workspace integration.  ``workspace_admin_subject`` is
-        # the Workspace user we impersonate for Admin SDK Directory calls;
-        # still used by ``DELETE /gmail/delete`` (Orchestra teardown
-        # worker) and by Gmail SA-delegated send/read fallbacks.
-        # ``WORKSPACE_EMAIL_DOMAIN`` and ``MS365_LICENSE_SKU_ID`` were
-        # removed together with the platform mailbox provisioning
-        # endpoints.
-        self.job_inventory_lookback_hours: int = int(
-            os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
-        )
-        self.workspace_admin_subject: str = os.environ.get(
-            "WORKSPACE_ADMIN_SUBJECT",
-            "dan@unify.ai",
-        )
+    @property
+    def ms_teams_bot_app_id(self) -> str:
+        """Audience the /ms-teams-bot/messages webhook validates activity JWTs
+        against.
 
-        # Microsoft 365 admin app — used by ``DELETE /outlook/delete``
-        # (Orchestra teardown worker) and by app-only Graph fallbacks
-        # (e.g. Teams watch teardown).  No longer used to mint tokens;
-        # the platform-mailbox provisioning + ``unify_ropc`` refresh
-        # paths were retired with the wider @unify.ai email feature.
-        self.ms365_admin_tenant_id: str = os.environ.get(
-            "MS365_ADMIN_TENANT_ID",
-            "",
-        )
-        self.ms365_admin_client_id: str = os.environ.get(
-            "MS365_ADMIN_CLIENT_ID",
-            "",
-        )
+        App-level: one Bot Framework registration shared across every tenant
+        that installs the Teams app. Per-tenant install state (service_url,
+        conversation references) lives in Orchestra (ms_teams_bot_installs).
+        """
+        return os.environ.get("MS_TEAMS_BOT_APP_ID", "")
 
-        # BYOD Microsoft 365 (multi-tenant Entra ID app for user-granted access)
-        self.ms365_byod_client_id: str = os.environ.get(
-            "MS365_BYOD_CLIENT_ID",
-            "",
-        )
+    @property
+    def ms_teams_bot_app_secret(self) -> str:
+        """Mints a Bot Connector token for the one proactive send originated
+        here -- the install-welcome DM.
 
-        # BYOD Google (platform-level OAuth 2.0 web app for user-granted Gmail access)
-        self.google_oauth_client_id: str = os.environ.get(
-            "GOOGLE_OAUTH_CLIENT_ID",
-            "",
-        )
+        Every other outbound reply is minted and sent by the gateway. The bot is
+        a single-tenant registration in Unify's home tenant, so the token is
+        minted from ``ms365_admin_tenant_id``'s authority.
+        """
+        return os.environ.get("MS_TEAMS_BOT_APP_SECRET", "")
 
-        # HMAC key shared with Orchestra for signing/verifying OAuth state params
-        self.oauth_state_signing_key: str = os.environ.get(
-            "OAUTH_STATE_SIGNING_KEY",
-            "",
-        )
+    # Cleanup / Workspace integration.  ``workspace_admin_subject`` is the
+    # Workspace user we impersonate for Admin SDK Directory calls; still used
+    # by ``DELETE /gmail/delete`` (Orchestra teardown worker) and by Gmail
+    # SA-delegated send/read fallbacks.  ``WORKSPACE_EMAIL_DOMAIN`` and
+    # ``MS365_LICENSE_SKU_ID`` were removed together with the platform mailbox
+    # provisioning endpoints.
 
-        # K8s Lease-based assignment
-        self.lease_duration_seconds: int = 60
+    @property
+    def job_inventory_lookback_hours(self) -> int:
+        return int(os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"))
 
-        # Derived names used across the codebase
-        self.unity_image_name: str = f"unity{self.env_suffix}"
-        self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
-        self.unity_coordinator_email_address: str = (
+    @property
+    def workspace_admin_subject(self) -> str:
+        return os.environ.get("WORKSPACE_ADMIN_SUBJECT", "dan@unify.ai")
+
+    # Microsoft 365 admin app -- used by ``DELETE /outlook/delete`` (Orchestra
+    # teardown worker) and by app-only Graph fallbacks (e.g. Teams watch
+    # teardown).  No longer used to mint tokens; the platform-mailbox
+    # provisioning + ``unify_ropc`` refresh paths were retired with the wider
+    # @unify.ai email feature.
+
+    @property
+    def ms365_admin_tenant_id(self) -> str:
+        return os.environ.get("MS365_ADMIN_TENANT_ID", "")
+
+    @property
+    def ms365_admin_client_id(self) -> str:
+        return os.environ.get("MS365_ADMIN_CLIENT_ID", "")
+
+    @property
+    def ms365_byod_client_id(self) -> str:
+        """BYOD Microsoft 365 multi-tenant Entra ID app for user-granted
+        access."""
+        return os.environ.get("MS365_BYOD_CLIENT_ID", "")
+
+    @property
+    def google_oauth_client_id(self) -> str:
+        """BYOD Google platform-level OAuth 2.0 web app for user-granted Gmail
+        access."""
+        return os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+
+    @property
+    def oauth_state_signing_key(self) -> str:
+        """HMAC key shared with Orchestra for signing/verifying OAuth state
+        params."""
+        return os.environ.get("OAUTH_STATE_SIGNING_KEY", "")
+
+    # Derived names used across the codebase
+
+    @property
+    def unity_image_name(self) -> str:
+        return f"unity{self.env_suffix}"
+
+    @property
+    def gmail_topic(self) -> str:
+        return f"gmail-notifications{self.env_suffix}"
+
+    @property
+    def unity_coordinator_email_address(self) -> str:
+        return (
             (
                 os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
                 or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
@@ -256,14 +346,19 @@ class Settings:
             .strip()
             .lower()
         )
-        self.unity_coordinator_email_watch_topic: str = os.environ.get(
-            "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
-            self.gmail_topic,
-        )
-        # Multiplayer twin alias email: catch-all domain plus the Workspace
-        # mailbox its deliveries land in. Inbound routes by the recipient
-        # alias; Gmail operations delegate to the mailbox.
-        self.unity_twin_alias_email_domain: str = (
+
+    @property
+    def unity_coordinator_email_watch_topic(self) -> str:
+        return os.environ.get("UNITY_COORDINATOR_EMAIL_WATCH_TOPIC", self.gmail_topic)
+
+    @property
+    def unity_twin_alias_email_domain(self) -> str:
+        """Catch-all domain for multiplayer twin alias email.
+
+        Inbound routes by the recipient alias; Gmail operations delegate to
+        ``unity_twin_alias_mailbox``.
+        """
+        return (
             (
                 os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
                 or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
@@ -272,73 +367,92 @@ class Settings:
             .strip()
             .lower()
         )
-        self.unity_twin_alias_mailbox: str = (
+
+    @property
+    def unity_twin_alias_mailbox(self) -> str:
+        """Workspace mailbox that twin alias deliveries land in."""
+        return (
             (os.environ.get("UNITY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai")
             .strip()
             .lower()
         )
-        self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
-        self.client_bundle_bucket: str = os.environ.get(
-            "UNITY_CLIENT_BUNDLE_BUCKET",
-            "unity-client-bundles",
-        )
 
-        # Container image registry (Artifact Registry)
-        self.image_registry: str = (
-            f"us-central1-docker.pkg.dev/{self.gcp_project_id}/unity"
-        )
+    @property
+    def image_hash_blob(self) -> str:
+        return _image_hash_blob_name(deploy_env=self.deploy_env)
 
-        # VM infrastructure (dedicated GCP project, separate from GKE)
-        self.vm_project_id: str = "gcp-project-vms"
-        self.dns_project_id: str = "gcp-project-dns"
-        self.vm_region: str = "us-central1"
-        _zone_map = {
+    @property
+    def client_bundle_bucket(self) -> str:
+        return os.environ.get("UNITY_CLIENT_BUNDLE_BUCKET", "unity-client-bundles")
+
+    @property
+    def image_registry(self) -> str:
+        """Container image registry (Artifact Registry)."""
+        return f"us-central1-docker.pkg.dev/{self.gcp_project_id}/unity"
+
+    # VM infrastructure (dedicated GCP project, separate from GKE)
+
+    @property
+    def vm_zone(self) -> str:
+        return {
             "production": "us-central1-f",
             "staging": "us-central1-a",
-        }
-        self.vm_zone: str = _zone_map.get(self.deploy_env, "us-central1-f")
-        # Retained for legacy VM discovery paths. New placements are selected
-        # on demand from the GCP capability preflight, not Cloud Run env vars.
-        self.vm_provisioned_locations: dict[str, str] = {
-            self.vm_region: self.vm_zone,
-        }
-        self.vm_location_preflight_cache_ttl_seconds: float = float(
+        }.get(self.deploy_env, "us-central1-f")
+
+    @property
+    def vm_provisioned_locations(self) -> dict[str, str]:
+        """Retained for legacy VM discovery paths.
+
+        New placements are selected on demand from the GCP capability
+        preflight, not Cloud Run env vars.
+        """
+        return {self.vm_region: self.vm_zone}
+
+    @property
+    def vm_location_preflight_cache_ttl_seconds(self) -> float:
+        ttl = float(
             os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300"),
         )
-        if self.vm_location_preflight_cache_ttl_seconds <= 0:
+        if ttl <= 0:
             raise ValueError(
                 "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive",
             )
+        return ttl
 
-        # Tunnel relay service
-        self.tunnel_subdomain: str = (
-            "tunnel.unify.ai"
-            if self.deploy_env == "production"
-            else f"{self.deploy_env}.tunnel.unify.ai"
-        )
-        self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
-        self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
+    # Tunnel relay service
 
-        # Shared screens captured from browser meetings. GCS rather than process
-        # memory because the Cloud Run instance holding a bot's websocket is not
-        # the one an assistant pod's poll reaches. One overwritten object per
-        # room; provision with a short lifecycle rule.
-        #
-        # One bucket for both environments, separated by a ``deploy_env`` path
-        # prefix, matching call recordings (``unity-call-recordings``). No
-        # ``env_suffix`` here: the environment lives in the object path, not the
-        # bucket name.
-        self.meet_screenshare_bucket: str = os.environ.get(
+    @property
+    def tunnel_subdomain(self) -> str:
+        deploy_env = self.deploy_env
+        if deploy_env == "production":
+            return "tunnel.unify.ai"
+        return f"{deploy_env}.tunnel.unify.ai"
+
+    @property
+    def tunnel_vm_name(self) -> str:
+        return f"unity-tunnel-server{self.env_suffix}"
+
+    @property
+    def tunnel_gcs_bucket(self) -> str:
+        return f"unity-tunnel-config{self.env_suffix}"
+
+    @property
+    def meet_screenshare_bucket(self) -> str:
+        """Shared screens captured from browser meetings.
+
+        GCS rather than process memory because the Cloud Run instance holding a
+        bot's websocket is not the one an assistant pod's poll reaches. One
+        overwritten object per room; provision with a short lifecycle rule.
+
+        One bucket for both environments, separated by a ``deploy_env`` path
+        prefix, matching call recordings (``unity-call-recordings``). No
+        ``env_suffix`` here: the environment lives in the object path, not the
+        bucket name.
+        """
+        return os.environ.get(
             "UNITY_MEET_SCREENSHARE_BUCKET",
             "unity-recall-meet-screenshare",
         )
-
-        # AssistantSession control plane
-        self.assistant_session_group: str = "infra.unify.ai"
-        self.assistant_session_version: str = "v1alpha1"
-        self.assistant_session_plural: str = "assistantsessions"
-        self.assistant_session_kind: str = "AssistantSession"
-        self.assistant_session_protocol_version: str = "v1"
 
     def assistant_topic(self, assistant_id: str) -> str:
         """Pub/Sub topic name for a specific assistant.

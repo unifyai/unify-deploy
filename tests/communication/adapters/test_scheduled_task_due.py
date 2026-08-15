@@ -1,5 +1,7 @@
 """Unit tests for the scheduled task due adapters endpoint."""
 
+import os
+
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -69,7 +71,7 @@ def test_scheduled_task_due_attaches_wake_reason_for_cold_start():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -122,7 +124,7 @@ def test_scheduled_task_due_publishes_event_for_running_session():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -159,7 +161,7 @@ def test_scheduled_task_due_skips_deleted_assistant():
     client = TestClient(app)
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value={"assistant_id": None}),
     ):
         response = client.post(
@@ -188,7 +190,7 @@ def test_scheduled_task_due_rejects_revoked_team_destination():
     ]
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=assistant_data),
         patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
         patch("adapters.main._publish_unity_system_event") as mock_publish,
@@ -223,7 +225,7 @@ def test_scheduled_task_due_carries_authorized_team_destination():
     assistant_data["team_ids"] = [7]
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=assistant_data),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -255,7 +257,7 @@ def test_scheduled_task_due_sets_desktop_required_for_resource_flags():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -283,7 +285,7 @@ def test_scheduled_task_due_skips_account_without_runtime_access():
     client = TestClient(app)
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.assistant_may_start_runtime", return_value=False),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
@@ -320,7 +322,7 @@ def test_scheduled_task_due_starts_when_runtime_access_is_unknown():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         # What the helper returns when Orchestra cannot be reached at all.
         patch("adapters.main.assistant_may_start_runtime", return_value=True),

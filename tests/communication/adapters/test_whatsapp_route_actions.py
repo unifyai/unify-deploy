@@ -659,7 +659,7 @@ def test_scheduled_email_watches_renews_shared_mailbox_once(monkeypatch):
         def json(self):
             return {"success": True}
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin")
     monkeypatch.setattr(
         main.requests,
         "get",

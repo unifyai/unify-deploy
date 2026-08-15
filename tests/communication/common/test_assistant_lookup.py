@@ -120,10 +120,7 @@ def test_assistant_payload_carries_default_model_fields():
 
 
 def test_get_assistant_skips_universal_coordinator_email_lookup(monkeypatch):
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.unity_coordinator_email_address",
-        "staging-twin@unify.ai",
-    )
+    monkeypatch.setenv("UNITY_COORDINATOR_EMAIL_ADDRESS", "staging-twin@unify.ai")
 
     def fail_get(*_args, **_kwargs):
         raise AssertionError("Orchestra should not be called for universal email")
@@ -146,14 +143,8 @@ def test_get_assistant_passes_from_fields_for_email_lookup(monkeypatch):
         calls.append({"params": params})
         return Response()
 
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_url",
-        "https://api.test",
-    )
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_admin_key",
-        "admin-key",
-    )
+    monkeypatch.setenv("ORCHESTRA_URL", "https://api.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr("common.assistant_lookup.requests.get", fake_get)
 
     get_assistant(email_address="byod@example.com")
@@ -180,14 +171,8 @@ def test_get_assistant_logs_orchestra_rejection_loudly(monkeypatch, caplog):
         def json(self):
             return {"detail": "Invalid field name(s): deploy_env"}
 
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_url",
-        "https://api.test",
-    )
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_admin_key",
-        "admin-key",
-    )
+    monkeypatch.setenv("ORCHESTRA_URL", "https://api.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(
         "common.assistant_lookup.requests.get",
         lambda *_args, **_kwargs: Response(),
@@ -220,14 +205,8 @@ def test_get_assistant_does_not_log_sensitive_response_fields(monkeypatch, caplo
                 ],
             }
 
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_url",
-        "https://api.test",
-    )
-    monkeypatch.setattr(
-        "common.assistant_lookup.SETTINGS.orchestra_admin_key",
-        "admin-key",
-    )
+    monkeypatch.setenv("ORCHESTRA_URL", "https://api.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(
         "common.assistant_lookup.requests.get",
         lambda *_args, **_kwargs: Response(),

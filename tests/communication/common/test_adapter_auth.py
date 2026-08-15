@@ -9,18 +9,12 @@ import pytest
 from fastapi import HTTPException
 
 from common import adapter_auth as auth
-from common.settings import SETTINGS
 
 
 @pytest.fixture
 def _admin_key(monkeypatch):
-    monkeypatch.setattr(SETTINGS, "orchestra_admin_key", "ADMIN-KEY", raising=False)
-    monkeypatch.setattr(
-        SETTINGS,
-        "orchestra_url",
-        "https://orchestra.example.com/v0",
-        raising=False,
-    )
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "ADMIN-KEY")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.example.com/v0")
     return "ADMIN-KEY"
 
 

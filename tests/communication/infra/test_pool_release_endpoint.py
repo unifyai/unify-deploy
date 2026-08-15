@@ -2,8 +2,14 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
-from common.settings import SETTINGS
+
+# /vm/pool/release is a self-scoped route; the admin key makes the admin
+# short-circuit apply, since these tests target release logic rather than auth.
+@pytest.fixture(autouse=True)
+def _admin_key(monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "TEST-ADMIN-KEY")
 
 
 def _views_module():
@@ -15,9 +21,6 @@ def _views_module():
 def _client() -> TestClient:
     from communication.infra.views import assistant_self_router, router
 
-    # /vm/pool/release is now a self-scoped route; send the admin key so the
-    # admin short-circuit applies (these tests target release logic, not auth).
-    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
     app = FastAPI()
     app.include_router(router, prefix="/infra")
     app.include_router(assistant_self_router, prefix="/infra")
