@@ -476,13 +476,17 @@ async def request_restart(
     deadline_at = _iso(datetime.fromtimestamp(deadline, tz=timezone.utc))
 
     if existing is not None and existing.block_admission:
-        # Idempotent: same/newer revision keeps the active drain.
+        # Idempotent: same/newer revision keeps the active drain. The waiter is
+        # re-armed regardless: it is an in-process task, and an instance that
+        # recycled mid-drain leaves the durable intent blocking admission with
+        # nothing left to advance it.
         if (
             body.target_revision
             and existing.target_revision
             and body.target_revision == existing.target_revision
             and existing.state not in {"done", "failed"}
         ):
+            await _ensure_waiter(aid)
             return {
                 "success": True,
                 "status": "already_draining",

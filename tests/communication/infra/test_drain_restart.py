@@ -89,6 +89,24 @@ async def test_request_restart_arms_graceful_and_starts_waiter():
 
 
 @pytest.mark.asyncio
+async def test_request_restart_same_revision_rearms_waiter():
+    """A lost waiter is revived by re-requesting the drain, not left blocking."""
+    existing = _intent(target_revision="sha1")
+    with (
+        patch.object(drain_mod, "get_drain_intent", return_value=existing),
+        patch.object(drain_mod, "set_drain_intent", side_effect=lambda i: i),
+        patch.object(drain_mod, "_ensure_waiter", new_callable=AsyncMock) as ensure,
+        patch.object(drain_mod, "_stop_live_session", new_callable=AsyncMock),
+    ):
+        result = await drain_mod.request_restart(
+            "1406",
+            RestartRequest(mode="graceful", reason="deploy", target_revision="sha1"),
+        )
+    assert result["status"] == "already_draining"
+    ensure.assert_awaited_once_with("1406")
+
+
+@pytest.mark.asyncio
 async def test_request_restart_force_stops_session():
     stored: dict[str, DrainIntent] = {}
 
@@ -169,7 +187,14 @@ async def test_offline_dispatch_raises_503_when_draining():
             "communication.infra.drain.admission_blocked",
             return_value=_intent(),
         ),
+        patch(
+            "communication.infra.drain._ensure_waiter",
+            new_callable=AsyncMock,
+        ) as ensure,
     ):
         with pytest.raises(HTTPException) as exc:
             await dispatch_offline_task(body, MagicMock())
     assert exc.value.status_code == 503
+    # A deferred dispatch revives the drain waiter, so a lost one cannot leave
+    # admission blocked forever.
+    ensure.assert_awaited_once_with("1406")
