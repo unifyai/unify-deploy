@@ -45,7 +45,7 @@ def _bucket_for_env(env: str) -> str:
 class GcsArtifactStoreSettings(BaseSettings):
     """Settings for the GCS-backed artifact store."""
 
-    model_config = {"env_prefix": "UNITY_GCS_ARTIFACT_"}
+    model_config = {"env_prefix": "UNIFY_GCS_ARTIFACT_"}
 
     bucket: str = ""
     prefix: str = ""
@@ -55,7 +55,7 @@ class GcsArtifactStoreSettings(BaseSettings):
 class PubSubQueueSettings(BaseSettings):
     """Settings for the Pub/Sub-backed work queue."""
 
-    model_config = {"env_prefix": "UNITY_PUBSUB_"}
+    model_config = {"env_prefix": "UNIFY_PUBSUB_"}
 
     project_id: str = ""
     parse_topic: str = "unity-parse"
@@ -78,7 +78,7 @@ class GcpPipelineSettings(BaseSettings):
     overridden for staging, causing cross-environment leaks.
     """
 
-    model_config = {"env_prefix": "UNITY_GCP_PIPELINE_"}
+    model_config = {"env_prefix": "UNIFY_GCP_PIPELINE_"}
 
     environment: str = ""
     artifact_store: GcsArtifactStoreSettings = Field(
