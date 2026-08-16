@@ -24,6 +24,15 @@ export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
 RELEASE_STATE_DIR="/var/lib/unity-pool-watcher"
 LAST_RELEASE_TOKEN_FILE="$RELEASE_STATE_DIR/last-release-token"
+RESTORE_IN_FLIGHT_FILE="$RELEASE_STATE_DIR/restore-in-flight"
+
+# Bound the metadata long-poll so the loop keeps supervising background phases
+# even while metadata sits unchanged.
+METADATA_POLL_TIMEOUT_SECONDS=60
+# How long an interrupted phase gets to unwind before it is killed outright,
+# and how long the kill itself is given to clear the process group.
+JOB_TERM_GRACE_SECONDS=15
+JOB_KILL_GRACE_SECONDS=15
 
 get_metadata() {
     local key=$1
@@ -101,6 +110,108 @@ should_trigger_release() {
     fi
 
     [[ -z "$current_unify_key" && -n "$current_release_token" && "$current_release_token" != "$last_handled_release_token" ]]
+}
+
+mark_restore_in_flight() {
+    ensure_release_state_dir
+    : > "$RESTORE_IN_FLIGHT_FILE"
+}
+
+clear_restore_in_flight() {
+    rm -f "$RESTORE_IN_FLIGHT_FILE"
+}
+
+restore_in_flight() {
+    [[ -f "$RESTORE_IN_FLIGHT_FILE" ]]
+}
+
+# ─── Interruptible phases ────────────────────────────────────────────────
+#
+# Bootstrapping a cold pool VM runs for tens of minutes: two repository
+# clones, three dependency installs and a browser download. Run inline, it
+# also blocks the metadata poll, so a release signalled mid-bootstrap is not
+# even read until the bootstrap finishes and the VM stays claimed for that
+# whole window. Phases a release is allowed to cut short therefore run in
+# their own process group, which leaves the poll loop free to notice the
+# signal and lets one kill reach every descendant the phase spawned -- git,
+# npm, gsutil and the rest.
+
+JOB_PID=""
+JOB_LABEL=""
+
+start_job() {
+    local label=$1
+    shift
+    cancel_job "superseded by $label"
+    # Monitor mode is what puts the child in a process group of its own,
+    # making $! usable as a process group id.
+    set -m
+    ( "$@" ) &
+    JOB_PID=$!
+    set +m
+    JOB_LABEL="$label"
+    log "JOB: $label started (process group $JOB_PID)"
+}
+
+cancel_job() {
+    local reason=${1-}
+    [[ -n "$JOB_PID" ]] || return 0
+
+    local pid=$JOB_PID
+    local label=$JOB_LABEL
+    local watchdog status waited
+    JOB_PID=""
+    JOB_LABEL=""
+
+    kill -TERM -"$pid" 2>/dev/null || true
+    # A phase blocked in a package install can ignore the term signal, so a
+    # kill follows once the grace is up. The watchdog rides outside the doomed
+    # process group so it survives to deliver it.
+    ( sleep "$JOB_TERM_GRACE_SECONDS"; kill -KILL -"$pid" 2>/dev/null || true ) &
+    watchdog=$!
+    wait "$pid" 2>/dev/null
+    status=$?
+
+    # The phase's own shell exits ahead of the children it spawned, and those
+    # children are what would go on writing to a filesystem that release is
+    # about to archive and scrub. Signal 0 to the group reports whether any
+    # member is left, so wait for the group rather than for the shell.
+    waited=0
+    while kill -0 -"$pid" 2>/dev/null; do
+        if [[ $waited -ge $((JOB_TERM_GRACE_SECONDS + JOB_KILL_GRACE_SECONDS)) ]]; then
+            log "WARNING: $label left processes behind that did not die"
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+
+    log "JOB: $label ended with status $status${reason:+ ($reason)}"
+}
+
+read_metadata_etag() {
+    curl -sf -H "$METADATA_HEADER" \
+        -o /dev/null -D - \
+        "$METADATA_URL/instance/attributes/?recursive=true" \
+        2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo ""
+}
+
+wait_for_metadata_change() {
+    local response
+    response=$(curl -sf -H "$METADATA_HEADER" \
+        "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&timeout_sec=$METADATA_POLL_TIMEOUT_SECONDS&last_etag=$ETAG" \
+        2>/dev/null || echo "")
+
+    if [[ -z "$response" ]]; then
+        log "Metadata poll returned empty, retrying in 5s"
+        sleep 5
+        return
+    fi
+
+    ETAG=$(read_metadata_etag)
 }
 
 # ─── Code update helpers ─────────────────────────────────────────────────
@@ -435,7 +546,9 @@ do_update() {
         log "Magnitude updating ($mag_saved -> $mag_remote)"
         if [[ -d "/magnitude/.git" ]]; then
             cd /magnitude
-            [[ -n "$github_token" ]] && git remote set-url origin "$magnitude_url" 2>/dev/null || true
+            # VMs provisioned before the credential purge still carry a
+            # tokenised origin; point them back at the public URL before fetch.
+            git remote set-url origin "$magnitude_url" 2>/dev/null || true
             git fetch --depth 1 origin main 2>&1 || true
             git reset --hard origin/main 2>&1 || true
             local commit
@@ -499,12 +612,15 @@ do_update() {
         else
             log "WARNING: observation_scaling_policy.json missing from sparse checkout"
         fi
-        save_commit_hash /agent-service "$commit"
         rm -rf "$tmp_dir"
 
         cd /agent-service
         npm install 2>&1
         cd /
+        # Record the commit only once its dependencies are installed. An
+        # update cut short by a release must re-run on the next assignment,
+        # not be mistaken for current and left with half a node_modules.
+        save_commit_hash /agent-service "$commit"
         log "Agent Service updated ($commit)"
     fi
 
@@ -532,6 +648,18 @@ ensure_unity_workspace_access() {
         return 1
     fi
     log "Verified unityuser access to desktop workspace paths"
+}
+
+ready_notification_is_terminal() {
+    # Comms answers 401/403 once Orchestra stops accepting the assistant's key
+    # and 404/409 once the binding has moved on -- all verdicts about this
+    # assignment rather than transient faults, and all of them routine when a
+    # release lands while the bootstrap is still running. Retrying only spends
+    # the release's time. Transport failures ("000") and 5xx stay retryable.
+    case ${1-} in
+        401 | 403 | 404 | 409) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 do_assign() {
@@ -579,6 +707,11 @@ do_assign() {
     orchestra_url=$(get_metadata "orchestra-url")
     comms_url=$(get_metadata "comms-url")
     configure_caddy_hostname "$hostname"
+
+    # From here until the profile is in place, /Unity holds a half-restored
+    # copy of the assistant's archives rather than anything worth keeping. A
+    # release arriving inside this window must not archive what it finds.
+    mark_restore_in_flight
 
     # Mount persistent disk
     if [[ -n "$disk_device" ]]; then
@@ -646,6 +779,8 @@ do_assign() {
     # its extraction target, which can silently reset /Unity to root:0700.
     # Repair it again before the unprivileged agent starts.
     ensure_unity_workspace_access || return 1
+
+    clear_restore_in_flight
 
     # SSH authorized_keys
     if [[ -n "$ssh_public_key" ]]; then
@@ -756,15 +891,22 @@ EOF
     if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" && -n "$binding_id" ]]; then
         for attempt in $(seq 1 10); do
             local http_code
-            http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
+            # No -f: it makes curl exit non-zero on an error status, and the
+            # shell would then append a fallback code onto the one -w already
+            # printed. Without it a refused connection still reports "000".
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
                 -X POST "$comms_url/infra/vm/ready" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $unify_key" \
                 -d "{\"assistant_id\": \"$assistant_id\", \"binding_id\": \"$binding_id\", \"vm_type\": \"ubuntu\", \"hostname\": \"$hostname\"}" \
-                2>/dev/null || echo "000")
+                2>/dev/null)
 
             if [[ "$http_code" == "200" ]]; then
                 log "VM ready notification sent (attempt $attempt)"
+                break
+            fi
+            if ready_notification_is_terminal "$http_code"; then
+                log "VM ready notification rejected (HTTP $http_code), giving up"
                 break
             fi
             log "VM ready notification attempt $attempt failed (HTTP $http_code), retrying in 5s..."
@@ -816,19 +958,28 @@ PYSCRIPT
     assistant_id=$(get_metadata "assistant-id")
     local archive_bucket
     archive_bucket=$(get_metadata "archive-bucket")
-    if mountpoint -q /Unity/Local 2>/dev/null; then
-        if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
-            local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
-            log "Archiving /Unity/Local to $archive_path"
-            if tar czf - -C /Unity/Local . | gsutil -q cp - "$archive_path" 2>/dev/null; then
-                log "Archive uploaded successfully"
-            else
-                log "WARNING: archive upload failed, PD data will be preserved as fallback"
+    if restore_in_flight; then
+        # This release interrupted a bootstrap that was still unpacking the
+        # assistant's archives, so what sits on disk is a truncated copy of
+        # them and no work of its own. Uploading it would replace good
+        # archives with worse ones.
+        log "Assignment was interrupted mid-restore; keeping the existing archives"
+        clear_restore_in_flight
+    else
+        if mountpoint -q /Unity/Local 2>/dev/null; then
+            if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
+                local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
+                log "Archiving /Unity/Local to $archive_path"
+                if tar czf - -C /Unity/Local . | gsutil -q cp - "$archive_path" 2>/dev/null; then
+                    log "Archive uploaded successfully"
+                else
+                    log "WARNING: archive upload failed, PD data will be preserved as fallback"
+                fi
             fi
         fi
-    fi
-    if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
-        archive_desktop_profile "$assistant_id" "$archive_bucket"
+        if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
+            archive_desktop_profile "$assistant_id" "$archive_bucket"
+        fi
     fi
 
     # Unmount persistent disk (kill busy processes first, then lazy fallback)
@@ -845,9 +996,9 @@ PYSCRIPT
 
     scrub_filesystem
 
-    # Update code while VM is idle so next assignment starts with latest
-    do_update
-
+    # Refreshing the code takes minutes and the pool is blocked until the
+    # callback below lands, so the watcher runs that separately once this
+    # returns.
     wipe_metadata_key "github-token"
     if notify_release_complete; then
         save_last_release_token "$release_token"
@@ -901,61 +1052,35 @@ main() {
     fi
 
     # Pre-fetch etag so the first long-poll has a valid value and won't block
-    # on already-set metadata. Also check current state immediately to handle
-    # assignments that happened before the watcher started.
-    ETAG=$(curl -sf -H "$METADATA_HEADER" \
-        -o /dev/null -D - \
-        "$METADATA_URL/instance/attributes/?recursive=true" \
-        2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
-
-    CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
-    CURRENT_RELEASE_TOKEN=$(current_release_token)
-    LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
-        do_assign "$CURRENT_UNIFY_KEY"
-    fi
-    if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
-        do_release
-        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-    fi
-    PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
+    # on already-set metadata. The first pass reads current state before it
+    # polls, which is what handles assignments made before the watcher started.
+    ETAG=$(read_metadata_etag)
 
     while true; do
-        # Long-poll for metadata changes (ETAG is always valid here)
-        RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
-            "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
-            2>/dev/null || echo "")
-
-        if [[ -z "$RESPONSE" ]]; then
-            log "Metadata poll returned empty, retrying in 5s"
-            sleep 5
-            continue
-        fi
-
-        # Extract new etag from response headers (re-request with header capture)
-        ETAG=$(curl -sf -H "$METADATA_HEADER" \
-            -o /dev/null -D - \
-            "$METADATA_URL/instance/attributes/?recursive=true" \
-            2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
-
-        # Check unify-key
         CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
         CURRENT_RELEASE_TOKEN=$(current_release_token)
         LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
 
-        if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
-            do_assign "$CURRENT_UNIFY_KEY"
-        fi
-
+        # A release and an assignment are never both pending: releasing is
+        # signalled by clearing unify-key, assigning by setting it.
         if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
+            cancel_job "release requested"
+            # Release runs here rather than as a job: it is what the pool is
+            # waiting on, and an archive upload must never be cut in half.
             do_release
-            LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+            # Warm the next assignment while the VM is idle. do_assign
+            # supersedes this, so a quick re-claim never waits on it.
+            start_job update do_update
+        elif [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
+            start_job assign do_assign "$CURRENT_UNIFY_KEY"
         fi
 
         PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
 
         # Refresh TLS cert if metadata changed (handles renewal pushes)
         refresh_tls
+
+        wait_for_metadata_change
     done
 }
 

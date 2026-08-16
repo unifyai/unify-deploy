@@ -279,7 +279,22 @@ Two GCS blobs per assistant (bucket `POOL_ASSISTANT_ARCHIVE_BUCKET` in
 
 On release the watcher archives Local then the desktop-profile, unmounts the PD, and scrubs home profile paths off the shared pool VM. On permanent unhire both blobs are deleted via `DELETE /infra/vm/pool/archive/{assistant_id}`. Disk GC treats `{id}.tar.gz` as the durable-workspace signal; a missing profile only means a cold browser login. **If the bucket doesn't exist, files don't persist between sessions** (a rename gap fixed 2026-06-24).
 
+**Exception — a release that interrupted a bootstrap uploads nothing.** The guest marks `/var/lib/unity-pool-watcher/restore-in-flight` while it unpacks these two blobs; a release landing inside that window would otherwise tar up a half-extracted copy of the archives and overwrite them with it. The existing blobs are already a superset of what such an assignment produced, so they are left alone.
+
 Used by `unity-pool-watcher.sh` / `.ps1`.
+
+### Guest assign/release (`unity-pool-watcher.sh`)
+
+The watcher long-polls instance metadata: `unify-key` going non-empty means assign, going empty (with a new `binding-id:release-generation` token) means release.
+
+**Assign runs as a background job in its own process group; release runs inline and preempts it.** A cold pool VM — every VM, whenever the pool holds no warm one for that type — bootstraps for tens of minutes: two repository clones, three dependency installs, a browser download. When that ran inline it also blocked the metadata poll, so a release was not *read* until the bootstrap returned; a staging release on 2026-08-15 was requested at 20:26:34 and only acknowledged at 21:58:33, failing two Integration smoke gate runs. Release now cancels the in-flight bootstrap with a process-group SIGTERM (SIGKILL after `JOB_TERM_GRACE_SECONDS`), which is what reaches the git/npm/gsutil children, then waits for the group to empty before touching the filesystem.
+
+Two consequences worth knowing:
+
+- **`release-complete` is no longer behind a code refresh.** `do_update` used to run at the end of `do_release`, in front of the callback the pool blocks on. It now runs afterwards as a cancellable idle warm-up job, superseded by the next assign.
+- **An interrupted `do_update` re-runs.** The agent-service commit hash is recorded only after `npm install` finishes, so a cancelled update cannot be mistaken for current and left with half a `node_modules`.
+
+The Windows guest (`unity-pool-watcher.ps1`) still runs both phases inline and carries the same queueing defect; it ships from a separate image pipeline and PowerShell has no equivalent one-liner for killing a process tree.
 
 ### VM TLS (wildcard)
 

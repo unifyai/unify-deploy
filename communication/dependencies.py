@@ -41,7 +41,10 @@ async def authenticate_user_api_key(api_key: str) -> dict:
     Validate a user API key against Orchestra's /user/basic-info endpoint.
 
     Returns the user info dict (contains user_id, email, etc.) on success.
-    Raises HTTPException(401) on failure.
+    Raises HTTPException(401) when Orchestra rejects the key and 502 when
+    Orchestra itself failed. Reporting both as 401 hid outages behind a
+    verdict about the caller's key, and told callers that retrying was
+    pointless when it was the only thing that would work.
     """
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -50,9 +53,22 @@ async def authenticate_user_api_key(api_key: str) -> dict:
             timeout=10.0,
         )
 
+    if response.status_code >= 500:
+        logger.warning(
+            "API key authentication unavailable: Orchestra /user/basic-info "
+            f"returned {response.status_code}",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Orchestra could not validate the key ({response.status_code}).",
+        )
+
     if response.status_code != 200:
         logger.warning(f"API key authentication failed: {response.status_code}")
-        raise HTTPException(status_code=401, detail="Invalid API key.")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid API key (Orchestra returned {response.status_code}).",
+        )
 
     return response.json()
 
