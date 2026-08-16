@@ -14,8 +14,8 @@ Usage (local-with-GCP testing):
     python -m unify_deploy.infra.workers.entrypoint_parse
 
 Environment (GCP):
-    GCP_SA_KEY, UNITY_GCP_PIPELINE_ENVIRONMENT, UNITY_PUBSUB_PROJECT_ID,
-    UNITY_GCS_ARTIFACT_BUCKET
+    GCP_SA_KEY, UNIFY_GCP_PIPELINE_ENVIRONMENT, UNIFY_PUBSUB_PROJECT_ID,
+    UNIFY_GCS_ARTIFACT_BUCKET
 """
 
 from __future__ import annotations

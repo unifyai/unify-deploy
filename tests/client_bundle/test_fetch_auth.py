@@ -25,7 +25,7 @@ def test_auth_headers_empty_without_unify_key(monkeypatch):
 
 
 def test_bundle_api_url_sends_assistant_and_binding(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms:8080")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "http://comms:8080")
 
     url = fetch._bundle_api_url(assistant_id=7367, binding_id="bind-1")
 
@@ -38,7 +38,7 @@ def test_bundle_api_url_sends_assistant_and_binding(monkeypatch):
 
 
 def test_fetch_bundle_metadata_uses_unify_key(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms:8080")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "http://comms:8080")
     monkeypatch.setenv("UNIFY_KEY", "assistant-scoped-key")
 
     captured: dict = {}

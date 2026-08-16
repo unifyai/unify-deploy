@@ -1224,13 +1224,13 @@ def main() -> int:
 
     whatsapp_number = (
         env.get("COMMS_BRIDGE_WHATSAPP_NUMBER")
-        or env.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
+        or env.get("UNIFY_COORDINATOR_WHATSAPP_NUMBER")
         or ""
     ).strip()
     phone_number = (
         env.get("COMMS_BRIDGE_SMS_NUMBER")
         or env.get("UNITY_COORDINATOR_PHONE")
-        or env.get("UNITY_COORDINATOR_PHONE_US")
+        or env.get("UNIFY_COORDINATOR_PHONE_US")
         or ""
     ).strip()
 

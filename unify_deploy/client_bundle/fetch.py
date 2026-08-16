@@ -39,7 +39,7 @@ def bundled_client_mode() -> bool:
 
 def _comms_base_url() -> str:
     return (
-        os.environ.get("UNITY_COMMS_URL")
+        os.environ.get("UNIFY_COMMS_URL")
         or os.environ.get("COMMS_URL")
         or "http://unity-comms-app:8080"
     ).rstrip("/")

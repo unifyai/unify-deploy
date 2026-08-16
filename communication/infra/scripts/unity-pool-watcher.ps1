@@ -885,7 +885,7 @@ PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
-UNITY_COMMS_URL=$commsUrl
+UNIFY_COMMS_URL=$commsUrl
 PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 DISPLAY=:1
 "@

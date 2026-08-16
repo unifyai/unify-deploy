@@ -101,7 +101,7 @@ def main() -> int:
     """Run the stale-job cleanup flow."""
 
     if not comms_url or not admin_key:
-        print("Error: UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
+        print("Error: UNIFY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
         return 1
 
     cleanup_jobs(fetch_running_jobs(namespace))

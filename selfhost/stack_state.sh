@@ -74,7 +74,7 @@ data = {
         "NEXTAUTH_URL": f"http://localhost:{env('CONSOLE_PORT', '3000')}",
         "ORCHESTRA_URL": f"http://127.0.0.1:{env('ORCHESTRA_PORT', '8000')}",
         "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
-        "UNITY_ADAPTERS_URL": env("UNITY_ADAPTERS_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
+        "UNIFY_ADAPTERS_URL": env("UNIFY_ADAPTERS_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
         "COMMUNICATION_URL": env("COMMUNICATION_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
         "PUBSUB_EMULATOR_HOST": env("PUBSUB_EMULATOR_HOST", "localhost:8085"),
         "GCP_PROJECT_ID": env("GCP_PROJECT_ID", "local-test-project"),

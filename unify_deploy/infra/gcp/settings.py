@@ -7,7 +7,7 @@ the process is running in (staging / production / development).  All
 environment-dependent defaults — bucket names, Pub/Sub topic suffixes,
 subscription names — are derived from it so that a single env var
 controls the entire pipeline surface.  Explicit env-var overrides
-(``UNITY_GCP_PIPELINE_ENVIRONMENT``, ``UNITY_GCS_ARTIFACT_BUCKET``,
+(``UNIFY_GCP_PIPELINE_ENVIRONMENT``, ``UNIFY_GCS_ARTIFACT_BUCKET``,
 etc.) still take precedence for K8s manifests and CI, but when they
 are absent the ``ORCHESTRA_URL`` inference prevents cross-environment
 leaks like staging dispatches uploading to the production bucket.

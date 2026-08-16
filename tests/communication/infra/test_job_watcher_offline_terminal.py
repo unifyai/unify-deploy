@@ -56,7 +56,7 @@ def _install_fake_kopf(monkeypatch) -> None:
 def watcher_module(monkeypatch):
     """Import watcher.py with required env vars and a clean module slot."""
 
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.syspath_prepend(str(WATCHER_DIR))
     _install_fake_kopf(monkeypatch)

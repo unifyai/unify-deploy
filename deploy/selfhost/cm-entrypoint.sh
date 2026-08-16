@@ -84,15 +84,15 @@ build_cm_env() {
   export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-pubsub-emulator:8085}"
   export GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
   export ORCHESTRA_URL="${ORCHESTRA_URL:-http://orchestra:8000/v0}"
-  export UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://gateway:8001}"
-  export UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://gateway:8001}"
+  export UNIFY_COMMS_URL="${UNIFY_COMMS_URL:-http://gateway:8001}"
+  export UNIFY_ADAPTERS_URL="${UNIFY_ADAPTERS_URL:-http://gateway:8001}"
 
   # Files always parse off this process when a fleet is reachable, and here one
   # is: the ingestion worker services share the pipeline-artifacts volume with
   # the service fronting /infra/pipeline/*. Left unset, every file would parse
   # in-process instead -- which works, but rehearses none of the parse/ingest
   # process split the hosted stack runs.
-  export UNIFY_INGESTION_PIPELINE_URL="${UNIFY_INGESTION_PIPELINE_URL:-$UNITY_COMMS_URL}"
+  export UNIFY_INGESTION_PIPELINE_URL="${UNIFY_INGESTION_PIPELINE_URL:-$UNIFY_COMMS_URL}"
 
   export UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED=true
   export UNIFY_CONVERSATION_LOCAL_COMMS_MODE=local

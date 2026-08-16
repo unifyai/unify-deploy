@@ -845,8 +845,8 @@ cmd_resume() {
   # (and provider) the way the hosted assignment event would, so outbound
   # Coordinator mail + the reference quiz work. No-op until a Coordinator
   # mailbox is configured.
-  if [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
-    export ASSISTANT_EMAIL="${UNITY_COORDINATOR_EMAIL_ADDRESS}"
+  if [[ -n "${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+    export ASSISTANT_EMAIL="${UNIFY_COORDINATOR_EMAIL_ADDRESS}"
     export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
   fi
 

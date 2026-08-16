@@ -137,7 +137,7 @@ self_host_comms_bridge_script() {
 # Configured = at least one channel is set: a Gmail SA + Coordinator mailbox
 # (email), or Twilio creds (SMS/WhatsApp). No-op otherwise.
 self_host_comms_bridge_configured() {
-  [[ -f "$(self_host_comms_sa_file)" && -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]] && return 0
+  [[ -f "$(self_host_comms_sa_file)" && -n "${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" ]] && return 0
   [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${TWILIO_AUTH_TOKEN:-}" ]] && return 0
   return 1
 }
@@ -166,10 +166,10 @@ self_host_ensure_comms_bridge() {
   # key off TWILIO_* + the Coordinator numbers. ORCHESTRA_URL/ORCHESTRA_ADMIN_KEY
   # keep local routing identical to hosted adapters: every inbound sender is
   # resolved by Orchestra before the bridge forwards it to the local CM.
-  GMAIL_BRIDGE_MAILBOX="${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" \
+  GMAIL_BRIDGE_MAILBOX="${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" \
     GMAIL_BRIDGE_SA_FILE="$(self_host_comms_sa_file)" \
     COMMS_BRIDGE_SMS_NUMBER="${COMMS_BRIDGE_SMS_NUMBER:-${UNITY_COORDINATOR_PHONE:-}}" \
-    COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${UNITY_COORDINATOR_WHATSAPP_NUMBER:-}}" \
+    COMMS_BRIDGE_WHATSAPP_NUMBER="${COMMS_BRIDGE_WHATSAPP_NUMBER:-${UNIFY_COORDINATOR_WHATSAPP_NUMBER:-}}" \
     ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}" \
     ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-}" \
     nohup "$py" "$script" >>"$log_file" 2>&1 &
@@ -386,8 +386,8 @@ self_host_ensure_provider_trigger_worker() {
     ORCHESTRA_DB_PASS=orchestra \
     ORCHESTRA_DB_BASE=orchestra \
     SELF_HOST=1 \
-    UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://127.0.0.1:${gateway_port}}" \
-    UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://127.0.0.1:${gateway_port}}" \
+    UNIFY_COMMS_URL="${UNIFY_COMMS_URL:-http://127.0.0.1:${gateway_port}}" \
+    UNIFY_ADAPTERS_URL="${UNIFY_ADAPTERS_URL:-http://127.0.0.1:${gateway_port}}" \
     nohup "$py" -m orchestra.workers.provider_trigger_worker >>"$log_file" 2>&1 &
   local pid=$!
   disown "$pid" 2>/dev/null || true
@@ -783,7 +783,7 @@ self_host_runtime_doctor_line() {
   fi
   if self_host_comms_bridge_configured; then
     local _bridge_channels=""
-    [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
+    [[ -n "${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" && -f "$(self_host_comms_sa_file)" ]] \
       && _bridge_channels="email"
     if [[ -n "${TWILIO_ACCOUNT_SID:-}" && -n "${TWILIO_AUTH_TOKEN:-}" \
       && -n "${ORCHESTRA_ADMIN_KEY:-}" \

@@ -8,7 +8,7 @@ ACK=0
 LIMIT=100
 PIPELINE_ENV_ARG=""
 SUB_OVERRIDE=""
-PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
+PROJECT="${UNIFY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PIPELINE_ENV="${PIPELINE_ENV_ARG:-${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}}"
+PIPELINE_ENV="${PIPELINE_ENV_ARG:-${UNIFY_GCP_PIPELINE_ENVIRONMENT:-staging}}"
 case "$PIPELINE_ENV" in
   staging) ENV_SUFFIX="-staging" ;;
   production) ENV_SUFFIX="" ;;

@@ -73,7 +73,7 @@ from unify.syntax_highlight import highlight_code_blocks
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 GCP_PROJECT = "gcp-project-runtime"
-GKE_CLUSTER = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
+GKE_CLUSTER = os.environ.get("UNIFY_GKE_CLUSTER_NAME", "unity")
 GKE_REGION = "us-central1"
 ORCHESTRA_ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 

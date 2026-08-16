@@ -156,8 +156,8 @@ services:
       # SELF_HOST_COMMS_URL at a hosted (e.g. staging) comms deployment to light
       # up the channels that gateway provides — its ORCHESTRA_ADMIN_KEY must then
       # match that deployment's admin key.
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - local-bucket:/data/local-bucket
     - provider-event-blobs:/data/provider-event-blobs
@@ -238,8 +238,8 @@ services:
       UNIFY_GATEWAY_SINGLE_URL: "true"
       UNIFY_GATEWAY_STORAGE_DIR: /data/local-bucket
       UNIFY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
-      UNITY_COMMS_URL: http://gateway:8001
-      UNITY_ADAPTERS_URL: http://gateway:8001
+      UNIFY_COMMS_URL: http://gateway:8001
+      UNIFY_ADAPTERS_URL: http://gateway:8001
       UNIFY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
       SELF_HOST_INTERNAL_COMMS_ENABLED: ${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}
       SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
@@ -292,8 +292,8 @@ services:
       ORCHESTRA_URL: http://orchestra:8000
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       LOCAL_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       SELF_HOST_OWNER_FILE: /runtime/self-host-owner.json
@@ -330,8 +330,8 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
       PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       UNIFY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
       UNIFY_CONVERSATION_LOCAL_COMMS_PORT: 8787
       UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL_FILE: /runtime/call-tunnel-url
@@ -644,8 +644,8 @@ services:
       TRIGGER_EVENT_PRIVATE_ROOT: /data/provider-event-blobs
       TRIGGER_EVENT_WRAPPING_MASTER_KEY: ${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}
       ORCHESTRA_TRIGGER_CALLBACK_BASE_URL: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - provider-event-blobs:/data/provider-event-blobs
     depends_on:

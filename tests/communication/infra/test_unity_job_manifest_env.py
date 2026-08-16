@@ -194,7 +194,7 @@ def test_unity_startup_timing_is_disabled_literal_not_configmap_sourced() -> Non
 
 
 def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
-    """Per-deploy ORCHESTRA_URL / UNITY_COMMS_URL / UNITY_ADAPTERS_URL
+    """Per-deploy ORCHESTRA_URL / UNIFY_COMMS_URL / UNIFY_ADAPTERS_URL
     overrides arrive via ``extra_env``. The override must replace the
     default (not duplicate it) so the container sees exactly one value
     per env name.
@@ -205,8 +205,8 @@ def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
         deploy_env="staging",
         extra_env={
             "ORCHESTRA_URL": "https://internal.example.com/v0",
-            "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-            "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+            "UNIFY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+            "UNIFY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
         },
     )
 
@@ -214,16 +214,16 @@ def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
     env_names = _env_names(manifest)
 
     assert env_names.count("ORCHESTRA_URL") == 1
-    assert env_names.count("UNITY_COMMS_URL") == 1
-    assert env_names.count("UNITY_ADAPTERS_URL") == 1
+    assert env_names.count("UNIFY_COMMS_URL") == 1
+    assert env_names.count("UNIFY_ADAPTERS_URL") == 1
 
     assert env_by_name["ORCHESTRA_URL"]["value"] == (
         "https://internal.example.com/v0"
     )
-    assert env_by_name["UNITY_COMMS_URL"]["value"] == (
+    assert env_by_name["UNIFY_COMMS_URL"]["value"] == (
         "https://myslug---unity-comms-app-staging.run.app"
     )
-    assert env_by_name["UNITY_ADAPTERS_URL"]["value"] == (
+    assert env_by_name["UNIFY_ADAPTERS_URL"]["value"] == (
         "https://myslug---unity-adapters-staging.run.app"
     )
 
@@ -347,7 +347,7 @@ def test_meet_bridge_page_url_is_served_by_comms() -> None:
     """
     manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
     env = _env_by_name(manifest)
-    comms_url = env["UNITY_COMMS_URL"]["value"].rstrip("/")
+    comms_url = env["UNIFY_COMMS_URL"]["value"].rstrip("/")
     assert env["MEET_BRIDGE_PAGE_URL"]["value"] == f"{comms_url}/meet/bridge"
 
 
@@ -662,8 +662,8 @@ def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
     for assignment in (
         "DEPLOY_ENV=staging",
         "ORCHESTRA_URL=${_ORCHESTRA_URL}",
-        "UNITY_COMMS_URL=https://${_COMMS_HOST}",
-        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}",
+        "UNIFY_COMMS_URL=https://${_COMMS_HOST}",
+        "UNIFY_ADAPTERS_URL=https://${_ADAPTERS_HOST}",
     ):
         assert assignment in body, assignment
 
@@ -677,8 +677,8 @@ def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
     """A URL cannot be a literal on a service where it is secret-backed.
 
     Cloud Run rejects the revision when an env var already exists with a
-    different type. ``UNITY_ADAPTERS_URL`` is secret-backed on the adapters
-    service, so it must never appear as a literal there. ``UNITY_COMMS_URL`` is
+    different type. ``UNIFY_ADAPTERS_URL`` is secret-backed on the adapters
+    service, so it must never appear as a literal there. ``UNIFY_COMMS_URL`` is
     not, so setting it literally is correct -- which is why this asserts against
     the secret list rather than banning both names outright.
     """
@@ -692,7 +692,7 @@ def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
         }
         for name in secret_backed:
             assert f"{name}=https://" not in body, f"{name} retyped in {filename}"
-        assert "UNITY_ADAPTERS_URL" in secret_backed, filename
+        assert "UNIFY_ADAPTERS_URL" in secret_backed, filename
 
 
 def test_workflows_dir_is_not_stamped_from_this_image() -> None:

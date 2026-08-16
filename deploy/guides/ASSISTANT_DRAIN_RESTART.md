@@ -57,7 +57,7 @@ ORCHESTRA_ADMIN_KEY=… \
 
 # Staging
 ORCHESTRA_ADMIN_KEY=… \
-  UNITY_COMMS_URL=https://service.a.run.app \
+  UNIFY_COMMS_URL=https://service.a.run.app \
   deploy/scripts/dev/restart_assistant.sh 8081 graceful
 
 # Every assistant mapped to a client bundle
@@ -77,7 +77,7 @@ Canonical hosts:
 Brain `scripts/publish_client_bundle.sh` (after writing `latest.txt`) calls
 `POST /infra/assistants/drain-bundle` when `ORCHESTRA_ADMIN_KEY` is set.
 GitHub Actions needs repo secret `ORCHESTRA_ADMIN_KEY`; without it publish
-still succeeds and drain is skipped. Do **not** pin `UNITY_COMMS_URL` to
+still succeeds and drain is skipped. Do **not** pin `UNIFY_COMMS_URL` to
 prod on the brain repo — the script selects staging vs prod from
 `ENVIRONMENT`.
 

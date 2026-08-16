@@ -16,7 +16,7 @@ comms_url = _comms_url(namespace)
 admin_key = _admin_key()
 
 if not comms_url or not admin_key:
-    print("Error: UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
+    print("Error: UNIFY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set")
     exit(1)
 
 jobs = fetch_running_jobs(namespace)

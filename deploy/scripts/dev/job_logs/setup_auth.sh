@@ -24,8 +24,8 @@ fi
 # ─── Configuration ───────────────────────────────────────────────────────────
 GCP_PROJECT="gcp-project-runtime"
 # Fallback only; the live cluster name is auto-discovered (see discover_cluster)
-# and persisted to .env as UNITY_GKE_CLUSTER_NAME.
-GKE_CLUSTER="${UNITY_GKE_CLUSTER_NAME:-unity}"
+# and persisted to .env as UNIFY_GKE_CLUSTER_NAME.
+GKE_CLUSTER="${UNIFY_GKE_CLUSTER_NAME:-unity}"
 GKE_REGION="us-central1"
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
@@ -171,7 +171,7 @@ setup_gke_credentials() {
             --region "$GKE_REGION" \
             --project "$GCP_PROJECT" 2>&1; then
         success "Cluster credentials configured."
-        persist_env_var "UNITY_GKE_CLUSTER_NAME" "$GKE_CLUSTER"
+        persist_env_var "UNIFY_GKE_CLUSTER_NAME" "$GKE_CLUSTER"
     else
         error "Failed to get cluster credentials."
         echo ""

@@ -62,7 +62,7 @@ spec:
           value: "__BRAIN_OPERATOR_ASSISTANT_ID__"
         - name: ORCHESTRA_URL
           value: "__ORCHESTRA_URL__"
-        - name: UNITY_COMMS_URL
+        - name: UNIFY_COMMS_URL
           value: "__UNITY_COMMS_URL__"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:

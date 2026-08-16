@@ -48,9 +48,9 @@ def _target_numbers() -> list[str]:
     candidates = [
         os.environ.get("COMMS_BRIDGE_SMS_NUMBER", ""),
         os.environ.get("UNITY_COORDINATOR_PHONE", ""),
-        os.environ.get("UNITY_COORDINATOR_PHONE_US", ""),
+        os.environ.get("UNIFY_COORDINATOR_PHONE_US", ""),
         os.environ.get("COMMS_BRIDGE_WHATSAPP_NUMBER", ""),
-        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER", ""),
+        os.environ.get("UNIFY_COORDINATOR_WHATSAPP_NUMBER", ""),
     ]
     numbers: list[str] = []
     for raw in candidates:

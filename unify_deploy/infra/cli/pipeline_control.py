@@ -432,9 +432,9 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> None:
     env = getattr(args, "env", "") or ""
     project = getattr(args, "project", "") or ""
     if env:
-        os.environ["UNITY_GCP_PIPELINE_ENVIRONMENT"] = env
+        os.environ["UNIFY_GCP_PIPELINE_ENVIRONMENT"] = env
     if project:
-        os.environ["UNITY_PUBSUB_PROJECT_ID"] = project
+        os.environ["UNIFY_PUBSUB_PROJECT_ID"] = project
 
 
 def _init_infra(debug: bool = False):

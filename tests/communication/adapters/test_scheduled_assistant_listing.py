@@ -133,7 +133,7 @@ def test_scheduled_teams_watches_filters_by_email_provider(monkeypatch):
 
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.test")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.test")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.requests, "post", post)
 

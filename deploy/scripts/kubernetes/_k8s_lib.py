@@ -1,7 +1,7 @@
 """Shared kubeconfig helper for the one-time setup scripts in this directory.
 
 These scripts run interactively against the GKE cluster named by
-``UNITY_GKE_CLUSTER_NAME`` (project ``gcp-project-runtime``,
+``UNIFY_GKE_CLUSTER_NAME`` (project ``gcp-project-runtime``,
 region ``us-central1``, default ``unity``) and
 each one previously open-coded the same gcloud + ``load_kube_config``
 incantation. They are dev-only; the production path for Unity Job
@@ -34,12 +34,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Cluster identity. The cluster name is resolved from the
-# UNITY_GKE_CLUSTER_NAME env var (the same one the runtime reads via
+# UNIFY_GKE_CLUSTER_NAME env var (the same one the runtime reads via
 # common.settings), so a rename only needs to update .env. Run
 # setup_auth.sh to discover and persist it.
 PROJECT_ID = "gcp-project-runtime"
 REGION = "us-central1"
-CLUSTER_NAME = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
+CLUSTER_NAME = os.environ.get("UNIFY_GKE_CLUSTER_NAME", "unity")
 
 
 def ensure_kube_config() -> bool:

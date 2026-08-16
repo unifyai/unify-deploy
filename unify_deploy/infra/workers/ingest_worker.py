@@ -1776,7 +1776,7 @@ async def _publish_attachment_completion(
     from google.cloud import pubsub_v1
 
     project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get(
-        "UNITY_PUBSUB_PROJECT_ID",
+        "UNIFY_PUBSUB_PROJECT_ID",
     )
     if not project_id:
         logger.warning(

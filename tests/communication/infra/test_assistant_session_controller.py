@@ -452,8 +452,8 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
     image_uri = "registry/unity-staging:override-myslug-deadbeef"
     runtime_service_env = {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+        "UNIFY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+        "UNIFY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
     }
 
     job = controller._claim_idle_job_for_binding(
@@ -609,8 +609,8 @@ def test_claim_and_bind_pending_job_threads_override_runtime_spec_through(monkey
     )
     assert captured["runtime_service_env"] == {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+        "UNIFY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+        "UNIFY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
     }
 
 

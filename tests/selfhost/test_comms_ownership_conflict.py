@@ -40,7 +40,7 @@ def _isolate(
     )
     monkeypatch.setenv("COMMS_BRIDGE_WHATSAPP_NUMBER", "+15550000000")
     monkeypatch.delenv("UNITY_COORDINATOR_PHONE", raising=False)
-    monkeypatch.delenv("UNITY_COORDINATOR_PHONE_US", raising=False)
+    monkeypatch.delenv("UNIFY_COORDINATOR_PHONE_US", raising=False)
     if phone:
         monkeypatch.setenv("COMMS_BRIDGE_SMS_NUMBER", "+15551111111")
     else:

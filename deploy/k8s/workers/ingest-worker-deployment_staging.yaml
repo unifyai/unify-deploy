@@ -60,9 +60,9 @@ spec:
             memory: "3Gi"
             ephemeral-storage: "4Gi"
         env:
-        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+        - name: UNIFY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
-        - name: UNITY_GCS_ARTIFACT_BUCKET
+        - name: UNIFY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts-staging"
         # GCS attempt-lease TTL. Refreshed every chunk (~20-30s), so this is
         # only the window before an orphaned lease (from a killed pod) becomes
@@ -77,7 +77,7 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: UNITY_PUBSUB_PROJECT_ID
+        - name: UNIFY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"

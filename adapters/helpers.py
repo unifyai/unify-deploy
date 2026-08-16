@@ -2236,12 +2236,12 @@ def get_target_idle_count(running_count: int) -> IdlePoolTarget:
 
     Returns an IdlePoolTarget with:
     - target: max(min_floor, demand_buffer)
-    - min_floor: the UNITY_MIN_IDLE_JOBS value
-    - demand_buffer: ceil(running_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    - min_floor: the UNIFY_MIN_IDLE_JOBS value
+    - demand_buffer: ceil(running_count / UNIFY_IDLE_JOB_DEMAND_FACTOR)
     - demand_exceeds_floor: whether demand-based scaling has kicked in
     """
-    min_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
-    demand_factor = int(os.getenv("UNITY_IDLE_JOB_DEMAND_FACTOR", "5"))
+    min_floor = int(os.getenv("UNIFY_MIN_IDLE_JOBS", "3"))
+    demand_factor = int(os.getenv("UNIFY_IDLE_JOB_DEMAND_FACTOR", "5"))
 
     if demand_factor <= 0:
         return IdlePoolTarget(min_floor, min_floor, 0)

@@ -5,7 +5,7 @@ Developer utilities for managing Unity jobs, assistants, and logs against the li
 Most scripts that talk to the comms service require two environment variables:
 
 ```bash
-export UNITY_COMMS_URL="https://..."
+export UNIFY_COMMS_URL="https://..."
 export ORCHESTRA_ADMIN_KEY="..."
 ```
 

@@ -138,7 +138,7 @@ def _print_env(assistant: dict, user: dict, api_key: str, deploy_env: str):
         "ANTHROPIC_API_KEY=",
         f"USER_ID={_v(assistant.get('user_id'))}",
         f"UNIFY_KEY={api_key}",
-        f"UNITY_COMMS_URL={COMMS_URLS[deploy_env]}",
+        f"UNIFY_COMMS_URL={COMMS_URLS[deploy_env]}",
         "DEEPGRAM_API_KEY=",
         "CARTESIA_API_KEY=",
         "ELEVEN_API_KEY=",

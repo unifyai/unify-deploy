@@ -32,8 +32,8 @@
 #   Set TEST_ASSISTANT_ID to use a different assistant ID.
 #
 # On success, exports:
-#   UNITY_ADAPTERS_URL=http://127.0.0.1:8081
-#   UNITY_COMMS_URL=http://127.0.0.1:8082  (if communication service started)
+#   UNIFY_ADAPTERS_URL=http://127.0.0.1:8081
+#   UNIFY_COMMS_URL=http://127.0.0.1:8082  (if communication service started)
 #   PUBSUB_EMULATOR_HOST=localhost:8085    (if emulator started)
 #
 set -euo pipefail
@@ -509,7 +509,7 @@ start_adapters_service() {
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
-    "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
+    "UNIFY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
   )
 
   # Add PUBSUB_EMULATOR_HOST if emulator is running
@@ -623,7 +623,7 @@ start_comms_service() {
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "DEPLOY_ENV=$DEPLOY_ENV"
-    "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
+    "UNIFY_COMMS_URL=$LOCAL_COMMS_URL"
   )
 
   # Add ORCHESTRA_ADMIN_KEY if set
@@ -764,14 +764,14 @@ cmd_start() {
   # Write config file for external tools
   {
     echo "ADAPTERS_PORT=$ADAPTERS_PORT"
-    echo "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
+    echo "UNIFY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
     if [[ "$use_emulator" == "true" ]]; then
       echo "PUBSUB_EMULATOR_HOST=$LOCAL_PUBSUB_HOST"
       echo "PUBSUB_EMULATOR_PORT=$PUBSUB_EMULATOR_PORT"
     fi
     if [[ "$start_comms" == "true" ]]; then
       echo "COMMS_PORT=$COMMS_PORT"
-      echo "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
+      echo "UNIFY_COMMS_URL=$LOCAL_COMMS_URL"
     fi
     echo "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     echo "TEST_ASSISTANT_ID=$TEST_ASSISTANT_ID"
@@ -791,12 +791,12 @@ cmd_start() {
   fi
   echo ""
   echo "To use in your shell:"
-  echo "  export UNITY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
+  echo "  export UNIFY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
   if [[ "$use_emulator" == "true" ]]; then
     echo "  export PUBSUB_EMULATOR_HOST='$LOCAL_PUBSUB_HOST'"
   fi
   if [[ "$start_comms" == "true" ]]; then
-    echo "  export UNITY_COMMS_URL='$LOCAL_COMMS_URL'"
+    echo "  export UNIFY_COMMS_URL='$LOCAL_COMMS_URL'"
   fi
   echo ""
   echo "Test assistant topics created:"
@@ -805,12 +805,12 @@ cmd_start() {
   echo ""
 
   # Output for eval
-  echo "export UNITY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
+  echo "export UNIFY_ADAPTERS_URL='$LOCAL_ADAPTERS_URL'"
   if [[ "$use_emulator" == "true" ]]; then
     echo "export PUBSUB_EMULATOR_HOST='$LOCAL_PUBSUB_HOST'"
   fi
   if [[ "$start_comms" == "true" ]]; then
-    echo "export UNITY_COMMS_URL='$LOCAL_COMMS_URL'"
+    echo "export UNIFY_COMMS_URL='$LOCAL_COMMS_URL'"
   fi
 
   return 0

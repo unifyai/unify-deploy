@@ -106,8 +106,8 @@ load_self_host_context() {
     # email (and provider) the way the hosted assignment event would. Without
     # this the CM boots with no email and outbound Coordinator mail / the
     # reference quiz fail. No-op until a Coordinator mailbox is configured.
-    if [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
-      export ASSISTANT_EMAIL="${UNITY_COORDINATOR_EMAIL_ADDRESS}"
+    if [[ -n "${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+      export ASSISTANT_EMAIL="${UNIFY_COORDINATOR_EMAIL_ADDRESS}"
       export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
     fi
   fi

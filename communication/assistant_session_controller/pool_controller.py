@@ -34,7 +34,7 @@ WATCH_NAMESPACE = os.environ.get("WATCH_NAMESPACE", SETTINGS.default_namespace)
 POOL_CONTROLLER_INTERVAL_SECONDS = float(
     os.environ.get("POOL_CONTROLLER_INTERVAL_SECONDS", "10"),
 )
-MIN_IDLE_JOBS = int(os.environ.get("UNITY_MIN_IDLE_JOBS", "3"))
+MIN_IDLE_JOBS = int(os.environ.get("UNIFY_MIN_IDLE_JOBS", "3"))
 ASSISTANT_IP_SYNC_INTERVAL_SECONDS = float(
     os.environ.get("UNIFY_ASSISTANT_IP_SYNC_INTERVAL_SECONDS", "300"),
 )

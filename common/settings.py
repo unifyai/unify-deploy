@@ -116,7 +116,7 @@ class Settings:
 
     @property
     def gke_cluster_name(self) -> str:
-        return os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
+        return os.environ.get("UNIFY_GKE_CLUSTER_NAME", "unity")
 
     @property
     def default_namespace(self) -> str:
@@ -130,11 +130,11 @@ class Settings:
 
     @property
     def comms_url(self) -> str:
-        return _service_url("UNITY_COMMS_URL", "comms")
+        return _service_url("UNIFY_COMMS_URL", "comms")
 
     @property
     def adapters_url(self) -> str:
-        return _service_url("UNITY_ADAPTERS_URL", "adapters")
+        return _service_url("UNIFY_ADAPTERS_URL", "adapters")
 
     @property
     def task_due_queue_location(self) -> str:
@@ -339,8 +339,8 @@ class Settings:
     def unity_coordinator_email_address(self) -> str:
         return (
             (
-                os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
-                or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+                os.environ.get("UNIFY_COORDINATOR_EMAIL_ADDRESS")
+                or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_EMAIL_ADDRESS")
                 or "twin@unify.ai"
             )
             .strip()

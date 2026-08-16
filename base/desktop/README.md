@@ -23,6 +23,6 @@ Watch these videos for [setup](https://www.loom.com/share/ad1a9b9c4e6e4de1a9b501
 - Control: Use `primitives.computer.desktop.*` for full desktop control (mouse/keyboard). Use `primitives.computer.web.new_session(visible=True/False)` to create browser sessions (visible on VM or headless).
 
 ### Troubleshooting
-- Make sure `UNITY_COMMS_URL`, `ORCHESTRA_URL` and `UNIFY_KEY` are in your `.env` file when starting the Docker container.
-- Also make sure `UNITY_COMMS_URL`, `ORCHESTRA_URL` and `UNIFY_KEY` are in your `agent-service/.env` file on starting the server.
+- Make sure `UNIFY_COMMS_URL`, `ORCHESTRA_URL` and `UNIFY_KEY` are in your `.env` file when starting the Docker container.
+- Also make sure `UNIFY_COMMS_URL`, `ORCHESTRA_URL` and `UNIFY_KEY` are in your `agent-service/.env` file on starting the server.
 - When running with Actor, make sure `UNIFY_KEY` is present in your unity `.env` for the agent-service server auth to work.

@@ -528,9 +528,9 @@ def _upsert_scheduled_execution_task(
     if not SETTINGS.orchestra_admin_key:
         raise RuntimeError("ORCHESTRA_ADMIN_KEY must be configured")
     if request.delivery == "live" and not SETTINGS.adapters_url:
-        raise RuntimeError("UNITY_ADAPTERS_URL must be configured")
+        raise RuntimeError("UNIFY_ADAPTERS_URL must be configured")
     if request.delivery == "offline" and not SETTINGS.comms_url:
-        raise RuntimeError("UNITY_COMMS_URL must be configured")
+        raise RuntimeError("UNIFY_COMMS_URL must be configured")
 
     from google.cloud import tasks_v2
 

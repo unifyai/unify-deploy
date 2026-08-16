@@ -205,9 +205,9 @@ Verify worker bucket wiring:
 
 ```bash
 kubectl get deployment unity-ingest-worker -n staging \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNITY_GCS_ARTIFACT_BUCKET")].value}'
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNIFY_GCS_ARTIFACT_BUCKET")].value}'
 kubectl get deployment unity-ingest-worker -n production \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNITY_GCS_ARTIFACT_BUCKET")].value}'
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="UNIFY_GCS_ARTIFACT_BUCKET")].value}'
 ```
 
 ## Deploying And Reconciling Infra
@@ -315,9 +315,9 @@ Always resolve the environment explicitly before retrying so the CLI reads
 the matching artifact bucket and Pub/Sub topics:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+UNIFY_GCP_PIPELINE_ENVIRONMENT=production \
+UNIFY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNIFY_PUBSUB_PROJECT_ID=gcp-project-runtime \
 uv run python -m unify_deploy.infra.cli.pipeline_control status \
   --env production \
   --dispatch-id <dispatch-id> \
@@ -330,9 +330,9 @@ Dry-run the retry plan first. This should list only DLQ/stale/error jobs to
 retry and skip successful or actively running jobs:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+UNIFY_GCP_PIPELINE_ENVIRONMENT=production \
+UNIFY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNIFY_PUBSUB_PROJECT_ID=gcp-project-runtime \
 uv run python -m unify_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
@@ -343,9 +343,9 @@ uv run python -m unify_deploy.infra.cli.pipeline_control retry \
 After confirming the skipped/retry sets are correct, publish retry messages:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+UNIFY_GCP_PIPELINE_ENVIRONMENT=production \
+UNIFY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNIFY_PUBSUB_PROJECT_ID=gcp-project-runtime \
 uv run python -m unify_deploy.infra.cli.pipeline_control retry \
   --env production \
   --dispatch-id <dispatch-id> \
@@ -353,8 +353,8 @@ uv run python -m unify_deploy.infra.cli.pipeline_control retry \
   --execute
 ```
 
-For staging, use `UNITY_GCP_PIPELINE_ENVIRONMENT=staging`,
-`UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts-staging`, and
+For staging, use `UNIFY_GCP_PIPELINE_ENVIRONMENT=staging`,
+`UNIFY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts-staging`, and
 `--env staging`.
 
 ## Running-Stale Recovery
@@ -365,9 +365,9 @@ retried with the DLQ-only path unless a DLQ record exists. Use stale recovery
 so the CLI can read `jobs/<job_id>/outbox/parse.json` and current checkpoints:
 
 ```bash
-UNITY_GCP_PIPELINE_ENVIRONMENT=production \
-UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
-UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+UNIFY_GCP_PIPELINE_ENVIRONMENT=production \
+UNIFY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNIFY_PUBSUB_PROJECT_ID=gcp-project-runtime \
 uv run python -m unify_deploy.infra.cli.pipeline_control recover-stale \
   --env production \
   --dispatch-id <dispatch-id> \

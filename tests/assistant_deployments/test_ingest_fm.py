@@ -29,8 +29,8 @@ def test_dispatch_fm_passes_table_config_and_document_only_files(monkeypatch):
             ],
         },
     )
-    monkeypatch.setenv("UNITY_PUBSUB_PROJECT_ID", "test-project")
-    monkeypatch.setenv("UNITY_GCS_ARTIFACT_BUCKET", "test-bucket")
+    monkeypatch.setenv("UNIFY_PUBSUB_PROJECT_ID", "test-project")
+    monkeypatch.setenv("UNIFY_GCS_ARTIFACT_BUCKET", "test-bucket")
 
     calls = []
 

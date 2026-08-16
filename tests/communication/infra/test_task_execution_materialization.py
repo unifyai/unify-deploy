@@ -128,7 +128,7 @@ def test_upsert_scheduled_task_execution_creates_cloud_task(client, fake_tasks_m
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -192,7 +192,7 @@ def test_upsert_live_symbolic_activation_carries_entrypoint(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -232,7 +232,7 @@ def test_upsert_scheduled_task_execution_threads_destination(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -278,7 +278,7 @@ def test_upsert_scheduled_task_execution_deletes_previous_materialization(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -327,7 +327,7 @@ def test_upsert_mode_change_deletes_previous_live_materialization_by_default(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_COMMS_URL": "https://comms.test"}),
+        patch.dict(os.environ, {"UNIFY_COMMS_URL": "https://comms.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -395,7 +395,7 @@ def test_upsert_offline_scheduled_task_execution_targets_offline_queue(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_COMMS_URL": "https://comms.test"}),
+        patch.dict(os.environ, {"UNIFY_COMMS_URL": "https://comms.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -442,7 +442,7 @@ def test_upsert_offline_symbolic_activation_carries_entrypoint(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_COMMS_URL": "https://comms.test"}),
+        patch.dict(os.environ, {"UNIFY_COMMS_URL": "https://comms.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -486,7 +486,7 @@ def test_upsert_far_future_activation_targets_repair_queue(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_COMMS_URL": "https://comms.test"}),
+        patch.dict(os.environ, {"UNIFY_COMMS_URL": "https://comms.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -544,7 +544,7 @@ def test_upsert_far_future_duplicate_is_non_destructive(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_COMMS_URL": "https://comms.test"}),
+        patch.dict(os.environ, {"UNIFY_COMMS_URL": "https://comms.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -595,7 +595,7 @@ def test_upsert_existing_activation_is_non_destructive(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -644,7 +644,7 @@ def test_upsert_fails_when_materialization_cannot_be_verified(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,
@@ -876,7 +876,7 @@ def test_repair_scheduled_task_execution_materializes_cloud_task(
 
     with (
         patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
-        patch.dict(os.environ, {"UNITY_ADAPTERS_URL": "https://adapters.test"}),
+        patch.dict(os.environ, {"UNIFY_ADAPTERS_URL": "https://adapters.test"}),
         patch(
             "communication.infra.task_execution._get_cloud_tasks_client",
             return_value=fake_client,

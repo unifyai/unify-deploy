@@ -38,7 +38,7 @@ TERMINAL_STATES = frozenset({"success", "error", "cancelled"})
 
 def _init(*, bucket_override: str | None = None):
     if bucket_override:
-        os.environ["UNITY_GCS_ARTIFACT_BUCKET"] = bucket_override
+        os.environ["UNIFY_GCS_ARTIFACT_BUCKET"] = bucket_override
 
     from unify_deploy.infra.workers.worker_utils import (
         build_worker_infra,
@@ -194,7 +194,7 @@ def main() -> None:
         help=(
             "Override the GCS artifact bucket "
             "(e.g. unity-pipeline-artifacts-staging). "
-            "Defaults to UNITY_GCS_ARTIFACT_BUCKET env var."
+            "Defaults to UNIFY_GCS_ARTIFACT_BUCKET env var."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)

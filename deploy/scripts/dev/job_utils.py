@@ -46,10 +46,10 @@ def success(msg):
 def _comms_url(namespace: str) -> str:
     """Resolve the comms service URL for a namespace.
 
-    Prefers the ``UNITY_COMMS_URL`` env var (set in ``.env``); falls back
+    Prefers the ``UNIFY_COMMS_URL`` env var (set in ``.env``); falls back
     to the per-environment URL mapping.
     """
-    return os.environ.get("UNITY_COMMS_URL", "").rstrip("/") or COMMS_URLS[namespace]
+    return os.environ.get("UNIFY_COMMS_URL", "").rstrip("/") or COMMS_URLS[namespace]
 
 
 def _admin_key() -> str:
@@ -65,7 +65,7 @@ def fetch_running_jobs(namespace: str) -> list[dict]:
     url = _comms_url(namespace)
     key = _admin_key()
     if not url or not key:
-        error("UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set.")
+        error("UNIFY_COMMS_URL and ORCHESTRA_ADMIN_KEY must be set.")
         sys.exit(1)
 
     resp = requests.get(

@@ -12,7 +12,7 @@ if [[ -z "${ASSISTANT_ID}" ]]; then
   exit 2
 fi
 
-COMMS_URL="${UNITY_COMMS_URL:-${COMMS_URL:-https://service.a.run.app}}"
+COMMS_URL="${UNIFY_COMMS_URL:-${COMMS_URL:-https://service.a.run.app}}"
 COMMS_URL="${COMMS_URL%/}"
 if [[ -z "${ORCHESTRA_ADMIN_KEY:-}" ]]; then
   echo "ORCHESTRA_ADMIN_KEY must be set" >&2

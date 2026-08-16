@@ -6,7 +6,7 @@
 #   deploy/scripts/dev/drain_bundle_assistants.sh unify_company staging <SHA>
 #
 # Env:
-#   UNITY_COMMS_URL / COMMS_URL — Cloud Run defaults below
+#   UNIFY_COMMS_URL / COMMS_URL — Cloud Run defaults below
 #   ORCHESTRA_ADMIN_KEY — required (comms /infra admin auth)
 set -euo pipefail
 
@@ -19,7 +19,7 @@ if [[ -z "${BUNDLE_KEY}" || -z "${ENVIRONMENT}" || -z "${REVISION}" ]]; then
   exit 2
 fi
 
-COMMS_URL="${UNITY_COMMS_URL:-${COMMS_URL:-}}"
+COMMS_URL="${UNIFY_COMMS_URL:-${COMMS_URL:-}}"
 if [[ -z "${COMMS_URL}" ]]; then
   if [[ "${ENVIRONMENT}" == "staging" ]]; then
     COMMS_URL="https://service.a.run.app"

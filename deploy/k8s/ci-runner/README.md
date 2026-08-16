@@ -75,8 +75,8 @@ created-assistant reaper and a staging reconcile pass so runs stay leak-neutral.
    ```
 
 4. **Repo secrets used by the workflow** (GitHub injects these into the job):
-   `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `CLONE_TOKEN`, `UNITY_COMMS_URL`,
-   `UNITY_ADAPTERS_URL` (all already used by `hosted-tests.yml`).
+   `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `CLONE_TOKEN`, `UNIFY_COMMS_URL`,
+   `UNIFY_ADAPTERS_URL` (all already used by `hosted-tests.yml`).
 
 5. **Build & push the runner image**, then apply the manifests:
 
