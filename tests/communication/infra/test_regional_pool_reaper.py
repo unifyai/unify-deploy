@@ -86,7 +86,7 @@ def test_regional_reaper_fences_then_deletes_only_reapable_pool_vms(monkeypatch)
     result = vm_helpers.reap_inactive_regional_pools(core_api=object())
 
     assert result["regions"] == [
-        {"region": "us-east1", "action": "reaped", "deleted": ["unity-pool-ubuntu-1"]}
+        {"region": "us-east1", "action": "reaped", "deleted": ["unity-pool-ubuntu-1"]},
     ]
     assert state["fenced"] is True
     assert deleted == ["unity-pool-ubuntu-1"]
@@ -108,7 +108,7 @@ def test_regional_reaper_never_deletes_an_assigned_vm(monkeypatch):
     result = vm_helpers.reap_inactive_regional_pools(core_api=object())
 
     assert result["regions"] == [
-        {"region": "us-east1", "action": "active", "vm_count": 1}
+        {"region": "us-east1", "action": "active", "vm_count": 1},
     ]
     assert state == {"fenced": False}
     delete.assert_not_called()

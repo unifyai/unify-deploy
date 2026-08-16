@@ -13,7 +13,7 @@ is asserted without a credential or a deployed Orchestra.
 import os
 import re
 
-os.environ.pop("SKIP_UNITY_TEST_INIT", None)
+os.environ.pop("SKIP_UNIFY_TEST_INIT", None)
 
 import pytest
 import unisdk

@@ -174,7 +174,7 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
+DEFAULT_UNIFY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
 TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
@@ -1017,7 +1017,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(SETTINGS.default_namespace),
-    image: str = Form(DEFAULT_UNITY_IMAGE),
+    image: str = Form(DEFAULT_UNIFY_IMAGE),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.

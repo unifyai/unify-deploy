@@ -68,7 +68,7 @@ spec:
         # only the window before an orphaned lease (from a killed pod) becomes
         # stealable. Kept comfortably above one chunk but bounded so scale-down/
         # rollout orphans recover quickly. See BACKFILL_RUNBOOK.md.
-        - name: UNITY_INGEST_ATTEMPT_LEASE_TTL
+        - name: UNIFY_INGEST_ATTEMPT_LEASE_TTL
           value: "480"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"

@@ -76,7 +76,7 @@ async def test_client_bundle_succeeds_without_assistant_session(monkeypatch):
     )
     monkeypatch.setattr(views, "storage", SimpleNamespace(Client=_StorageClient))
     monkeypatch.setattr(views, "_service_account_credentials", lambda: None)
-    monkeypatch.setenv("UNITY_CLIENT_BUNDLE_BUCKET", "unity-client-bundles")
+    monkeypatch.setenv("UNIFY_CLIENT_BUNDLE_BUCKET", "unity-client-bundles")
     monkeypatch.setenv("DEPLOY_ENV", "production")
 
     result = await views.get_client_bundle_signed_url(

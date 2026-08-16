@@ -15,10 +15,10 @@
 #   --boot-runtime   Install a login boot hook so background scheduling survives reboot
 #
 # Environment (all optional):
-#   UNITY_HOME              Install root (default: ~/.unity)
+#   UNIFY_HOME              Install root (default: ~/.unity)
 #   ORCHESTRA_PORT          Orchestra FastAPI port (default: 8000)
 #   ORCHESTRA_DB_PORT       Postgres port (default: 55432)
-#   UNITY_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
+#   UNIFY_SKIP_ORCHESTRA    If "1", skip the orchestra spin-up (env only)
 # ============================================================================
 
 set -e
@@ -29,24 +29,24 @@ set -e
 # whether that's the installer's ~/.unity tree or a developer's own clones
 # (e.g. ~/dev/{unity,console,orchestra,...}). This mirrors stack.sh's
 # UNIFY_STACK_ROOT resolution so setup and stack always target the same repos.
-# Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
+# Explicit UNIFY_HOME / UNIFY_STACK_ROOT / *_REPO env vars still win.
 # This script lives in unity-deploy/selfhost/ and bootstraps the sibling unify,
 # console, and orchestra checkouts located under UNIFY_STACK_ROOT (defaults to
-# the parent of unity-deploy). Explicit UNITY_HOME / UNIFY_STACK_ROOT / *_REPO
+# the parent of unity-deploy). Explicit UNIFY_HOME / UNIFY_STACK_ROOT / *_REPO
 # env vars still win.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=default_repo_paths.sh
 source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO/.." && pwd -P)}"
-UNITY_HOME="${UNITY_HOME:-$UNIFY_STACK_ROOT}"
-UNITY_REPO="${UNITY_REPO:-${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}}"
-export UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNITY_REPO}"
-ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNITY_HOME}/orchestra}"
-CONSOLE_REPO="${CONSOLE_REPO:-${UNITY_HOME}/console}"
+UNIFY_HOME="${UNIFY_HOME:-$UNIFY_STACK_ROOT}"
+UNIFY_REPO="${UNIFY_REPO:-${UNIFY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}}"
+export UNIFY_REPO_PATH="${UNIFY_REPO_PATH:-$UNIFY_REPO}"
+ORCHESTRA_REPO="${ORCHESTRA_REPO:-${UNIFY_HOME}/orchestra}"
+CONSOLE_REPO="${CONSOLE_REPO:-${UNIFY_HOME}/console}"
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 CONSOLE_PORT="${CONSOLE_PORT:-3000}"
-UNITY_BRANCH="${UNITY_BRANCH:-staging}"
+UNIFY_BRANCH="${UNIFY_BRANCH:-staging}"
 
 # Ensure user-local tool dirs are on PATH. `uv` lands here, and in a fresh
 # shell it may not be picked up.
@@ -62,7 +62,7 @@ log_error()   { echo -e "${RED}✗${NC} $1"; }
 
 has_env_value() {
     local key="$1"
-    [[ -f "$UNITY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNITY_REPO/.env"
+    [[ -f "$UNIFY_REPO/.env" ]] && grep -qE "^${key}=.+$" "$UNIFY_REPO/.env"
 }
 
 default_orchestra_db_port() {
@@ -113,16 +113,16 @@ SHALLOW_CLONE_DEPTH="${SHALLOW_CLONE_DEPTH:-1}"
 
 _sync_orchestra_repo() {
     if git -C "$ORCHESTRA_REPO" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
-        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$UNITY_BRANCH" || return 1
+        git -C "$ORCHESTRA_REPO" fetch --depth "$SHALLOW_CLONE_DEPTH" origin "$UNIFY_BRANCH" || return 1
     else
-        git -C "$ORCHESTRA_REPO" fetch origin "$UNITY_BRANCH" || return 1
+        git -C "$ORCHESTRA_REPO" fetch origin "$UNIFY_BRANCH" || return 1
     fi
-    git -C "$ORCHESTRA_REPO" checkout "$UNITY_BRANCH" 2>/dev/null || {
-        log_warn "[orchestra] Couldn't checkout $UNITY_BRANCH (uncommitted changes?). Leaving as-is."
+    git -C "$ORCHESTRA_REPO" checkout "$UNIFY_BRANCH" 2>/dev/null || {
+        log_warn "[orchestra] Couldn't checkout $UNIFY_BRANCH (uncommitted changes?). Leaving as-is."
         return 0
     }
-    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$UNITY_BRANCH" 2>/dev/null; then
-        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$UNITY_BRANCH" 2>/dev/null || {
+    if ! git -C "$ORCHESTRA_REPO" reset --hard "origin/$UNIFY_BRANCH" 2>/dev/null; then
+        git -C "$ORCHESTRA_REPO" pull --ff-only origin "$UNIFY_BRANCH" 2>/dev/null || {
             log_warn "[orchestra] Fast-forward pull skipped; leaving as-is."
             return 0
         }
@@ -217,9 +217,9 @@ ensure_orchestra_repo() {
         _sync_orchestra_repo || return 1
     else
         log_warn "[orchestra] Missing at $ORCHESTRA_REPO — install.sh should have cloned it."
-        mkdir -p "$UNITY_HOME"
+        mkdir -p "$UNIFY_HOME"
         if ! git clone --quiet --depth "$SHALLOW_CLONE_DEPTH" --single-branch \
-            --branch "$UNITY_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
+            --branch "$UNIFY_BRANCH" "https://github.com/unifyai/orchestra.git" "$ORCHESTRA_REPO" 2>/dev/null; then
             return 1
         fi
     fi
@@ -318,10 +318,10 @@ start_local_orchestra() {
 
 # --- Wire into Unity's .env -----------------------------------------------
 wire_unity_env() {
-    local env_file="$UNITY_REPO/.env"
+    local env_file="$UNIFY_REPO/.env"
     if [ ! -f "$env_file" ]; then
-        if [ -f "$UNITY_REPO/.env.example" ]; then
-            cp "$UNITY_REPO/.env.example" "$env_file"
+        if [ -f "$UNIFY_REPO/.env.example" ]; then
+            cp "$UNIFY_REPO/.env.example" "$env_file"
             log_info "Created $env_file from .env.example"
         else
             touch "$env_file"
@@ -431,7 +431,7 @@ bootstrap_console_env() {
 #
 # This file contains ONLY auth signing secrets + local Orchestra wiring.
 # Feature availability (billing, voice, transcription, workspace OAuth, ...)
-# is derived from the credentials you add to $UNITY_REPO/.env — the stack
+# is derived from the credentials you add to $UNIFY_REPO/.env — the stack
 # scripts propagate those into the Console process automatically.
 
 # NextAuth / session signing. Console uses JWT sessions + OrchestraAdapter and
@@ -472,7 +472,7 @@ setup_voice_defaults() {
     fi
 
     log_warn "LiveKit Cloud media credentials are not configured yet."
-    log_info "The BYOK wizard will write them to ${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
+    log_info "The BYOK wizard will write them to ${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
 }
 
 ensure_console_npm_deps() {
@@ -515,7 +515,7 @@ CANVAS_HOST_DIR="${CANVAS_HOST_DIR:-$HOME/.unity/canvas-host}"
 # on the kit itself.
 _canvas_branding_src() {
     local candidate
-    for candidate in "${BRANDING_REPO:-}" "$UNITY_HOME/branding" "$CONSOLE_REPO/branding"; do
+    for candidate in "${BRANDING_REPO:-}" "$UNIFY_HOME/branding" "$CONSOLE_REPO/branding"; do
         if [[ -n "$candidate" && -f "$candidate/packages/canvas-kit/package.json" ]]; then
             printf '%s' "$candidate"
             return 0
@@ -525,7 +525,7 @@ _canvas_branding_src() {
 }
 
 ensure_canvas_toolchain() {
-    local installer="$UNITY_REPO/scripts/install-canvas-toolchain.sh"
+    local installer="$UNIFY_REPO/scripts/install-canvas-toolchain.sh"
     if [[ ! -f "$installer" ]]; then
         log_warn "Canvas installer not found at $installer — skipping canvas setup."
         return 0
@@ -557,7 +557,7 @@ ensure_canvas_toolchain() {
     # The render gate drives chromium through unify's own playwright. When it is
     # missing the gate skips rather than fails, so this is attempted and never
     # enforced.
-    local py="$UNITY_REPO/.venv/bin/python"
+    local py="$UNIFY_REPO/.venv/bin/python"
     if [[ -x "$py" ]] && ! "$py" - <<'PY' >/dev/null 2>&1
 import pathlib
 import sys
@@ -599,16 +599,16 @@ main() {
     echo -e "${BOLD}Unity setup${NC} — bootstrapping local orchestra + Cloud voice"
     echo ""
 
-    if [ ! -d "$UNITY_REPO" ]; then
-        log_error "Unity is not installed at $UNITY_REPO. Run scripts/install.sh first."
+    if [ ! -d "$UNIFY_REPO" ]; then
+        log_error "Unity is not installed at $UNIFY_REPO. Run scripts/install.sh first."
         exit 1
     fi
 
     _load_install_progress
 
-    if [ "${UNITY_SKIP_ORCHESTRA:-0}" = "1" ]; then
-        log_warn "UNITY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
-        log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNITY_REPO/.env to point at a remote backend."
+    if [ "${UNIFY_SKIP_ORCHESTRA:-0}" = "1" ]; then
+        log_warn "UNIFY_SKIP_ORCHESTRA=1 — skipping orchestra spin-up."
+        log_info "Set ORCHESTRA_URL + UNIFY_KEY manually in $UNIFY_REPO/.env to point at a remote backend."
         exit 0
     fi
 
@@ -620,7 +620,7 @@ main() {
         ensure_self_host_stack_prereqs || exit 1
     fi
 
-    progress_step_begin 3 "Syncing orchestra repo (branch $UNITY_BRANCH)"
+    progress_step_begin 3 "Syncing orchestra repo (branch $UNIFY_BRANCH)"
     progress_step_update 40
     if ! ensure_orchestra_repo; then
         progress_step_end_fail
@@ -660,12 +660,12 @@ main() {
     fi
 
     if [[ -x "$SCRIPT_DIR/prompt_byok_keys.sh" ]]; then
-        if has_env_value UNITY_BYOK_CONFIGURED; then
+        if has_env_value UNIFY_BYOK_CONFIGURED; then
             log_success "BYOK already configured — skipping wizard"
         else
             echo ""
             log_info "BYOK wizard (LLM, voice, optional workspace OAuth)..."
-            UNITY_REPO="$UNITY_REPO" bash "$SCRIPT_DIR/prompt_byok_keys.sh" || true
+            UNIFY_REPO="$UNIFY_REPO" bash "$SCRIPT_DIR/prompt_byok_keys.sh" || true
         fi
     fi
 

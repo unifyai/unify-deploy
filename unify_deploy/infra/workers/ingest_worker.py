@@ -259,13 +259,13 @@ def _scratch_guard_threshold_bytes() -> int:
     Default is 3.5 GiB, matching a 4 GiB ephemeral-storage limit with a
     little headroom. Operators can tune it without rebuilding the image.
     """
-    raw = os.environ.get("UNITY_INGEST_TMP_MAX_BYTES")
+    raw = os.environ.get("UNIFY_INGEST_TMP_MAX_BYTES")
     if raw:
         try:
             return max(int(raw), 1)
         except ValueError:
             logger.warning(
-                "[ingest] Ignoring invalid UNITY_INGEST_TMP_MAX_BYTES=%r",
+                "[ingest] Ignoring invalid UNIFY_INGEST_TMP_MAX_BYTES=%r",
                 raw,
             )
     return int(3.5 * 1024 * 1024 * 1024)

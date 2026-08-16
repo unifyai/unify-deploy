@@ -36,7 +36,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  UNITY_IMAGE: unifyai/unity-selfhost
+  UNIFY_IMAGE: unifyai/unity-selfhost
   DESKTOP_IMAGE: unifyai/unity-desktop-selfhost
 
 jobs:
@@ -242,7 +242,7 @@ jobs:
         file: ./unity-src/deploy/Dockerfile
         platforms: ${{ matrix.platform }}
         push: true
-        tags: ${{ env.REGISTRY }}/${{ env.UNITY_IMAGE }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch_tag }}
+        tags: ${{ env.REGISTRY }}/${{ env.UNIFY_IMAGE }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch_tag }}
         build-args: |
           BRANCH=${{ needs.resolve.outputs.channel_tag }}
           DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}

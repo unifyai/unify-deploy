@@ -52,7 +52,7 @@ class TestingSettings(ProductionSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Test Infrastructure Settings
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_INCREMENTING_TIMESTAMPS: bool = (
+    UNIFY_INCREMENTING_TIMESTAMPS: bool = (
         False  # Auto-increment timestamps for NEW markers
     )
     EVENTBUS_PUBLISHING_ENABLED: bool = False  # Disabled by default in tests
@@ -62,11 +62,11 @@ class TestingSettings(ProductionSettings):
     UNIFY_TESTS_DELETE_PROJ_ON_START: bool = True
     UNIFY_TESTS_DELETE_PROJ_ON_EXIT: bool = False
     UNIFY_TESTS_ALLOW_PROD: bool = False  # Let requires_orchestra reach hosted
-    UNITY_CACHE_STATS: bool = False
+    UNIFY_CACHE_STATS: bool = False
     UNIFY_PRETEST_CONTEXT_CREATE: bool = False
     UNIFY_TEST_TAGS: str = ""  # Comma-separated list of tags for duration logging
     UNIFY_SKIP_SESSION_SETUP: bool = False  # Skip project/context creation (pre-done)
-    UNITY_TEST_PROJECT_NAME: str = "UnityDeployTests"
+    UNIFY_TEST_PROJECT_NAME: str = "UnityDeployTests"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Local Orchestra Settings
@@ -79,18 +79,18 @@ class TestingSettings(ProductionSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # File Lock Settings (for parallel test coordination)
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_FILE_LOCK_TIMEOUT: float = 3600.0  # 1 hour - handles slow tests under load
+    UNIFY_FILE_LOCK_TIMEOUT: float = 3600.0  # 1 hour - handles slow tests under load
 
     # ─────────────────────────────────────────────────────────────────────────
     # Trace Upload Settings (for uploading OTEL traces to test context)
     # ─────────────────────────────────────────────────────────────────────────
-    UNITY_TRACE_UPLOAD: bool = (
+    UNIFY_TRACE_UPLOAD: bool = (
         False  # Enable/disable trace upload to {TestContext}/Trace
     )
-    UNITY_TRACE_SERVICES: str = (
+    UNIFY_TRACE_SERVICES: str = (
         "all"  # Services to include: "all" or comma-separated list
     )
-    UNITY_TRACE_EXCLUDE_PATTERNS: str = (
+    UNIFY_TRACE_EXCLUDE_PATTERNS: str = (
         ""  # Comma-separated span name patterns to exclude
     )
 
@@ -100,14 +100,14 @@ class TestingSettings(ProductionSettings):
         """Return the test project name based on settings.
 
         If UNIFY_TESTS_RAND_PROJ is True, returns a random project name.
-        Otherwise, returns UNITY_TEST_PROJECT_NAME (defaults to 'UnityDeployTests').
+        Otherwise, returns UNIFY_TEST_PROJECT_NAME (defaults to 'UnityDeployTests').
         """
         if self.UNIFY_TESTS_RAND_PROJ:
             suffix = "".join(
                 random.choices(string.ascii_letters + string.digits, k=8),
             )
             return f"UnityDeployTests_{suffix}"
-        return self.UNITY_TEST_PROJECT_NAME
+        return self.UNIFY_TEST_PROJECT_NAME
 
 
 class _SettingsProxy:

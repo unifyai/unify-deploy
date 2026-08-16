@@ -62,10 +62,10 @@ DIRECTORY_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user"]
 WORKSPACE_ADMIN_SUBJECT = os.environ.get("WORKSPACE_ADMIN_SUBJECT", "dan@unify.ai")
 
 ALIAS_MAILBOX = (
-    (os.environ.get("UNITY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai").strip().lower()
+    (os.environ.get("UNIFY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai").strip().lower()
 )
 ALIAS_DOMAIN = (
-    (os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN") or "twins.unify.ai")
+    (os.environ.get("UNIFY_TWIN_ALIAS_EMAIL_DOMAIN") or "twins.unify.ai")
     .strip()
     .lower()
 )

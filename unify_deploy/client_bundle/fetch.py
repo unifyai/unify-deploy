@@ -33,7 +33,7 @@ def client_deployment_root() -> Path | None:
 
 def bundled_client_mode() -> bool:
     return (
-        os.environ.get("UNITY_DEPLOY_CLIENT_MODE") or "bundled"
+        os.environ.get("UNIFY_DEPLOY_CLIENT_MODE") or "bundled"
     ).strip().lower() == "bundled"
 
 

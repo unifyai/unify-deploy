@@ -4,8 +4,8 @@ FROM ${BASE_IMAGE}
 USER root
 COPY . /app/unity-deploy-src
 
-ENV UNITY_DEPLOY_INSTALL_PROFILE=runtime
-ENV UNITY_DEPLOY_CLIENT_MODE=bundled
+ENV UNIFY_DEPLOY_INSTALL_PROFILE=runtime
+ENV UNIFY_DEPLOY_CLIENT_MODE=bundled
 
 RUN cd /app/unity-deploy-src && uv pip install --system --no-cache .
 

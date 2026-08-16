@@ -52,7 +52,7 @@ def test_ensure_embedded_clients_skips_missing_modules(monkeypatch):
 
 
 def test_load_deployment_registry_embedded_uses_client_imports(monkeypatch):
-    monkeypatch.setenv("UNITY_DEPLOY_CLIENT_MODE", "embedded")
+    monkeypatch.setenv("UNIFY_DEPLOY_CLIENT_MODE", "embedded")
     monkeypatch.setenv(
         "ORCHESTRA_URL",
         "https://internal.example.com/v0",
@@ -65,7 +65,7 @@ def test_load_deployment_registry_embedded_uses_client_imports(monkeypatch):
 
 
 def test_load_bundled_registry_builds_entries_from_manifest(monkeypatch):
-    monkeypatch.setenv("UNITY_DEPLOY_CLIENT_MODE", "bundled")
+    monkeypatch.setenv("UNIFY_DEPLOY_CLIENT_MODE", "bundled")
     monkeypatch.setenv(
         "ORCHESTRA_URL",
         "https://internal.example.com/v0",

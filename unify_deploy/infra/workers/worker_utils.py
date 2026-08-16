@@ -629,7 +629,7 @@ def build_selfhost_worker_infra(
         settings = GcpPipelineSettings()
 
     root = artifact_root or os.environ.get(
-        "UNITY_SELFHOST_ARTIFACT_ROOT",
+        "UNIFY_SELFHOST_ARTIFACT_ROOT",
         "/artifacts",
     )
     artifact_store = LocalArtifactStore(root_dir=root)

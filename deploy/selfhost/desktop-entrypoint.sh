@@ -33,9 +33,9 @@ while true; do
   sleep "$POLL_SECONDS"
 done
 
-export UNITY_GATEWAY_URL="${UNITY_GATEWAY_URL:-http://gateway:8001}"
+export UNIFY_GATEWAY_URL="${UNIFY_GATEWAY_URL:-http://gateway:8001}"
 export ORCHESTRA_URL="${ORCHESTRA_URL:-http://orchestra:8000/v0}"
-export UNITY_COMMS_URL="${UNITY_COMMS_URL:-$UNITY_GATEWAY_URL}"
+export UNITY_COMMS_URL="${UNITY_COMMS_URL:-$UNIFY_GATEWAY_URL}"
 
 update_agent_service_env() {
   local env_file="/app/agent-service/.env"
@@ -43,7 +43,7 @@ update_agent_service_env() {
     log "agent-service .env not found at ${env_file}; skipping env sync"
     return 0
   fi
-  python3 - "$env_file" "$UNIFY_KEY" "$ORCHESTRA_URL" "$UNITY_COMMS_URL" "$UNITY_GATEWAY_URL" "${UNIFY_MODEL:-}" <<'PY'
+  python3 - "$env_file" "$UNIFY_KEY" "$ORCHESTRA_URL" "$UNITY_COMMS_URL" "$UNIFY_GATEWAY_URL" "${UNIFY_MODEL:-}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -53,11 +53,11 @@ keys = {
     "UNIFY_KEY": unify_key,
     "ORCHESTRA_URL": orchestra_url,
     "UNITY_COMMS_URL": comms_url,
-    "UNITY_GATEWAY_URL": gateway_url,
+    "UNIFY_GATEWAY_URL": gateway_url,
 }
 if unify_model:
     keys["UNIFY_MODEL"] = unify_model
-    keys["UNITY_AGENT_SERVICE_LLM_MODEL"] = unify_model
+    keys["UNIFY_AGENT_SERVICE_LLM_MODEL"] = unify_model
 lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
 for key, value in keys.items():
     prefix = f"{key}="

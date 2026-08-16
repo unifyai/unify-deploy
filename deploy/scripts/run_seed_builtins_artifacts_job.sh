@@ -24,7 +24,7 @@ Optional:
 
 A full resync can be requested declaratively via ``sync.force = true`` in the
 manifest, or operationally for this job revision with
-``--force-override true`` / ``UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=true``.
+``--force-override true`` / ``UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=true``.
 Use ``false`` to suppress a manifest force value without changing code.
 
 The job runs from the Unity image and seeds all Builtins artifacts:
@@ -46,7 +46,7 @@ backend_id=""
 wait_mode="async"
 dry_run="false"
 setup_only="false"
-force_override="${UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE:-}"
+force_override="${UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -120,7 +120,7 @@ cleanup() {
 trap cleanup EXIT
 
 ensure_toml_parser() {
-  if [[ "${UNITY_FORCE_TOMLI_BOOTSTRAP:-false}" != "true" ]] && python3 - <<'PY' >/dev/null 2>&1
+  if [[ "${UNIFY_FORCE_TOMLI_BOOTSTRAP:-false}" != "true" ]] && python3 - <<'PY' >/dev/null 2>&1
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -204,15 +204,15 @@ if [[ ! "$task_timeout_seconds" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be a duration in whole seconds, for example 7200s." >&2
   exit 2
 fi
-trigger_timeout_seconds="${UNITY_INTEGRATION_BOOTSTRAP_TRIGGER_TIMEOUT:-300}"
+trigger_timeout_seconds="${UNIFY_INTEGRATION_BOOTSTRAP_TRIGGER_TIMEOUT:-300}"
 poll_timeout_seconds=$(( task_timeout_seconds - 300 ))
 if (( poll_timeout_seconds < 600 )); then
   poll_timeout_seconds=600
 fi
 
-job_env_vars="ORCHESTRA_URL=${orchestra_url},UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
+job_env_vars="ORCHESTRA_URL=${orchestra_url},UNIFY_INTEGRATION_BOOTSTRAP_EXECUTOR=api,UNIFY_INTEGRATION_BOOTSTRAP_TIMEOUT=${trigger_timeout_seconds},UNIFY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT=${poll_timeout_seconds}"
 if [[ -n "$force_override" ]]; then
-  job_env_vars="${job_env_vars},UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=${force_override}"
+  job_env_vars="${job_env_vars},UNIFY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE=${force_override}"
 fi
 
 if [[ "$dry_run" == "true" ]]; then

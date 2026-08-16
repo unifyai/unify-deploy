@@ -6,7 +6,7 @@ import os
 
 from setuptools import find_packages, setup
 
-_PROFILE = os.environ.get("UNITY_DEPLOY_INSTALL_PROFILE", "full").strip().lower()
+_PROFILE = os.environ.get("UNIFY_DEPLOY_INSTALL_PROFILE", "full").strip().lower()
 
 _CLIENT_SUBPACKAGES = (
     "unify_deploy.assistant_deployments.clients.client_alpha",

@@ -51,7 +51,7 @@ def _install_gsutil_shim(tmp_path: Path) -> tuple[dict[str, str], Path]:
         **os.environ,
         "PATH": f"{shim_dir}:{os.environ['PATH']}",
         "FAKE_GCS_ROOT": str(fake_gcs_root),
-        "UNITY_CLIENT_BUNDLE_BUCKET": "test-bucket",
+        "UNIFY_CLIENT_BUNDLE_BUCKET": "test-bucket",
     }
     return env, fake_gcs_root
 

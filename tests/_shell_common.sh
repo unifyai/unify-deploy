@@ -31,19 +31,19 @@ _derive_socket_name() {
   echo "unity${tty_id}"
 }
 
-# Default socket name (can be overridden via UNITY_TEST_SOCKET env var)
-UNITY_TMUX_SOCKET="${UNITY_TEST_SOCKET:-$(_derive_socket_name)}"
+# Default socket name (can be overridden via UNIFY_TEST_SOCKET env var)
+UNIFY_TMUX_SOCKET="${UNIFY_TEST_SOCKET:-$(_derive_socket_name)}"
 
 # ---- Timeout command wrapper ----
 # Determines the best available timeout command for avoiding hangs on dead sockets.
-# Sets UNITY_TIMEOUT_CMD to either "timeout 1", "gtimeout 1", or empty string.
+# Sets UNIFY_TIMEOUT_CMD to either "timeout 1", "gtimeout 1", or empty string.
 _setup_timeout_cmd() {
   if command -v timeout >/dev/null 2>&1; then
-    UNITY_TIMEOUT_CMD="timeout 1"
+    UNIFY_TIMEOUT_CMD="timeout 1"
   elif command -v gtimeout >/dev/null 2>&1; then
-    UNITY_TIMEOUT_CMD="gtimeout 1"
+    UNIFY_TIMEOUT_CMD="gtimeout 1"
   else
-    UNITY_TIMEOUT_CMD=""
+    UNIFY_TIMEOUT_CMD=""
   fi
 }
 _setup_timeout_cmd
@@ -52,8 +52,8 @@ _setup_timeout_cmd
 # List sessions from a socket with timeout protection
 _tmux_ls() {
   local sock="$1"
-  if [[ -n "$UNITY_TIMEOUT_CMD" ]]; then
-    $UNITY_TIMEOUT_CMD tmux -L "$sock" ls 2>/dev/null || true
+  if [[ -n "$UNIFY_TIMEOUT_CMD" ]]; then
+    $UNIFY_TIMEOUT_CMD tmux -L "$sock" ls 2>/dev/null || true
   else
     tmux -L "$sock" ls 2>/dev/null || true
   fi

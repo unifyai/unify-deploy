@@ -202,8 +202,8 @@ get_python() {
 }
 
 resolve_unity_repo_path() {
-  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
-    echo "$UNITY_REPO_PATH"
+  if [[ -n "${UNIFY_REPO_PATH:-}" && -d "$UNIFY_REPO_PATH" ]]; then
+    echo "$UNIFY_REPO_PATH"
     return 0
   fi
   local candidate
@@ -245,7 +245,7 @@ ensure_comms_unity_deps() {
 
   if ! unity_repo="$(resolve_unity_repo_path)"; then
     log_error "Comms App imports unity.task_scheduler.offline_runner_contract but unity is unavailable"
-    log_info "Clone unify as a sibling of unity-deploy (../unify) or set UNITY_REPO_PATH"
+    log_info "Clone unify as a sibling of unity-deploy (../unify) or set UNIFY_REPO_PATH"
     return 1
   fi
 

@@ -42,6 +42,6 @@ Verify:
   kubectl describe externalsecret unity-secrets -n staging
 
 After SM rotation, annotate force-sync or wait for refreshInterval, then restart Unity jobs.
-See deploy/guides/UNITY_CLUSTER_SECRETS.md
+See deploy/guides/UNIFY_CLUSTER_SECRETS.md
 
 EOF

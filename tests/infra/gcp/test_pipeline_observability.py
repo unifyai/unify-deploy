@@ -282,7 +282,7 @@ def test_queued_with_unknown_queued_at_stays_conservative() -> None:
 
 
 def test_queued_stale_age_threshold_is_env_tunable(monkeypatch) -> None:
-    monkeypatch.setenv("UNITY_QUEUED_STALE_AGE_SECONDS", "60")
+    monkeypatch.setenv("UNIFY_QUEUED_STALE_AGE_SECONDS", "60")
     aged = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
     derived, _classification, retryable = derive_status(
         durable_status="queued",

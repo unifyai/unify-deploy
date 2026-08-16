@@ -10,4 +10,4 @@ Unity test infrastructure via ``@_handle_project``.
 
 import os
 
-os.environ["SKIP_UNITY_TEST_INIT"] = "1"
+os.environ["SKIP_UNIFY_TEST_INIT"] = "1"

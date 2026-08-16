@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
-export UNITY_REPO_PATH
+UNIFY_REPO_PATH="${UNIFY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNIFY_REPO_PATH
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
@@ -62,15 +62,15 @@ if [[ "$YES" != "true" ]]; then
 fi
 
 export SELF_HOST=1
-export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
 if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
   # shellcheck disable=SC1090
   source "$SELF_HOST_ENV_SCRIPT"
   export_self_host_coordinator_runtime_file
-  if [[ -f "$UNITY_REPO_PATH/.env" ]]; then
-    load_self_host_env_file "$UNITY_REPO_PATH/.env"
+  if [[ -f "$UNIFY_REPO_PATH/.env" ]]; then
+    load_self_host_env_file "$UNIFY_REPO_PATH/.env"
   fi
 fi
 
@@ -86,7 +86,7 @@ export ORCHESTRA_DB_PASS="${ORCHESTRA_DB_PASS:-orchestra}"
 export ORCHESTRA_DB_BASE="${ORCHESTRA_DB_BASE:-orchestra}"
 
 if [[ "$STOP_RUNTIME" == "true" && -f "$CONSOLE_REPO_PATH/scripts/local.sh" ]]; then
-  UNITY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_REPO_PATH/scripts/local.sh" stop-runtime-backend >/dev/null 2>&1 || true
+  UNIFY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_REPO_PATH/scripts/local.sh" stop-runtime-backend >/dev/null 2>&1 || true
 fi
 
 cd "$ORCHESTRA_REPO_PATH"
@@ -249,7 +249,7 @@ def reset_coordinator_profile(session, coordinator: Assistant) -> None:
 def runtime_api_key() -> str:
     state_dir = Path(
         os.environ.get("SELF_HOST_STATE_DIR")
-        or os.environ.get("UNITY_HOME")
+        or os.environ.get("UNIFY_HOME")
         or Path.home() / ".unity",
     )
     runtime_file = Path(
@@ -499,7 +499,7 @@ with SessionLocal() as session:
         "default_tasks": default_tasks,
         "credits": normalize_json(billing_account.credits if billing_account else None),
     }
-    state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("UNITY_HOME") or Path.home() / ".unity")
+    state_dir = Path(os.environ.get("SELF_HOST_STATE_DIR") or os.environ.get("UNIFY_HOME") or Path.home() / ".unity")
     if owner is not None and coordinator is not None and api_key:
         write_json_file(
             state_dir / "coordinator-runtime.json",

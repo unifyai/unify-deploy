@@ -23,12 +23,12 @@ _DEFAULT_BUNDLE_BUCKET = "unity-client-bundles"
 
 
 def _client_mode() -> str:
-    return (os.environ.get("UNITY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
+    return (os.environ.get("UNIFY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
 
 
 def _bundle_bucket() -> str:
     return (
-        os.environ.get("UNITY_CLIENT_BUNDLE_BUCKET") or _DEFAULT_BUNDLE_BUCKET
+        os.environ.get("UNIFY_CLIENT_BUNDLE_BUCKET") or _DEFAULT_BUNDLE_BUCKET
     ).strip()
 
 

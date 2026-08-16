@@ -1674,10 +1674,10 @@ def _build_offline_runner_env(
         shared_kwargs.pop("requires_filesystem", None)
         shared_kwargs.pop("requires_computer", None)
         env = _build_offline_runner_env_shared(**shared_kwargs)
-        env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] = (
+        env["UNIFY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] = (
             "1" if requires_filesystem else "0"
         )
-        env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] = "1" if requires_computer else "0"
+        env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] = "1" if requires_computer else "0"
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.

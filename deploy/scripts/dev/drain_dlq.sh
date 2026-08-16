@@ -48,7 +48,7 @@ case "$PIPELINE_ENV" in
     exit 2
     ;;
 esac
-SUB="${SUB_OVERRIDE:-${UNITY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}}"
+SUB="${SUB_OVERRIDE:-${UNIFY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}}"
 
 echo "DLQ drain target:"
 echo "  environment:  $PIPELINE_ENV"

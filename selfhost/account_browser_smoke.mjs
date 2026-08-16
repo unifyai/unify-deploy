@@ -57,7 +57,7 @@ function selfHostOwnerFilePath() {
 
   const stateDir =
     process.env.SELF_HOST_STATE_DIR ||
-    process.env.UNITY_HOME ||
+    process.env.UNIFY_HOME ||
     path.join(os.homedir(), '.unity');
   return path.join(stateDir, 'self-host-owner.json');
 }

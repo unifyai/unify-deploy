@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared self-host runtime ownership, locking, and health helpers.
 #
-# Expects self_host_env.sh to be sourced first (or UNITY_HOME / SELF_HOST_STATE_DIR set).
+# Expects self_host_env.sh to be sourced first (or UNIFY_HOME / SELF_HOST_STATE_DIR set).
 
 set -euo pipefail
 
@@ -14,23 +14,23 @@ _SELF_HOST_RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 _SELF_HOST_PACKAGED_DIR="${SELF_HOST_DEPLOY_SELFHOST_DIR:-$_SELF_HOST_RUNTIME_DIR/../deploy/selfhost}"
 
 self_host_runtime_state_file() {
-  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/runtime-state.json' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_runtime_lock_file() {
-  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/runtime.lock' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_marker_file() {
-  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service-enabled' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_supervisor_pidfile() {
-  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service-supervisor.pid' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_log_file() {
-  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/service.log' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_service_is_enabled() {
@@ -47,7 +47,7 @@ self_host_disable_runtime() {
 }
 
 self_host_ensure_state_dir() {
-  mkdir -p "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  mkdir -p "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_read_runtime_state() {
@@ -83,8 +83,8 @@ self_host_runtime_gateway_pid() {
 
 self_host_gateway_base_url() {
   printf 'http://%s:%s' \
-    "${UNITY_GATEWAY_HOST:-127.0.0.1}" \
-    "${UNITY_GATEWAY_PORT:-8001}"
+    "${UNIFY_GATEWAY_HOST:-127.0.0.1}" \
+    "${UNIFY_GATEWAY_PORT:-8001}"
 }
 
 self_host_gateway_pidfile() {
@@ -119,15 +119,15 @@ self_host_gateway_is_healthy() {
 
 self_host_comms_sa_file() {
   printf '%s' \
-    "${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/comms_sa.json}"
+    "${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/comms_sa.json}"
 }
 
 self_host_comms_bridge_pidfile() {
-  printf '%s/comms-bridge.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/comms-bridge.pid' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_comms_bridge_log_file() {
-  printf '%s/comms-bridge.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/comms-bridge.log' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_comms_bridge_script() {
@@ -157,7 +157,7 @@ self_host_ensure_comms_bridge() {
   local script py log_file
   script="$(self_host_comms_bridge_script)"
   [[ -f "$script" ]] || return 0
-  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
+  py="${UNIFY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
   log_file="$(self_host_comms_bridge_log_file)"
   self_host_ensure_state_dir
@@ -198,19 +198,19 @@ self_host_stop_comms_bridge() {
 # default; SELF_HOST_CALLS_ENABLED=0 is reserved for emergency local debugging.
 
 self_host_local_comms_port() {
-  printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+  printf '%s' "${UNIFY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 }
 
 self_host_tunnel_pidfile() {
-  printf '%s/call-tunnel.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/call-tunnel.pid' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_log_file() {
-  printf '%s/call-tunnel.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/call-tunnel.log' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_url_file() {
-  printf '%s/call-tunnel-url' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/call-tunnel-url' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_sync_comms_script() {
@@ -218,7 +218,7 @@ self_host_sync_comms_script() {
 }
 
 self_host_voice_synced_url_file() {
-  printf '%s/call-voice-synced-url' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/call-voice-synced-url' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_tunnel_is_running() {
@@ -247,7 +247,7 @@ self_host_ensure_tunnel() {
     local existing
     existing="$(self_host_tunnel_url 2>/dev/null || true)"
     if [[ -n "$existing" ]]; then
-      export UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$existing"
+      export UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$existing"
       return 0
     fi
     # Running but URL not yet recorded — fall through to re-resolve from the log.
@@ -287,13 +287,13 @@ self_host_ensure_tunnel() {
   fi
 
   printf '%s' "$url" >"$url_file"
-  export UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url"
+  export UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url"
   # The tunnel exposes the CM comms ingress (8787), NOT the gateway (8001).
-  # unity/scripts/local.sh defaults UNITY_GATEWAY_PUBLIC_URL to the comms public
+  # unity/scripts/local.sh defaults UNIFY_GATEWAY_PUBLIC_URL to the comms public
   # URL when unset, which would point the gateway health check + outbound
   # callback base at the comms tunnel. Pin the gateway to its local URL so only
   # the CM ingress is tunneled.
-  export UNITY_GATEWAY_PUBLIC_URL="${UNITY_GATEWAY_PUBLIC_URL:-http://127.0.0.1:${UNITY_GATEWAY_PORT:-8001}}"
+  export UNIFY_GATEWAY_PUBLIC_URL="${UNIFY_GATEWAY_PUBLIC_URL:-http://127.0.0.1:${UNIFY_GATEWAY_PORT:-8001}}"
   if declare -F self_host_patch_runtime_state &>/dev/null; then
     self_host_patch_runtime_state "call_tunnel_url=$url" || true
   fi
@@ -324,11 +324,11 @@ self_host_provider_trigger_worker_port() {
 }
 
 self_host_provider_trigger_worker_pidfile() {
-  printf '%s/provider-trigger-worker.pid' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/provider-trigger-worker.pid' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_provider_trigger_worker_log_file() {
-  printf '%s/provider-trigger-worker.log' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/provider-trigger-worker.log' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 self_host_provider_trigger_worker_is_running() {
@@ -376,7 +376,7 @@ self_host_ensure_provider_trigger_worker() {
   log_file="$(self_host_provider_trigger_worker_log_file)"
   port="$(self_host_provider_trigger_worker_port)"
   db_port="${ORCHESTRA_DB_PORT:-55432}"
-  gateway_port="${UNITY_GATEWAY_PORT:-8001}"
+  gateway_port="${UNIFY_GATEWAY_PORT:-8001}"
   self_host_ensure_state_dir
 
   PORT="$port" \
@@ -432,9 +432,9 @@ self_host_resync_voice_webhooks_if_changed() {
   [[ "$url" == "$prev" ]] && return 0
   script="$(self_host_sync_comms_script)"
   [[ -f "$script" ]] || return 0
-  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
+  py="${UNIFY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
-  if UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url" \
+  if UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$url" \
     "$py" "$script" --set-voice >/dev/null 2>&1; then
     printf '%s' "$url" >"$marker"
   fi
@@ -450,7 +450,7 @@ self_host_revert_voice_webhooks() {
   if declare -F self_host_export_comms_twilio &>/dev/null; then
     self_host_export_comms_twilio
   fi
-  py="${UNITY_REPO_PATH:-}/.venv/bin/python"
+  py="${UNIFY_REPO_PATH:-}/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
   if ! "$py" "$script" --release-voice >/dev/null 2>&1; then
     echo "[call-tunnel] owned voice callback release failed" >&2
@@ -718,8 +718,8 @@ self_host_apply_service_coordinator_context() {
   if ! self_host_service_supervisor_is_running; then
     return 0
   fi
-  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
-  export UNITY_SERVICE_RUNTIME=1
+  export UNIFY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export UNIFY_SERVICE_RUNTIME=1
 }
 
 with_unity_runtime_start_lock() {
@@ -822,7 +822,7 @@ self_host_load_coordinator_credentials() {
     if declare -F self_host_coordinator_runtime_file &>/dev/null; then
       runtime_file="$(self_host_coordinator_runtime_file)"
     else
-      runtime_file="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/coordinator-runtime.json"
+      runtime_file="${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/coordinator-runtime.json"
     fi
   fi
   if [[ ! -f "$runtime_file" ]]; then

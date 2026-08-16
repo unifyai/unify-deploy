@@ -859,7 +859,7 @@ def _verify_jobs(
 # duplicate-message lease/checkpoint race that silently under-ingests (the
 # fact_TelematicsTrips 166k/206,719 case). Markers older than the window are
 # treated as a lost message so recovery can proceed without --force.
-_INFLIGHT_GUARD_SECONDS = int(os.environ.get("UNITY_INFLIGHT_GUARD_SECONDS", "900"))
+_INFLIGHT_GUARD_SECONDS = int(os.environ.get("UNIFY_INFLIGHT_GUARD_SECONDS", "900"))
 
 
 def _recent_inflight_publish(job: Any, *, now: datetime | None = None) -> str | None:

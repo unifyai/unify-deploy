@@ -17,7 +17,7 @@ from unify.guidance_manager.custom_guidance import GUIDANCE_JSONL_FILENAME
 # pods, so this lives under the OS temp dir instead.
 _GENERATED_GUIDANCE_ROOT = (
     Path(
-        os.environ.get("UNITY_DEPLOY_GUIDANCE_CACHE", tempfile.gettempdir()),
+        os.environ.get("UNIFY_DEPLOY_GUIDANCE_CACHE", tempfile.gettempdir()),
     )
     / "unity-deploy-guidance"
 )

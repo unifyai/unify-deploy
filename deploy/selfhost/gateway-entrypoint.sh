@@ -22,8 +22,8 @@ case "${calls_enabled,,}" in
 esac
 
 exec python3 -m unify.gateway serve \
-  --host "${UNITY_GATEWAY_HOST:-0.0.0.0}" \
-  --port "${UNITY_GATEWAY_PORT:-8001}" \
-  --log-level "${UNITY_GATEWAY_LOG_LEVEL:-debug}" \
+  --host "${UNIFY_GATEWAY_HOST:-0.0.0.0}" \
+  --port "${UNIFY_GATEWAY_PORT:-8001}" \
+  --log-level "${UNIFY_GATEWAY_LOG_LEVEL:-debug}" \
   --mode all \
   --single-url

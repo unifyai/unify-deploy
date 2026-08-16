@@ -32,27 +32,27 @@ spec:
         - |
           set -eu
           set -- python -m unify_deploy.scripts.reconcile_deployment \
-            --environment "${UNITY_DEPLOYMENT_ENVIRONMENT}" \
-            --planes "${UNITY_DEPLOYMENT_PLANES}" \
-            --concurrency "${UNITY_DEPLOYMENT_CONCURRENCY}" \
+            --environment "${UNIFY_DEPLOYMENT_ENVIRONMENT}" \
+            --planes "${UNIFY_DEPLOYMENT_PLANES}" \
+            --concurrency "${UNIFY_DEPLOYMENT_CONCURRENCY}" \
             --apply
-          if [ -n "${UNITY_DEPLOYMENT_CLIENT:-}" ]; then
-            set -- "$@" --client "${UNITY_DEPLOYMENT_CLIENT}"
+          if [ -n "${UNIFY_DEPLOYMENT_CLIENT:-}" ]; then
+            set -- "$@" --client "${UNIFY_DEPLOYMENT_CLIENT}"
           fi
-          if [ -n "${UNITY_DEPLOYMENT_ASSISTANT_ID:-}" ]; then
-            set -- "$@" --assistant-id "${UNITY_DEPLOYMENT_ASSISTANT_ID}"
+          if [ -n "${UNIFY_DEPLOYMENT_ASSISTANT_ID:-}" ]; then
+            set -- "$@" --assistant-id "${UNIFY_DEPLOYMENT_ASSISTANT_ID}"
           fi
           exec "$@"
         env:
-        - name: UNITY_DEPLOYMENT_ENVIRONMENT
+        - name: UNIFY_DEPLOYMENT_ENVIRONMENT
           value: "__ENVIRONMENT__"
-        - name: UNITY_DEPLOYMENT_PLANES
+        - name: UNIFY_DEPLOYMENT_PLANES
           value: "__PLANES__"
-        - name: UNITY_DEPLOYMENT_CONCURRENCY
+        - name: UNIFY_DEPLOYMENT_CONCURRENCY
           value: "__CONCURRENCY__"
-        - name: UNITY_DEPLOYMENT_CLIENT
+        - name: UNIFY_DEPLOYMENT_CLIENT
           value: "__CLIENT__"
-        - name: UNITY_DEPLOYMENT_ASSISTANT_ID
+        - name: UNIFY_DEPLOYMENT_ASSISTANT_ID
           value: "__ASSISTANT_ID__"
         # brain_operator client routing reads this at reconcile time to
         # decide which assistant receives the unify_company bundle.

@@ -4,8 +4,8 @@
 # =============================================================================
 set -euo pipefail
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-COMPOSE_DIR="${UNITY_COMPOSE_DIR:-$UNITY_HOME}"
+UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+COMPOSE_DIR="${UNIFY_COMPOSE_DIR:-$UNIFY_HOME}"
 COMPOSE_FILE="${COMPOSE_FILE:-$COMPOSE_DIR/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-$COMPOSE_DIR/.env}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -292,7 +292,7 @@ cmd_up() {
   fi
   validate_optional_profiles || return 1
   stop_disabled_profile_services || return 1
-  mkdir -p "$(grep -E '^UNITY_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Unity/Local")"
+  mkdir -p "$(grep -E '^UNIFY_WORKSPACE_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed "s/^\\${HOME}/$HOME/" || echo "$HOME/Unity/Local")"
   log_info "Starting Unity self-host stack..."
   if ! compose up -d "$@"; then
     rollback_failed_start

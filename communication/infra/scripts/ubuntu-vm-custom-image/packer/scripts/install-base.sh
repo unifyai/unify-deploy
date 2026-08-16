@@ -337,8 +337,8 @@ echo "=== Configuring shell ==="
 cat >> /root/.bashrc << 'BASHRC'
 
 # Unity VM: Start interactive graphical terminal sessions in /Unity
-if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
-    export UNITY_SHELL_INIT=1
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNIFY_SHELL_INIT" ]]; then
+    export UNIFY_SHELL_INIT=1
     cd /Unity
 fi
 BASHRC

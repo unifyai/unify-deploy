@@ -36,7 +36,7 @@ POOL_CONTROLLER_INTERVAL_SECONDS = float(
 )
 MIN_IDLE_JOBS = int(os.environ.get("UNITY_MIN_IDLE_JOBS", "3"))
 ASSISTANT_IP_SYNC_INTERVAL_SECONDS = float(
-    os.environ.get("UNITY_ASSISTANT_IP_SYNC_INTERVAL_SECONDS", "300"),
+    os.environ.get("UNIFY_ASSISTANT_IP_SYNC_INTERVAL_SECONDS", "300"),
 )
 _IMAGE_HASH_LABEL = "unity-image-hash"
 _last_assistant_ip_sync_at = 0.0

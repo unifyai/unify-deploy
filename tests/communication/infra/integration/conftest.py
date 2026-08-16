@@ -319,7 +319,7 @@ def _stack_subprocess_env() -> dict[str, str]:
         "COMMUNICATION_REPO_PATH",
         str(_resolve_sibling_repo("communication")),
     )
-    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unify")))
+    env.setdefault("UNIFY_REPO_PATH", str(_resolve_sibling_repo("unify")))
     env.setdefault("CONSOLE_REPO_PATH", str(_resolve_sibling_repo("console")))
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     # Keep Orchestra alive for the full pytest session; local.sh defaults to 600s.

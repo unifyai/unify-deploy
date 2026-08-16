@@ -576,7 +576,7 @@ def build_unity_job_manifest(
             "name": "MEET_BRIDGE_PAGE_URL",
             "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",
         },
-        # UNITY_WORKFLOWS_DIR is deliberately NOT set here.
+        # UNIFY_WORKFLOWS_DIR is deliberately NOT set here.
         #
         # It used to be, resolved from this process's own installed
         # unify_deploy — which lives at /app in the comms image and under

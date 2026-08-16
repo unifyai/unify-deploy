@@ -188,7 +188,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment
@@ -243,7 +243,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment
@@ -333,7 +333,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment

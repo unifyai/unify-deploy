@@ -128,7 +128,7 @@ configure_calls() {
   python3 "$SCRIPT_DIR/provision_call_sip.py" || return
   publish_tunnel_url "$public_url" || return
   acquired=true
-  UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$public_url" \
+  UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$public_url" \
     python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only \
     || return
   publish_ready || return
@@ -191,7 +191,7 @@ while true; do
     && -n "$current_url" \
     && "$candidate_url" == "$current_url" ]] \
     && (( now - last_lease_check >= LEASE_CHECK_SECONDS )); then
-    if UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$current_url" \
+    if UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL="$current_url" \
       python3 "$SCRIPT_DIR/sync_comms_webhooks.py" --set-voice-only --check; then
       lease_status=0
     else

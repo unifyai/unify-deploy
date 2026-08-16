@@ -10,7 +10,7 @@ from unify_deploy.client_bundle import bootstrap
 def test_ensure_offline_client_bundle_resolves_startup_spec(monkeypatch):
     calls: list = []
 
-    monkeypatch.setenv("UNITY_DEPLOY_CLIENT_MODE", "bundled")
+    monkeypatch.setenv("UNIFY_DEPLOY_CLIENT_MODE", "bundled")
     monkeypatch.setenv("ASSISTANT_ID", "1406")
     monkeypatch.setenv("ORG_ID", "1")
     monkeypatch.setenv("USER_ID", "user-1")
@@ -40,7 +40,7 @@ def test_ensure_offline_client_bundle_resolves_startup_spec(monkeypatch):
 
 
 def test_ensure_offline_client_bundle_skips_without_assistant_id(monkeypatch):
-    monkeypatch.setenv("UNITY_DEPLOY_CLIENT_MODE", "bundled")
+    monkeypatch.setenv("UNIFY_DEPLOY_CLIENT_MODE", "bundled")
     monkeypatch.delenv("ASSISTANT_ID", raising=False)
 
     called = {"resolve": False}

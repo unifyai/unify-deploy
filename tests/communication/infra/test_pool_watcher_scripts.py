@@ -426,7 +426,7 @@ def test_bash_watcher_repairs_unityuser_workspace_access_before_agent_start():
     )
     # Extracting the root-owned profile archive can reset /Unity to mode 0700.
     # Repair after that extraction and before agent-service starts with
-    # UNITY_LOCAL_ROOT there.
+    # UNIFY_LOCAL_ROOT there.
     assert repair_after_profile_restore < text.index("# Agent Service .env")
 
 

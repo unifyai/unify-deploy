@@ -47,6 +47,6 @@ for base in ("unity-parse", "unity-ingest"):
         print(f"subscription {subscription}: {exc.__class__.__name__}")
 PY
 
-mkdir -p "${UNITY_SELFHOST_ARTIFACT_ROOT:-/artifacts}"
+mkdir -p "${UNIFY_SELFHOST_ARTIFACT_ROOT:-/artifacts}"
 
 exec python3 -m "unify_deploy.infra.workers.entrypoint_${role}"

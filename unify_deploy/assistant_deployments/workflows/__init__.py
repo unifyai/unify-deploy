@@ -3,7 +3,7 @@
 Each bundle follows the integration-package layout — ``manifest.yaml``
 plus the content directories (``guidance/``, ``knowledge/``, ``tasks/``,
 ``functions/``) — and is loaded by unify's workflow catalogue at boot
-when ``UNITY_WORKFLOWS_DIR`` points here (see ``workflows_root``).
+when ``UNIFY_WORKFLOWS_DIR`` points here (see ``workflows_root``).
 
 Authoring is git-only: bundles are hand-curated, reviewed in PRs, and a
 version bump here reaches every existing installation on its next
@@ -16,5 +16,5 @@ from pathlib import Path
 
 
 def workflows_root() -> Path:
-    """Absolute path of the catalogue, for UNITY_WORKFLOWS_DIR."""
+    """Absolute path of the catalogue, for UNIFY_WORKFLOWS_DIR."""
     return Path(__file__).resolve().parent

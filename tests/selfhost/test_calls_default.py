@@ -71,7 +71,7 @@ def test_livekit_cloud_state_overrides_repo_dev_env():
             text=True,
             env={
                 **os.environ,
-                "UNITY_HOME": str(state_dir),
+                "UNIFY_HOME": str(state_dir),
                 "SELF_HOST_STATE_DIR": str(state_dir),
             },
         )
@@ -115,7 +115,7 @@ def test_calls_disabled_still_uses_cloud_livekit_media():
             text=True,
             env={
                 **os.environ,
-                "UNITY_HOME": str(state_dir),
+                "UNIFY_HOME": str(state_dir),
                 "SELF_HOST_STATE_DIR": str(state_dir),
                 "SELF_HOST_CALLS_ENABLED": "0",
             },

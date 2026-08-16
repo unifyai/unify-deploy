@@ -229,7 +229,7 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
         run_key="offline:scheduled:assistant-123:101:abc123def456:once",
         job_name="unity-task-execution-abc123def456",
         offline_env={
-            "UNITY_OFFLINE_TASK_WAKE": "scheduled",
+            "UNIFY_OFFLINE_TASK_WAKE": "scheduled",
             "ASSISTANT_ID": "123",
             "UNIFY_KEY": "secret-key",
         },
@@ -275,12 +275,12 @@ def test_launch_offline_task_job_builds_one_shot_manifest():
     # Credentials must never appear inline in the pod spec.
     inline_env_names = {var["name"] for var in container["env"]}
     assert "UNIFY_KEY" not in inline_env_names
-    assert "UNITY_OFFLINE_TASK_WAKE" not in inline_env_names
+    assert "UNIFY_OFFLINE_TASK_WAKE" not in inline_env_names
 
     secret_body = core_api.create_namespaced_secret.call_args.kwargs["body"]
     assert secret_body.metadata.name == "unity-task-execution-abc123def456"
     assert secret_body.string_data["UNIFY_KEY"] == "secret-key"
-    assert secret_body.string_data["UNITY_OFFLINE_TASK_WAKE"] == "scheduled"
+    assert secret_body.string_data["UNIFY_OFFLINE_TASK_WAKE"] == "scheduled"
 
     # The Job adopts the Secret so both garbage-collect together.
     owner_patch = core_api.patch_namespaced_secret.call_args.kwargs["body"]
@@ -426,8 +426,8 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert body["job_name"] == _build_offline_task_job_name(run_key)
     assert mock_launch.call_args.kwargs["run_key"] == run_key
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_RUN_KEY"] == run_key
-    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == body["job_name"]
+    assert offline_env["UNIFY_OFFLINE_RUN_KEY"] == run_key
+    assert offline_env["UNIFY_OFFLINE_TASK_JOB_NAME"] == body["job_name"]
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
     assert create_payload["task_name"] == "Daily summary"
@@ -535,7 +535,7 @@ def test_offline_dispatch_retries_failed_terminal_run():
     expected_job_name = _build_offline_task_job_name(run_key, retry_count=2)
     assert response.json()["job_name"] == expected_job_name
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
+    assert offline_env["UNIFY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == expected_job_name
@@ -607,7 +607,7 @@ def test_offline_dispatch_retries_stale_inflight_run():
 
     expected_job_name = _build_offline_task_job_name(run_key, retry_count=1)
     offline_env = mock_launch.call_args.kwargs["offline_env"]
-    assert offline_env["UNITY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
+    assert offline_env["UNIFY_OFFLINE_TASK_JOB_NAME"] == expected_job_name
     assert mock_update_run.call_count == 2
     failed_update = mock_update_run.call_args_list[0].kwargs["updates"]
     assert failed_update["state"] == "failed"
@@ -1110,8 +1110,8 @@ def test_offline_runner_env_carries_agentic_execution_without_function_id():
         job_name="unity-assistant-abc",
     )
 
-    assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
-    assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Daily summary"
+    assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == ""
+    assert env["UNIFY_OFFLINE_TASK_REQUEST"] == "Daily summary"
 
 
 def test_offline_runner_env_carries_symbolic_function_id():
@@ -1127,7 +1127,7 @@ def test_offline_runner_env_carries_symbolic_function_id():
         job_name="unity-assistant-abc",
     )
 
-    assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
+    assert env["UNIFY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
 
 def test_offline_dispatch_persists_authorized_destination_on_run_create():
@@ -1664,7 +1664,7 @@ def test_requires_computer_offline_dispatch_resolves_desktop_binding():
     mock_desktop.assert_awaited_once()
     offline_env = mock_launch.call_args.kwargs["offline_env"]
     assert offline_env["ASSISTANT_DESKTOP_URL"] == desktop_env["ASSISTANT_DESKTOP_URL"]
-    assert offline_env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
+    assert offline_env["UNIFY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
 
 def test_assistant_desktop_browser_env_uses_local_worker_without_computer_use():

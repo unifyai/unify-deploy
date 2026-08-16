@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/_shell_common.sh"
 
-TMUX_SOCKET="$UNITY_TMUX_SOCKET"
+TMUX_SOCKET="$UNIFY_TMUX_SOCKET"
 
 KILL_ALL=0
 KILL_GLOBAL=0
@@ -87,8 +87,8 @@ _graceful_kill_socket() {
 
   # Get all pane PIDs from all sessions in this socket
   local pids
-  if [[ -n "$UNITY_TIMEOUT_CMD" ]]; then
-    pids=$($UNITY_TIMEOUT_CMD tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
+  if [[ -n "$UNIFY_TIMEOUT_CMD" ]]; then
+    pids=$($UNIFY_TIMEOUT_CMD tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
   else
     pids=$(tmux -L "$sock" list-panes -a -F '#{pane_pid}' 2>/dev/null || true)
   fi
@@ -106,8 +106,8 @@ _graceful_kill_socket() {
   fi
 
   # Now kill the tmux server (ignore errors if server doesn't exist)
-  if [[ -n "$UNITY_TIMEOUT_CMD" ]]; then
-    $UNITY_TIMEOUT_CMD tmux -L "$sock" kill-server 2>/dev/null || true
+  if [[ -n "$UNIFY_TIMEOUT_CMD" ]]; then
+    $UNIFY_TIMEOUT_CMD tmux -L "$sock" kill-server 2>/dev/null || true
   else
     tmux -L "$sock" kill-server 2>/dev/null || true
   fi
@@ -186,7 +186,7 @@ if (( ! SKIP_PURGE )); then
         kill -TERM "$pid" 2>/dev/null || true
         ((purge_count++)) || true
       fi
-    done < <(pgrep -f "UNITY_TEST_SOCKET|unity_dev_|unity_test_" 2>/dev/null || true)
+    done < <(pgrep -f "UNIFY_TEST_SOCKET|unity_dev_|unity_test_" 2>/dev/null || true)
 
     if (( purge_count > 0 )); then
       sleep 1

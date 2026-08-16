@@ -698,7 +698,7 @@ def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
 def test_workflows_dir_is_not_stamped_from_this_image() -> None:
     """A path resolved here is a fact about the comms image, not the Job's.
 
-    UNITY_WORKFLOWS_DIR used to be set from this process's own installed
+    UNIFY_WORKFLOWS_DIR used to be set from this process's own installed
     unify_deploy, which lives at /app in the comms image and under
     site-packages in the assistant image. The Job then received an absolute
     path that did not exist in its own container: the assistant logged
@@ -711,7 +711,7 @@ def test_workflows_dir_is_not_stamped_from_this_image() -> None:
     development, set in the same container that reads it.
     """
     manifest = build_unity_job_manifest(job_name="workflows-dir-staging")
-    assert "UNITY_WORKFLOWS_DIR" not in _env_by_name(manifest)
+    assert "UNIFY_WORKFLOWS_DIR" not in _env_by_name(manifest)
 
 
 # ---------------------------------------------------------------------------

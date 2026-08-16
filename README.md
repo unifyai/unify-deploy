@@ -315,7 +315,7 @@ Rotate by adding a new SM **version**, then force sync + restart pods:
 kubectl annotate externalsecret unity-secrets -n staging force-sync=$(date +%s) --overwrite
 # then trigger a pool refresh so new pods pick it up
 ```
-Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides/UNITY_CLUSTER_SECRETS.md`](deploy/guides/UNITY_CLUSTER_SECRETS.md). Never `kubectl apply` hand-built secret YAML; never commit key material.
+Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides/UNIFY_CLUSTER_SECRETS.md`](deploy/guides/UNIFY_CLUSTER_SECRETS.md). Never `kubectl apply` hand-built secret YAML; never commit key material.
 
 ### 7.2 GitHub Actions secrets (CI)
 
@@ -571,7 +571,7 @@ The full all-repo local stack (local Orchestra + Console + Coordinator + gateway
 | Guide | Topic |
 |---|---|
 | [`deploy/guides/ASSISTANT_DRAIN_RESTART.md`](deploy/guides/ASSISTANT_DRAIN_RESTART.md) | Graceful/force assistant drain, admission close, publish fan-out |
-| [`deploy/guides/UNITY_CLUSTER_SECRETS.md`](deploy/guides/UNITY_CLUSTER_SECRETS.md) | ESO bootstrap, `unity-secrets` rotation, break-glass |
+| [`deploy/guides/UNIFY_CLUSTER_SECRETS.md`](deploy/guides/UNIFY_CLUSTER_SECRETS.md) | ESO bootstrap, `unity-secrets` rotation, break-glass |
 | [`deploy/guides/GKE_EPHEMERAL_STORAGE.md`](deploy/guides/GKE_EPHEMERAL_STORAGE.md) | 10Gi Autopilot cap, `emptyDir` `/tmp`, HF/Docling caches |
 | [`deploy/guides/TELEMETRY.md`](deploy/guides/TELEMETRY.md) | Prometheus / Cloud Monitoring metrics pipeline |
 | [`deploy/guides/CALL_RECORDING.md`](deploy/guides/CALL_RECORDING.md) | Call recording storage + flow |

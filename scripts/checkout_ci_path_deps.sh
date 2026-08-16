@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PARENT="$(cd "${ROOT}/.." && pwd)"
-BRANCH="${UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH:-staging}"
+BRANCH="${UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH:-staging}"
 
 for repo in unify unisdk unillm; do
   dest="${PARENT}/${repo}"

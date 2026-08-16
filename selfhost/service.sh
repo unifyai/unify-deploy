@@ -31,13 +31,13 @@ DEPLOY_REPO_PATH="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SELF_HOST_ENV_SCRIPT="$SCRIPT_DIR/self_host_env.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
-export UNITY_REPO_PATH
+UNIFY_REPO_PATH="${UNIFY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNIFY_REPO_PATH
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
 CONSOLE_LOCAL_SCRIPT="$CONSOLE_REPO_PATH/scripts/local.sh"
-SERVICE_LABEL="${UNITY_SERVICE_LABEL:-ai.unify.unity.runtime}"
+SERVICE_LABEL="${UNIFY_SERVICE_LABEL:-ai.unify.unity.runtime}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -71,16 +71,16 @@ default_orchestra_db_port() {
 
 load_self_host_context() {
   export SELF_HOST=1
-  export UNITY_REPO_PATH
+  export UNIFY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNIFY_REPO_PATH/.env"
     if declare -F self_host_load_state_env_overlay &>/dev/null; then
       self_host_load_state_env_overlay
     fi
@@ -99,8 +99,8 @@ load_self_host_context() {
     # Self-host always runs with Console, so the Coordinator onboarding flow
     # (narration + reference quiz) must stay active. The public unity default
     # (unity/.env) disables it for headless installs; force it on here.
-    export UNITY_CONSOLE_UI=true
-    export UNITY_GATEWAY_LOG_LEVEL="${UNITY_GATEWAY_LOG_LEVEL:-debug}"
+    export UNIFY_CONSOLE_UI=true
+    export UNIFY_GATEWAY_LOG_LEVEL="${UNIFY_GATEWAY_LOG_LEVEL:-debug}"
     export PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
     # The self-host CM is the personal Coordinator, so surface its universal
     # email (and provider) the way the hosted assignment event would. Without
@@ -154,10 +154,10 @@ service_install_launchd() {
   <dict>
     <key>SELF_HOST</key>
     <string>1</string>
-    <key>UNITY_HOME</key>
-    <string>${UNITY_HOME:-$HOME/.unity}</string>
-    <key>UNITY_REPO_PATH</key>
-    <string>${UNITY_REPO_PATH}</string>
+    <key>UNIFY_HOME</key>
+    <string>${UNIFY_HOME:-$HOME/.unity}</string>
+    <key>UNIFY_REPO_PATH</key>
+    <string>${UNIFY_REPO_PATH}</string>
     <key>CONSOLE_REPO_PATH</key>
     <string>${CONSOLE_REPO_PATH}</string>
     <key>ORCHESTRA_REPO_PATH</key>
@@ -196,8 +196,8 @@ ExecStart=/bin/bash ${SCRIPT_DIR}/service.sh run
 Restart=always
 RestartSec=5
 Environment=SELF_HOST=1
-Environment=UNITY_HOME=${UNITY_HOME:-$HOME/.unity}
-Environment=UNITY_REPO_PATH=${UNITY_REPO_PATH}
+Environment=UNIFY_HOME=${UNIFY_HOME:-$HOME/.unity}
+Environment=UNIFY_REPO_PATH=${UNIFY_REPO_PATH}
 Environment=CONSOLE_REPO_PATH=${CONSOLE_REPO_PATH}
 Environment=ORCHESTRA_REPO_PATH=${ORCHESTRA_REPO_PATH}
 Environment=ORCHESTRA_DB_PORT=${ORCHESTRA_DB_PORT:-55432}
@@ -292,8 +292,8 @@ ensure_runtime_backend() {
     log_error "Missing $CONSOLE_LOCAL_SCRIPT"
     return 1
   fi
-  export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
-  export UNITY_SERVICE_RUNTIME=1
+  export UNIFY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+  export UNIFY_SERVICE_RUNTIME=1
   if declare -F with_unity_runtime_start_lock >/dev/null 2>&1; then
     with_unity_runtime_start_lock 30 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend
   else
@@ -340,7 +340,7 @@ cmd_run() {
     if [[ "$count" -gt 1 ]]; then
       log_error "Multiple Coordinator CM processes detected ($count) — resetting runtime"
       if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
-        export UNITY_ALLOW_RUNTIME_STOP=1
+        export UNIFY_ALLOW_RUNTIME_STOP=1
         bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend || true
       fi
       sleep 2
@@ -422,7 +422,7 @@ cmd_stop() {
   fi
 
   if [[ -x "$CONSOLE_LOCAL_SCRIPT" ]]; then
-    export UNITY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
+    export UNIFY_RUNTIME_OWNER="$SELF_HOST_RUNTIME_OWNER_SERVICE"
     bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend || true
   fi
 

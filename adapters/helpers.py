@@ -27,8 +27,8 @@ from common.metrics import (
     BUILD_WEBHOOK_CONTEXT_DURATION,
     JOB_DEMAND_TOTAL,
     STALE_JOBS_LAST_SWEEP,
-    UNITY_JOBS_RUNNING,
-    UNITY_JOBS_IDLE,
+    UNIFY_JOBS_RUNNING,
+    UNIFY_JOBS_IDLE,
 )
 from common.assistant_lookup import get_assistant, managed_desktop_entitled
 from common.coordinator_voice import resolve_runtime_voice
@@ -2403,8 +2403,8 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     )
     matching_idle_count = len(matching_idle_jobs)
     stale_idle_count = len(stale_idle_jobs)
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(current_idle_count)
+    UNIFY_JOBS_RUNNING.set(running_count)
+    UNIFY_JOBS_IDLE.set(current_idle_count)
 
     extra_demand = max(0, int(extra_demand))
     pool_target = get_target_idle_count(running_count)
@@ -2418,8 +2418,8 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     }
 
     if num_to_create == 0:
-        UNITY_JOBS_RUNNING.set(running_count)
-        UNITY_JOBS_IDLE.set(current_idle_count)
+        UNIFY_JOBS_RUNNING.set(running_count)
+        UNIFY_JOBS_IDLE.set(current_idle_count)
         logger.info(
             "Idle pool is healthy "
             f"(current: {current_idle_count}, matching: {matching_idle_count}, "
@@ -2471,8 +2471,8 @@ def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
         futures = [pool.submit(_create_single_job) for _ in range(num_to_create)]
         created_jobs = [f.result() for f in as_completed(futures)]
 
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
+    UNIFY_JOBS_RUNNING.set(running_count)
+    UNIFY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
 
     return {
         "mode": mode,
@@ -2527,8 +2527,8 @@ def cleanup_idle_pool() -> dict:
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
     idle_count = len(inventory["idle"])
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(idle_count)
+    UNIFY_JOBS_RUNNING.set(running_count)
+    UNIFY_JOBS_IDLE.set(idle_count)
     target_retain = get_target_idle_count(running_count).target
 
     resp = requests.get(
@@ -2604,8 +2604,8 @@ def cleanup_idle_pool() -> dict:
 
     _delete_idle_jobs(to_delete, headers)
 
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(len(retain))
+    UNIFY_JOBS_RUNNING.set(running_count)
+    UNIFY_JOBS_IDLE.set(len(retain))
 
     return {
         "retained": len(retain),

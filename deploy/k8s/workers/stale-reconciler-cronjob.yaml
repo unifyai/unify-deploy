@@ -43,7 +43,7 @@ spec:
             - "5"
             - --execute
             env:
-            - name: UNITY_STALE_RECONCILER_DRY_RUN
+            - name: UNIFY_STALE_RECONCILER_DRY_RUN
               value: "false"
             - name: UNITY_GCP_PIPELINE_ENVIRONMENT
               value: "staging"
@@ -98,7 +98,7 @@ spec:
             - "5"
             - --execute
             env:
-            - name: UNITY_STALE_RECONCILER_DRY_RUN
+            - name: UNIFY_STALE_RECONCILER_DRY_RUN
               value: "false"
             - name: UNITY_GCP_PIPELINE_ENVIRONMENT
               value: "production"

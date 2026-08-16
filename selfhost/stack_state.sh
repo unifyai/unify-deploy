@@ -4,7 +4,7 @@
 set -euo pipefail
 
 stack_state_dir() {
-  printf '%s' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 stack_state_file() {
@@ -56,14 +56,14 @@ data = {
     "host": socket.gethostname(),
     "repo_paths": {
         "unify_deploy": env("DEPLOY_REPO_PATH"),
-        "unity": env("UNITY_REPO_PATH"),
+        "unity": env("UNIFY_REPO_PATH"),
         "console": env("CONSOLE_REPO_PATH"),
         "orchestra": env("ORCHESTRA_REPO_PATH"),
     },
     "ports": {
         "console": env("CONSOLE_PORT", "3000"),
         "orchestra": env("ORCHESTRA_PORT", "8000"),
-        "gateway": env("UNITY_GATEWAY_PORT", "8001"),
+        "gateway": env("UNIFY_GATEWAY_PORT", "8001"),
         "pubsub": env("PUBSUB_EMULATOR_PORT", "8085"),
         "desktop": "8090",
     },
@@ -73,9 +73,9 @@ data = {
         "NEXT_PUBLIC_CONSOLE_DEBUG": "true",
         "NEXTAUTH_URL": f"http://localhost:{env('CONSOLE_PORT', '3000')}",
         "ORCHESTRA_URL": f"http://127.0.0.1:{env('ORCHESTRA_PORT', '8000')}",
-        "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
-        "UNITY_ADAPTERS_URL": env("UNITY_ADAPTERS_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
-        "COMMUNICATION_URL": env("COMMUNICATION_URL", f"http://127.0.0.1:{env('UNITY_GATEWAY_PORT', '8001')}"),
+        "LOCAL_ADAPTERS_URL": env("LOCAL_ADAPTERS_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
+        "UNITY_ADAPTERS_URL": env("UNITY_ADAPTERS_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
+        "COMMUNICATION_URL": env("COMMUNICATION_URL", f"http://127.0.0.1:{env('UNIFY_GATEWAY_PORT', '8001')}"),
         "PUBSUB_EMULATOR_HOST": env("PUBSUB_EMULATOR_HOST", "localhost:8085"),
         "GCP_PROJECT_ID": env("GCP_PROJECT_ID", "local-test-project"),
         "PUBSUB_TOPIC_SUFFIX": env("PUBSUB_TOPIC_SUFFIX", "-staging"),
@@ -138,7 +138,7 @@ stack_state_compose_is_active() {
 }
 
 stack_state_refuse_if_compose_active() {
-  if [[ "${UNITY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
+  if [[ "${UNIFY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
     return 0
   fi
   if stack_state_compose_is_active; then
@@ -146,13 +146,13 @@ stack_state_refuse_if_compose_active() {
     echo "Use the compose-backed unity CLI, or stop it before starting source mode:" >&2
     echo "  unity down --full" >&2
     echo "Override only if you understand the port/process collision risk:" >&2
-    echo "  UNITY_ALLOW_STACK_MODE_MIX=1 $0 up" >&2
+    echo "  UNIFY_ALLOW_STACK_MODE_MIX=1 $0 up" >&2
     return 1
   fi
 }
 
 stack_state_refuse_if_source_active() {
-  if [[ "${UNITY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
+  if [[ "${UNIFY_ALLOW_STACK_MODE_MIX:-0}" == "1" ]]; then
     return 0
   fi
   if stack_state_source_is_active; then
@@ -160,7 +160,7 @@ stack_state_refuse_if_source_active() {
     echo "Use unity-deploy/selfhost/stack.sh status/repair-console, or stop it first:" >&2
     echo "  bash /Users/djl11/unity-deploy/selfhost/stack.sh down --full" >&2
     echo "Override only if you understand the port/process collision risk:" >&2
-    echo "  UNITY_ALLOW_STACK_MODE_MIX=1 unity up" >&2
+    echo "  UNIFY_ALLOW_STACK_MODE_MIX=1 unity up" >&2
     return 1
   fi
 }
