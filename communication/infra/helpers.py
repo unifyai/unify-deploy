@@ -389,6 +389,10 @@ def build_unity_job_manifest(
         "UNITY_EGRESS_PROXY_USERNAME",
         "UNITY_EGRESS_PROXY_PASSWORD",
         "UNITY_EGRESS_PROXY_REGIONS",
+        "UNIFY_EGRESS_PROXY_SERVER",
+        "UNIFY_EGRESS_PROXY_USERNAME",
+        "UNIFY_EGRESS_PROXY_PASSWORD",
+        "UNIFY_EGRESS_PROXY_REGIONS",
     }
     unity_secret_env = []
     for key in (
@@ -460,6 +464,10 @@ def build_unity_job_manifest(
         # the only thing stating where that endpoint leaves from; without it
         # egressPolicy.ts refuses the session rather than guess.
         "UNITY_EGRESS_PROXY_REGIONS",
+        "UNIFY_EGRESS_PROXY_SERVER",
+        "UNIFY_EGRESS_PROXY_USERNAME",
+        "UNIFY_EGRESS_PROXY_PASSWORD",
+        "UNIFY_EGRESS_PROXY_REGIONS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",
     ):
