@@ -11,8 +11,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from common.settings import SETTINGS
-
 RELAY_SECRET = "TEST-RELAY-SECRET"
 BUCKET = "test-meet-screenshare"
 # Pinned rather than inherited: object paths are prefixed by the environment, so
@@ -21,17 +19,10 @@ DEPLOY_ENV = "staging"
 
 
 @pytest.fixture(autouse=True)
-def _relay_config():
-    previous_secret = SETTINGS.recall_relay_secret
-    previous_bucket = SETTINGS.meet_screenshare_bucket
-    previous_env = SETTINGS.deploy_env
-    SETTINGS.recall_relay_secret = RELAY_SECRET
-    SETTINGS.meet_screenshare_bucket = BUCKET
-    SETTINGS.deploy_env = DEPLOY_ENV
-    yield
-    SETTINGS.recall_relay_secret = previous_secret
-    SETTINGS.meet_screenshare_bucket = previous_bucket
-    SETTINGS.deploy_env = previous_env
+def _relay_config(monkeypatch):
+    monkeypatch.setenv("RECALL_RELAY_SECRET", RELAY_SECRET)
+    monkeypatch.setenv("UNITY_MEET_SCREENSHARE_BUCKET", BUCKET)
+    monkeypatch.setenv("DEPLOY_ENV", DEPLOY_ENV)
 
 
 def _client() -> TestClient:
@@ -229,7 +220,7 @@ def test_stored_frames_are_jpeg_and_carry_who_shared_them() -> None:
     assert data[:2] == b"\xff\xd8"
 
 
-def test_the_environment_prefix_separates_the_two_deployments() -> None:
+def test_the_environment_prefix_separates_the_two_deployments(monkeypatch) -> None:
     """One bucket, so the prefix is the only thing keeping the environments apart.
 
     Room names are derived from the assistant id and the two environments have
@@ -238,9 +229,9 @@ def test_the_environment_prefix_separates_the_two_deployments() -> None:
     """
     from communication.meet_screenshare import _blob_name
 
-    SETTINGS.deploy_env = "staging"
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
     staging = _blob_name("unity_25_gmeet")
-    SETTINGS.deploy_env = "production"
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     production = _blob_name("unity_25_gmeet")
 
     assert staging == "staging/unity_25_gmeet/focus.jpg"
@@ -348,9 +339,9 @@ def test_no_frame_reads_as_nobody_sharing() -> None:
     assert resp.status_code == 404
 
 
-def test_an_unprovisioned_bucket_reads_as_nobody_sharing() -> None:
+def test_an_unprovisioned_bucket_reads_as_nobody_sharing(monkeypatch) -> None:
     """A new environment must join meetings, just without shared screens."""
-    SETTINGS.meet_screenshare_bucket = ""
+    monkeypatch.setenv("UNITY_MEET_SCREENSHARE_BUCKET", "")
     resp = _client().get(
         f"/meet/screenshare/unity_25_gmeet/focus.jpg?token={RELAY_SECRET}",
     )

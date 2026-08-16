@@ -109,24 +109,34 @@ jobs:
     - name: Checkout unity-deploy (self-host overlay)
       uses: actions/checkout@v4
 
+    # Scoped to branding, the one private repository this job reads, and
+    # revoked when the job ends. 4606137 is the unifyai-ci-clone App, which
+    # holds Contents: Read only; an App id is not a secret. This step fails
+    # loudly when the key is absent, which is what the hand-rolled empty
+    # checks below used to do.
+    - name: Mint a token that can read branding
+      id: clone-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606137'
+        private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: branding
+
+    # unity is public, so this clones unauthenticated. No global insteadOf
+    # rewrite is installed either: the two steps below that do read a private
+    # repository carry the credential in the URL themselves, and a rewrite
+    # would additionally hand that credential to every public clone here.
     - name: Clone unity and overlay deploy/selfhost
       env:
-        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
         UNITY_REF: ${{ needs.resolve.outputs.unity_ref }}
         UNITY_SHA: ${{ needs.resolve.outputs.unity_sha }}
       run: |
         set -euo pipefail
-        if [[ -z "${GH_TOKEN}" ]]; then
-          echo "::error::CLONE_TOKEN secret is not configured on unity-deploy."
-          exit 1
-        fi
-        AUTH="https://x-access-token:${GH_TOKEN}@github.com/"
-        git config --global url."${AUTH}".insteadOf "https://github.com/"
-
         dest="${GITHUB_WORKSPACE}/unity-src"
         rm -rf "$dest"
         git clone --depth 1 --branch "${UNITY_REF}" \
-          "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unity.git" "$dest"
+          "https://github.com/unifyai/unity.git" "$dest"
 
         if [[ -n "${UNITY_SHA}" ]]; then
           git -C "$dest" fetch --depth 1 origin "${UNITY_SHA}"
@@ -139,9 +149,29 @@ jobs:
         cp -R deploy/selfhost/. "$dest/deploy/selfhost/"
         printf '%s\n' "${GITHUB_SHA}" > "$dest/deploy/selfhost/.unity-deploy-sha"
 
+    # Fails here, naming the cause, rather than three steps later against a
+    # repository that plainly exists. The dependency resolve below reads three
+    # public repos and one private one, so a credential that cannot reach
+    # private repositories gets most of the way through and then reports
+    # "Repository not found" -- GitHub's answer for a repository you cannot
+    # see is the same as for one that is not there.
+    - name: The minted token can read a private dependency
+      env:
+        GH_TOKEN: ${{ steps.clone-token.outputs.token }}
+      run: |
+        if git -c http.https://github.com/.extraheader= \
+             ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" \
+             >/dev/null 2>&1; then
+          echo "The minted token can read unifyai/branding."
+        else
+          echo "::error::The minted token cannot read unifyai/branding. Check that"
+          echo "::error::the unifyai-ci-clone App is installed on that repository."
+          exit 1
+        fi
+
     - name: Resolve dependency SHAs (cache bust)
       env:
-        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        GH_TOKEN: ${{ steps.clone-token.outputs.token }}
         UNITY_REF: ${{ needs.resolve.outputs.unity_ref }}
       run: |
         set -euo pipefail
@@ -149,13 +179,26 @@ jobs:
         if [[ "${UNITY_REF}" == "main" || "${{ needs.resolve.outputs.channel_tag }}" == "main" ]]; then
           dep_branch="main"
         fi
-        UNISDK_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
-        UNILLM_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
-        MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/main" | cut -f1)"
+        # actions/checkout leaves an Authorization header configured for
+        # github.com, carrying this job's GITHUB_TOKEN, and git prefers it over
+        # credentials in the URL. That token is scoped to this repository alone,
+        # so the branding ls-remote below authenticated as the wrong identity
+        # and answered 404 -- while the same credential worked through the API,
+        # which never reads git config. Clearing the header for these calls is
+        # what lets the URL's credential be the one that is used.
+        ls_remote() {
+          git -c http.https://github.com/.extraheader= ls-remote "$@"
+        }
+        # These three are public and are read unauthenticated. The minted token
+        # is scoped to branding, so presenting it here would authenticate as an
+        # identity with no grant on them.
+        UNISDK_SHA="$(ls_remote "https://github.com/unifyai/unisdk.git" "refs/heads/${dep_branch}" | cut -f1)"
+        UNILLM_SHA="$(ls_remote "https://github.com/unifyai/unillm.git" "refs/heads/${dep_branch}" | cut -f1)"
+        MAGNITUDE_SHA="$(ls_remote "https://github.com/unifyai/magnitude.git" "refs/heads/main" | cut -f1)"
         # The canvas stage clones branding, whose clone command is static text, so
         # without this the layer is served from cache indefinitely and the image
         # keeps shipping whatever component kit it was first built with.
-        BRANDING_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" "refs/heads/${dep_branch}" | cut -f1)"
+        BRANDING_SHA="$(ls_remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/branding.git" "refs/heads/${dep_branch}" | cut -f1)"
         echo "DEP_REPOS_SHA=${UNISDK_SHA}-${UNILLM_SHA}" >> "$GITHUB_ENV"
         echo "MAGNITUDE_SHA=${MAGNITUDE_SHA}" >> "$GITHUB_ENV"
         echo "CANVAS_BRANDING_SHA=${BRANDING_SHA}" >> "$GITHUB_ENV"
@@ -171,6 +214,27 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    # The canvas stage reads branding and iso-animation over SSH, each under
+    # its own deploy key, mounted as build secrets so neither lands in a layer.
+    # Cloud Build satisfies the same Dockerfile from Secret Manager; Actions
+    # cannot read that store, so the keys are staged here from repository
+    # secrets. The runner is ephemeral and these never enter the image.
+    - name: Stage the canvas deploy keys
+      env:
+        BRANDING_DEPLOY_KEY: ${{ secrets.BRANDING_DEPLOY_KEY }}
+        ISO_ANIMATION_DEPLOY_KEY: ${{ secrets.ISO_ANIMATION_DEPLOY_KEY }}
+      run: |
+        umask 077
+        if [ -z "${BRANDING_DEPLOY_KEY}" ] || [ -z "${ISO_ANIMATION_DEPLOY_KEY}" ]; then
+          echo "::error::BRANDING_DEPLOY_KEY / ISO_ANIMATION_DEPLOY_KEY are not"
+          echo "::error::set on this repository; the canvas stage cannot clone."
+          exit 1
+        fi
+        # printf, not echo, so the file ends in exactly one newline whether or
+        # not the stored value carried one -- OpenSSH rejects a key without it.
+        printf '%s\n' "${BRANDING_DEPLOY_KEY}" > "${RUNNER_TEMP}/branding_deploy_key"
+        printf '%s\n' "${ISO_ANIMATION_DEPLOY_KEY}" > "${RUNNER_TEMP}/iso_deploy_key"
+
     - name: Build and push unity-selfhost (${{ matrix.arch_tag }})
       uses: docker/build-push-action@v6
       with:
@@ -180,11 +244,17 @@ jobs:
         push: true
         tags: ${{ env.REGISTRY }}/${{ env.UNITY_IMAGE }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch_tag }}
         build-args: |
-          GITHUB_TOKEN=${{ secrets.CLONE_TOKEN }}
           BRANCH=${{ needs.resolve.outputs.channel_tag }}
           DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}
           MAGNITUDE_SHA=${{ env.MAGNITUDE_SHA }}
           CANVAS_BRANDING_SHA=${{ env.CANVAS_BRANDING_SHA }}
+        # Passed as files rather than inline values: a PEM is multi-line, and
+        # interpolating one into the `secrets:` list splits it across entries,
+        # so the key reaches the build truncated and OpenSSH rejects it with
+        # "error in libcrypto".
+        secret-files: |
+          branding_deploy_key=${{ runner.temp }}/branding_deploy_key
+          iso_deploy_key=${{ runner.temp }}/iso_deploy_key
         cache-from: type=gha,scope=unity-selfhost-${{ matrix.arch_tag }}
         cache-to: type=gha,mode=max,scope=unity-selfhost-${{ matrix.arch_tag }}
 

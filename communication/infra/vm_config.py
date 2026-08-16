@@ -88,7 +88,17 @@ MAK_KEY = os.getenv("MAK_KEY", "")
 # VM Pool Configuration
 # =============================================================================
 POOL_SSH_USERNAME = "unityuser"
-POOL_TARGET_IDLE = 0
+# Idle VMs kept warm per pool, keyed by VM type.
+#
+# Ubuntu keeps one. A cold-started pool VM needs roughly half an hour to finish
+# its guest-side assignment bootstrap, and with no warm VM that wait lands on
+# whoever claims next -- long enough that a release requested during it is not
+# read until the bootstrap returns, because the guest watcher handles assignment
+# and release in one sequential loop.
+#
+# Windows stays cold: those VMs are substantially more expensive and their
+# demand is sparse, so paying the boot on demand is the better trade.
+POOL_TARGET_IDLE_BY_VM_TYPE = {"ubuntu": 1, "windows": 0}
 POOL_TARGET_STOPPED = 0
 POOL_BOOT_TIMEOUT_SECONDS = 300
 POOL_RELEASE_TIMEOUT_SECONDS = 600
@@ -107,6 +117,11 @@ POOL_VM_NAME_PREFIX_ALIASES: tuple[str, ...] = ("unity-pool", "droid-pool")
 # Retired env suffixes with no controller of their own. Both prod and staging
 # reclaimers may delete leftover network resources for these suffixes.
 POOL_RETIRED_ENV_SUFFIXES: tuple[str, ...] = ("-preview",)
+
+
+def pool_target_idle(vm_type: str) -> int:
+    """Return how many idle VMs of ``vm_type`` a pool keeps warm."""
+    return POOL_TARGET_IDLE_BY_VM_TYPE.get(vm_type, 0)
 
 
 def pool_vm_name_prefix(vm_type: str) -> str:

@@ -2450,9 +2450,6 @@ def _is_factory_test_assistant(assistant: dict) -> bool:
     is_local = assistant.get("is_local")
     if is_local not in (None, True):
         return False
-    deploy_env = str(assistant.get("deploy_env") or "")
-    if deploy_env and deploy_env != NAMESPACE:
-        return False
     about = str(assistant.get("about") or "")
     surname = str(assistant.get("surname") or "")
     return about == TEST_ASSISTANT_FACTORY_ABOUT or (

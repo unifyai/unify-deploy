@@ -2444,10 +2444,15 @@ async def dispatch_offline_task(
 
     _validate_offline_dispatch_request(request)
 
-    from communication.infra.drain import admission_blocked
+    from communication.infra.drain import _ensure_waiter, admission_blocked
 
     drain_intent = admission_blocked(request.assistant_id)
     if drain_intent is not None:
+        # The waiter that advances a drain lives in one Cloud Run instance; if
+        # that instance recycled, the durable intent would block admission
+        # forever. Re-arming here makes each deferred dispatch the thing that
+        # revives it, so the retry Cloud Tasks schedules can succeed.
+        await _ensure_waiter(str(request.assistant_id))
         # 503 so Cloud Tasks retries after the drain clears / pod recycles.
         raise HTTPException(
             status_code=503,

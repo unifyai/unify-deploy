@@ -15,6 +15,7 @@ import ast
 import importlib
 import importlib.util
 import json
+import os
 import sys
 import types as builtin_types
 from pathlib import Path
@@ -36,6 +37,10 @@ from unify_deploy.assistant_deployments.deployment_types import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CLIENTS_DIR = Path(unify_deploy.assistant_deployments.clients.__file__).parent
+
+# The environment client discovery is pinned to, so the covered client set is
+# the same everywhere. Hosted clients declare their mappings for production.
+_DISCOVERY_ORCHESTRA_URL = "https://api.unify.ai/v0"
 
 
 def _discover_all_deployments() -> list[tuple[str, str, Path]]:
@@ -389,21 +394,40 @@ class TestSecretsStructure:
 
 
 def _discover_clients_with_mappings():
-    """Find clients that export _MAPPING and _DEPLOYMENTS_DIR."""
+    """Find clients that export _MAPPING and _DEPLOYMENTS_DIR.
+
+    Discovery pins the environment, because a hosted-only client declares
+    ``_MAPPING = None`` outside the environments it serves.  What a client
+    declares is a property of the client, not of whichever backend the run
+    happens to point at, so leaving this ambient would silently cover a
+    different set of clients on a laptop than in CI.
+    """
+
     results = []
-    for client_dir in sorted(_CLIENTS_DIR.iterdir()):
-        if not client_dir.is_dir() or not (client_dir / "deployments").is_dir():
-            continue
-        try:
-            mod = importlib.import_module(
-                f"unify_deploy.assistant_deployments.clients.{client_dir.name}",
-            )
-            mapping = getattr(mod, "_MAPPING", None)
-            dep_dir = getattr(mod, "_DEPLOYMENTS_DIR", None)
-            if mapping is not None and dep_dir is not None:
-                results.append((client_dir.name, mapping, dep_dir))
-        except Exception:
-            pass
+    previous_url = os.environ.get("ORCHESTRA_URL")
+    os.environ["ORCHESTRA_URL"] = _DISCOVERY_ORCHESTRA_URL
+    try:
+        for client_dir in sorted(_CLIENTS_DIR.iterdir()):
+            if not client_dir.is_dir() or not (client_dir / "deployments").is_dir():
+                continue
+            try:
+                mod = importlib.import_module(
+                    f"unify_deploy.assistant_deployments.clients.{client_dir.name}",
+                )
+                if getattr(mod, "_MAPPING", None) is None:
+                    # Imported earlier under a different environment.
+                    mod = importlib.reload(mod)
+                mapping = getattr(mod, "_MAPPING", None)
+                dep_dir = getattr(mod, "_DEPLOYMENTS_DIR", None)
+                if mapping is not None and dep_dir is not None:
+                    results.append((client_dir.name, mapping, dep_dir))
+            except Exception:
+                pass
+    finally:
+        if previous_url is None:
+            os.environ.pop("ORCHESTRA_URL", None)
+        else:
+            os.environ["ORCHESTRA_URL"] = previous_url
     return results
 
 

@@ -1,10 +1,12 @@
 # Self-hosted GitHub Actions runner image for the Integration smoke merge gate.
 #
-# Base provides the auto-registering runner loop (ACCESS_TOKEN -> ephemeral
-# registration). We add the toolchain the integration suite needs: Python 3.12,
-# uv, portaudio headers (audio deps build during uv sync), the gcloud CLI, and
-# the GKE auth plugin. GCP/Kubernetes auth itself is wired at run time by the
-# workflow (gcloud auth activate-service-account) and in-cluster config.
+# Base provides the auto-registering runner loop (GitHub App key -> installation
+# token -> ephemeral registration, re-minted per registration; see
+# external-secret.yaml). We add the toolchain the integration suite needs:
+# Python 3.12, uv, portaudio headers (audio deps build during uv sync), the
+# gcloud CLI, and the GKE auth plugin. GCP/Kubernetes auth itself is wired at
+# run time by the workflow (gcloud auth activate-service-account) and
+# in-cluster config.
 FROM myoung34/github-runner:ubuntu-noble
 
 USER root

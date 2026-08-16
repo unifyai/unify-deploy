@@ -23,12 +23,7 @@ def client(monkeypatch):
     # Self-scoped routes authorize with admin-or-assistant; set a known admin
     # key and send it by default so these logic-focused tests hit the admin
     # short-circuit rather than the per-assistant session lookup.
-    monkeypatch.setattr(
-        SETTINGS,
-        "orchestra_admin_key",
-        "TEST-ADMIN-KEY",
-        raising=False,
-    )
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "TEST-ADMIN-KEY")
 
     app = FastAPI()
     app.include_router(router, prefix="/infra")

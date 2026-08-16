@@ -16,6 +16,7 @@ import pytest
 from unify_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unify_deploy.assistant_deployments.clients import (
     _CLIENT_DEPLOYMENTS,
+    _ensure_embedded_clients_registered,
     resolve,
     resolve_from_deployments,
 )
@@ -153,6 +154,10 @@ def _guidance_titles(resolved) -> set[str]:
     return {entry["title"] for entry in source.values()}
 
 
+def _guidance_keys(resolved) -> set[str]:
+    return set(collect_guidance_from_directories(resolved.guidance_dirs))
+
+
 # ---------------------------------------------------------------------------
 # Registry cleanup fixture
 # ---------------------------------------------------------------------------
@@ -161,6 +166,12 @@ def _guidance_titles(resolved) -> set[str]:
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Snapshot and restore the client deployment registry so tests don't leak."""
+    # ``resolve()`` imports the embedded client subpackages lazily, and those
+    # imports call ``register_client`` at module scope. Force them here, before
+    # any test body patches ``load_deployment``, so a first-time client import
+    # can never land inside a patch that only knows the test's own deployment
+    # names. Setup ordering guarantees this runs before the test body.
+    _ensure_embedded_clients_registered()
     saved_clients = dict(_CLIENT_DEPLOYMENTS)
     _CLIENT_DEPLOYMENTS.clear()
     yield
@@ -743,11 +754,25 @@ class TestEnvironmentGuardrail:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TestUnifyCompanyRouting — default deployment is org-scoped
+# TestUnifyCompanyRouting — only the brain-operator assistant is targeted
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestUnifyCompanyRouting:
+
+    @staticmethod
+    def _assert_carries_operator_guidance(matched) -> None:
+        """The operator resolves to the brain repo's own guidance surface.
+
+        Asserted at the namespace rather than at individual entries: this
+        prose lives in the brain repo and is edited there, while the
+        ``clients/unify_company`` symlink floats to that repo's branch tip.
+        Pinning titles here turns any brain content edit into a failure of
+        this repo's CI.
+        """
+
+        assert matched.guidance_dirs
+        assert any(key.startswith("brain-operator/") for key in _guidance_keys(matched))
 
     @staticmethod
     def _reload_unify_company(
@@ -773,10 +798,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(assistant_id=1406)
         assert matched is not None
-        assert _guidance_titles(matched) >= {
-            "CRM stage hygiene",
-            "CRM email sending policy",
-        }
+        self._assert_carries_operator_guidance(matched)
 
         assert resolve_from_deployments(org_id=1) is None
         assert resolve_from_deployments(assistant_id=9999) is None
@@ -789,10 +811,7 @@ class TestUnifyCompanyRouting:
 
         matched = resolve_from_deployments(assistant_id=8081)
         assert matched is not None
-        assert _guidance_titles(matched) >= {
-            "CRM stage hygiene",
-            "CRM email sending policy",
-        }
+        self._assert_carries_operator_guidance(matched)
 
         assert resolve_from_deployments(org_id=5) is None
         assert resolve_from_deployments(assistant_id=1406) is None

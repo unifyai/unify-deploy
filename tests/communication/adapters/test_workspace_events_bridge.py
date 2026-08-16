@@ -134,12 +134,9 @@ def test_bridge_forwards_signed_native_google_delivery_for_workspace_families(
 
     orchestra_response = MagicMock(status_code=200, text='{"status":"accepted"}')
     with (
-        patch("adapters.main.SETTINGS.native_google_webhook_secret", SECRET),
-        patch(
-            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
-            SA_EMAIL,
-        ),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_GOOGLE_WEBHOOK_SECRET": SECRET}),
+        patch.dict(os.environ, {"UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA": SA_EMAIL}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         patch(
             "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
@@ -186,12 +183,9 @@ def test_bridge_returns_503_when_orchestra_is_not_durable(client):
 
     orchestra_response = MagicMock(status_code=500, text="boom")
     with (
-        patch("adapters.main.SETTINGS.native_google_webhook_secret", SECRET),
-        patch(
-            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
-            SA_EMAIL,
-        ),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_GOOGLE_WEBHOOK_SECRET": SECRET}),
+        patch.dict(os.environ, {"UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA": SA_EMAIL}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         patch(
             "adapters.workspace_events_bridge.google_id_token.verify_oauth2_token",
             return_value={"email": SA_EMAIL, "email_verified": True},
@@ -274,12 +268,9 @@ def test_bridge_rejects_bad_pushes_without_contacting_orchestra(client, scenario
         secret_value = ""
 
     with (
-        patch("adapters.main.SETTINGS.native_google_webhook_secret", secret_value),
-        patch(
-            "adapters.main.SETTINGS.workspace_events_push_auth_service_account",
-            SA_EMAIL,
-        ),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_GOOGLE_WEBHOOK_SECRET": secret_value}),
+        patch.dict(os.environ, {"UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA": SA_EMAIL}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         oidc,
         patch("adapters.workspace_events_bridge.requests.post") as mock_post,
     ):

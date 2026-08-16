@@ -113,7 +113,7 @@ class TestEnvironmentReconstruct:
 
 
 class TestIntegrationRegistrySync:
-    def test_noop_with_empty_registry(self):
+    def test_noop_with_empty_registry(self, fake_orchestra_store):
         from unify.integration_registry import sync_custom_integration_registry
 
         result = sync_custom_integration_registry(source_registry={})
