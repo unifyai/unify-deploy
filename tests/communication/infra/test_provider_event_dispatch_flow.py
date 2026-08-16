@@ -39,9 +39,7 @@ def _dispatch_payload(**overrides) -> dict:
 
 @pytest.fixture
 def provider_event_client(monkeypatch):
-    from common.settings import SETTINGS
-
-    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "TEST-ADMIN-KEY")
     app = FastAPI()
     app.include_router(
         task_execution.router,

@@ -28,7 +28,7 @@ def ms_env(monkeypatch):
 
     from common.settings import SETTINGS
 
-    monkeypatch.setattr(SETTINGS, "ms365_byod_client_id", "byod-client-id")
+    monkeypatch.setenv("MS365_BYOD_CLIENT_ID", "byod-client-id")
     return SETTINGS
 
 
@@ -159,9 +159,7 @@ def test_byod_missing_env_returns_none(monkeypatch):
     """Missing BYOD env vars must surface as ``None``, not an empty-string call."""
     monkeypatch.delenv("MS365_BYOD_CLIENT_SECRET", raising=False)
 
-    from common.settings import SETTINGS
-
-    monkeypatch.setattr(SETTINGS, "ms365_byod_client_id", "")
+    monkeypatch.setenv("MS365_BYOD_CLIENT_ID", "")
 
     from adapters.main import _resolve_ms_refresh_credentials
 
@@ -181,9 +179,8 @@ class _Resp:
 
 def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
     """Refresh persistence treats PUT 404 + POST 201 as a successful upsert."""
-    from common.settings import SETTINGS
 
-    monkeypatch.setattr(SETTINGS, "orchestra_url", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
 
     calls: list[tuple[str, str, dict]] = []
     # Every call is bounded, so one hung upstream costs a single assistant
@@ -232,9 +229,8 @@ def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
 
 def test_store_refreshed_oauth_secrets_fails_on_persistence_error(monkeypatch):
     """A refresh job must not be counted refreshed when credential storage fails."""
-    from common.settings import SETTINGS
 
-    monkeypatch.setattr(SETTINGS, "orchestra_url", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
 
     from adapters import main
 

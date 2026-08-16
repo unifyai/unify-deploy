@@ -34,8 +34,8 @@ def test_list_scheduled_assistants_scopes_fields_and_returns_info(monkeypatch):
         captured["timeout"] = kwargs.get("timeout")
         return _Response(200, payload={"info": [{"agent_id": 1}, {"agent_id": 2}]})
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(main.requests, "get", get)
 
     out = main._list_scheduled_assistants(
@@ -61,8 +61,8 @@ def test_list_scheduled_assistants_retries_then_succeeds(monkeypatch):
             raise Exception("transient network error")
         return _Response(200, payload={"info": [{"agent_id": 7}]})
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.time, "sleep", lambda *_a, **_k: None)
 
@@ -78,8 +78,8 @@ def test_list_scheduled_assistants_raises_after_exhaustion(monkeypatch):
     def get(url, **kwargs):
         return _Response(500, text="upstream boom")
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.time, "sleep", lambda *_a, **_k: None)
 
@@ -100,8 +100,8 @@ def test_list_scheduled_assistants_paginates_with_limit(monkeypatch):
         pages.append(offset)
         return _Response(200, payload={"info": everyone[offset : offset + limit]})
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
     monkeypatch.setattr(main.requests, "get", get)
 
     out = main._list_scheduled_assistants(limit=2, retries=0, caller="unit")
@@ -131,9 +131,9 @@ def test_scheduled_teams_watches_filters_by_email_provider(monkeypatch):
         posted.append((kwargs.get("json") or {}).get("primary_email"))
         return _Response(200, payload={"success": True})
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "comms_url", "https://comms.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.test")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.requests, "post", post)
 

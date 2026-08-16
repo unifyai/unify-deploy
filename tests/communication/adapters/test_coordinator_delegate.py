@@ -1,5 +1,7 @@
 """Unit tests for the Coordinator delegation adapters endpoint."""
 
+import os
+
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -33,7 +35,6 @@ def _assistant_data() -> dict:
         "user_desktops": [],
         "team_ids": [],
         "org_id": None,
-        "deploy_env": "staging",
         "is_local": False,
     }
 
@@ -86,7 +87,7 @@ def test_coordinator_delegate_attaches_wake_reason_for_cold_start():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -128,7 +129,7 @@ def test_coordinator_delegate_publishes_event_for_running_session():
     }
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=False),
         patch(
@@ -163,7 +164,7 @@ def test_coordinator_delegate_local_runtime_publishes_directly():
     client = TestClient(app)
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value=_assistant_data()),
         patch("adapters.main.uses_local_unity_runtime", return_value=True),
         patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
@@ -194,7 +195,7 @@ def test_coordinator_delegate_skips_deleted_assistant():
     client = TestClient(app)
 
     with (
-        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch.dict(os.environ, {"ORCHESTRA_ADMIN_KEY": "test-admin-key"}),
         patch("adapters.main.get_assistant", return_value={"assistant_id": None}),
     ):
         response = client.post(

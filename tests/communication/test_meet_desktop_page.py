@@ -14,19 +14,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from common.settings import SETTINGS
-
 RELAY_SECRET = "TEST-RELAY-SECRET"
 LIVEVIEW = "https://vm.example.com/desktop/custom.html"
 PASSWORD = "vnc-pass"  # pragma: allowlist secret
 
 
 @pytest.fixture(autouse=True)
-def _relay_secret():
-    previous = SETTINGS.recall_relay_secret
-    SETTINGS.recall_relay_secret = RELAY_SECRET
-    yield
-    SETTINGS.recall_relay_secret = previous
+def _relay_secret(monkeypatch):
+    monkeypatch.setenv("RECALL_RELAY_SECRET", RELAY_SECRET)
 
 
 def _client() -> TestClient:
@@ -75,9 +70,9 @@ def test_a_signature_for_a_different_liveview_is_refused() -> None:
     assert resp.status_code == 403
 
 
-def test_the_route_fails_closed_with_no_secret_configured() -> None:
+def test_the_route_fails_closed_with_no_secret_configured(monkeypatch) -> None:
     """An unset secret must reject every caller, not accept every caller."""
-    SETTINGS.recall_relay_secret = ""
+    monkeypatch.setenv("RECALL_RELAY_SECRET", "")
     assert _get(liveview=LIVEVIEW, password=PASSWORD, sig=_sig()).status_code == 403
 
 

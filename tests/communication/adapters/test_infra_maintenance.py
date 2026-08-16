@@ -21,8 +21,8 @@ def app_module():
 
 
 @pytest.fixture
-def client(app_module):
-    app_module.SETTINGS.orchestra_admin_key = "test-admin-key"
+def client(app_module, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     test_client = TestClient(app_module.app)
     test_client.headers["Authorization"] = "Bearer test-admin-key"
     return test_client

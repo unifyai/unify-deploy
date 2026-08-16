@@ -66,6 +66,11 @@ pytestmark = [pytest.mark.integration]
 # The old blocking path regularly took 20-30 s; < 10 s confirms it works.
 DELETE_RESPONSE_TIMEOUT_SECONDS = 10
 
+# How long to wait for a freshly assigned VM to finish its guest-side
+# assignment bootstrap. With POOL_TARGET_IDLE=0 the VM is cold-started, so this
+# covers image boot plus the guest's own service startup.
+DESKTOP_READY_TIMEOUT_SECONDS = 900
+
 # How long to wait for the background cleanup task to finish.
 # Cold-start VM release + Orchestra Cloud Run CPU-throttling after the DELETE
 # response can leave the durable task pending until an explicit redrive.
@@ -116,6 +121,22 @@ def has_session_crd(k8s_clients) -> bool:
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _desktop_ready(session: dict | None) -> bool:
+    """Whether the guest finished bootstrapping the desktop for its binding.
+
+    Reads the same DesktopReady condition the product requires before it will
+    dispatch desktop-targeted work.
+    """
+    if not session:
+        return False
+    conditions = (session.get("status") or {}).get("conditions") or []
+    return any(
+        condition.get("type") == "DesktopReady" and condition.get("status") == "True"
+        for condition in conditions
+        if isinstance(condition, dict)
+    )
 
 
 def _assistant_exists_on_orchestra(agent_id: str) -> bool:
@@ -327,6 +348,27 @@ def test_delete_assistant_runtime_cleanup_completes(
             print(f"[Setup] AssistantSession confirmed ✓")
         else:
             session_name = None
+
+        if has_gce and has_session_crd:
+            # A pool VM reports "assigned" the moment its labels are written,
+            # while the guest is still running its assignment bootstrap. The
+            # guest watcher is a single sequential loop, so a release arriving
+            # mid-bootstrap is not read until that bootstrap finishes — on a
+            # cold-started VM that is ~25 minutes, and the teardown this test
+            # measures would be waiting on the bootstrap rather than on
+            # cleanup. DesktopReady is the same signal the product requires
+            # before it will route work to a desktop, so wait for it and
+            # delete an assistant that is genuinely up.
+            poll(
+                lambda: _desktop_ready(get_assistant_session(comms, agent_id)),
+                timeout=DESKTOP_READY_TIMEOUT_SECONDS,
+                interval=10,
+                description=(
+                    f"assistant {agent_id} desktop to finish its assignment "
+                    "bootstrap (DesktopReady)"
+                ),
+            )
+            print(f"[Setup] Desktop ready for assistant {agent_id} ✓")
 
         # DELETE — must be fast.
         t0 = time.monotonic()

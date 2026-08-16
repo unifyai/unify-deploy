@@ -10,6 +10,13 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
+# These routes are self-scoped; the admin key makes the admin short-circuit
+# apply, since the tests target dispatch logic rather than auth.
+@pytest.fixture(autouse=True)
+def _admin_key(monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "TEST-ADMIN-KEY")
+
+
 def _payload(**overrides):
     payload = {
         "assistant_id": "assistant-123",
@@ -94,12 +101,8 @@ def test_offline_runner_env_does_not_invent_channels():
 
 
 def _client() -> TestClient:
-    from common.settings import SETTINGS
     from communication.infra.views import assistant_self_router, router
 
-    # offline-dispatch is now a self-scoped route; send the admin key so the
-    # admin short-circuit applies (these tests target dispatch logic, not auth).
-    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
     app = FastAPI()
     app.include_router(router, prefix="/infra")
     app.include_router(assistant_self_router, prefix="/infra")
@@ -1797,10 +1800,8 @@ def test_terminalize_offline_job_idempotent_when_already_terminal():
 def test_offline_task_job_terminal_endpoint():
     """Admin-auth route wires the terminalize helper."""
 
-    from common.settings import SETTINGS
     from communication.infra.views import router
 
-    SETTINGS.orchestra_admin_key = "TEST-ADMIN-KEY"
     app = FastAPI()
     app.include_router(router, prefix="/infra")
     client = TestClient(app)

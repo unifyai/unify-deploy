@@ -96,8 +96,8 @@ def test_bridge_forwards_signed_native_microsoft_change_notification(client) -> 
     orchestra_response.status_code = 200
 
     with (
-        patch("adapters.main.SETTINGS.native_microsoft_webhook_secret", SECRET),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_MICROSOFT_WEBHOOK_SECRET": SECRET}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         patch(
             "adapters.microsoft_graph_bridge.requests.post",
             return_value=orchestra_response,
@@ -131,8 +131,8 @@ def test_bridge_forwards_lifecycle_notification_after_graph_ack(
     orchestra_response.status_code = 503
 
     with (
-        patch("adapters.main.SETTINGS.native_microsoft_webhook_secret", SECRET),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_MICROSOFT_WEBHOOK_SECRET": SECRET}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         patch(
             "adapters.microsoft_graph_bridge.requests.post",
             return_value=orchestra_response,
@@ -154,8 +154,8 @@ def test_bridge_forwards_lifecycle_notification_after_graph_ack(
 
 def test_bridge_rejects_bad_client_state_without_contacting_orchestra(client) -> None:
     with (
-        patch("adapters.main.SETTINGS.native_microsoft_webhook_secret", SECRET),
-        patch("adapters.main.SETTINGS.orchestra_url", ORCHESTRA_URL),
+        patch.dict(os.environ, {"NATIVE_MICROSOFT_WEBHOOK_SECRET": SECRET}),
+        patch.dict(os.environ, {"ORCHESTRA_URL": ORCHESTRA_URL}),
         patch("adapters.microsoft_graph_bridge.requests.post") as post_mock,
     ):
         response = client.post(

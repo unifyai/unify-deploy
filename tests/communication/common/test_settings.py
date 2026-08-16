@@ -8,7 +8,56 @@ silently route staging traffic onto the production image (or vice versa).
 
 from __future__ import annotations
 
-from common.settings import _get_deploy_env, _image_hash_blob_name
+import pytest
+
+from common.settings import SETTINGS, _get_deploy_env, _image_hash_blob_name
+
+
+class TestSettingsFollowTheEnvironment:
+    """``SETTINGS`` is imported once and read for the life of the process, so
+    every value has to reflect the environment at the moment it is read.
+
+    Held in instance state instead, configuration froze as the environment
+    stood when whichever module imported ``common.settings`` first ran -- and
+    under pytest that is alphabetical collection order, which no caller
+    chooses. Ten adapter assertions comparing topic names against a suffix
+    fixed by an unrelated module is what that cost.
+    """
+
+    def test_deploy_env_follows_a_change_made_after_import(self, monkeypatch):
+        monkeypatch.setenv("DEPLOY_ENV", "staging")
+        assert SETTINGS.deploy_env == "staging"
+        monkeypatch.setenv("DEPLOY_ENV", "production")
+        assert SETTINGS.deploy_env == "production"
+
+    def test_derived_names_follow_the_environment(self, monkeypatch):
+        """The suffix reaches names built from it, not just ``deploy_env``."""
+        monkeypatch.setenv("DEPLOY_ENV", "staging")
+        assert SETTINGS.env_suffix == "-staging"
+        assert SETTINGS.org_topic(11) == "unity-org-11-staging"
+        assert SETTINGS.assistant_topic("25") == "unity-25-staging"
+
+        monkeypatch.delenv("DEPLOY_ENV", raising=False)
+        assert SETTINGS.env_suffix == ""
+        assert SETTINGS.org_topic(11) == "unity-org-11"
+        assert SETTINGS.assistant_topic("25") == "unity-25"
+
+    def test_plain_values_follow_the_environment(self, monkeypatch):
+        monkeypatch.setenv("GCP_PROJECT_ID", "some-other-project")
+        assert SETTINGS.gcp_project_id == "some-other-project"
+        assert SETTINGS.image_registry.startswith(
+            "us-central1-docker.pkg.dev/some-other-project/",
+        )
+
+    def test_settings_hold_no_environment_derived_state(self):
+        """Assigning a setting must fail rather than half-work.
+
+        A writable attribute would shadow the property for the rest of the
+        process, which is the same bug in a smaller window: tests set the
+        variable instead.
+        """
+        with pytest.raises(AttributeError):
+            SETTINGS.deploy_env = "staging"
 
 
 class TestImageHashBlobName:

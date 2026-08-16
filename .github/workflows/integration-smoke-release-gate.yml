@@ -115,11 +115,26 @@ jobs:
         gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
         gcloud config set project "$TEST_GCP_PROJECT_ID"
 
+    - name: Resolve Orchestra and Unify keys
+      run: bash scripts/resolve_ci_orchestra_keys.sh
+
+    # Scoped to the two private dependencies and revoked when the job ends.
+    # 4606137 is the unifyai-ci-clone App, which holds Contents: Read only;
+    # an App id is not a secret.
+    - name: Mint a token that can read the private dependencies
+      id: clone-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: '4606137'
+        private-key: ${{ secrets.CI_CLONE_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: brain,branding
+
     - name: Configure git for private repos
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
       env:
-        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        GH_TOKEN: ${{ steps.clone-token.outputs.token }}
 
     - name: Install dependencies
       run: |

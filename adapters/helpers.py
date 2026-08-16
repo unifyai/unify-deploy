@@ -2096,7 +2096,6 @@ def _build_start_job_request_data(
             if assistant.get("org_id") is not None
             else ""
         ),
-        "deploy_env": assistant.get("deploy_env", ""),
     }
     if wake_reasons:
         data["wake_reasons"] = json.dumps(wake_reasons)

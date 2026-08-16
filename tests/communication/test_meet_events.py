@@ -9,8 +9,6 @@ from fastapi.testclient import TestClient
 from livekit.protocol.models import DataPacket
 from starlette.websockets import WebSocketDisconnect
 
-from common.settings import SETTINGS
-
 RELAY_SECRET = "TEST-RELAY-SECRET"
 
 
@@ -23,11 +21,8 @@ def _client() -> TestClient:
 
 
 @pytest.fixture(autouse=True)
-def _relay_secret():
-    previous = SETTINGS.recall_relay_secret
-    SETTINGS.recall_relay_secret = RELAY_SECRET
-    yield
-    SETTINGS.recall_relay_secret = previous
+def _relay_secret(monkeypatch):
+    monkeypatch.setenv("RECALL_RELAY_SECRET", RELAY_SECRET)
 
 
 @pytest.fixture
@@ -93,12 +88,12 @@ def test_relay_rejects_a_wrong_token(livekit) -> None:
             ws.receive_text()
 
 
-def test_relay_is_disabled_when_no_secret_is_configured(livekit) -> None:
+def test_relay_is_disabled_when_no_secret_is_configured(livekit, monkeypatch) -> None:
     """An unset secret must fail closed, not authorize every caller.
 
     Comparing against "" would otherwise let an empty token in.
     """
-    SETTINGS.recall_relay_secret = ""
+    monkeypatch.setenv("RECALL_RELAY_SECRET", "")
     url = "/meet/events?room=unity_25_gmeet&token="
     with pytest.raises(WebSocketDisconnect):
         with _client().websocket_connect(url) as ws:

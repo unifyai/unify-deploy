@@ -15,16 +15,8 @@ import communication.infra.assistant_jobs_routes as routes
 
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setattr(
-        routes.SETTINGS,
-        "orchestra_url",
-        "https://orchestra.test/v0",
-    )
-    monkeypatch.setattr(
-        routes.SETTINGS,
-        "orchestra_admin_key",
-        "test-admin-key",
-    )
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test/v0")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     app = FastAPI()
     app.include_router(assistant_self_router, prefix="/infra")
     return TestClient(app)

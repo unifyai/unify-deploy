@@ -5,13 +5,12 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from common.settings import SETTINGS
 from communication import dependencies as deps
 
 
 @pytest.fixture
 def _admin_key(monkeypatch):
-    monkeypatch.setattr(SETTINGS, "orchestra_admin_key", "ADMIN-KEY", raising=False)
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "ADMIN-KEY")
     return "ADMIN-KEY"
 
 
@@ -166,3 +165,74 @@ async def test_verify_assistant_identity_from_key_rejects_invalid_user_key(
             assistant_id=1406,
         )
     assert exc.value.status_code == 401
+
+
+class _StubResponse:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _StubClient:
+    def __init__(self, response: _StubResponse):
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def get(self, *args, **kwargs):
+        return self._response
+
+
+@pytest.fixture
+def _orchestra_answers(monkeypatch):
+    def _install(response: _StubResponse):
+        monkeypatch.setattr(deps.httpx, "AsyncClient", lambda: _StubClient(response))
+
+    return _install
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_api_key_returns_user_info(_orchestra_answers):
+    _orchestra_answers(_StubResponse(200, {"user_id": "u1", "email": "u@unify.ai"}))
+
+    assert await deps.authenticate_user_api_key("good-key") == {
+        "user_id": "u1",
+        "email": "u@unify.ai",
+    }
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_api_key_names_the_upstream_rejection(
+    _orchestra_answers,
+):
+    _orchestra_answers(_StubResponse(403))
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.authenticate_user_api_key("stale-key")
+
+    assert exc.value.status_code == 401
+    assert "403" in exc.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_status", [500, 502, 503])
+async def test_authenticate_user_api_key_reports_orchestra_outages_as_502(
+    _orchestra_answers,
+    upstream_status: int,
+):
+    """An Orchestra outage reported as 401 tells callers their key is dead and
+    that retrying is pointless, when retrying is the only thing that helps."""
+    _orchestra_answers(_StubResponse(upstream_status))
+
+    with pytest.raises(HTTPException) as exc:
+        await deps.authenticate_user_api_key("good-key")
+
+    assert exc.value.status_code == 502
+    assert str(upstream_status) in exc.value.detail

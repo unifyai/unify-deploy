@@ -34,7 +34,7 @@ def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
         calls.append(("post", url))
         return _Response(201, "created")
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
     monkeypatch.setattr(main.requests, "put", put)
     monkeypatch.setattr(main.requests, "post", post)
 
@@ -81,9 +81,9 @@ def test_scheduled_google_token_failure_is_not_marked_refreshed(monkeypatch):
     def put(url, **kwargs):
         return _Response(500, "store failed")
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "google_oauth_client_id", "google-client")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "google-client")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "google-secret")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.requests, "post", post)
@@ -131,9 +131,9 @@ def test_scheduled_microsoft_token_failure_is_not_marked_refreshed(monkeypatch):
     def put(url, **kwargs):
         return _Response(500, "store failed")
 
-    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin-key")
-    monkeypatch.setattr(main.SETTINGS, "orchestra_url", "https://orchestra.test")
-    monkeypatch.setattr(main.SETTINGS, "ms365_byod_client_id", "ms-client")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("MS365_BYOD_CLIENT_ID", "ms-client")
     monkeypatch.setenv("MS365_BYOD_CLIENT_SECRET", "ms-secret")
     monkeypatch.setattr(main.requests, "get", get)
     monkeypatch.setattr(main.requests, "post", post)

@@ -7,8 +7,8 @@
 # /secrets/comm-sa/key.json; the workflow activates it and points
 # GOOGLE_APPLICATION_CREDENTIALS at it. The GitHub registration credential and
 # Orchestra/Unify test secrets are NOT mounted here — GitHub injects job secrets
-# into the runner over its encrypted channel; only the runner-registration token
-# lives on the pod.
+# into the runner over its encrypted channel; only the GitHub App private key
+# used for registration lives on the pod.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,13 +54,20 @@ spec:
           value: "true"
         - name: DISABLE_AUTO_UPDATE
           value: "true"
-        # PAT (or GitHub App installation token) with repo admin:runner scope,
-        # synced from Secret Manager via the ExternalSecret in this directory.
-        - name: ACCESS_TOKEN
+        # Registration authenticates as the org-owned GitHub App, whose private
+        # key is synced from Secret Manager by the ExternalSecret in this
+        # directory. APP_ID and APP_LOGIN are not secret. These three are
+        # mutually exclusive with ACCESS_TOKEN/RUNNER_TOKEN — the entrypoint
+        # exits if both styles are set.
+        - name: APP_ID
+          value: "4597891"
+        - name: APP_LOGIN
+          value: "unifyai"
+        - name: APP_PRIVATE_KEY
           valueFrom:
             secretKeyRef:
               name: ci-integration-runner-github
-              key: ACCESS_TOKEN
+              key: APP_PRIVATE_KEY
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /secrets/comm-sa/key.json
         volumeMounts:

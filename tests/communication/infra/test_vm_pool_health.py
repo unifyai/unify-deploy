@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from communication.infra import vm_config as vm_config_module
 from communication.infra import vm_helpers as vm_helpers_module
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
@@ -18,6 +19,7 @@ from communication.infra.vm_helpers import (
     reclaim_orphaned_assistant_disk,
     release_pool_vm,
     replenish_pool,
+    retire_pool_vm_release,
     split_binding_runtime_vms,
 )
 
@@ -546,6 +548,102 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     assert result["release_generation"] == 1
     assert recycled == ["assistant_release_with_stale_contract"]
     assert release_calls == [True]
+
+
+def test_retire_pool_vm_release_retires_quarantined_vm(monkeypatch):
+    """The scrubber reaching a stuck VM first must not strand the session.
+
+    Quarantining sets pool-role=quarantined and clears assistant-id, keeping
+    binding-id. Retire is the session's last-resort recovery for exactly that
+    VM, so the binding is what proves ownership.
+    """
+    quarantined_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "quarantined",
+                "assistant-id": "",
+                "binding-id": "binding-123",
+                "vm-type": "ubuntu",
+            },
+        ),
+        status="RUNNING",
+        metadata=SimpleNamespace(items=[]),
+    )
+    client = MagicMock()
+    client.get.return_value = quarantined_vm
+    recycled = []
+    replenished = []
+    release_calls = _install_binding_lease(monkeypatch)
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._recycle_pool_vm_instance",
+        lambda *_args, **kwargs: recycled.append(kwargs["reason"]),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.replenish_pool",
+        lambda vm_type: replenished.append(vm_type),
+    )
+
+    result = retire_pool_vm_release(
+        "assistant-123",
+        "binding-123",
+        vm_name="unity-pool-ubuntu-3-staging",
+        reason="controller_desired_stop_release_timeout",
+    )
+
+    assert result["retired"] is True
+    assert result["released"] is True
+    assert result["pool_role"] == "retired"
+    assert recycled == ["controller_desired_stop_release_timeout"]
+    assert replenished == ["ubuntu"]
+    assert release_calls == [True]
+
+
+def test_retire_pool_vm_release_skips_vm_held_by_another_binding(monkeypatch):
+    """A newer assignment must survive a stale release's retire attempt."""
+    reassigned_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "assigned",
+                "assistant-id": "assistant-999",
+                "binding-id": "binding-999",
+                "vm-type": "ubuntu",
+            },
+        ),
+        status="RUNNING",
+        metadata=SimpleNamespace(items=[]),
+    )
+    client = MagicMock()
+    client.get.return_value = reassigned_vm
+    _install_binding_lease(monkeypatch)
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._recycle_pool_vm_instance",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not retire a VM held by another binding"),
+        ),
+    )
+
+    result = retire_pool_vm_release(
+        "assistant-123",
+        "binding-123",
+        vm_name="unity-pool-ubuntu-3-staging",
+        reason="controller_desired_stop_release_timeout",
+    )
+
+    assert result["skipped"] is True
+    assert result["reason"] == "vm_not_owned"
+    assert result.get("retired") is None
 
 
 def test_recycle_pool_vm_restores_assistant_ip_before_deleting(monkeypatch):
@@ -1296,7 +1394,7 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
         labels={"vm-type": "ubuntu"},
     )
 
-    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 1)
+    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 1})
     monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_STOPPED", 1)
     monkeypatch.setattr(
         vm_helpers_module,
@@ -1371,7 +1469,7 @@ def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
     client = MagicMock()
     set_labels = MagicMock(return_value=True)
 
-    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 0})
     monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
     monkeypatch.setattr(
         vm_helpers_module,
@@ -1392,7 +1490,7 @@ def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
 
 
 def test_trim_pool_respects_pending_claims_target(monkeypatch):
-    """In-process pending claims raise the idle floor above POOL_TARGET_IDLE."""
+    """In-process pending claims raise the idle floor above the warm target."""
 
     now = datetime.now(UTC)
     old_idle = SimpleNamespace(
@@ -1411,7 +1509,7 @@ def test_trim_pool_respects_pending_claims_target(monkeypatch):
     client = MagicMock()
     set_labels = MagicMock(return_value=True)
 
-    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
+    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 0})
     monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
     monkeypatch.setattr(
         vm_helpers_module,
@@ -1863,10 +1961,7 @@ def test_cleanup_orphaned_assistant_dns_caps_and_reports_batch_failure(monkeypat
 def test_pool_identity_parsers_accept_historical_prefixes_and_retired_suffixes(
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        "",
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     assert vm_helpers_module._parse_pool_vm_identity(
         "droid-pool-ubuntu-3",
         "ubuntu",
@@ -2056,11 +2151,7 @@ def _install_disk_reconcile_env(
         "communication.infra.vm_helpers._assistant_archive_info",
         lambda assistant_id: archive_info_map.get(assistant_id, (False, None)),
     )
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        env_suffix,
-        raising=False,
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "staging" if env_suffix else "production")
     return delete_calls
 
 
@@ -2317,11 +2408,7 @@ def test_reconcile_records_delete_race_as_error(monkeypatch):
         "communication.infra.vm_helpers._assistant_archive_info",
         lambda assistant_id: (True, fresh_archive),
     )
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers.SETTINGS.env_suffix",
-        "-staging",
-        raising=False,
-    )
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
 
     result = vm_helpers_module.reconcile_orphaned_disks(
         max_age_hours=72,
