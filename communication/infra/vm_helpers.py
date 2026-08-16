@@ -62,7 +62,7 @@ from .vm_config import (
     UBUNTU_POOL_WATCHER_PATH,
     UBUNTU_SUPERVISORD_CONF_PATH,
     POOL_SSH_USERNAME,
-    POOL_TARGET_IDLE,
+    pool_target_idle,
     POOL_TARGET_STOPPED,
     POOL_BOOT_TIMEOUT_SECONDS,
     POOL_RELEASE_TIMEOUT_SECONDS,
@@ -172,8 +172,8 @@ POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS = 600.0
 REGIONAL_POOL_REAPER_CONFIG_MAP = "unity-regional-pool-reaper"
 REGIONAL_POOL_REAPER_GRACE_SECONDS = 60 * 60
 REGIONAL_POOL_REAPER_REAPABLE_ROLES = frozenset({"idle", "stopped", "quarantined"})
-# Keep freshly-idle VMs claimable across process boundaries. With
-# POOL_TARGET_IDLE=0, replenish boots a VM for demand in one process while
+# Keep freshly-idle VMs claimable across process boundaries. Where a pool
+# keeps no warm VM, replenish boots one for demand in one process while
 # trim in another (pool controller) would otherwise stop it the moment it
 # becomes idle — before the assign poll can claim it.
 POOL_IDLE_TRIM_GRACE_SECONDS = float(POOL_BOOT_TIMEOUT_SECONDS)
@@ -5681,7 +5681,7 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     """Start or provision VMs to meet current demand.
 
     Demand-aware: computes deficit from the number of threads currently
-    waiting in claim_idle_vm, not just POOL_TARGET_IDLE.  Subtracts VMs
+    waiting in claim_idle_vm, not just the pool's warm target.  Subtracts VMs
     already booting (in-flight) to avoid runaway over-provisioning across
     sequential replenish cycles.
 
@@ -5787,7 +5787,7 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
     with _pending_lock:
         pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
 
-    target = max(POOL_TARGET_IDLE, pending)
+    target = max(pool_target_idle(vm_type), pending)
     deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
 
     logger.info(
@@ -5907,7 +5907,7 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
 
 
 def trim_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
-    """Stop excess idle VMs to maintain POOL_TARGET_IDLE.
+    """Stop excess idle VMs down to the pool's warm target.
 
     ``extra_demand`` carries demand this process cannot see in its own
     ``_pending_claims`` counter — sessions waiting on capacity elsewhere. Without
@@ -5957,7 +5957,8 @@ def _trim_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     reducing the pool below target cause the loop to break early.
 
     Demand-aware and grace-aware: keeps at least
-    ``max(POOL_TARGET_IDLE, pending_claims, extra_demand)`` idle VMs, and never
+    ``max(pool_target_idle(vm_type), pending_claims, extra_demand)`` idle VMs,
+    and never
     stops an idle VM younger than ``POOL_IDLE_TRIM_GRACE_SECONDS`` so cold-start
     replenish in one process cannot be undone by trim in another.
     """
@@ -5970,7 +5971,7 @@ def _trim_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
             _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
             with _pending_lock:
                 pending = _pending_claims.get(_pool_scope_key(vm_type), 0)
-            target = max(POOL_TARGET_IDLE, pending, extra_demand)
+            target = max(pool_target_idle(vm_type), pending, extra_demand)
             if len(idle_vms) <= target:
                 break
 
