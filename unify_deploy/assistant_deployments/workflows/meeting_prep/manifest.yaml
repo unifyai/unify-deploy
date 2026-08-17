@@ -50,6 +50,9 @@ params_schema:
     label: Send the brief
     type: number
     required: false
+    # The value the help text below promises, stated where the installer can
+    # apply it. Left only in prose, it was re-inferred by a model on every run.
+    default: 30
     suffix: minutes before
     help: >
       How long before a meeting starts the brief should arrive — for example
@@ -59,6 +62,7 @@ params_schema:
     label: Skip recurring meetings
     type: boolean
     required: false
+    default: false
     help: >
       Turn on to leave your standing meetings alone — a daily stand-up rarely
       needs a brief. One-offs and externals are still covered. Left empty,
