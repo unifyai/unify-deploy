@@ -285,6 +285,31 @@ def _merge_env_overrides(
     return merged
 
 
+# The runtime resolves its service URLs from the UNIFY_* names. An image rolled
+# back past that rename resolves them from the UNITY_* ones, and a pod given
+# only the name its image does not read resolves the other to "" -- which
+# builds relative URLs like "/ms-teams-bot/send" that fail at the client, per
+# send, rather than at boot. Both names travel, mirrored after the extra_env
+# merge so a per-deployment override reaches the legacy name too instead of
+# leaving the pair disagreeing about which comms host this assistant answers on.
+_LEGACY_SERVICE_URL_NAMES = {
+    "UNIFY_COMMS_URL": "UNITY_COMMS_URL",
+    "UNIFY_ADAPTERS_URL": "UNITY_ADAPTERS_URL",
+}
+
+
+def _mirror_legacy_service_url_names(env_vars: list[dict]) -> list[dict]:
+    """Append the legacy twin of each service URL, carrying the final value."""
+
+    present = {str(env_var.get("name", "") or "") for env_var in env_vars}
+    mirrored = list(env_vars)
+    for env_var in env_vars:
+        legacy = _LEGACY_SERVICE_URL_NAMES.get(str(env_var.get("name", "") or ""))
+        if legacy and legacy not in present:
+            mirrored.append({"name": legacy, "value": env_var["value"]})
+    return mirrored
+
+
 def build_unity_job_manifest(
     job_name: str,
     namespace: str = "default",
@@ -509,8 +534,10 @@ def build_unity_job_manifest(
             "name": "EVENTBUS_ORCHESTRA_PERSIST_TOOLS",
             "value": "act,execute_code,execute_function",
         },
-        {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
-        {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
+        # The name the runtime reads. Legacy twins are mirrored on after the
+        # extra_env merge below, so a per-deploy override reaches both.
+        {"name": "UNIFY_COMMS_URL", "value": SETTINGS.comms_url},
+        {"name": "UNIFY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         # Route the pod's OpenRouter traffic through Orchestra's server-side
         # broker: unillm reads this and swaps api_base/api_key, authenticating
@@ -616,6 +643,7 @@ def build_unity_job_manifest(
             {"name": "UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},
         ]
     env_vars = _merge_env_overrides(env_vars, extra_env)
+    env_vars = _mirror_legacy_service_url_names(env_vars)
 
     # The broker sidecar's environment, kept deliberately small. It needs the
     # provider credentials and somewhere to report spend, and nothing else:
