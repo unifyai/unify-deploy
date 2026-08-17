@@ -78,7 +78,7 @@ This is why things broke silently for days: **the code says `unity-*` but the li
 | **Windows** desktop pool (images, VMs, IPs, DNS) | ❌ entirely `unity-pool-windows-*` |
 | Pub/Sub fabric | ⚠️ ~84% still `unity-*` (1,334 topics / 5,198 subs vs 252 / 1,021 unity) |
 | Data buckets (recordings, logs, artifacts) | ⚠️ `unity-*` created empty; code partly still reads `unity-*` |
-| GitHub org secrets `UNIFY_ADAPTERS_URL` / `UNIFY_COMMS_URL` | ❌ still `unity`; workflows read `UNITY_*` → empty at runtime |
+| GitHub org secrets `UNITY_ADAPTERS_URL` / `UNITY_COMMS_URL` | ⚠️ dual-written — `UNIFY_*` added alongside; both pairs live, both `visibility=private` (see [§7.2](#72-github-actions-secrets-ci)) |
 | Secrets `UNITY_COORDINATOR_*`, `UNITY_{LIVEKIT,OPENAI,…}` | ⚠️ dual-written (`UNITY_COORDINATOR_*` added; comms/LLM still unity) |
 | GCP project IDs / SA emails / cluster name | ❌ immutable — `unity` forever |
 
@@ -319,7 +319,67 @@ Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides
 
 ### 7.2 GitHub Actions secrets (CI)
 
-Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLONE_TOKEN`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, and ⚠️ `UNIFY_ADAPTERS_URL`, `UNIFY_COMMS_URL`. Org variables: `GCP_PROJECT_ID=gcp-project-saas`, `GCP_LOCATION=us-central1`, `GCP_BUCKET_*`. Per-repo additions are listed in [§8](#8-cicd-cloud-build-github-actions-branches). **CI mismatch:** workflows now read `UNIFY_COMMS_URL`/`UNIFY_ADAPTERS_URL` but only `UNITY_*` exist → empty at runtime (see [§9](#9-known-rename-loose-ends--gotchas)).
+**No org secret is inherited by every repo.** Since the SOC 2 org-secret tightening, not one of them carries visibility `all` — the provider keys that used to be org-wide (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `CLONE_TOKEN`) **no longer exist at org level at all**. They moved to repo and environment scope. Resolve a missing secret against the tables below, not against a mental model of inheritance.
+
+**Org secrets — the complete list** (verified 2026-08-16):
+
+| Secret | Visibility | Who can actually read it |
+|---|---|---|
+| `CI_CLONE_APP_PRIVATE_KEY` | `selected` | `unify`, `unify-deploy`, `unillm`, `unisdk`, `console`, `brain`, `landing-page` |
+| `CI_DISPATCH_APP_PRIVATE_KEY` | `selected` | `unify` only |
+| `TOGETHER_API_KEY` | `private` | private + internal repos only |
+| `UNIFY_ADAPTERS_URL`, `UNIFY_COMMS_URL` | `private` | private + internal repos only |
+| `UNITY_ADAPTERS_URL`, `UNITY_COMMS_URL` | `private` | private + internal repos only — legacy names, still live |
+
+Both the `UNIFY_*` and `UNITY_*` URL pairs now exist, so the old "workflows read one name, only the other exists" mismatch is gone. The legacy `UNITY_*` pair is still populated and still read by some workflows; treat it as live, not as a leftover to delete.
+
+⚠️ **The `private` visibility trap — this is the one that burns debugging time.** GitHub's `private` visibility means *private and internal* repositories. It **excludes public ones**, and three first-party repos are public:
+
+| Repo | Visibility | Inherits org `private` secrets? |
+|---|---|---|
+| `unify`, `unillm`, `unisdk` | **public** | ❌ **no** — only the `selected` grants above reach them |
+| `unify-deploy` | internal | ✅ yes |
+| `orchestra`, `console`, `brain`, `landing-page` | private | ✅ yes |
+
+So a workflow in `unify`, `unillm`, or `unisdk` referencing `secrets.TOGETHER_API_KEY` or `secrets.UNIFY_COMMS_URL` resolves to the **empty string** unless that repo holds its own copy. Nothing errors — the step runs with a blank value. `unify` and `unillm` each keep a repo-level `TOGETHER_API_KEY` for exactly this reason; the org copy is unreachable from them.
+
+**Where the keys actually live now** (repo-level `R`, environment-scoped `[env]`):
+
+| Repo | Secrets |
+|---|---|
+| `unify` | `R`: `ANTHROPIC_CI_API_KEY`, `OPENAI_CI_API_KEY`, `OPENROUTER_CI_API_KEY`, `GCP_SERVICE_ACCOUNT_JSON`, `GCP_PROJECT_ID`, `TAVILY_API_KEY`, `TOGETHER_API_KEY`, `UNIFY_KEY` · `[unity-testing]`: `ANTHROPIC_API_KEY`, `ANTHROPIC_CI_API_KEY`, `DEEPSEEK_CI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CI_API_KEY`, `GCP_SERVICE_ACCOUNT_JSON`, `UNIFY_KEY` · `[unity-llm-cache-refresh]`: `ANTHROPIC_CI_API_KEY`, `OPENAI_CI_API_KEY` · `[droid-usage-audit]`: `OPENAI_ADMIN_KEY` |
+| `unillm` | `R`: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY` · `[unify-testing]`: `GCP_SERVICE_ACCOUNT_JSON`, `UNIFY_KEY` · `[unillm-llm-cache-refresh]`: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `UNIFY_KEY` |
+| `unisdk` | `[unify-testing]`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GCP_SERVICE_ACCOUNT_JSON`, `UNIFY_KEY` — **no repo-level secrets at all** |
+| `unify-deploy` | `R`: `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `TOGETHER_API_KEY`, `BRANDING_DEPLOY_KEY`, `ISO_ANIMATION_DEPLOY_KEY` · `[droid-usage-audit]`: `OPENAI_ADMIN_KEY` |
+| `orchestra` | `R`: `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `OPENROUTER_API_KEY_CI`, `ORCHESTRA_OPENAI_API_KEY`, `ORCHESTRA_TOGETHER_AI_API_KEY`, `TOGETHER_API_KEY` |
+| `console` | `R`: `DEVBOT_GITHUB_TOKEN`, `ORCHESTRA_PAT`, `ELEVENLABS_API_KEY`, `CODESANDBOX_TEMPLATE_ID` |
+
+**Environment-scoped secrets need the job to declare that environment.** A job without `environment: unity-testing` cannot see `unity-testing`'s secrets, even in the owning repo. In `unify`, `flow-smoke.yml`, `flow-smoke-release-gate.yml` and `tests.yml` declare `unity-testing`; `llm-cache-refresh.yml` declares `unity-llm-cache-refresh`. `unify-deploy` declares no environment in any workflow, so its gates read repo-level and org secrets only.
+
+**Org variables are the exception — they *are* inherited everywhere** (all `visibility=all`, so public repos get them too):
+
+| Variable | Value |
+|---|---|
+| `GCP_PROJECT_ID` | `gcp-project-saas` |
+| `GCP_LOCATION` | `us-central1` |
+| `GCP_BUCKET_ASSISTANT_IMAGES` | `hired_assistants_images` |
+| `GCP_BUCKET_LOGS` | `log-images-bucket` |
+| `GCP_BUCKET_RECORDINGS` | `assistant-call-recordings` |
+| `GCP_CREDENTIALS_FILENAME` | `gcp-service-account.json` |
+
+Note `unify` holds `GCP_PROJECT_ID` as a repo *secret* as well as inheriting the org *variable* — `secrets.GCP_PROJECT_ID` and `vars.GCP_PROJECT_ID` are different lookups, and a workflow reading the wrong namespace gets an empty string rather than an error.
+
+**Debugging a gate that behaves as if a secret is missing** — re-derive the state rather than trusting this table, and remember an empty value never raises:
+
+```bash
+gh api orgs/unifyai/actions/secrets   --jq '.secrets[] | "\(.name)\t\(.visibility)"'
+gh api orgs/unifyai/actions/variables --jq '.variables[] | "\(.name)\t\(.visibility)\t\(.value)"'
+gh api orgs/unifyai/actions/secrets/<NAME>/repositories --jq '[.repositories[].name]|join(", ")'  # visibility=selected only
+gh api repos/unifyai/<repo>/actions/secrets --jq '.secrets[].name'
+gh api repos/unifyai/<repo>/environments/<env>/secrets --jq '.secrets[].name'
+```
+
+Per-repo CI wiring is described in [§8](#8-cicd-cloud-build-github-actions-branches).
 
 ### 7.3 VM TLS secrets
 
@@ -388,7 +448,15 @@ An absent `github-authentication-token-expiration` header means the PAT does not
 
 **Direction of travel: these PATs are being retired.** GitHub has no API for creating a personal access token, so rotating one means signing into the web UI *as its owning account* — which for a bot-owned token means holding the bot's password and 2FA, and for a person-owned token means only that person can do it. Sharing a login is not the answer; a **GitHub App** is. An App has no login, password or 2FA at all: it signs a JWT with a private key and exchanges it for an installation token that expires in an hour, scoped to chosen repos and permissions. Rotation becomes a key swap, and a leaked token dies within the hour.
 
-The self-hosted CI runner has migrated: it registers as org-owned GitHub App **`unifyai-ci-runner`** (App ID `4597891`), installed on `unify-deploy` alone with `Administration: write` + `Metadata: read`, its key in Secret Manager as `CI_RUNNER_GITHUB_APP_PRIVATE_KEY` (see [`deploy/k8s/ci-runner/`](deploy/k8s/ci-runner/)). `CLONE_TOKEN`'s six consuming repos — `unify`, `unify-deploy`, `console`, `unisdk`, `unillm`, `brain` — are to follow. Until that lands, the slots above are what exists: **document them, do not add to them.**
+Three org-owned GitHub Apps have now replaced the CI PATs:
+
+| App | App ID | Installed on | Key held in |
+|---|---|---|---|
+| `unifyai-ci-runner` | `4597891` | `unify-deploy` (`Administration: write`, `Metadata: read`) | Secret Manager `CI_RUNNER_GITHUB_APP_PRIVATE_KEY` — see [`deploy/k8s/ci-runner/`](deploy/k8s/ci-runner/) |
+| `unifyai-ci-clone` | `4606137` | the 7 repos listed in [§7.2](#72-github-actions-secrets-ci) | org secret `CI_CLONE_APP_PRIVATE_KEY` |
+| `unifyai-ci-dispatch` | `4606148` | `unify` | org secret `CI_DISPATCH_APP_PRIVATE_KEY` |
+
+**`CLONE_TOKEN` is retired** — the org secret was deleted on 2026-08-16 and every consumer now mints a short-lived installation token instead, scoped per call (`repositories: brain,branding` in the clone workflows). The PAT itself still exists on `ci-bot`; revoking it is the remaining cleanup. The `DEVBOT_GITHUB_TOKEN` slots above are what is left: **document them, do not add to them.**
 
 **⚠️ Known loose ends:**
 
@@ -490,8 +558,8 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 | 1 | **P0** | Tunnel fixes stranded on `staging` | `8b5097a9` (tunnel bucket/VM → `unity-*`) and `244ad103` (SFTP firewall band) are on `origin/staging` **not `origin/main`**. Prod `common/settings.py` may still point tunnel at non-existent `unity-tunnel-*`. **Merging `staging`→`main` is required** for these (but does **not** fix #2/#3 which are identical on both branches). |
 | 2 | **P0** | Pool image families (RESOLVED 2026-06-24) | Code wanted `unity-pool-ubuntu-vm`; only `unity-pool-ubuntu-vm` existed → 404 on every desktop provision → `assistant-session-controller` CrashLoop. Fixed by creating `unity-pool-*` families. **Keep the families fresh:** `build-ubuntu.sh`/`build-windows.sh` publish to them. |
 | 3 | **P0** | Archive bucket (RESOLVED 2026-06-24) | Code wanted `unity-assistant-archives`; only `unity-assistant-archives` existed → no cross-session file persistence. Fixed by bucket create + rsync (183 objects). |
-| 4 | **P1** | CI URL name split | RESOLVED (code aligned): `unity/tests.yml` + `unity/llm-cache-refresh.yml` now read the live `secrets.UNIFY_COMMS_URL` instead of the non-existent `vars.UNIFY_COMMS_URL`. Org secrets stay `UNITY_*` (no new resources). Re-check `unity-deploy/hosted-tests.yml` if it references these. |
-| 5 | **P1** | Orphaned GitHub environments | `unity` repo has `unity-testing` (full secret set) and `unity-llm-cache-refresh` superseded by `unity-testing` / `unity-llm-cache-refresh`. Migrate env-scoped secrets + delete the `unity-*` envs. |
+| 4 | **P1** | CI URL name split | Name mismatch RESOLVED — both `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` and legacy `UNITY_*` now exist as org secrets, and `unify`'s + `unify-deploy`'s workflows read `secrets.UNIFY_*`. **A different failure replaced it:** all four are `visibility=private`, which excludes public repos, so `unify`'s `secrets.UNIFY_COMMS_URL` resolves **empty** — silently, no error. `unify-deploy` (internal) is unaffected. Fix by adding a repo-level copy in `unify`, or by granting the org secrets `selected` visibility including it. See [§7.2](#72-github-actions-secrets-ci). |
+| 5 | **P1** | Environment naming split + orphans | Live envs: `unify` uses legacy `unity-testing` / `unity-llm-cache-refresh` (both populated, both load-bearing — its workflows name them explicitly), while `unillm` and `unisdk` use `unify-testing`. `unify`'s `droid-testing` and `github-pages` hold **no secrets** — orphans, safe to delete. Renaming the `unity-*` envs means editing the `environment:` key in `unify`'s `tests.yml`, `flow-smoke.yml`, `flow-smoke-release-gate.yml`, `llm-cache-refresh.yml` in the same change, or the jobs lose their secrets silently. |
 | 6 | **P1** | Stale Cloud Build triggers | Triggers bound to `repositories/unity` / `unity-deploy` (e.g. `adapters-unity-deploy`, `unity-comms-app-*`) fail at source-fetch (~3-6s, no steps) even though GitHub redirects the repo. Recreate as `unity-*` triggers against `repositories/unity` / `unity-deploy`. Compat files `cloudbuild/unity-comms-app*.yaml` exist for old trigger names. |
 | 7 | **P1** | Referenced-but-unconfigured secrets | `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (console build-arg), `TWILIO_*`/`LIVEKIT_*`/`GCP_SA_KEY` (unity-deploy `hosted-tests.yml`) are not configured → empty/skip. |
 | 8 | **P2** | ~~`magnitude@main`~~ | RESOLVED: magnitude default/consumption branch is now `main`; install/CI/pool scripts updated. |
