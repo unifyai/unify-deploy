@@ -21,6 +21,8 @@ from .conftest import (
     UNIFY_KEY,
     VM_PROJECT_ID,
     VM_ZONE,
+    _create_test_assistant,
+    _delete_test_assistant,
     assign_pool_vm_with_cold_start,
     list_assigned_vms,
     list_idle_vms,
@@ -31,6 +33,20 @@ from .conftest import (
 _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 
 pytestmark = [pytest.mark.integration]
+
+
+def _throwaway_assistant_id() -> str:
+    """Create a real Orchestra assistant for a test that must not share one.
+
+    ``/infra/vm/pool/assign`` refuses an id Orchestra does not know, so a
+    made-up id cannot stand in for an assistant. Tests that create and then
+    destroy a disk or a GCS archive get an assistant of their own instead of
+    touching the shared ``test_id`` assistant's resources. Callers delete it
+    with ``_delete_test_assistant`` in their ``finally``.
+    """
+    return str(
+        _create_test_assistant(int(time.time() * 1000) % 1000000)["assistant_id"],
+    )
 
 
 @pytest.mark.merge_gate
@@ -227,7 +243,12 @@ def test_vm_idle_pool_has_capacity(gce_client):
 # ---------------------------------------------------------------------------
 
 
-def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
+def test_restarted_vm_survives_scrub_and_reaches_idle(
+    gce_client,
+    batch_api,
+    comms,
+    poll,
+):
     """A stopped VM started by replenish must survive a subsequent scrub
     and eventually transition to idle.
 
@@ -300,37 +321,40 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     print(f"  Target: {target_name} (pool-role={role_before}, status={status_before})")
 
     # Create a deficit so replenish has a reason to start the stopped VM.
-    # Assign an idle VM to a dummy assistant to reduce idle count below target.
-    dummy_aid = f"scrub-test-{int(time.time())}"
-    dummy_resp = requests.post(
-        f"{COMMS_APP_URL}/infra/vm/pool/assign",
-        json={
-            "assistant_id": dummy_aid,
-            "unify_apikey": "test-key",
-            "vm_type": "ubuntu",
-        },
-        headers=_ADMIN_HEADERS,
-        timeout=120,
-    )
-    if dummy_resp.status_code == 200:
-        print(
-            f"  Consumed 1 idle VM ({dummy_resp.json().get('vm_name')}) to create deficit",
-        )
-
-    # Rebalance #1: starts the stopped VM (deficit exists now)
-    resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
-    assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
-    time.sleep(3)
-
-    role_mid, status_mid = _get_state()
-    print(f"  After rebalance #1: pool-role={role_mid}, status={status_mid}")
-
-    # Rebalance #2: scrub runs — must not kill the booting VM
-    resp2 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
-    assert resp2.status_code == 200, f"Rebalance #2 failed: {resp2.text}"
-
-    # Wait for the VM to reach idle (boot takes 30-90s)
+    # Assign an idle VM to a throwaway assistant to reduce idle count below
+    # target.
+    deficit_aid = _throwaway_assistant_id()
     try:
+        deficit_resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/assign",
+            json={
+                "assistant_id": deficit_aid,
+                "binding_id": f"scrub-test-{int(time.time())}",
+                "unify_apikey": "test-key",
+                "vm_type": "ubuntu",
+            },
+            headers=_ADMIN_HEADERS,
+            timeout=120,
+        )
+        if deficit_resp.status_code == 200:
+            print(
+                f"  Consumed 1 idle VM ({deficit_resp.json().get('vm_name')}) "
+                "to create deficit",
+            )
+
+        # Rebalance #1: starts the stopped VM (deficit exists now)
+        resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
+        assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
+        time.sleep(3)
+
+        role_mid, status_mid = _get_state()
+        print(f"  After rebalance #1: pool-role={role_mid}, status={status_mid}")
+
+        # Rebalance #2: scrub runs — must not kill the booting VM
+        resp2 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
+        assert resp2.status_code == 200, f"Rebalance #2 failed: {resp2.text}"
+
+        # Wait for the VM to reach idle (boot takes 30-90s)
         poll(
             lambda: _get_state()[0] == "idle",
             timeout=120,
@@ -358,13 +382,8 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
             f"before the startup script could call mark-idle."
         )
     finally:
-        if dummy_resp.status_code == 200:
-            requests.post(
-                f"{COMMS_APP_URL}/infra/vm/pool/release",
-                json={"assistant_id": dummy_aid},
-                headers=_ADMIN_HEADERS,
-                timeout=30,
-            )
+        _release_all_vms_for(gce_client, deficit_aid)
+        _delete_test_assistant(deficit_aid, batch_api)
 
 
 # ---------------------------------------------------------------------------
@@ -478,20 +497,21 @@ def test_orphaned_vm_detected_and_reconciled(
     Orphans arise when a pod crashes or is force-deleted without calling
     release_pool_vm. The VM stays in pool-role=assigned indefinitely.
 
-    This test assigns a VM to a dummy assistant that has no container,
+    This test assigns a VM to a throwaway assistant that has no container,
     verifies the orphan exists, triggers the reconciler, and confirms
     the VM is released. No start_real_job is used (which would trigger
     a background assign_pool_vm that interferes with the test).
     """
     require_gce(gce_client)
 
-    orphan_aid = f"orphan-test-{int(time.time())}"
+    orphan_aid = _throwaway_assistant_id()
 
     try:
         assign_resp = requests.post(
             f"{COMMS_APP_URL}/infra/vm/pool/assign",
             json={
                 "assistant_id": orphan_aid,
+                "binding_id": f"orphan-test-{int(time.time())}",
                 "unify_apikey": "orphan-test-key",
                 "vm_type": "ubuntu",
             },
@@ -502,7 +522,7 @@ def test_orphaned_vm_detected_and_reconciled(
             pytest.skip("VM assign failed — pool may be exhausted")
 
         vm_name = assign_resp.json().get("vm_name", "")
-        print(f"  Assigned VM {vm_name} to dummy assistant {orphan_aid}")
+        print(f"  Assigned VM {vm_name} to throwaway assistant {orphan_aid}")
 
         time.sleep(5)
         orphaned = list_assigned_vms(gce_client, orphan_aid)
@@ -517,7 +537,7 @@ def test_orphaned_vm_detected_and_reconciled(
         active_jobs = [j for j in jobs.items if j.status.active and j.status.active > 0]
         assert (
             len(active_jobs) == 0
-        ), f"Dummy assistant {orphan_aid} should have no K8s Jobs"
+        ), f"Throwaway assistant {orphan_aid} should have no K8s Jobs"
         print(f"  Orphan confirmed: VM assigned, no K8s Job")
 
         reconcile_resp = requests.post(
@@ -539,6 +559,7 @@ def test_orphaned_vm_detected_and_reconciled(
 
     finally:
         _release_all_vms_for(gce_client, orphan_aid)
+        _delete_test_assistant(orphan_aid, batch_api)
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +567,7 @@ def test_orphaned_vm_detected_and_reconciled(
 # ---------------------------------------------------------------------------
 
 
-def test_gcs_archive_created_on_release(gce_client, comms, poll):
+def test_gcs_archive_created_on_release(gce_client, batch_api, comms, poll):
     """After assigning a VM, writing a file, and releasing, a GCS archive
     should exist for that assistant ID.
 
@@ -556,8 +577,8 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
     require_gce(gce_client)
     assert UNIFY_KEY, "UNIFY_KEY must be set for GCS archive test"
 
-    archive_aid = f"archive-test-{int(time.time())}"
-    archive_binding = f"{archive_aid}-binding"
+    archive_aid = _throwaway_assistant_id()
+    archive_binding = f"archive-test-{int(time.time())}"
     archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{archive_aid}.tar.gz"
     vm_hostname = None
@@ -720,9 +741,10 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
             capture_output=True,
             timeout=15,
         )
+        _delete_test_assistant(archive_aid, batch_api)
 
 
-def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
+def test_gcs_archive_restore_on_fresh_disk(gce_client, batch_api, comms, poll):
     """After archiving, deleting the PD, and re-assigning, the restored
     filesystem should contain the previously-written marker file.
 
@@ -732,7 +754,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
     require_gce(gce_client)
     assert UNIFY_KEY, "UNIFY_KEY must be set for GCS restore test"
 
-    restore_aid = f"restore-test-{int(time.time())}"
+    restore_aid = _throwaway_assistant_id()
     archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{restore_aid}.tar.gz"
 
@@ -742,6 +764,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": restore_aid,
+                "binding_id": f"restore-test-{int(time.time())}-phase1",
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
@@ -819,6 +842,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": restore_aid,
+                "binding_id": f"restore-test-{int(time.time())}-phase3",
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
@@ -880,3 +904,4 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             ).result()
         except Exception:
             pass
+        _delete_test_assistant(restore_aid, batch_api)
