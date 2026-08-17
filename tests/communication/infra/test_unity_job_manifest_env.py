@@ -188,6 +188,24 @@ def test_unity_startup_timing_is_disabled_literal_not_configmap_sourced() -> Non
     assert production_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
 
 
+def test_service_urls_travel_under_both_env_names() -> None:
+    """The runtime reads UNIFY_*; an image rolled back past the rename reads
+    UNITY_*. A pod given only one name resolves the other to "" and builds
+    relative URLs like "/ms-teams-bot/send" -- which fail per send, at the
+    client, rather than at boot, so nothing about the pod looks unhealthy.
+    """
+    env_by_name = _env_by_name(build_unity_job_manifest(job_name="urls-staging"))
+
+    assert (
+        env_by_name["UNIFY_COMMS_URL"]["value"]
+        == env_by_name["UNITY_COMMS_URL"]["value"]
+    )
+    assert (
+        env_by_name["UNIFY_ADAPTERS_URL"]["value"]
+        == env_by_name["UNITY_ADAPTERS_URL"]["value"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # extra_env overrides
 # ---------------------------------------------------------------------------
@@ -224,6 +242,18 @@ def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
         "https://myslug---unity-comms-app-staging.run.app"
     )
     assert env_by_name["UNIFY_ADAPTERS_URL"]["value"] == (
+        "https://myslug---unity-adapters-staging.run.app"
+    )
+
+    # The legacy twins carry the override too. Mirroring the pre-override
+    # default instead would leave the pair disagreeing about which comms host
+    # this deployment answers on, and a rollback would take the shared one.
+    assert env_names.count("UNITY_COMMS_URL") == 1
+    assert env_names.count("UNITY_ADAPTERS_URL") == 1
+    assert env_by_name["UNITY_COMMS_URL"]["value"] == (
+        "https://myslug---unity-comms-app-staging.run.app"
+    )
+    assert env_by_name["UNITY_ADAPTERS_URL"]["value"] == (
         "https://myslug---unity-adapters-staging.run.app"
     )
 
