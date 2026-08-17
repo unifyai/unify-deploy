@@ -35,12 +35,12 @@ def _isolate(
     monkeypatch.setenv("SELF_HOST_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SELF_HOST_COMMS_TWILIO_FILE", str(tmp_path / "absent.env"))
     monkeypatch.setenv(
-        "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
+        "UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL",
         "https://tunnel.invalid",
     )
     monkeypatch.setenv("COMMS_BRIDGE_WHATSAPP_NUMBER", "+15550000000")
     monkeypatch.delenv("UNITY_COORDINATOR_PHONE", raising=False)
-    monkeypatch.delenv("UNITY_COORDINATOR_PHONE_US", raising=False)
+    monkeypatch.delenv("UNIFY_COORDINATOR_PHONE_US", raising=False)
     if phone:
         monkeypatch.setenv("COMMS_BRIDGE_SMS_NUMBER", "+15551111111")
     else:

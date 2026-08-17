@@ -820,7 +820,7 @@ PYSCRIPT
     fi
 
     # Agent Service .env (owned by unityuser so the process can read it)
-    # UNITY_LOCAL_ROOT must be set explicitly: the disk is mounted/synced at
+    # UNIFY_LOCAL_ROOT must be set explicitly: the disk is mounted/synced at
     # /Unity/Local, but the agent's default of ~/Unity/Local would resolve to
     # /Unity/Unity/Local and miss every synced file (attachments, screenshots,
     # downloads).
@@ -830,8 +830,8 @@ NODE_ENV=production
 UNIFY_KEY=$unify_key
 VNC_PASSWORD=$vnc_password
 ORCHESTRA_URL=$orchestra_url
-UNITY_COMMS_URL=$comms_url
-UNITY_LOCAL_ROOT=/Unity/Local
+UNIFY_COMMS_URL=$comms_url
+UNIFY_LOCAL_ROOT=/Unity/Local
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 DISPLAY=:1
 EOF

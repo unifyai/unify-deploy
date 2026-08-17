@@ -18,7 +18,7 @@ Modes:
     ``SELF_HOST_CALLS_ENABLED=0`` is set, point the voice webhook at the local
     tunnel.
   * ``--set-voice``: keep messaging poll-only, but point the voice webhook at the
-    tunnel (``UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL``/``LOCAL_COMMS_PUBLIC_URL``).
+    tunnel (``UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL``/``LOCAL_COMMS_PUBLIC_URL``).
   * ``--set-voice-only``: update only voice callbacks for tunnel rotation.
   * ``--revert-voice``: safely acquire poll-only voice state.
   * ``--acquire-text``: safely acquire poll-only messaging state.
@@ -73,7 +73,7 @@ from pathlib import Path
 _TWILIO_ENV_FILE = Path(
     os.environ.get(
         "SELF_HOST_COMMS_TWILIO_FILE",
-        Path(os.environ.get("UNITY_HOME", str(Path.home() / ".unity")))
+        Path(os.environ.get("UNIFY_HOME", str(Path.home() / ".unity")))
         / "comms_twilio.env",
     ),
 )
@@ -99,7 +99,7 @@ def _state_root() -> Path:
     return Path(
         os.environ.get(
             "SELF_HOST_STATE_DIR",
-            os.environ.get("UNITY_HOME", str(Path.home() / ".unity")),
+            os.environ.get("UNIFY_HOME", str(Path.home() / ".unity")),
         ),
     )
 
@@ -697,7 +697,7 @@ def _phone_is_poll_only(record: dict) -> bool:
 
 def _public_url(env: dict) -> str:
     url = (
-        env.get("UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL")
+        env.get("UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL")
         or env.get("LOCAL_COMMS_PUBLIC_URL")
         or ""
     ).strip()
@@ -1216,7 +1216,7 @@ def main() -> int:
     if mode in _VOICE_TUNNEL_MODES and not public_url:
         print(
             "ERROR: voice acquisition needs "
-            "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
+            "UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL "
             "(the cloudflared tunnel URL). Is the call tunnel up?",
             file=sys.stderr,
         )
@@ -1224,13 +1224,13 @@ def main() -> int:
 
     whatsapp_number = (
         env.get("COMMS_BRIDGE_WHATSAPP_NUMBER")
-        or env.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
+        or env.get("UNIFY_COORDINATOR_WHATSAPP_NUMBER")
         or ""
     ).strip()
     phone_number = (
         env.get("COMMS_BRIDGE_SMS_NUMBER")
         or env.get("UNITY_COORDINATOR_PHONE")
-        or env.get("UNITY_COORDINATOR_PHONE_US")
+        or env.get("UNIFY_COORDINATOR_PHONE_US")
         or ""
     ).strip()
 

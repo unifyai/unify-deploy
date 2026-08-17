@@ -276,9 +276,9 @@ spec:
             configMapKeyRef:
               name: unity-config
               key: GCP_PROJECT_ID
-        - name: UNITY_COMMS_URL
+        - name: UNIFY_COMMS_URL
           value: "https://service.a.run.app"
-        - name: UNITY_ADAPTERS_URL
+        - name: UNIFY_ADAPTERS_URL
           value: "https://service.a.run.app"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"
@@ -356,9 +356,9 @@ spec:
             configMapKeyRef:
               name: unity-config
               key: GCP_PROJECT_ID
-        - name: UNITY_COMMS_URL
+        - name: UNIFY_COMMS_URL
           value: "https://service.a.run.app"
-        - name: UNITY_ADAPTERS_URL
+        - name: UNIFY_ADAPTERS_URL
           value: "https://service.a.run.app"
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"

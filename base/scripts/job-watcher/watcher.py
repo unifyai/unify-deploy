@@ -31,7 +31,7 @@ import kopf
 
 from assistant_jobs_api import notify_offline_task_job_terminal, release_pool_vm
 
-COMMS_URL = os.environ["UNITY_COMMS_URL"]
+COMMS_URL = os.environ["UNIFY_COMMS_URL"]
 ADMIN_KEY = os.environ["ORCHESTRA_ADMIN_KEY"]
 MAX_EVENT_AGE = datetime.timedelta(minutes=5)
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"

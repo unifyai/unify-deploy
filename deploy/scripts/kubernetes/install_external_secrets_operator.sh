@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 PROJECT_ID="${GCP_PROJECT_ID:-gcp-project-runtime}"
-CLUSTER="${UNITY_GKE_CLUSTER_NAME:-unity}"
+CLUSTER="${UNIFY_GKE_CLUSTER_NAME:-unity}"
 REGION="${GKE_REGION:-us-central1}"
 ESO_VERSION="${ESO_VERSION:-0.14.2}"
 
@@ -42,6 +42,6 @@ Verify:
   kubectl describe externalsecret unity-secrets -n staging
 
 After SM rotation, annotate force-sync or wait for refreshInterval, then restart Unity jobs.
-See deploy/guides/UNITY_CLUSTER_SECRETS.md
+See deploy/guides/UNIFY_CLUSTER_SECRETS.md
 
 EOF

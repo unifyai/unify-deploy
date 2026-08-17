@@ -57,8 +57,8 @@ source "$SCRIPT_DIR/canvas_origin.sh"
 source "$SCRIPT_DIR/builtins_catalog_cache.sh"
 
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO_PATH/.." && pwd -P)}"
-UNITY_REPO_PATH="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
-export UNITY_REPO_PATH
+UNIFY_REPO_PATH="${UNIFY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNIFY_REPO_PATH
 CONSOLE_REPO_PATH="${CONSOLE_REPO_PATH:-$UNIFY_STACK_ROOT/console}"
 ORCHESTRA_REPO_PATH="${ORCHESTRA_REPO_PATH:-$UNIFY_STACK_ROOT/orchestra}"
 
@@ -92,7 +92,7 @@ require_repo() {
 
 _has_env_key() {
   local key="$1"
-  local env_file="$UNITY_REPO_PATH/.env"
+  local env_file="$UNIFY_REPO_PATH/.env"
   [[ -n "${!key:-}" ]] && return 0
   [[ -f "$env_file" ]] && grep -qE "^${key}=.+$" "$env_file"
 }
@@ -194,16 +194,16 @@ cmd_doctor() {
   require_repo "Console" "$CONSOLE_REPO_PATH" || ok=false
   require_repo "Orchestra" "$ORCHESTRA_REPO_PATH" || ok=false
 
-  if [[ -f "$UNITY_REPO_PATH/.venv/bin/python" ]]; then
-    local unity_py="$UNITY_REPO_PATH/.venv/bin/python"
+  if [[ -f "$UNIFY_REPO_PATH/.venv/bin/python" ]]; then
+    local unity_py="$UNIFY_REPO_PATH/.venv/bin/python"
     if "$unity_py" -c "import unify.gateway" &>/dev/null; then
       log_success "Unity venv + unify.gateway OK"
     else
-      log_error "unify.gateway not importable — run: cd $UNITY_REPO_PATH && uv sync"
+      log_error "unify.gateway not importable — run: cd $UNIFY_REPO_PATH && uv sync"
       ok=false
     fi
   else
-    log_warn "Unity .venv missing — run: cd $UNITY_REPO_PATH && uv sync"
+    log_warn "Unity .venv missing — run: cd $UNIFY_REPO_PATH && uv sync"
     ok=false
   fi
 
@@ -241,13 +241,13 @@ cmd_doctor() {
     log_warn "No TTS key — browser calls need CARTESIA_API_KEY or ELEVEN_API_KEY"
   fi
 
-  if _has_env_key UNITY_WEB_TAVILY_API_KEY; then
-    log_success "UNITY_WEB_TAVILY_API_KEY set (web search)"
+  if _has_env_key UNIFY_WEB_TAVILY_API_KEY; then
+    log_success "UNIFY_WEB_TAVILY_API_KEY set (web search)"
   else
     log_info "Web search not configured (optional — Tavily via prompt_byok_keys.sh)"
   fi
 
-  if _has_env_key ANTICAPTCHA_KEY || _has_env_key UNITY_ACTOR_ANTICAPTCHA_KEY; then
+  if _has_env_key ANTICAPTCHA_KEY || _has_env_key UNIFY_ACTOR_ANTICAPTCHA_KEY; then
     log_success "AntiCaptcha key set (computer automation)"
   else
     log_info "AntiCaptcha not configured (optional — computer use / CAPTCHA solving)"
@@ -256,7 +256,7 @@ cmd_doctor() {
   echo ""
   echo "Runtime"
   echo "-------"
-  log_info "FileManager workspace: ${UNITY_LOCAL_ROOT:-$HOME/Unity/Local}"
+  log_info "FileManager workspace: ${UNIFY_LOCAL_ROOT:-$HOME/Unity/Local}"
   log_info "Scheduled tasks: LocalActivationScheduler in Coordinator CM"
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -294,7 +294,7 @@ cmd_doctor() {
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
-    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNIFY_REPO_PATH/.env"
     if declare -F self_host_load_state_env_overlay &>/dev/null; then
       self_host_load_state_env_overlay
     fi
@@ -436,9 +436,9 @@ cmd_up_calls_setup() {
     log_error "Call tunnel failed to start — cannot expose local call webhooks"
     return 1
   fi
-  log_success "Call tunnel: ${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
+  log_success "Call tunnel: ${UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-?}"
 
-  local py="$UNITY_REPO_PATH/.venv/bin/python"
+  local py="$UNIFY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
 
   if [[ ! -f "$PACKAGED_SELFHOST_DIR/provision_call_sip.py" ]]; then
@@ -462,7 +462,7 @@ cmd_up_calls_setup() {
   case "$sync_rc" in
     0)
       if declare -F self_host_voice_synced_url_file &>/dev/null; then
-        printf '%s' "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
+        printf '%s' "${UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}" \
           >"$(self_host_voice_synced_url_file)"
       fi
       ;;
@@ -485,7 +485,7 @@ current_tmux_session() {
 }
 
 stop_durable_stack_session() {
-  local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
+  local session="${UNIFY_STACK_TMUX_SESSION:-unity-stack}"
   command -v tmux &>/dev/null || return 0
   tmux has-session -t "=${session}" 2>/dev/null || return 0
 
@@ -501,8 +501,8 @@ stop_durable_stack_session() {
 
 cmd_purge_fresh_redeploy_state() {
   export SELF_HOST=1
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -515,7 +515,7 @@ cmd_purge_fresh_redeploy_state() {
     return 1
   fi
 
-  local state_dir="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  local state_dir="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
   log_info "Clearing self-host runtime identity state in $state_dir"
   local stale_state_files=(
     "coordinator-runtime.json"
@@ -587,18 +587,18 @@ seed_builtins_cache_manifest() {
 
 cmd_seed_builtins() {
   export SELF_HOST=1
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
   export ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNIFY_REPO_PATH/.env"
   fi
 
-  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$UNITY_HOME/coordinator-runtime.json}"
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-$UNIFY_HOME/coordinator-runtime.json}"
   local api_key=""
   api_key="$(runtime_json_value "$runtime_file" apiKey api_key 2>/dev/null || true)"
   if [[ -z "$api_key" ]]; then
@@ -606,10 +606,10 @@ cmd_seed_builtins() {
     log_info "Seeding Builtins catalogues with local Orchestra admin key"
   fi
 
-  local py="$UNITY_REPO_PATH/.venv/bin/python"
+  local py="$UNIFY_REPO_PATH/.venv/bin/python"
   [[ -x "$py" ]] || py="python3"
-  if [[ ! -f "$UNITY_REPO_PATH/scripts/seed_builtins_catalog.py" ]]; then
-    log_error "Missing $UNITY_REPO_PATH/scripts/seed_builtins_catalog.py"
+  if [[ ! -f "$UNIFY_REPO_PATH/scripts/seed_builtins_catalog.py" ]]; then
+    log_error "Missing $UNIFY_REPO_PATH/scripts/seed_builtins_catalog.py"
     return 1
   fi
 
@@ -619,13 +619,13 @@ cmd_seed_builtins() {
   manifest="$(seed_builtins_cache_manifest)"
   if [[ -n "$manifest" ]]; then
     args+=(--integration-bootstrap-manifest "$manifest")
-    export UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
+    export UNIFY_INTEGRATION_BOOTSTRAP_EXECUTOR="${UNIFY_INTEGRATION_BOOTSTRAP_EXECUTOR:-direct_worker}"
     export ORCHESTRA_ADMIN_KEY="${ORCHESTRA_ADMIN_KEY:-$(console_admin_key)}"
     # The direct worker imports orchestra, which lives in the sibling
     # checkout's venv — not in unify's.
     local orchestra_py="$ORCHESTRA_REPO_PATH/.venv/bin/python"
     if [[ -x "$orchestra_py" ]]; then
-      export UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD="${UNITY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD:-$orchestra_py -m orchestra.workers.builtins_artifacts_seed_job}"
+      export UNIFY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD="${UNIFY_INTEGRATION_BOOTSTRAP_DIRECT_WORKER_CMD:-$orchestra_py -m orchestra.workers.builtins_artifacts_seed_job}"
     fi
   fi
 
@@ -640,7 +640,7 @@ cmd_seed_builtins() {
   log_info "Seeding Builtins catalogues..."
   local seed_rc=0
   (
-    cd "$UNITY_REPO_PATH"
+    cd "$UNIFY_REPO_PATH"
     UNIFY_KEY="$api_key" \
       ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0" \
       ORCHESTRA_DB_HOST="${ORCHESTRA_DB_HOST:-127.0.0.1}" \
@@ -695,8 +695,8 @@ wait_for_coordinator_runtime() {
 wait_for_source_stack_ready() {
   local console_port="${CONSOLE_PORT:-3000}"
   local orchestra_port="${ORCHESTRA_PORT:-8000}"
-  local gateway_host="${UNITY_GATEWAY_HOST:-127.0.0.1}"
-  local gateway_port="${UNITY_GATEWAY_PORT:-8001}"
+  local gateway_host="${UNIFY_GATEWAY_HOST:-127.0.0.1}"
+  local gateway_port="${UNIFY_GATEWAY_PORT:-8001}"
 
   wait_for_http "Console" "http://127.0.0.1:${console_port}" 90
   wait_for_http "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features" 90
@@ -733,8 +733,8 @@ check_account_page() {
 
   CONSOLE_REPO_PATH="$CONSOLE_REPO_PATH" \
     CONSOLE_PORT="$console_port" \
-    UNITY_HOME="${UNITY_HOME:-$HOME/.unity}" \
-    SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}" \
+    UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}" \
+    SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}" \
     "$node_bin" "$browser_smoke_script"
 }
 
@@ -758,7 +758,7 @@ cmd_redeploy() {
   cmd_seed_builtins
 
   if [[ -f "$CONSOLE_LOCAL_SCRIPT" && -f "${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" ]]; then
-    UNITY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
+    UNIFY_ALLOW_RUNTIME_STOP=1 SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" stop-runtime-backend >/dev/null 2>&1 || true
     SELF_HOST=1 bash "$CONSOLE_LOCAL_SCRIPT" start-runtime-backend --self-host
   fi
 
@@ -800,17 +800,17 @@ cmd_resume() {
   export SELF_HOST=1
   export DEPLOY_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export UNITY_REPO_PATH
+  export UNIFY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNIFY_REPO_PATH/.env"
     if declare -F self_host_load_state_env_overlay &>/dev/null; then
       self_host_load_state_env_overlay
     fi
@@ -839,14 +839,14 @@ cmd_resume() {
   # Self-host always runs with Console, so the Coordinator onboarding flow
   # (narration + reference quiz) must stay active even though the public unity
   # default (unity/.env) disables it for headless installs.
-  export UNITY_CONSOLE_UI=true
+  export UNIFY_CONSOLE_UI=true
 
   # The self-host CM is the personal Coordinator; surface its universal email
   # (and provider) the way the hosted assignment event would, so outbound
   # Coordinator mail + the reference quiz work. No-op until a Coordinator
   # mailbox is configured.
-  if [[ -n "${UNITY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
-    export ASSISTANT_EMAIL="${UNITY_COORDINATOR_EMAIL_ADDRESS}"
+  if [[ -n "${UNIFY_COORDINATOR_EMAIL_ADDRESS:-}" ]]; then
+    export ASSISTANT_EMAIL="${UNIFY_COORDINATOR_EMAIL_ADDRESS}"
     export ASSISTANT_EMAIL_PROVIDER="${ASSISTANT_EMAIL_PROVIDER:-google_workspace}"
   fi
 
@@ -956,12 +956,12 @@ wait_for_durable_stack_session() {
 
   while (( idle_seconds < stall_seconds )); do
     pane="$(tmux capture-pane -t "$session" -p -S -2000 2>/dev/null || true)"
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_0__"* ]]; then
+    if [[ "$pane" == *"__UNIFY_STACK_UP_EXIT_0__"* ]]; then
       log_success "Durable stack session is ready: $session"
       return 0
     fi
     # The success sentinel is absent here, so any sentinel is a non-zero exit.
-    if [[ "$pane" == *"__UNITY_STACK_UP_EXIT_"* ]]; then
+    if [[ "$pane" == *"__UNIFY_STACK_UP_EXIT_"* ]]; then
       log_error "Durable stack startup failed in tmux session: $session"
       echo "$pane"
       return 1
@@ -981,11 +981,11 @@ wait_for_durable_stack_session() {
 }
 
 cmd_up_durable() {
-  local session="${UNITY_STACK_TMUX_SESSION:-unity-stack}"
+  local session="${UNIFY_STACK_TMUX_SESSION:-unity-stack}"
   # Seconds of complete silence before startup counts as wedged.
-  local stall_seconds="${UNITY_STACK_TMUX_STALL_SECONDS:-300}"
+  local stall_seconds="${UNIFY_STACK_TMUX_STALL_SECONDS:-300}"
   local console_port="${CONSOLE_PORT:-3000}"
-  local bash_bin="${UNITY_STACK_BASH:-bash}"
+  local bash_bin="${UNIFY_STACK_BASH:-bash}"
 
   if [[ "$(uname -s)" == "Darwin" && -x "/opt/homebrew/bin/bash" ]]; then
     bash_bin="/opt/homebrew/bin/bash"
@@ -1015,7 +1015,7 @@ cmd_up_durable() {
   local shell_bin="${SHELL:-/bin/bash}"
   # tmux new-session inherits the tmux server's env (not this client's), so opt-in
   # toggles like the call-support gate must be injected into the command itself.
-  local inner="export PATH=\"/opt/homebrew/bin:\$PATH\"; cd \"$DEPLOY_REPO_PATH\"; \"$bash_bin\" \"$SCRIPT_DIR/stack.sh\" up; rc=\$?; echo __UNITY_STACK_UP_EXIT_\${rc}__; exec \"$shell_bin\" -l"
+  local inner="export PATH=\"/opt/homebrew/bin:\$PATH\"; cd \"$DEPLOY_REPO_PATH\"; \"$bash_bin\" \"$SCRIPT_DIR/stack.sh\" up; rc=\$?; echo __UNIFY_STACK_UP_EXIT_\${rc}__; exec \"$shell_bin\" -l"
   if [[ -n "${SELF_HOST_CALLS_ENABLED:-}" ]]; then
     inner="export SELF_HOST_CALLS_ENABLED=$(printf '%q' "$SELF_HOST_CALLS_ENABLED"); $inner"
   fi
@@ -1067,8 +1067,8 @@ cmd_down() {
     return 1
   fi
 
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -1124,8 +1124,8 @@ health_check_line() {
 cmd_health_summary() {
   local console_port="${CONSOLE_PORT:-3000}"
   local orchestra_port="${ORCHESTRA_PORT:-8000}"
-  local gateway_host="${UNITY_GATEWAY_HOST:-127.0.0.1}"
-  local gateway_port="${UNITY_GATEWAY_PORT:-8001}"
+  local gateway_host="${UNIFY_GATEWAY_HOST:-127.0.0.1}"
+  local gateway_port="${UNIFY_GATEWAY_PORT:-8001}"
 
   echo ""
   echo "Source Stack Health"
@@ -1133,7 +1133,7 @@ cmd_health_summary() {
   health_check_line "Console" "http://127.0.0.1:${console_port}"
   health_check_line "Orchestra" "http://127.0.0.1:${orchestra_port}/v0/features"
   health_check_line "Gateway" "http://${gateway_host}:${gateway_port}/health"
-  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-${UNITY_HOME:-$HOME/.unity}/coordinator-runtime.json}"
+  local runtime_file="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-${UNIFY_HOME:-$HOME/.unity}/coordinator-runtime.json}"
   if [[ ! -f "$runtime_file" ]]; then
     health_check_line "Login" "http://localhost:${console_port}/login"
     printf '  %-12s %s\n' "Coordinator" "pending signup"
@@ -1186,17 +1186,17 @@ cmd_repair_console() {
   export SELF_HOST=1
   export DEPLOY_REPO_PATH
   export ORCHESTRA_REPO_PATH
-  export UNITY_REPO_PATH
+  export UNIFY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="$(default_orchestra_db_port)"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
     source "$SELF_HOST_ENV_SCRIPT"
     export_self_host_coordinator_runtime_file
-    load_self_host_repo_env_file "$UNITY_REPO_PATH/.env"
+    load_self_host_repo_env_file "$UNIFY_REPO_PATH/.env"
     if declare -F self_host_load_state_env_overlay &>/dev/null; then
       self_host_load_state_env_overlay
     fi
@@ -1237,11 +1237,11 @@ cmd_dev_env() {
 cmd_smoke() {
   export SELF_HOST=1
   export ORCHESTRA_REPO_PATH
-  export UNITY_REPO_PATH
+  export UNIFY_REPO_PATH
   export CONSOLE_REPO_PATH
   export ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-55432}"
-  export UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
-  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNITY_HOME}"
+  export UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
+  export SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-$UNIFY_HOME}"
 
   if [[ -f "$SELF_HOST_ENV_SCRIPT" ]]; then
     # shellcheck disable=SC1090
@@ -1249,15 +1249,15 @@ cmd_smoke() {
     export_self_host_coordinator_runtime_file
   fi
 
-  local py="$UNITY_REPO_PATH/.venv/bin/python"
+  local py="$UNIFY_REPO_PATH/.venv/bin/python"
   if [[ ! -x "$py" ]]; then
     py="python3"
   fi
 
   CONSOLE_PORT="${CONSOLE_PORT:-3000}" \
     ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}" \
-    UNITY_GATEWAY_HOST="${UNITY_GATEWAY_HOST:-127.0.0.1}" \
-    UNITY_GATEWAY_PORT="${UNITY_GATEWAY_PORT:-8001}" \
+    UNIFY_GATEWAY_HOST="${UNIFY_GATEWAY_HOST:-127.0.0.1}" \
+    UNIFY_GATEWAY_PORT="${UNIFY_GATEWAY_PORT:-8001}" \
     SELF_HOST_COORDINATOR_RUNTIME_FILE="${SELF_HOST_COORDINATOR_RUNTIME_FILE:-}" \
     STACK_SCRIPT="$SCRIPT_DIR/stack.sh" \
     "$py" <<'PY'
@@ -1316,7 +1316,7 @@ def check(
 
 console = f"http://127.0.0.1:{os.environ['CONSOLE_PORT']}"
 orchestra = f"http://127.0.0.1:{os.environ['ORCHESTRA_PORT']}"
-gateway = f"http://{os.environ['UNITY_GATEWAY_HOST']}:{os.environ['UNITY_GATEWAY_PORT']}"
+gateway = f"http://{os.environ['UNIFY_GATEWAY_HOST']}:{os.environ['UNIFY_GATEWAY_PORT']}"
 
 check("Console", "GET", console, {200})
 check("Orchestra features", "GET", f"{orchestra}/v0/features", {200})

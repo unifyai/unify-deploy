@@ -61,14 +61,14 @@ steps:
     # session to the first key that authenticates -- so each lookup below runs
     # with only its own identity rather than offering them all at once.
     ssh_with() { GIT_SSH_COMMAND="ssh -i $$1 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git ls-remote "$$2" "$$3" | cut -f1; }
-    UNIFY_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
+    UNISDK_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
     MAGNITUDE_SHA=$$(git ls-remote https://github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
     BRANDING_SHA=$$(ssh_with /workspace/.k_branding git@github.com:unifyai/branding.git refs/heads/staging)
-    echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
+    echo "$${UNISDK_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
-    echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
+    echo "Dependency SHAs: unisdk=$${UNISDK_SHA:0:8} unillm=$${UNILLM_SHA:0:8} magnitude=$${MAGNITUDE_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
     SYSTEM_SHAS=""
     for repo in orchestra console docs; do
       case "$${repo}" in

@@ -180,8 +180,8 @@ RUN mkdir -p /home/unity/.cache/ms-playwright && playwright install && \
 # publish it.
 COPY --from=canvas /opt/canvas-toolchain /opt/canvas-toolchain
 COPY --from=canvas /opt/canvas-host /opt/canvas-host
-ENV UNITY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain
-ENV UNITY_CANVAS_HOST_ROOT=/opt/canvas-host
+ENV UNIFY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain
+ENV UNIFY_CANVAS_HOST_ROOT=/opt/canvas-host
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
@@ -227,10 +227,10 @@ ENV MKL_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
 
 # Logging: Unity emoji logs to terminal, unify/unillm quiet (file traces only)
-ENV UNITY_TERMINAL_LOG=true
+ENV UNIFY_TERMINAL_LOG=true
 ENV UNISDK_TERMINAL_LOG=false
 ENV UNILLM_TERMINAL_LOG=false
-ENV UNITY_LOG_DIR=/var/log/unity
+ENV UNIFY_LOG_DIR=/var/log/unity
 ENV UNISDK_LOG_DIR=/var/log/unisdk
 ENV UNILLM_LOG_DIR=/var/log/unillm
 ENV MAGNITUDE_LOG_DIR=/var/log/magnitude

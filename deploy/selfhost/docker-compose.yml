@@ -4,7 +4,7 @@
 name: unity-selfhost
 
 x-unity-image: &unity_image
-  image: ${UNITY_IMAGE:-ghcr.io/unifyai/unity-selfhost:staging}
+  image: ${UNIFY_IMAGE:-ghcr.io/unifyai/unity-selfhost:staging}
 
 x-console-image: &console_image
   image: ${CONSOLE_IMAGE:-ghcr.io/unifyai/console-selfhost:staging}
@@ -156,8 +156,8 @@ services:
       # SELF_HOST_COMMS_URL at a hosted (e.g. staging) comms deployment to light
       # up the channels that gateway provides — its ORCHESTRA_ADMIN_KEY must then
       # match that deployment's admin key.
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - local-bucket:/data/local-bucket
     - provider-event-blobs:/data/provider-event-blobs
@@ -196,7 +196,7 @@ services:
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
-      UNITY_BUILTINS_PROJECT: ${UNITY_BUILTINS_PROJECT:-Builtins}
+      UNIFY_BUILTINS_PROJECT: ${UNIFY_BUILTINS_PROJECT:-Builtins}
       COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     volumes:
     - runtime:/runtime
@@ -233,14 +233,14 @@ services:
     environment:
       ORCHESTRA_URL: http://orchestra:8000/v0
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
-      UNITY_GATEWAY_HOST: 0.0.0.0
-      UNITY_GATEWAY_PORT: 8001
-      UNITY_GATEWAY_SINGLE_URL: "true"
-      UNITY_GATEWAY_STORAGE_DIR: /data/local-bucket
-      UNITY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
-      UNITY_COMMS_URL: http://gateway:8001
-      UNITY_ADAPTERS_URL: http://gateway:8001
-      UNITY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
+      UNIFY_GATEWAY_HOST: 0.0.0.0
+      UNIFY_GATEWAY_PORT: 8001
+      UNIFY_GATEWAY_SINGLE_URL: "true"
+      UNIFY_GATEWAY_STORAGE_DIR: /data/local-bucket
+      UNIFY_GATEWAY_STORAGE_PUBLIC_URL: http://orchestra:8000/v0/storage/local
+      UNIFY_COMMS_URL: http://gateway:8001
+      UNIFY_ADAPTERS_URL: http://gateway:8001
+      UNIFY_GATEWAY_LOCAL_INGRESS_URL: http://unity-cm:8787
       SELF_HOST_INTERNAL_COMMS_ENABLED: ${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}
       SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
       LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
@@ -292,8 +292,8 @@ services:
       ORCHESTRA_URL: http://orchestra:8000
       ORCHESTRA_ADMIN_KEY: ${ORCHESTRA_ADMIN_KEY}
       LOCAL_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       SELF_HOST_OWNER_FILE: /runtime/self-host-owner.json
@@ -330,15 +330,15 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
       PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
-      UNITY_CONVERSATION_LOCAL_COMMS_PORT: 8787
-      UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL_FILE: /runtime/call-tunnel-url
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_CONVERSATION_LOCAL_COMMS_HOST: 0.0.0.0
+      UNIFY_CONVERSATION_LOCAL_COMMS_PORT: 8787
+      UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL_FILE: /runtime/call-tunnel-url
       SELF_HOST_INTERNAL_COMMS_ENABLED: ${SELF_HOST_INTERNAL_COMMS_ENABLED:-false}
       SELF_HOST_INTERNAL_CALLS_ENABLED: ${SELF_HOST_INTERNAL_CALLS_ENABLED:-false}
-      UNITY_DESKTOP_SHARED_MOUNT: "1"
-      UNITY_LOCAL_ROOT: /Unity/Local
+      UNIFY_DESKTOP_SHARED_MOUNT: "1"
+      UNIFY_LOCAL_ROOT: /Unity/Local
       SELF_HOST_DESKTOP_URL: http://127.0.0.1:8090
       SELF_HOST_DESKTOP_INTERNAL_URL: http://desktop-proxy:8090
       LIVEKIT_URL: ${LIVEKIT_URL:?set LIVEKIT_URL to your LiveKit Cloud websocket URL}
@@ -357,13 +357,13 @@ services:
       VOICE_PROVIDER: ${VOICE_PROVIDER:-}
       VOICE_ID: ${VOICE_ID:-}
       UNIFY_MODEL: ${UNIFY_MODEL:-}
-      UNITY_WEB_TAVILY_API_KEY: ${UNITY_WEB_TAVILY_API_KEY:-}
-      UNITY_WEB_ENABLED: ${UNITY_WEB_ENABLED:-false}
+      UNIFY_WEB_TAVILY_API_KEY: ${UNIFY_WEB_TAVILY_API_KEY:-}
+      UNIFY_WEB_ENABLED: ${UNIFY_WEB_ENABLED:-false}
       ANTICAPTCHA_KEY: ${ANTICAPTCHA_KEY:-}
-      UNITY_ACTOR_ANTICAPTCHA_KEY: ${UNITY_ACTOR_ANTICAPTCHA_KEY:-}
+      UNIFY_ACTOR_ANTICAPTCHA_KEY: ${UNIFY_ACTOR_ANTICAPTCHA_KEY:-}
     volumes:
     - runtime:/runtime
-    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    - ${UNIFY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     - ./cm-entrypoint.sh:/app/deploy/selfhost/cm-entrypoint.sh:ro
     - ./load-comms-secrets.sh:/app/deploy/selfhost/load-comms-secrets.sh:ro
     secrets:
@@ -403,8 +403,8 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       GCP_PROJECT_ID: ${PUBSUB_GCP_PROJECT_ID:-local-test-project}
       PUBSUB_TOPIC_SUFFIX: ${PUBSUB_TOPIC_SUFFIX:--staging}
-      UNITY_SELFHOST_ARTIFACT_ROOT: /artifacts
-      UNITY_LOCAL_ROOT: /Unity/Local
+      UNIFY_SELFHOST_ARTIFACT_ROOT: /artifacts
+      UNIFY_LOCAL_ROOT: /Unity/Local
       HF_HOME: /opt/hf-cache
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -415,7 +415,7 @@ services:
     - pipeline-artifacts:/artifacts
     # Workspace mounted read-only: a worker reads the files it was given and
     # writes only artifacts, so it has no reason to modify the user's files.
-    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
+    - ${UNIFY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
     - ./ingestion-worker-entrypoint.sh:/app/deploy/selfhost/ingestion-worker-entrypoint.sh:ro
     depends_on:
       orchestra:
@@ -434,7 +434,7 @@ services:
     volumes:
     - runtime:/runtime
     - pipeline-artifacts:/artifacts
-    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
+    - ${UNIFY_WORKSPACE_HOST:-./workspace}:/Unity/Local:ro
     - ./ingestion-worker-entrypoint.sh:/app/deploy/selfhost/ingestion-worker-entrypoint.sh:ro
     depends_on:
       orchestra:
@@ -448,13 +448,13 @@ services:
     entrypoint: ["/bin/bash", "/app/deploy/selfhost/desktop-entrypoint.sh"]
     environment:
       HOME: /Unity
-      UNITY_LOCAL_ROOT: /Unity/Local
+      UNIFY_LOCAL_ROOT: /Unity/Local
       PORT: "3000"
       SELF_HOST_COORDINATOR_RUNTIME_FILE: /runtime/coordinator-runtime.json
       UNIFY_MODEL: ${UNIFY_MODEL:-}
     volumes:
     - runtime:/runtime
-    - ${UNITY_WORKSPACE_HOST:-./workspace}:/Unity/Local
+    - ${UNIFY_WORKSPACE_HOST:-./workspace}:/Unity/Local
     restart: unless-stopped
 
   desktop-proxy:
@@ -644,8 +644,8 @@ services:
       TRIGGER_EVENT_PRIVATE_ROOT: /data/provider-event-blobs
       TRIGGER_EVENT_WRAPPING_MASTER_KEY: ${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}
       ORCHESTRA_TRIGGER_CALLBACK_BASE_URL: ${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}
-      UNITY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
-      UNITY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_COMMS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
+      UNIFY_ADAPTERS_URL: ${SELF_HOST_COMMS_URL:-http://gateway:8001}
     volumes:
     - provider-event-blobs:/data/provider-event-blobs
     depends_on:

@@ -20,8 +20,8 @@ Environment (required):
     ORCHESTRA_URL, ORCHESTRA_ADMIN_KEY
 
 Environment (GCP):
-    GCP_SA_KEY, UNITY_GCP_PIPELINE_ENVIRONMENT, UNITY_PUBSUB_PROJECT_ID,
-    UNITY_GCS_ARTIFACT_BUCKET
+    GCP_SA_KEY, UNIFY_GCP_PIPELINE_ENVIRONMENT, UNIFY_PUBSUB_PROJECT_ID,
+    UNIFY_GCS_ARTIFACT_BUCKET
 
 Environment (optional):
     UNIFY_PROJECT_NAME
@@ -63,16 +63,16 @@ def _lease_lifetime_cap() -> tuple[float | None, int | None]:
     (we observed 2.5h / 76 extensions), which is what made pause/stop
     unable to reclaim an in-flight chunk. The default (30 min) sits well
     above a healthy chunk time once the O(n^2) counter scan is gone; set
-    ``UNITY_INGEST_LEASE_MAX_LIFETIME_S=0`` to disable.
+    ``UNIFY_INGEST_LEASE_MAX_LIFETIME_S=0`` to disable.
     """
-    raw_lifetime = os.environ.get("UNITY_INGEST_LEASE_MAX_LIFETIME_S", "1800")
+    raw_lifetime = os.environ.get("UNIFY_INGEST_LEASE_MAX_LIFETIME_S", "1800")
     try:
         lifetime = float(raw_lifetime)
     except ValueError:
         lifetime = 1800.0
     max_lifetime_s = lifetime if lifetime > 0 else None
 
-    raw_extensions = os.environ.get("UNITY_INGEST_LEASE_MAX_EXTENSIONS", "")
+    raw_extensions = os.environ.get("UNIFY_INGEST_LEASE_MAX_EXTENSIONS", "")
     try:
         extensions = int(raw_extensions)
     except ValueError:
@@ -86,18 +86,18 @@ def _duplicate_defer_seconds(expires_at: str) -> int:
     # Short fallback when the holder's expiry is unreadable. A flat multi-minute
     # wait (the old 300s) blinds us to a lease that may already be stealable and
     # turns a ~30s wait into a 5-min stall; re-check soon instead, bounded by
-    # UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS.
+    # UNIFY_DUPLICATE_DEFER_MAX_ATTEMPTS.
     fallback_seconds = int(
-        os.environ.get("UNITY_DUPLICATE_DEFER_FALLBACK_SECONDS", "30"),
+        os.environ.get("UNIFY_DUPLICATE_DEFER_FALLBACK_SECONDS", "30"),
     )
-    max_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_MAX_SECONDS", "600"))
-    jitter_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
+    max_seconds = int(os.environ.get("UNIFY_DUPLICATE_DEFER_MAX_SECONDS", "600"))
+    jitter_seconds = int(os.environ.get("UNIFY_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
     # An expired lease only becomes stealable after a grace window
     # (acquire_lease steal_expired_after_seconds, default 30s); add a small
     # buffer on top. Waking on the dot of expiry would land before the lease is
     # reclaimable and re-defer a whole cycle.
-    steal_grace = int(os.environ.get("UNITY_INGEST_LEASE_STEAL_GRACE_SECONDS", "30"))
-    buffer_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_BUFFER_SECONDS", "5"))
+    steal_grace = int(os.environ.get("UNIFY_INGEST_LEASE_STEAL_GRACE_SECONDS", "30"))
+    buffer_seconds = int(os.environ.get("UNIFY_DUPLICATE_DEFER_BUFFER_SECONDS", "5"))
     until_expiry = _parse_expiry_seconds(expires_at)
     if until_expiry is None:
         logger.warning(
@@ -272,7 +272,7 @@ async def main() -> None:
                     except DuplicateLiveAttempt as exc:
                         lease = exc.lease
                         max_deferrals = int(
-                            os.environ.get("UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS", "12"),
+                            os.environ.get("UNIFY_DUPLICATE_DEFER_MAX_ATTEMPTS", "12"),
                         )
                         delivery_attempt = int(item.delivery_attempt or 0)
                         defer_seconds = _duplicate_defer_seconds(

@@ -32,7 +32,7 @@ from unity_cluster_secrets import (
     COMM_SA_KEY_SECRET_NAME,
     GCP_SA_KEY_SM_SECRET,
     GCP_SECRETS_PROJECT_ID,
-    UNITY_SECRET_KEYS_FROM_GCP,
+    UNIFY_SECRET_KEYS_FROM_GCP,
     is_eso_managed_secret,
 )
 
@@ -51,7 +51,7 @@ def fetch_gcp_secret_payload(secret_manager_client, sm_secret_id: str) -> bytes:
 def build_unity_secrets_data(secret_manager_client) -> dict[str, str]:
     """Return base64-encoded secret data for unity-secrets from GCP."""
     secrets_data = {}
-    for sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+    for sm_name, k8s_key in UNIFY_SECRET_KEYS_FROM_GCP:
         raw = fetch_gcp_secret_payload(secret_manager_client, sm_name)
         secrets_data[k8s_key] = base64.b64encode(raw).decode()
     return secrets_data
@@ -187,7 +187,7 @@ def create_global_secrets(api_client, namespace="default", *, reconcile: bool = 
             print(f"   ❌ Failed to read required secrets: {exc}")
             return False
 
-        for _sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+        for _sm_name, k8s_key in UNIFY_SECRET_KEYS_FROM_GCP:
             print(f"   ✅ {k8s_key}")
 
         unity_manifest = {
@@ -467,7 +467,7 @@ Examples:
         print("\n💡 Next steps:")
         print("   1. Verify resources: python setup_k8s_config.py --list")
         print(
-            "   2. Secret rotation: deploy/guides/UNITY_CLUSTER_SECRETS.md",
+            "   2. Secret rotation: deploy/guides/UNIFY_CLUSTER_SECRETS.md",
         )
         if reconcile_secrets:
             print(

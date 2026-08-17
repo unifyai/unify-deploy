@@ -30,11 +30,11 @@ BUILTINS_CATALOG_KEEP="${BUILTINS_CATALOG_KEEP:-3}"
 # point at a location the operator controls. Downloads are structurally
 # validated before use (see builtins_catalog_validate), which bounds a corrupt
 # or truncated file but is not a substitute for trusting the host.
-BUILTINS_CATALOG_URL="${UNITY_BUILTINS_CATALOG_URL:-}"
-BUILTINS_CATALOG_FETCH_TIMEOUT="${UNITY_BUILTINS_CATALOG_FETCH_TIMEOUT:-600}"
+BUILTINS_CATALOG_URL="${UNIFY_BUILTINS_CATALOG_URL:-}"
+BUILTINS_CATALOG_FETCH_TIMEOUT="${UNIFY_BUILTINS_CATALOG_FETCH_TIMEOUT:-600}"
 
 builtins_catalog_cache_dir() {
-  printf '%s' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/builtins-catalog"
+  printf '%s' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/builtins-catalog"
 }
 
 builtins_catalog_db_container() {

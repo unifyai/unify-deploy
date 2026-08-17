@@ -47,7 +47,9 @@ def test_patch_liveview_via_infra_includes_password_when_set() -> None:
 def primed_backend(monkeypatch: pytest.MonkeyPatch):
     """Make update_liveview_url's guards pass without touching real config."""
     monkeypatch.setattr(
-        backend.SETTINGS.conversation, "COMMS_URL", "https://comms.test"
+        backend.SETTINGS.conversation,
+        "COMMS_URL",
+        "https://comms.test",
     )
     monkeypatch.setattr(backend.SETTINGS.conversation, "JOB_NAME", "job-abc")
     monkeypatch.setattr(backend.SESSION_DETAILS, "unify_key", "unify-key-1")
@@ -57,7 +59,9 @@ def primed_backend(monkeypatch: pytest.MonkeyPatch):
 def test_update_liveview_url_three_arg_call_still_works(primed_backend) -> None:
     """Callers built against the old 3-positional-arg signature must not raise."""
     with patch.object(
-        backend, "patch_liveview_via_infra", return_value=True
+        backend,
+        "patch_liveview_via_infra",
+        return_value=True,
     ) as patch_call:
         backend.update_liveview_url("42", "user-1", "https://vm.example/desktop")
 
@@ -66,7 +70,9 @@ def test_update_liveview_url_three_arg_call_still_works(primed_backend) -> None:
 
 def test_update_liveview_url_forwards_password_when_set(primed_backend) -> None:
     with patch.object(
-        backend, "patch_liveview_via_infra", return_value=True
+        backend,
+        "patch_liveview_via_infra",
+        return_value=True,
     ) as patch_call:
         backend.update_liveview_url(
             "42",
@@ -81,7 +87,9 @@ def test_update_liveview_url_forwards_password_when_set(primed_backend) -> None:
 def test_hosted_backend_forwards_password_positionally(primed_backend) -> None:
     """The unify pod calls HostedAssistantJobsBackend.update_liveview_url with a 4th arg."""
     with patch.object(
-        backend, "patch_liveview_via_infra", return_value=True
+        backend,
+        "patch_liveview_via_infra",
+        return_value=True,
     ) as patch_call:
         HostedAssistantJobsBackend().update_liveview_url(
             "42",

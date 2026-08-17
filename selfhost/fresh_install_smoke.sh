@@ -20,15 +20,15 @@
 set -euo pipefail
 
 # This script lives in unity-deploy/selfhost/. DEPLOY_REPO is the unity-deploy
-# checkout; UNITY_DEV_REPO is the sibling unify checkout under UNIFY_STACK_ROOT.
+# checkout; UNIFY_DEV_REPO is the sibling unify checkout under UNIFY_STACK_ROOT.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=default_repo_paths.sh
 source "$SCRIPT_DIR/default_repo_paths.sh"
 DEPLOY_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 UNIFY_STACK_ROOT="${UNIFY_STACK_ROOT:-$(cd "$DEPLOY_REPO/.." && pwd)}"
-UNITY_DEV_REPO="${UNITY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
-export UNITY_REPO_PATH="${UNITY_REPO_PATH:-$UNITY_DEV_REPO}"
-INSTALL_SCRIPT="${INSTALL_SCRIPT:-$UNITY_DEV_REPO/scripts/install.sh}"
+UNIFY_DEV_REPO="${UNIFY_REPO_PATH:-$(default_unity_repo_path "$UNIFY_STACK_ROOT")}"
+export UNIFY_REPO_PATH="${UNIFY_REPO_PATH:-$UNIFY_DEV_REPO}"
+INSTALL_SCRIPT="${INSTALL_SCRIPT:-$UNIFY_DEV_REPO/scripts/install.sh}"
 
 FRESH_INSTALL_ROOT="${FRESH_INSTALL_ROOT:-/tmp}"
 FRESH_INSTALL_BRANCH="${FRESH_INSTALL_BRANCH:-staging}"
@@ -67,14 +67,14 @@ run_compose_smoke() {
   mkdir -p "$unity_home"
 
   log "Compose install smoke"
-  log "  UNITY_HOME=$unity_home"
+  log "  UNIFY_HOME=$unity_home"
 
   export NON_INTERACTIVE=true
   export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-smoke-test-placeholder}"
 
-  if ! UNITY_COMPOSE_SKIP_START=1 \
+  if ! UNIFY_COMPOSE_SKIP_START=1 \
     INSTALL_SELFHOST_SRC="$DEPLOY_REPO/deploy/selfhost" \
-    UNITY_HOME="$unity_home" \
+    UNIFY_HOME="$unity_home" \
     bash "$SCRIPT_DIR/install-compose.sh" --dir "$unity_home" --no-cli --non-interactive; then
     fail "install-compose.sh failed"
     [[ "$KEEP" == "true" ]] || rm -rf "$unity_home"
@@ -109,7 +109,7 @@ run_compose_smoke() {
     mode="$(stat -c '%a' "$unity_home")"
   fi
   [[ "$mode" == "700" ]] || {
-    fail "UNITY_HOME permissions are $mode, expected 700"
+    fail "UNIFY_HOME permissions are $mode, expected 700"
     return 1
   }
   for required_file in .env comms_sa.json comms_twilio.env; do
@@ -270,7 +270,7 @@ run_local_smoke() {
   mkdir -p "$unity_home"
 
   log "Fresh install smoke (local)"
-  log "  UNITY_HOME=$unity_home"
+  log "  UNIFY_HOME=$unity_home"
   log "  branch=$FRESH_INSTALL_BRANCH"
   log "  install script=$INSTALL_SCRIPT"
 
@@ -291,14 +291,14 @@ run_local_smoke() {
   fi
 
   log "Overlaying local unity/scripts for pre-push validation..."
-  rsync -a "$UNITY_DEV_REPO/scripts/" "$unity_home/unity/scripts/"
+  rsync -a "$UNIFY_DEV_REPO/scripts/" "$unity_home/unity/scripts/"
   if [[ -f "$HOME/Unify/orchestra/scripts/local.sh" ]]; then
     log "Overlaying local orchestra/scripts/local.sh for pre-push validation..."
     rsync -a "$HOME/Unify/orchestra/scripts/local.sh" "$unity_home/orchestra/scripts/local.sh" 2>/dev/null || true
   fi
 
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  export UNITY_HOME="$unity_home"
+  export UNIFY_HOME="$unity_home"
 
   if [[ "$CODE_ONLY" == "true" ]]; then
     log "Running unity stack doctor (expected gaps before setup)..."
@@ -330,7 +330,7 @@ run_local_smoke() {
     export OPENAI_API_KEY="sk-smoke-test-placeholder" # pragma: allowlist secret
     log "No LLM key in env — using placeholder for smoke test (chat will not work until a real key is set)"
   fi
-    if ! UNITY_HOME="$unity_home" UNITY_BRANCH="$FRESH_INSTALL_BRANCH" \
+    if ! UNIFY_HOME="$unity_home" UNIFY_BRANCH="$FRESH_INSTALL_BRANCH" \
       ORCHESTRA_PREFIX="$ORCHESTRA_PREFIX" \
       ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT" \
       ORCHESTRA_PORT="$ORCHESTRA_PORT" \
@@ -374,7 +374,7 @@ run_docker_smoke() {
   unity_home_in_container="/tmp/unity-fresh-smoke-${stamp}"
 
   log "Fresh install smoke (Docker Ubuntu)"
-  log "  container UNITY_HOME=$unity_home_in_container"
+  log "  container UNIFY_HOME=$unity_home_in_container"
   log "  branch=$FRESH_INSTALL_BRANCH"
 
   local skip_setup_flag=""
@@ -395,8 +395,8 @@ run_docker_smoke() {
       curl -fsSL https://astral.sh/uv/install.sh | sh >/dev/null
       export PATH=\"\$HOME/.local/bin:\$PATH\"
       bash /install.sh --dir '$unity_home_in_container' --branch '$FRESH_INSTALL_BRANCH' $skip_setup_flag
-      export UNITY_HOME='$unity_home_in_container'
-      bash \"\$UNITY_HOME/unity/scripts/stack.sh\" doctor
+      export UNIFY_HOME='$unity_home_in_container'
+      bash \"\$UNIFY_HOME/unity/scripts/stack.sh\" doctor
       echo '✓ Docker fresh install smoke passed'
     "
 }

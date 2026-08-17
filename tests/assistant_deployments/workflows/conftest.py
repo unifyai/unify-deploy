@@ -9,4 +9,4 @@ bundles *this repo authors* are well-formed.
 
 import os
 
-os.environ["SKIP_UNITY_TEST_INIT"] = "1"
+os.environ["SKIP_UNIFY_TEST_INIT"] = "1"

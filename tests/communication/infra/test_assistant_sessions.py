@@ -239,8 +239,8 @@ def test_build_assistant_session_spec_carries_runtime_service_urls():
     assert spec["serviceUrls"] == service_urls
     assert session_runtime_service_env({"spec": spec}) == {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
-        "UNITY_COMMS_URL": "https://coordinator---unity-comms-app-staging.run.app",
-        "UNITY_ADAPTERS_URL": "https://coordinator---unity-adapters-staging.run.app",
+        "UNIFY_COMMS_URL": "https://coordinator---unity-comms-app-staging.run.app",
+        "UNIFY_ADAPTERS_URL": "https://coordinator---unity-adapters-staging.run.app",
     }
 
 

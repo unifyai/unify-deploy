@@ -378,7 +378,7 @@ def parse_cloud_log(cloud_log_path: Path) -> dict[str, Any]:
 # Framework log parsing (unity.log)
 # ---------------------------------------------------------------------------
 
-_UNITY_LOG_RE = re.compile(
+_UNIFY_LOG_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+" r"(\w+)\s+" r"(.*?)$",
     re.MULTILINE,
 )
@@ -400,7 +400,7 @@ def parse_framework_log(
     text = unity_log_path.read_text(encoding="utf-8", errors="replace")
     all_entries: list[dict] = []
 
-    for m in _UNITY_LOG_RE.finditer(text):
+    for m in _UNIFY_LOG_RE.finditer(text):
         ts, lvl, msg = m.group(1), m.group(2), m.group(3).strip()
         comp = ""
         comp_match = re.search(r"\[(\w+)\]", msg)

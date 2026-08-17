@@ -30,8 +30,8 @@ fi
 CANVAS_HOST_DIR="${CANVAS_HOST_DIR:-$HOME/.unity/canvas-host}"
 CANVAS_PORT="${CANVAS_PORT:-3100}"
 CANVAS_ORIGIN="${CANVAS_ORIGIN:-http://localhost:${CANVAS_PORT}}"
-CANVAS_ORIGIN_PID_FILE="${CANVAS_ORIGIN_PID_FILE:-${UNITY_HOME:-$HOME/.unity}/canvas-origin.pid}"
-CANVAS_ORIGIN_LOG_FILE="${CANVAS_ORIGIN_LOG_FILE:-${UNITY_HOME:-$HOME/.unity}/canvas-origin.log}"
+CANVAS_ORIGIN_PID_FILE="${CANVAS_ORIGIN_PID_FILE:-${UNIFY_HOME:-$HOME/.unity}/canvas-origin.pid}"
+CANVAS_ORIGIN_LOG_FILE="${CANVAS_ORIGIN_LOG_FILE:-${UNIFY_HOME:-$HOME/.unity}/canvas-origin.log}"
 
 canvas_origin_installed() {
     [[ -f "$CANVAS_HOST_DIR/host/v1/index.html" ]]

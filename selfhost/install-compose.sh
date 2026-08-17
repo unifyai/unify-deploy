@@ -13,7 +13,7 @@ BRANCH="${BRANCH:-staging}"
 REPO_RAW="https://raw.githubusercontent.com/unifyai/unity-deploy/${BRANCH}"
 SELFHOST_SRC="${INSTALL_SELFHOST_SRC:-${SCRIPT_DIR:+$SCRIPT_DIR/../deploy/selfhost}}"
 
-UNITY_HOME="${UNITY_HOME:-$HOME/.unity}"
+UNIFY_HOME="${UNIFY_HOME:-$HOME/.unity}"
 CLI_DIR="${CLI_DIR:-$HOME/.local/bin}"
 CREATE_CLI=true
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
@@ -33,7 +33,7 @@ log_err() { echo -e "${RED}✗${NC} $1" >&2; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dir) UNITY_HOME="$2"; shift 2 ;;
+    --dir) UNIFY_HOME="$2"; shift 2 ;;
     --no-cli) CREATE_CLI=false; shift ;;
     --non-interactive) NON_INTERACTIVE=true; shift ;;
     -h|--help)
@@ -83,9 +83,9 @@ fetch_remote() {
 }
 
 install_compose_bundle() {
-  mkdir -p -m 0700 "$UNITY_HOME"
-  chmod 0700 "$UNITY_HOME"
-  mkdir -p "${UNITY_HOME}/workspace"
+  mkdir -p -m 0700 "$UNIFY_HOME"
+  chmod 0700 "$UNIFY_HOME"
+  mkdir -p "${UNIFY_HOME}/workspace"
   local files=(
     docker-compose.yml
     Caddyfile
@@ -114,47 +114,47 @@ install_compose_bundle() {
       return 1
     fi
     seen+="${file}|"
-    if [[ -e "$UNITY_HOME/$file" && ! -f "$UNITY_HOME/$file" ]]; then
-      log_err "Refusing to replace non-file bundle path: $UNITY_HOME/$file"
+    if [[ -e "$UNIFY_HOME/$file" && ! -f "$UNIFY_HOME/$file" ]]; then
+      log_err "Refusing to replace non-file bundle path: $UNIFY_HOME/$file"
       return 1
     fi
     if [[ -n "$SELFHOST_SRC" && -f "$SELFHOST_SRC/$file" ]]; then
-      cp "$SELFHOST_SRC/$file" "$UNITY_HOME/$file"
+      cp "$SELFHOST_SRC/$file" "$UNIFY_HOME/$file"
     else
-      fetch_remote "deploy/selfhost/$file" "$UNITY_HOME/$file"
+      fetch_remote "deploy/selfhost/$file" "$UNIFY_HOME/$file"
     fi
   done
   chmod 0644 \
-    "$UNITY_HOME/docker-compose.yml" \
-    "$UNITY_HOME/Caddyfile" \
-    "$UNITY_HOME/call-proxy.Caddyfile" \
-    "$UNITY_HOME/.env.example" \
-    "$UNITY_HOME/comms_ingress_bridge.py" \
-    "$UNITY_HOME/provision_call_sip.py" \
-    "$UNITY_HOME/sync_comms_webhooks.py" \
-    "$UNITY_HOME/integration-bootstrap.selfhost.toml" \
-    "$UNITY_HOME/README.md"
-  chmod 0600 "$UNITY_HOME/coordinator.env"
-  chmod 0755 "$UNITY_HOME"/*.sh
-  if [[ ! -f "$UNITY_HOME/.env" ]]; then
-    cp "$UNITY_HOME/.env.example" "$UNITY_HOME/.env"
+    "$UNIFY_HOME/docker-compose.yml" \
+    "$UNIFY_HOME/Caddyfile" \
+    "$UNIFY_HOME/call-proxy.Caddyfile" \
+    "$UNIFY_HOME/.env.example" \
+    "$UNIFY_HOME/comms_ingress_bridge.py" \
+    "$UNIFY_HOME/provision_call_sip.py" \
+    "$UNIFY_HOME/sync_comms_webhooks.py" \
+    "$UNIFY_HOME/integration-bootstrap.selfhost.toml" \
+    "$UNIFY_HOME/README.md"
+  chmod 0600 "$UNIFY_HOME/coordinator.env"
+  chmod 0755 "$UNIFY_HOME"/*.sh
+  if [[ ! -f "$UNIFY_HOME/.env" ]]; then
+    cp "$UNIFY_HOME/.env.example" "$UNIFY_HOME/.env"
     # Expand ${HOME} for workspace path
-    sed -i.bak "s|\${HOME}|$HOME|g" "$UNITY_HOME/.env" 2>/dev/null || \
-      sed -i '' "s|\${HOME}|$HOME|g" "$UNITY_HOME/.env"
-    rm -f "$UNITY_HOME/.env.bak"
+    sed -i.bak "s|\${HOME}|$HOME|g" "$UNIFY_HOME/.env" 2>/dev/null || \
+      sed -i '' "s|\${HOME}|$HOME|g" "$UNIFY_HOME/.env"
+    rm -f "$UNIFY_HOME/.env.bak"
   fi
   for file in comms_twilio.env comms_sa.json; do
-    if [[ -e "$UNITY_HOME/$file" && ! -f "$UNITY_HOME/$file" ]]; then
-      log_err "Refusing secret path collision: $UNITY_HOME/$file"
+    if [[ -e "$UNIFY_HOME/$file" && ! -f "$UNIFY_HOME/$file" ]]; then
+      log_err "Refusing secret path collision: $UNIFY_HOME/$file"
       return 1
     fi
-    touch "$UNITY_HOME/$file"
+    touch "$UNIFY_HOME/$file"
   done
   chmod 0600 \
-    "$UNITY_HOME/.env" \
-    "$UNITY_HOME/comms_twilio.env" \
-    "$UNITY_HOME/comms_sa.json"
-  log_ok "Compose bundle installed to $UNITY_HOME"
+    "$UNIFY_HOME/.env" \
+    "$UNIFY_HOME/comms_twilio.env" \
+    "$UNIFY_HOME/comms_sa.json"
+  log_ok "Compose bundle installed to $UNIFY_HOME"
 }
 
 upsert_env_value() {
@@ -207,7 +207,7 @@ normalize_env_file() {
 }
 
 generate_secrets() {
-  local env_file="$UNITY_HOME/.env"
+  local env_file="$UNIFY_HOME/.env"
   normalize_env_file "$env_file"
   if ! grep -qE '^ORCHESTRA_ADMIN_KEY=.+$' "$env_file" 2>/dev/null; then
     upsert_env_value "$env_file" "ORCHESTRA_ADMIN_KEY" \
@@ -230,17 +230,17 @@ generate_secrets() {
 run_byok_wizard() {
   local wizard="${SCRIPT_DIR:+$SCRIPT_DIR/prompt_byok_keys.sh}"
   if [[ -z "$wizard" || ! -f "$wizard" ]]; then
-    local tmp_wizard="$UNITY_HOME/.prompt_byok_keys.sh"
+    local tmp_wizard="$UNIFY_HOME/.prompt_byok_keys.sh"
     fetch_remote "selfhost/prompt_byok_keys.sh" "$tmp_wizard"
     wizard="$tmp_wizard"
   fi
   if [[ ! -f "$wizard" ]]; then
-    log_warn "BYOK wizard not found — add API keys to $UNITY_HOME/.env manually"
+    log_warn "BYOK wizard not found — add API keys to $UNIFY_HOME/.env manually"
     return 0
   fi
-  log_info "BYOK wizard (keys written to $UNITY_HOME/.env)..."
-  UNITY_ENV_FILE="$UNITY_HOME/.env" \
-    UNITY_COMPOSE_INSTALL=1 \
+  log_info "BYOK wizard (keys written to $UNIFY_HOME/.env)..."
+  UNIFY_ENV_FILE="$UNIFY_HOME/.env" \
+    UNIFY_COMPOSE_INSTALL=1 \
     NON_INTERACTIVE="$NON_INTERACTIVE" \
     bash "$wizard"
 }
@@ -248,7 +248,7 @@ run_byok_wizard() {
 create_compose_cli() {
   local compose_cli="${SCRIPT_DIR:+$SCRIPT_DIR/compose-cli.sh}"
   if [[ -z "$compose_cli" || ! -f "$compose_cli" ]]; then
-    compose_cli="$UNITY_HOME/compose-cli.sh"
+    compose_cli="$UNIFY_HOME/compose-cli.sh"
     fetch_remote "selfhost/compose-cli.sh" "$compose_cli"
   fi
   INSTALLED_COMPOSE_CLI="$compose_cli"
@@ -258,11 +258,11 @@ create_compose_cli() {
   cat > "$shim" <<EOF
 #!/usr/bin/env bash
 set -e
-UNITY_HOME="${UNITY_HOME}"
-export UNITY_HOME
+UNIFY_HOME="${UNIFY_HOME}"
+export UNIFY_HOME
 COMPOSE_CLI="${compose_cli}"
 
-if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
+if [[ -f "\$UNIFY_HOME/docker-compose.yml" ]]; then
   cmd="\${1:-up}"
   case "\$cmd" in
     stack)
@@ -280,8 +280,8 @@ if [[ -f "\$UNITY_HOME/docker-compose.yml" ]]; then
     integrations-sync) shift || true; exec bash "\$COMPOSE_CLI" integrations-sync "\$@" ;;
     builtins-sync) shift || true; exec bash "\$COMPOSE_CLI" builtins-sync "\$@" ;;
     setup)
-      echo "Compose install is already configured at \$UNITY_HOME" >&2
-      echo "Edit \$UNITY_HOME/.env for keys, then run: unify restart" >&2
+      echo "Compose install is already configured at \$UNIFY_HOME" >&2
+      echo "Edit \$UNIFY_HOME/.env for keys, then run: unify restart" >&2
       exit 0 ;;
     help|-h|--help)
       cat <<'USAGE'
@@ -318,12 +318,12 @@ EOF
 # Compose gives the caller's shell environment precedence over --env-file
 # values during ${VAR} interpolation, so stray exports (direnv, dotfiles, CI)
 # would silently override the stack's secrets. Run compose under a minimal
-# environment so $UNITY_HOME/.env is the single source of truth.
+# environment so $UNIFY_HOME/.env is the single source of truth.
 compose_cmd() {
   local profile_args=()
   local comms_enabled calls_enabled
-  comms_enabled="$(grep -E '^SELF_HOST_INTERNAL_COMMS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
-  calls_enabled="$(grep -E '^SELF_HOST_INTERNAL_CALLS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  comms_enabled="$(grep -E '^SELF_HOST_INTERNAL_COMMS_ENABLED=' "$UNIFY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  calls_enabled="$(grep -E '^SELF_HOST_INTERNAL_CALLS_ENABLED=' "$UNIFY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
   case "$comms_enabled:$calls_enabled" in
     1:*|true:*|yes:*|on:*|*:1|*:true|*:yes|*:on)
       profile_args+=(--profile internal-comms)
@@ -333,7 +333,7 @@ compose_cmd() {
     1|true|yes|on) profile_args+=(--profile internal-calls) ;;
   esac
   local triggers_enabled
-  triggers_enabled="$(grep -E '^SELF_HOST_PROVIDER_TRIGGERS_ENABLED=' "$UNITY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
+  triggers_enabled="$(grep -E '^SELF_HOST_PROVIDER_TRIGGERS_ENABLED=' "$UNIFY_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr '[:upper:]' '[:lower:]')"
   case "$triggers_enabled" in
     1|true|yes|on) profile_args+=(--profile provider-triggers) ;;
   esac
@@ -346,7 +346,7 @@ compose_cmd() {
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     ${DOCKER_CERT_PATH:+DOCKER_CERT_PATH="$DOCKER_CERT_PATH"} \
     ${DOCKER_TLS_VERIFY:+DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY"} \
-    docker compose -f "$UNITY_HOME/docker-compose.yml" --env-file "$UNITY_HOME/.env" \
+    docker compose -f "$UNIFY_HOME/docker-compose.yml" --env-file "$UNIFY_HOME/.env" \
       "${profile_args[@]}" "$@"
 }
 
@@ -363,7 +363,7 @@ verify_orchestra_seed() {
     fi
     if [[ "$seed_status" == exited* ]] && [[ "$seed_status" != "exited	0" ]]; then
       log_err "orchestra-seed failed — billing tables were not seeded"
-      log_info "Retry: docker compose -f $UNITY_HOME/docker-compose.yml --env-file $UNITY_HOME/.env run --rm orchestra-seed"
+      log_info "Retry: docker compose -f $UNIFY_HOME/docker-compose.yml --env-file $UNIFY_HOME/.env run --rm orchestra-seed"
       exit 1
     fi
     sleep 2
@@ -372,7 +372,7 @@ verify_orchestra_seed() {
 }
 
 start_composio_catalog_sync() {
-  if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
+  if ! grep -qE '^COMPOSIO_API_KEY=.+$' "$UNIFY_HOME/.env" 2>/dev/null; then
     return 0
   fi
   log_info "Composio integration catalogue sync runs via unity-builtins-seed (watch: unify stack logs unity-builtins-seed)"
@@ -382,7 +382,7 @@ pull_and_start() {
   log_info "Pulling images (first run may take several minutes)..."
   compose_cmd pull
   log_info "Starting stack..."
-  if ! UNITY_HOME="$UNITY_HOME" bash "$INSTALLED_COMPOSE_CLI" up; then
+  if ! UNIFY_HOME="$UNIFY_HOME" bash "$INSTALLED_COMPOSE_CLI" up; then
     log_err "Stack startup failed and was rolled back"
     return 1
   fi
@@ -393,7 +393,7 @@ pull_and_start() {
 
 open_browser() {
   local url
-  url="$(grep -E '^NEXTAUTH_URL=' "$UNITY_HOME/.env" 2>/dev/null | cut -d= -f2- || echo 'http://127.0.0.1:3000')"
+  url="$(grep -E '^NEXTAUTH_URL=' "$UNIFY_HOME/.env" 2>/dev/null | cut -d= -f2- || echo 'http://127.0.0.1:3000')"
   log_info "Open $url to register and chat with your Coordinator"
   case "$(uname -s)" in
     Darwin) open "$url" 2>/dev/null || true ;;
@@ -408,8 +408,8 @@ main() {
   generate_secrets
   run_byok_wizard
   create_compose_cli
-  if [[ "${UNITY_COMPOSE_SKIP_START:-0}" == "1" ]]; then
-    log_ok "Skipping image pull/start (UNITY_COMPOSE_SKIP_START=1)"
+  if [[ "${UNIFY_COMPOSE_SKIP_START:-0}" == "1" ]]; then
+    log_ok "Skipping image pull/start (UNIFY_COMPOSE_SKIP_START=1)"
   else
     pull_and_start
     open_browser
@@ -420,8 +420,8 @@ main() {
   echo "  Daily driver:  unify / unify stack up"
   echo "  UI off:        unify stack down"
   echo "  Stop all:      unify stack down --full"
-  echo "  Edit keys:     \$UNITY_HOME/.env  then  unify restart"
-  if grep -qE '^COMPOSIO_API_KEY=.+$' "$UNITY_HOME/.env" 2>/dev/null; then
+  echo "  Edit keys:     \$UNIFY_HOME/.env  then  unify restart"
+  if grep -qE '^COMPOSIO_API_KEY=.+$' "$UNIFY_HOME/.env" 2>/dev/null; then
     echo "  Integrations:  catalog sync runs in background (~30 min); unify stack doctor"
   fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -432,7 +432,7 @@ main() {
     echo "    2. Menu bar app → Settings → paste your API key (from Console → Connect your desktop)"
     echo "    3. Approve Screen Sharing when prompted; wait for green status"
     echo "    4. Console → Connect your desktop → link your Mac → unify restart"
-    echo "    Full guide: \$UNITY_HOME/README.md"
+    echo "    Full guide: \$UNIFY_HOME/README.md"
   fi
   echo ""
 }

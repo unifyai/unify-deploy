@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from communication.infra import vm_config as vm_config_module
 from communication.infra import vm_helpers as vm_helpers_module
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
@@ -1394,7 +1393,7 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
         labels={"vm-type": "ubuntu"},
     )
 
-    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 1})
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 1)
     monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_STOPPED", 1)
     monkeypatch.setattr(
         vm_helpers_module,
@@ -1469,7 +1468,7 @@ def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
     client = MagicMock()
     set_labels = MagicMock(return_value=True)
 
-    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 0})
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
     monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
     monkeypatch.setattr(
         vm_helpers_module,
@@ -1490,7 +1489,7 @@ def test_trim_pool_keeps_fresh_idle_vms_during_grace(monkeypatch):
 
 
 def test_trim_pool_respects_pending_claims_target(monkeypatch):
-    """In-process pending claims raise the idle floor above the warm target."""
+    """In-process pending claims raise the idle floor above POOL_TARGET_IDLE."""
 
     now = datetime.now(UTC)
     old_idle = SimpleNamespace(
@@ -1509,7 +1508,7 @@ def test_trim_pool_respects_pending_claims_target(monkeypatch):
     client = MagicMock()
     set_labels = MagicMock(return_value=True)
 
-    monkeypatch.setattr(vm_config_module, "POOL_TARGET_IDLE_BY_VM_TYPE", {"ubuntu": 0})
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 0)
     monkeypatch.setattr(vm_helpers_module, "POOL_IDLE_TRIM_GRACE_SECONDS", 300.0)
     monkeypatch.setattr(
         vm_helpers_module,

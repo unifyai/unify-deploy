@@ -188,7 +188,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment
@@ -243,7 +243,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment
@@ -264,8 +264,8 @@ jobs:
         LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
         LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
-        UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
+        UNIFY_COMMS_URL: ${{ secrets.UNIFY_COMMS_URL }}
+        UNIFY_ADAPTERS_URL: ${{ secrets.UNIFY_ADAPTERS_URL }}
         DEPLOY_ENV: staging
         GCP_PROJECT_ID: gcp-project-runtime
 
@@ -333,7 +333,7 @@ jobs:
 
     - name: Checkout first-party path dependencies
       env:
-        UNITY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        UNIFY_DEPLOY_CI_FIRST_PARTY_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
       run: bash scripts/checkout_ci_path_deps.sh
 
     - name: Set up Environment
@@ -354,7 +354,7 @@ jobs:
         LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
         LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
-        UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
+        UNIFY_COMMS_URL: ${{ secrets.UNIFY_COMMS_URL }}
+        UNIFY_ADAPTERS_URL: ${{ secrets.UNIFY_ADAPTERS_URL }}
         DEPLOY_ENV: staging
         GCP_PROJECT_ID: gcp-project-runtime

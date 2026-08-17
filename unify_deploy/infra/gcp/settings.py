@@ -7,7 +7,7 @@ the process is running in (staging / production / development).  All
 environment-dependent defaults — bucket names, Pub/Sub topic suffixes,
 subscription names — are derived from it so that a single env var
 controls the entire pipeline surface.  Explicit env-var overrides
-(``UNITY_GCP_PIPELINE_ENVIRONMENT``, ``UNITY_GCS_ARTIFACT_BUCKET``,
+(``UNIFY_GCP_PIPELINE_ENVIRONMENT``, ``UNIFY_GCS_ARTIFACT_BUCKET``,
 etc.) still take precedence for K8s manifests and CI, but when they
 are absent the ``ORCHESTRA_URL`` inference prevents cross-environment
 leaks like staging dispatches uploading to the production bucket.
@@ -45,7 +45,7 @@ def _bucket_for_env(env: str) -> str:
 class GcsArtifactStoreSettings(BaseSettings):
     """Settings for the GCS-backed artifact store."""
 
-    model_config = {"env_prefix": "UNITY_GCS_ARTIFACT_"}
+    model_config = {"env_prefix": "UNIFY_GCS_ARTIFACT_"}
 
     bucket: str = ""
     prefix: str = ""
@@ -55,7 +55,7 @@ class GcsArtifactStoreSettings(BaseSettings):
 class PubSubQueueSettings(BaseSettings):
     """Settings for the Pub/Sub-backed work queue."""
 
-    model_config = {"env_prefix": "UNITY_PUBSUB_"}
+    model_config = {"env_prefix": "UNIFY_PUBSUB_"}
 
     project_id: str = ""
     parse_topic: str = "unity-parse"
@@ -78,7 +78,7 @@ class GcpPipelineSettings(BaseSettings):
     overridden for staging, causing cross-environment leaks.
     """
 
-    model_config = {"env_prefix": "UNITY_GCP_PIPELINE_"}
+    model_config = {"env_prefix": "UNIFY_GCP_PIPELINE_"}
 
     environment: str = ""
     artifact_store: GcsArtifactStoreSettings = Field(

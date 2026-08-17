@@ -120,7 +120,7 @@ def test_assistant_payload_carries_default_model_fields():
 
 
 def test_get_assistant_skips_universal_coordinator_email_lookup(monkeypatch):
-    monkeypatch.setenv("UNITY_COORDINATOR_EMAIL_ADDRESS", "staging-twin@unify.ai")
+    monkeypatch.setenv("UNIFY_COORDINATOR_EMAIL_ADDRESS", "staging-twin@unify.ai")
 
     def fail_get(*_args, **_kwargs):
         raise AssertionError("Orchestra should not be called for universal email")

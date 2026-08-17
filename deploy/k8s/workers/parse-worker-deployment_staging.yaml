@@ -60,16 +60,16 @@ spec:
             memory: "4Gi"
             ephemeral-storage: "4Gi"
         env:
-        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+        - name: UNIFY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
-        - name: UNITY_GCS_ARTIFACT_BUCKET
+        - name: UNIFY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts-staging"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: UNITY_PUBSUB_PROJECT_ID
+        - name: UNIFY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         livenessProbe:
           exec:

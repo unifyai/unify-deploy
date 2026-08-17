@@ -433,7 +433,7 @@ def resolve(
     import os
 
     client_mode = (
-        (os.environ.get("UNITY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
+        (os.environ.get("UNIFY_DEPLOY_CLIENT_MODE") or "bundled").strip().lower()
     )
     if client_mode == "embedded":
         _ensure_embedded_clients_registered()

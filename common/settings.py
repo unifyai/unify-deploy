@@ -116,7 +116,7 @@ class Settings:
 
     @property
     def gke_cluster_name(self) -> str:
-        return os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
+        return os.environ.get("UNIFY_GKE_CLUSTER_NAME", "unity")
 
     @property
     def default_namespace(self) -> str:
@@ -130,48 +130,48 @@ class Settings:
 
     @property
     def comms_url(self) -> str:
-        return _service_url("UNITY_COMMS_URL", "comms")
+        return _service_url("UNIFY_COMMS_URL", "comms")
 
     @property
     def adapters_url(self) -> str:
-        return _service_url("UNITY_ADAPTERS_URL", "adapters")
+        return _service_url("UNIFY_ADAPTERS_URL", "adapters")
 
     @property
     def task_due_queue_location(self) -> str:
-        return os.environ.get("UNITY_TASK_DUE_QUEUE_LOCATION", self.default_region)
+        return os.environ.get("UNIFY_TASK_DUE_QUEUE_LOCATION", self.default_region)
 
     @property
     def task_due_queue_name(self) -> str:
         return os.environ.get(
-            "UNITY_TASK_DUE_QUEUE_NAME",
+            "UNIFY_TASK_DUE_QUEUE_NAME",
             f"unity-task-due{self.env_suffix}",
         )
 
     @property
     def task_offline_queue_name(self) -> str:
         return os.environ.get(
-            "UNITY_TASK_OFFLINE_QUEUE_NAME",
+            "UNIFY_TASK_OFFLINE_QUEUE_NAME",
             f"unity-task-offline{self.env_suffix}",
         )
 
     @property
     def task_execution_repair_queue_name(self) -> str:
         return os.environ.get(
-            "UNITY_TASK_EXECUTION_REPAIR_QUEUE_NAME",
+            "UNIFY_TASK_EXECUTION_REPAIR_QUEUE_NAME",
             f"unity-task-execution-repair{self.env_suffix}",
         )
 
     @property
     def task_due_dispatch_deadline_seconds(self) -> int:
-        return int(os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"))
+        return int(os.environ.get("UNIFY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"))
 
     @property
     def task_execution_horizon_days(self) -> int:
-        return int(os.environ.get("UNITY_TASK_EXECUTION_HORIZON_DAYS", "29"))
+        return int(os.environ.get("UNIFY_TASK_EXECUTION_HORIZON_DAYS", "29"))
 
     @property
     def offline_task_job_ttl_seconds(self) -> int:
-        return int(os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"))
+        return int(os.environ.get("UNIFY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"))
 
     @property
     def offline_task_max_runtime_seconds(self) -> int:
@@ -189,12 +189,12 @@ class Settings:
         sweep that would have reported it. A task needing less sets its own
         max_runtime_seconds; it cannot set more.
         """
-        return int(os.environ.get("UNITY_OFFLINE_TASK_MAX_RUNTIME_SECONDS", "43200"))
+        return int(os.environ.get("UNIFY_OFFLINE_TASK_MAX_RUNTIME_SECONDS", "43200"))
 
     @property
     def provider_event_dispatch_request_ttl_seconds(self) -> int:
         return int(
-            os.environ.get("UNITY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
+            os.environ.get("UNIFY_PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS", "300"),
         )
 
     # Auth keys
@@ -240,7 +240,7 @@ class Settings:
     @property
     def workspace_events_push_auth_service_account(self) -> str:
         return os.environ.get(
-            "UNITY_WORKSPACE_EVENTS_PUSH_AUTH_SA",
+            "UNIFY_WORKSPACE_EVENTS_PUSH_AUTH_SA",
             f"comm-sa@{self.gcp_project_id}.iam.gserviceaccount.com",
         )
 
@@ -287,7 +287,7 @@ class Settings:
 
     @property
     def job_inventory_lookback_hours(self) -> int:
-        return int(os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"))
+        return int(os.environ.get("UNIFY_JOB_INVENTORY_LOOKBACK_HOURS", "36"))
 
     @property
     def workspace_admin_subject(self) -> str:
@@ -339,8 +339,8 @@ class Settings:
     def unity_coordinator_email_address(self) -> str:
         return (
             (
-                os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
-                or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+                os.environ.get("UNIFY_COORDINATOR_EMAIL_ADDRESS")
+                or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_EMAIL_ADDRESS")
                 or "twin@unify.ai"
             )
             .strip()
@@ -349,7 +349,7 @@ class Settings:
 
     @property
     def unity_coordinator_email_watch_topic(self) -> str:
-        return os.environ.get("UNITY_COORDINATOR_EMAIL_WATCH_TOPIC", self.gmail_topic)
+        return os.environ.get("UNIFY_COORDINATOR_EMAIL_WATCH_TOPIC", self.gmail_topic)
 
     @property
     def unity_twin_alias_email_domain(self) -> str:
@@ -360,8 +360,8 @@ class Settings:
         """
         return (
             (
-                os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
-                or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+                os.environ.get("UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
+                or os.environ.get("ORCHESTRA_UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
                 or "twins.unify.ai"
             )
             .strip()
@@ -372,7 +372,7 @@ class Settings:
     def unity_twin_alias_mailbox(self) -> str:
         """Workspace mailbox that twin alias deliveries land in."""
         return (
-            (os.environ.get("UNITY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai")
+            (os.environ.get("UNIFY_TWIN_ALIAS_MAILBOX") or "twins@unify.ai")
             .strip()
             .lower()
         )
@@ -383,7 +383,7 @@ class Settings:
 
     @property
     def client_bundle_bucket(self) -> str:
-        return os.environ.get("UNITY_CLIENT_BUNDLE_BUCKET", "unity-client-bundles")
+        return os.environ.get("UNIFY_CLIENT_BUNDLE_BUCKET", "unity-client-bundles")
 
     @property
     def image_registry(self) -> str:
@@ -411,11 +411,11 @@ class Settings:
     @property
     def vm_location_preflight_cache_ttl_seconds(self) -> float:
         ttl = float(
-            os.environ.get("UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300"),
+            os.environ.get("UNIFY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS", "300"),
         )
         if ttl <= 0:
             raise ValueError(
-                "UNITY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive",
+                "UNIFY_VM_LOCATION_PREFLIGHT_CACHE_TTL_SECONDS must be positive",
             )
         return ttl
 
@@ -450,7 +450,7 @@ class Settings:
         bucket name.
         """
         return os.environ.get(
-            "UNITY_MEET_SCREENSHARE_BUCKET",
+            "UNIFY_MEET_SCREENSHARE_BUCKET",
             "unity-recall-meet-screenshare",
         )
 

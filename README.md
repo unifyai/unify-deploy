@@ -61,7 +61,7 @@ This is why things broke silently for days: **the code says `unity-*` but the li
 
 - **GCP project IDs are immutable.** `gcp-project-vms` and `gcp-project-runtime` (display name still "Unity LiveKit") will keep the `unity` name forever unless we migrate to brand-new projects. Code intentionally keeps `vm_project_id = "gcp-project-vms"`.
 - **Service-account emails** embed the (immutable) project id, so `service-account@example.iam.gserviceaccount.com` stays.
-- **GKE cluster names** can't be renamed (recreate-only); the cluster is `unity`. Code is decoupled via `UNITY_GKE_CLUSTER_NAME` (default `unity`) / Cloud Build `_CLUSTER: 'unity'`.
+- **GKE cluster names** can't be renamed (recreate-only); the cluster is `unity`. Code is decoupled via `UNIFY_GKE_CLUSTER_NAME` (default `unity`) / Cloud Build `_CLUSTER: 'unity'`.
 
 ### Rename status by layer (as of 2026-06-24)
 
@@ -78,7 +78,7 @@ This is why things broke silently for days: **the code says `unity-*` but the li
 | **Windows** desktop pool (images, VMs, IPs, DNS) | ❌ entirely `unity-pool-windows-*` |
 | Pub/Sub fabric | ⚠️ ~84% still `unity-*` (1,334 topics / 5,198 subs vs 252 / 1,021 unity) |
 | Data buckets (recordings, logs, artifacts) | ⚠️ `unity-*` created empty; code partly still reads `unity-*` |
-| GitHub org secrets `UNITY_ADAPTERS_URL` / `UNITY_COMMS_URL` | ❌ still `unity`; workflows read `UNITY_*` → empty at runtime |
+| GitHub org secrets `UNIFY_ADAPTERS_URL` / `UNIFY_COMMS_URL` | ❌ still `unity`; workflows read `UNITY_*` → empty at runtime |
 | Secrets `UNITY_COORDINATOR_*`, `UNITY_{LIVEKIT,OPENAI,…}` | ⚠️ dual-written (`UNITY_COORDINATOR_*` added; comms/LLM still unity) |
 | GCP project IDs / SA emails / cluster name | ❌ immutable — `unity` forever |
 
@@ -182,7 +182,7 @@ After adding a scope, wait a few minutes for propagation, then run `python3 depl
 
 **Pub/Sub:** infra topics `unity-ingest`, `unity-parse`, `unity-dead-letter` (+`-staging`); per-assistant `unity-<id>[-staging]` (new) and `unity-<id>[-staging]` (legacy) ⚠️. ~1,590 topics / ~6,222 subs total, ~84% still `unity-*`.
 
-**Secret Manager (names):** `UNITY_ADAPTERS_URL{,_PREVIEW,_STAGING}`, `UNITY_COMMS_URL{,_PREVIEW,_STAGING}` ⚠️, `UNITY_ADAPTERS_URL_{PRODUCTION,STAGING}`, plus provider/integration secrets (`ANTHROPIC_API_KEY`, `LIVEKIT_*`, `TWILIO_*`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `VM_WILDCARD_FULLCHAIN/PRIVKEY`, `gcp-sa-key`, `github-pat`, `DEVBOT_GITHUB_TOKEN` ⚠️ **dead here — the live copy is in `gcp-project-saas`, see [§7.5](#75-github-machine-account-credentials)**, …). Cluster runtime secret = `unity-secrets` (see §7).
+**Secret Manager (names):** `UNIFY_ADAPTERS_URL{,_PREVIEW,_STAGING}`, `UNIFY_COMMS_URL{,_PREVIEW,_STAGING}` ⚠️, `UNITY_ADAPTERS_URL_{PRODUCTION,STAGING}`, plus provider/integration secrets (`ANTHROPIC_API_KEY`, `LIVEKIT_*`, `TWILIO_*`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, `VM_WILDCARD_FULLCHAIN/PRIVKEY`, `gcp-sa-key`, `github-pat`, `DEVBOT_GITHUB_TOKEN` ⚠️ **dead here — the live copy is in `gcp-project-saas`, see [§7.5](#75-github-machine-account-credentials)**, …). Cluster runtime secret = `unity-secrets` (see §7).
 
 ### 4.2 `gcp-project-vms` — desktop VM pool
 
@@ -240,7 +240,7 @@ The hosted system spans three code areas: **Orchestra** (API + DB), **unity-depl
 
 ### Idle pool management
 
-Target idle count: `max(UNITY_MIN_IDLE_JOBS, live_count // UNITY_IDLE_JOB_DEMAND_FACTOR)` (defaults 3 and 5). Three mechanisms share it:
+Target idle count: `max(UNIFY_MIN_IDLE_JOBS, live_count // UNIFY_IDLE_JOB_DEMAND_FACTOR)` (defaults 3 and 5). Three mechanisms share it:
 1. **Reactive fill** — on every inbound that consumes an idle job (`/scheduled/jobs/create`).
 2. **Deploy refresh** — every Cloud Build (`?refresh=true`) rotates the pool to the new image.
 3. **Hourly cron** — self-heal + rotation; cleanup 10 min later trims to target.
@@ -315,11 +315,11 @@ Rotate by adding a new SM **version**, then force sync + restart pods:
 kubectl annotate externalsecret unity-secrets -n staging force-sync=$(date +%s) --overwrite
 # then trigger a pool refresh so new pods pick it up
 ```
-Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides/UNITY_CLUSTER_SECRETS.md`](deploy/guides/UNITY_CLUSTER_SECRETS.md). Never `kubectl apply` hand-built secret YAML; never commit key material.
+Bootstrap, break-glass (`setup_k8s_config.py`), and ESO details: [`deploy/guides/UNIFY_CLUSTER_SECRETS.md`](deploy/guides/UNIFY_CLUSTER_SECRETS.md). Never `kubectl apply` hand-built secret YAML; never commit key material.
 
 ### 7.2 GitHub Actions secrets (CI)
 
-Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLONE_TOKEN`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, and ⚠️ `UNITY_ADAPTERS_URL`, `UNITY_COMMS_URL`. Org variables: `GCP_PROJECT_ID=gcp-project-saas`, `GCP_LOCATION=us-central1`, `GCP_BUCKET_*`. Per-repo additions are listed in [§8](#8-cicd-cloud-build-github-actions-branches). **CI mismatch:** workflows now read `UNITY_COMMS_URL`/`UNITY_ADAPTERS_URL` but only `UNITY_*` exist → empty at runtime (see [§9](#9-known-rename-loose-ends--gotchas)).
+Org `unifyai` secrets are inherited by all repos: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLONE_TOKEN`, `GCP_SERVICE_ACCOUNT_JSON`, `ORCHESTRA_ADMIN_KEY`, `UNIFY_KEY`, and ⚠️ `UNIFY_ADAPTERS_URL`, `UNIFY_COMMS_URL`. Org variables: `GCP_PROJECT_ID=gcp-project-saas`, `GCP_LOCATION=us-central1`, `GCP_BUCKET_*`. Per-repo additions are listed in [§8](#8-cicd-cloud-build-github-actions-branches). **CI mismatch:** workflows now read `UNIFY_COMMS_URL`/`UNIFY_ADAPTERS_URL` but only `UNITY_*` exist → empty at runtime (see [§9](#9-known-rename-loose-ends--gotchas)).
 
 ### 7.3 VM TLS secrets
 
@@ -476,7 +476,7 @@ This ordering was learned the hard way on 2026-08-11: this repo reached `main` a
 > for this: `tunnel_config.py` (tag/IP → `unity-tunnel-server*`), `vm_config.py` +
 > `vm_helpers.py` (per-OS pool prefix: Ubuntu `unity-pool-*`, Windows `unity-pool-*`;
 > Windows image family/tags → `unity-*`), and `unity` CI (`tests.yml`,
-> `llm-cache-refresh.yml`) read the real `UNITY_COMMS_URL` secret. The 2026-06-22
+> `llm-cache-refresh.yml`) read the real `UNIFY_COMMS_URL` secret. The 2026-06-22
 > production `assistant-session-controller` crash-loop was a **controller defect**
 > (the timer reconcile ran per-session GCP VM/disk ownership scans over ~110 terminal
 > sessions every interval, starving its liveness probe), **not** a name mismatch; fixed
@@ -490,7 +490,7 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 | 1 | **P0** | Tunnel fixes stranded on `staging` | `8b5097a9` (tunnel bucket/VM → `unity-*`) and `244ad103` (SFTP firewall band) are on `origin/staging` **not `origin/main`**. Prod `common/settings.py` may still point tunnel at non-existent `unity-tunnel-*`. **Merging `staging`→`main` is required** for these (but does **not** fix #2/#3 which are identical on both branches). |
 | 2 | **P0** | Pool image families (RESOLVED 2026-06-24) | Code wanted `unity-pool-ubuntu-vm`; only `unity-pool-ubuntu-vm` existed → 404 on every desktop provision → `assistant-session-controller` CrashLoop. Fixed by creating `unity-pool-*` families. **Keep the families fresh:** `build-ubuntu.sh`/`build-windows.sh` publish to them. |
 | 3 | **P0** | Archive bucket (RESOLVED 2026-06-24) | Code wanted `unity-assistant-archives`; only `unity-assistant-archives` existed → no cross-session file persistence. Fixed by bucket create + rsync (183 objects). |
-| 4 | **P1** | CI URL name split | RESOLVED (code aligned): `unity/tests.yml` + `unity/llm-cache-refresh.yml` now read the live `secrets.UNITY_COMMS_URL` instead of the non-existent `vars.UNITY_COMMS_URL`. Org secrets stay `UNITY_*` (no new resources). Re-check `unity-deploy/hosted-tests.yml` if it references these. |
+| 4 | **P1** | CI URL name split | RESOLVED (code aligned): `unity/tests.yml` + `unity/llm-cache-refresh.yml` now read the live `secrets.UNIFY_COMMS_URL` instead of the non-existent `vars.UNIFY_COMMS_URL`. Org secrets stay `UNITY_*` (no new resources). Re-check `unity-deploy/hosted-tests.yml` if it references these. |
 | 5 | **P1** | Orphaned GitHub environments | `unity` repo has `unity-testing` (full secret set) and `unity-llm-cache-refresh` superseded by `unity-testing` / `unity-llm-cache-refresh`. Migrate env-scoped secrets + delete the `unity-*` envs. |
 | 6 | **P1** | Stale Cloud Build triggers | Triggers bound to `repositories/unity` / `unity-deploy` (e.g. `adapters-unity-deploy`, `unity-comms-app-*`) fail at source-fetch (~3-6s, no steps) even though GitHub redirects the repo. Recreate as `unity-*` triggers against `repositories/unity` / `unity-deploy`. Compat files `cloudbuild/unity-comms-app*.yaml` exist for old trigger names. |
 | 7 | **P1** | Referenced-but-unconfigured secrets | `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (console build-arg), `TWILIO_*`/`LIVEKIT_*`/`GCP_SA_KEY` (unity-deploy `hosted-tests.yml`) are not configured → empty/skip. |
@@ -571,7 +571,7 @@ The full all-repo local stack (local Orchestra + Console + Coordinator + gateway
 | Guide | Topic |
 |---|---|
 | [`deploy/guides/ASSISTANT_DRAIN_RESTART.md`](deploy/guides/ASSISTANT_DRAIN_RESTART.md) | Graceful/force assistant drain, admission close, publish fan-out |
-| [`deploy/guides/UNITY_CLUSTER_SECRETS.md`](deploy/guides/UNITY_CLUSTER_SECRETS.md) | ESO bootstrap, `unity-secrets` rotation, break-glass |
+| [`deploy/guides/UNIFY_CLUSTER_SECRETS.md`](deploy/guides/UNIFY_CLUSTER_SECRETS.md) | ESO bootstrap, `unity-secrets` rotation, break-glass |
 | [`deploy/guides/GKE_EPHEMERAL_STORAGE.md`](deploy/guides/GKE_EPHEMERAL_STORAGE.md) | 10Gi Autopilot cap, `emptyDir` `/tmp`, HF/Docling caches |
 | [`deploy/guides/TELEMETRY.md`](deploy/guides/TELEMETRY.md) | Prometheus / Cloud Monitoring metrics pipeline |
 | [`deploy/guides/CALL_RECORDING.md`](deploy/guides/CALL_RECORDING.md) | Call recording storage + flow |

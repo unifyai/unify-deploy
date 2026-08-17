@@ -389,6 +389,10 @@ def build_unity_job_manifest(
         "UNITY_EGRESS_PROXY_USERNAME",
         "UNITY_EGRESS_PROXY_PASSWORD",
         "UNITY_EGRESS_PROXY_REGIONS",
+        "UNIFY_EGRESS_PROXY_SERVER",
+        "UNIFY_EGRESS_PROXY_USERNAME",
+        "UNIFY_EGRESS_PROXY_PASSWORD",
+        "UNIFY_EGRESS_PROXY_REGIONS",
     }
     unity_secret_env = []
     for key in (
@@ -460,6 +464,10 @@ def build_unity_job_manifest(
         # the only thing stating where that endpoint leaves from; without it
         # egressPolicy.ts refuses the session rather than guess.
         "UNITY_EGRESS_PROXY_REGIONS",
+        "UNIFY_EGRESS_PROXY_SERVER",
+        "UNIFY_EGRESS_PROXY_USERNAME",
+        "UNIFY_EGRESS_PROXY_PASSWORD",
+        "UNIFY_EGRESS_PROXY_REGIONS",
         "_UNITY_STARTUP_HOOK_GROUP",
         "_UNITY_STARTUP_HOOK_PACKAGE",
     ):
@@ -576,7 +584,7 @@ def build_unity_job_manifest(
             "name": "MEET_BRIDGE_PAGE_URL",
             "value": f"{SETTINGS.comms_url.rstrip('/')}/meet/bridge",
         },
-        # UNITY_WORKFLOWS_DIR is deliberately NOT set here.
+        # UNIFY_WORKFLOWS_DIR is deliberately NOT set here.
         #
         # It used to be, resolved from this process's own installed
         # unify_deploy — which lives at /app in the comms image and under

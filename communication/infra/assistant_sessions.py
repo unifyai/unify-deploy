@@ -51,8 +51,8 @@ _RELEASED_BINDINGS_HISTORY_LIMIT = 20
 SERVICE_URLS_SPEC_FIELD = "serviceUrls"
 _SERVICE_URL_ENV_BY_SPEC_KEY = {
     "orchestra": "ORCHESTRA_URL",
-    "comms": "UNITY_COMMS_URL",
-    "adapters": "UNITY_ADAPTERS_URL",
+    "comms": "UNIFY_COMMS_URL",
+    "adapters": "UNIFY_ADAPTERS_URL",
 }
 
 

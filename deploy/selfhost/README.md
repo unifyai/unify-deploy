@@ -501,12 +501,12 @@ change produces a different key and simply misses, falling through to a full
 sync; developer data is never captured, so `up` still purges it.
 
 The catalogue is provider metadata rather than anything install-specific, so one
-machine's snapshot seeds another. Point `UNITY_BUILTINS_CATALOG_URL` at an https
+machine's snapshot seeds another. Point `UNIFY_BUILTINS_CATALOG_URL` at an https
 location serving `<key>.sql.gz` and a first `up` on a new machine downloads the
 catalogue instead of syncing it.
 
 > A snapshot is SQL executed against the local database. Only point
-> `UNITY_BUILTINS_CATALOG_URL` at a location you control. Downloads are rejected
+> `UNIFY_BUILTINS_CATALOG_URL` at a location you control. Downloads are rejected
 > unless they contain nothing but `COPY` data blocks, which bounds a corrupt or
 > tampered file but does not replace trusting the host.
 

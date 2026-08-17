@@ -88,19 +88,19 @@ def _get_socket_subdir() -> str:
     """Determine the log subdirectory for test-related files.
 
     Returns a datetime-prefixed directory name for natural time-based ordering:
-        - UNITY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
-        - Falls back to UNITY_TEST_SOCKET for legacy compatibility
+        - UNIFY_LOG_SUBDIR if set (e.g., '2025-12-05T14-30-45_unity_dev_ttys042')
+        - Falls back to UNIFY_TEST_SOCKET for legacy compatibility
         - Derives terminal ID for direct pytest invocations (same as parallel_run.sh would)
     """
     import os
     from datetime import datetime
 
     # Prefer the datetime-prefixed log subdir if available
-    log_subdir = os.environ.get("UNITY_LOG_SUBDIR", "").strip()
+    log_subdir = os.environ.get("UNIFY_LOG_SUBDIR", "").strip()
     if log_subdir:
         return log_subdir
     # Fallback to socket name for backward compatibility
-    socket = os.environ.get("UNITY_TEST_SOCKET", "").strip()
+    socket = os.environ.get("UNIFY_TEST_SOCKET", "").strip()
     if socket:
         return socket
     # Derive terminal ID (same logic as _shell_common.sh) for direct pytest invocations
@@ -111,7 +111,7 @@ def _get_socket_subdir() -> str:
 def _get_repo_root() -> Path:
     """Determine the repository root directory.
 
-    Prefers UNITY_LOG_ROOT env var if set, allowing explicit worktree targeting.
+    Prefers UNIFY_LOG_ROOT env var if set, allowing explicit worktree targeting.
     Otherwise derives from this file's location, which correctly resolves to
     the worktree when running from one.
 
@@ -121,7 +121,7 @@ def _get_repo_root() -> Path:
     import os
 
     # Allow explicit override for flexibility
-    log_root = os.environ.get("UNITY_LOG_ROOT", "").strip()
+    log_root = os.environ.get("UNIFY_LOG_ROOT", "").strip()
     if log_root:
         return Path(log_root)
 
@@ -242,11 +242,11 @@ def _should_include_span(span: dict) -> bool:
     """Check if a span should be included based on SETTINGS filters.
 
     Filters:
-        - UNITY_TRACE_SERVICES: "all" or comma-separated list of services
-        - UNITY_TRACE_EXCLUDE_PATTERNS: comma-separated span name patterns to exclude
+        - UNIFY_TRACE_SERVICES: "all" or comma-separated list of services
+        - UNIFY_TRACE_EXCLUDE_PATTERNS: comma-separated span name patterns to exclude
     """
     # Service filter
-    services_setting = SETTINGS.UNITY_TRACE_SERVICES.strip().lower()
+    services_setting = SETTINGS.UNIFY_TRACE_SERVICES.strip().lower()
     if services_setting != "all":
         allowed_services = {s.strip() for s in services_setting.split(",") if s.strip()}
         span_service = (span.get("service") or "").lower()
@@ -254,7 +254,7 @@ def _should_include_span(span: dict) -> bool:
             return False
 
     # Exclusion pattern filter
-    exclude_setting = SETTINGS.UNITY_TRACE_EXCLUDE_PATTERNS.strip()
+    exclude_setting = SETTINGS.UNIFY_TRACE_EXCLUDE_PATTERNS.strip()
     if exclude_setting:
         exclude_patterns = [p.strip() for p in exclude_setting.split(",") if p.strip()]
         span_name = span.get("name") or ""
@@ -273,9 +273,9 @@ def _upload_trace_to_context(
     """Upload trace data from JSONL file to {TestContext}/Trace context.
 
     Controlled by SETTINGS:
-        - UNITY_TRACE_UPLOAD: Enable/disable upload entirely
-        - UNITY_TRACE_SERVICES: Filter by service (e.g., "unity" or "unity,orchestra")
-        - UNITY_TRACE_EXCLUDE_PATTERNS: Exclude spans matching patterns
+        - UNIFY_TRACE_UPLOAD: Enable/disable upload entirely
+        - UNIFY_TRACE_SERVICES: Filter by service (e.g., "unity" or "unity,orchestra")
+        - UNIFY_TRACE_EXCLUDE_PATTERNS: Exclude spans matching patterns
 
     Args:
         test_ctx: The test context path (e.g., tests/.../test_name/{user_id}/{assistant_id})
@@ -283,7 +283,7 @@ def _upload_trace_to_context(
         max_spans: Maximum number of spans to upload (default 1000 to avoid slow uploads)
     """
     # Check if upload is enabled
-    if not SETTINGS.UNITY_TRACE_UPLOAD:
+    if not SETTINGS.UNIFY_TRACE_UPLOAD:
         return
 
     if not trace_id:
@@ -834,7 +834,7 @@ def scenario_file_lock(lock_name: str, timeout: float | None = None):
         lock_name: Unique name for this scenario's lock file.
                    Will be created in system temp directory.
         timeout: Maximum seconds to wait for the lock. Defaults to
-                 SETTINGS.UNITY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
+                 SETTINGS.UNIFY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
 
     Raises:
         TimeoutError: If the lock cannot be acquired within the timeout.
@@ -850,7 +850,7 @@ def scenario_file_lock(lock_name: str, timeout: float | None = None):
                 seed_all_data()
     """
     if timeout is None:
-        timeout = SETTINGS.UNITY_FILE_LOCK_TIMEOUT
+        timeout = SETTINGS.UNIFY_FILE_LOCK_TIMEOUT
     lock_path = os.path.join(tempfile.gettempdir(), f"unity_{lock_name}.lock")
     lock_file = open(lock_path, "w")
     try:
@@ -880,7 +880,7 @@ def mutation_test_lock(lock_name: str, timeout: float | None = None):
         lock_name: Unique name for this lock (e.g., "cm_mutation").
                    Will be created in system temp directory.
         timeout: Maximum seconds to wait for the lock. Defaults to
-                 SETTINGS.UNITY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
+                 SETTINGS.UNIFY_FILE_LOCK_TIMEOUT (3600s / 1 hour).
 
     Raises:
         TimeoutError: If the lock cannot be acquired within the timeout.
@@ -894,7 +894,7 @@ def mutation_test_lock(lock_name: str, timeout: float | None = None):
                 yield cm, id_map
     """
     if timeout is None:
-        timeout = SETTINGS.UNITY_FILE_LOCK_TIMEOUT
+        timeout = SETTINGS.UNIFY_FILE_LOCK_TIMEOUT
     lock_path = os.path.join(tempfile.gettempdir(), f"unity_{lock_name}.lock")
     lock_file = open(lock_path, "w")
     try:

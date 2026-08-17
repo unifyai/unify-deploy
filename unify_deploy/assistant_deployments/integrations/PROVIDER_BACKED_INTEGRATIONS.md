@@ -100,7 +100,7 @@ Hosted staging and production use the Builtins artifacts job path owned by Cloud
   permission for `ORCHESTRA_ADMIN_KEY` and `GLOBAL_UNIFY_KEY`. Cloud Build does
   not grant or mutate secret IAM during deploy.
 - The job runs `scripts/seed_builtins_catalog.py` with the hosted integration
-  manifest and `UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
+  manifest and `UNIFY_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
 - Integration artifact materialization writes `IntegrationBootstrapState` as `running`,
   `success`, or `failed`.
 - The main Cloud Build starts artifact seeding and does not wait for artifact

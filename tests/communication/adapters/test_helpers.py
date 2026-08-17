@@ -1123,7 +1123,7 @@ def _stale_job(*, job_name: str, assistant_id: str, status: str = "running") -> 
     }
 
 
-@patch.dict(os.environ, {"UNITY_COMMS_URL": "http://comms.test"})
+@patch.dict(os.environ, {"UNIFY_COMMS_URL": "http://comms.test"})
 @patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")
@@ -1193,7 +1193,7 @@ def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
     ]
 
 
-@patch.dict(os.environ, {"UNITY_COMMS_URL": "http://comms.test"})
+@patch.dict(os.environ, {"UNIFY_COMMS_URL": "http://comms.test"})
 @patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")
@@ -1654,7 +1654,7 @@ def _stale_idle_job(*, job_name: str, image_hash: str) -> dict:
     return job
 
 
-@patch.dict(os.environ, {"UNITY_COMMS_URL": "http://comms.test"})
+@patch.dict(os.environ, {"UNIFY_COMMS_URL": "http://comms.test"})
 @patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")
@@ -1709,7 +1709,7 @@ def test_expire_all_stale_jobs_reaps_only_unclaimable_idle_members(
     assert result["cleaned_jobs"] == ["unity-idle-stale"]
 
 
-@patch.dict(os.environ, {"UNITY_COMMS_URL": "http://comms.test"})
+@patch.dict(os.environ, {"UNIFY_COMMS_URL": "http://comms.test"})
 @patch("adapters.helpers.assistant_has_active_call", return_value=False)
 @patch("adapters.helpers.requests.delete")
 @patch("adapters.helpers.requests.post")

@@ -20,7 +20,7 @@ from tests import fake_orchestra
 
 @pytest.fixture(autouse=True)
 def _embedded_client_mode(monkeypatch):
-    monkeypatch.setenv("UNITY_DEPLOY_CLIENT_MODE", "embedded")
+    monkeypatch.setenv("UNIFY_DEPLOY_CLIENT_MODE", "embedded")
 
 
 @pytest.fixture

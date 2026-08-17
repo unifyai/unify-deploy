@@ -18,8 +18,8 @@ set -euo pipefail
 #
 
 ENV="${1:-staging}"
-PROJECT_ID="${UNITY_OPENREPLAY_PROJECT_ID:-gcp-project-runtime}"
-ZONE="${UNITY_OPENREPLAY_ZONE:-us-central1-a}"
+PROJECT_ID="${UNIFY_OPENREPLAY_PROJECT_ID:-gcp-project-runtime}"
+ZONE="${UNIFY_OPENREPLAY_ZONE:-us-central1-a}"
 
 if [[ "${ENV}" == "production" ]]; then
   VM_NAME="unity-openreplay"
@@ -31,8 +31,8 @@ else
   ENVIRONMENT_LABEL="staging"
 fi
 
-MACHINE_TYPE="${UNITY_OPENREPLAY_MACHINE_TYPE:-n2-standard-2}"
-DISK_SIZE_GB="${UNITY_OPENREPLAY_DISK_GB:-100}"
+MACHINE_TYPE="${UNIFY_OPENREPLAY_MACHINE_TYPE:-n2-standard-2}"
+DISK_SIZE_GB="${UNIFY_OPENREPLAY_DISK_GB:-100}"
 
 # Governance labels required by the Vanta "GCE instances have required labels"
 # test; every instance must be created with all five. dataclassification is

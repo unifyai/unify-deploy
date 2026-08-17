@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 
 ENV="${1:-staging}"
-PROJECT_ID="${UNITY_OPENREPLAY_PROJECT_ID:-gcp-project-runtime}"
+PROJECT_ID="${UNIFY_OPENREPLAY_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
 
 if [[ "${ENV}" == "production" ]]; then

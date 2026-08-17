@@ -5147,7 +5147,7 @@ async def microsoft_router(request: Request):
     logger.info(f"routing {len(notifications)} notification(s)")
 
     # Route each notification to appropriate processor
-    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
+    adapters_url = os.getenv("UNIFY_ADAPTERS_URL", "http://localhost:8001")
 
     async with httpx.AsyncClient() as client:
         for notification in notifications:
@@ -5424,7 +5424,7 @@ async def microsoft_oauth_callback(request: Request):
                 status_code=400,
             )
 
-    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
+    redirect_uri = os.getenv("UNIFY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
 
     # ------------------------------------------------------------------
     # Exchange code → tokens
@@ -5669,7 +5669,7 @@ async def google_oauth_callback(request: Request):
             status_code=500,
         )
 
-    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/google/auth/callback"
+    redirect_uri = os.getenv("UNIFY_ADAPTERS_URL", "") + "/google/auth/callback"
 
     # Exchange code → tokens
     try:

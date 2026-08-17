@@ -41,11 +41,11 @@ spec:
             - "100"
             - --ack
             env:
-            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+            - name: UNIFY_GCP_PIPELINE_ENVIRONMENT
               value: "staging"
-            - name: UNITY_GCS_ARTIFACT_BUCKET
+            - name: UNIFY_GCS_ARTIFACT_BUCKET
               value: "unity-pipeline-artifacts-staging"
-            - name: UNITY_PUBSUB_PROJECT_ID
+            - name: UNIFY_PUBSUB_PROJECT_ID
               value: "gcp-project-runtime"
             - name: ORCHESTRA_URL
               value: "https://internal.example.com/v0"
@@ -92,11 +92,11 @@ spec:
             - "100"
             - --ack
             env:
-            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+            - name: UNIFY_GCP_PIPELINE_ENVIRONMENT
               value: "production"
-            - name: UNITY_GCS_ARTIFACT_BUCKET
+            - name: UNIFY_GCS_ARTIFACT_BUCKET
               value: "unity-pipeline-artifacts"
-            - name: UNITY_PUBSUB_PROJECT_ID
+            - name: UNIFY_PUBSUB_PROJECT_ID
               value: "gcp-project-runtime"
             - name: ORCHESTRA_URL
               value: "https://api.unify.ai/v0"

@@ -16,17 +16,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Determine current unity branch
-UNITY_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
+UNIFY_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
 
 # Select branch for sibling repos (main→main, otherwise→staging)
-if [[ "$UNITY_BRANCH" == "main" ]]; then
+if [[ "$UNIFY_BRANCH" == "main" ]]; then
     SIBLING_BRANCH="main"
 else
     SIBLING_BRANCH="staging"
 fi
 
 echo "=== Cloud Bootstrap ==="
-echo "Unity branch: $UNITY_BRANCH"
+echo "Unity branch: $UNIFY_BRANCH"
 echo "Sibling repos branch: $SIBLING_BRANCH"
 echo ""
 

@@ -528,9 +528,9 @@ def _upsert_scheduled_execution_task(
     if not SETTINGS.orchestra_admin_key:
         raise RuntimeError("ORCHESTRA_ADMIN_KEY must be configured")
     if request.delivery == "live" and not SETTINGS.adapters_url:
-        raise RuntimeError("UNITY_ADAPTERS_URL must be configured")
+        raise RuntimeError("UNIFY_ADAPTERS_URL must be configured")
     if request.delivery == "offline" and not SETTINGS.comms_url:
-        raise RuntimeError("UNITY_COMMS_URL must be configured")
+        raise RuntimeError("UNIFY_COMMS_URL must be configured")
 
     from google.cloud import tasks_v2
 
@@ -1674,10 +1674,15 @@ def _build_offline_runner_env(
         shared_kwargs.pop("requires_filesystem", None)
         shared_kwargs.pop("requires_computer", None)
         env = _build_offline_runner_env_shared(**shared_kwargs)
-        env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] = (
-            "1" if requires_filesystem else "0"
-        )
-        env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] = "1" if requires_computer else "0"
+        for suffix, value in (
+            ("REQUIRES_FILESYSTEM", "1" if requires_filesystem else "0"),
+            ("REQUIRES_COMPUTER", "1" if requires_computer else "0"),
+        ):
+            # Both names, for the same reason the contract emits both: this
+            # fallback exists precisely when the runner is an older image, and
+            # that image reads the UNITY_ spelling.
+            env[f"UNIFY_OFFLINE_TASK_{suffix}"] = value
+            env[f"UNITY_OFFLINE_TASK_{suffix}"] = value
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.

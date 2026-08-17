@@ -486,10 +486,10 @@ def queued_stale_age_seconds() -> int:
     """Min seconds a job may sit ``durable=queued`` before it is recoverable.
 
     Guards against prematurely "recovering" a freshly enqueued job whose ingest
-    message is still in flight. Tunable via ``UNITY_QUEUED_STALE_AGE_SECONDS``.
+    message is still in flight. Tunable via ``UNIFY_QUEUED_STALE_AGE_SECONDS``.
     """
     try:
-        return int(os.environ.get("UNITY_QUEUED_STALE_AGE_SECONDS", "900"))
+        return int(os.environ.get("UNIFY_QUEUED_STALE_AGE_SECONDS", "900"))
     except ValueError:
         return 900
 

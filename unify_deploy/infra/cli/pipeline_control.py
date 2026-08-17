@@ -432,9 +432,9 @@ def _apply_runtime_overrides(args: argparse.Namespace) -> None:
     env = getattr(args, "env", "") or ""
     project = getattr(args, "project", "") or ""
     if env:
-        os.environ["UNITY_GCP_PIPELINE_ENVIRONMENT"] = env
+        os.environ["UNIFY_GCP_PIPELINE_ENVIRONMENT"] = env
     if project:
-        os.environ["UNITY_PUBSUB_PROJECT_ID"] = project
+        os.environ["UNIFY_PUBSUB_PROJECT_ID"] = project
 
 
 def _init_infra(debug: bool = False):
@@ -859,7 +859,7 @@ def _verify_jobs(
 # duplicate-message lease/checkpoint race that silently under-ingests (the
 # fact_TelematicsTrips 166k/206,719 case). Markers older than the window are
 # treated as a lost message so recovery can proceed without --force.
-_INFLIGHT_GUARD_SECONDS = int(os.environ.get("UNITY_INFLIGHT_GUARD_SECONDS", "900"))
+_INFLIGHT_GUARD_SECONDS = int(os.environ.get("UNIFY_INFLIGHT_GUARD_SECONDS", "900"))
 
 
 def _recent_inflight_publish(job: Any, *, now: datetime | None = None) -> str | None:

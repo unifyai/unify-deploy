@@ -52,7 +52,7 @@ source "$SELF_HOST_COORDINATOR_ENV"
 SELF_HOST_CALLS_ENABLED="${SELF_HOST_CALLS_ENABLED:-1}"
 
 # Persistent self-host state (survives reboot; unlike /tmp).
-SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+SELF_HOST_STATE_DIR="${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 
 self_host_coordinator_runtime_file() {
   printf '%s/coordinator-runtime.json' "$SELF_HOST_STATE_DIR"
@@ -64,7 +64,7 @@ export_self_host_coordinator_runtime_file() {
 }
 
 default_self_host_workspace() {
-  printf '%s' "${UNITY_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
+  printf '%s' "${UNIFY_LOCAL_ROOT:-$SELF_HOST_DEFAULT_WORKSPACE}"
 }
 
 ensure_self_host_workspace_dir() {
@@ -76,21 +76,21 @@ ensure_self_host_workspace_dir() {
 self_host_export_coordinator_contact_env() {
   # The local Coordinator uses fixed, shared contact identities so every
   # developer's localhost deployment converges on the same Twin contact rows.
-  export UNITY_COORDINATOR_EMAIL_ADDRESS="$SELF_HOST_COORDINATOR_EMAIL_ADDRESS"
-  export ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS="${ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS:-$UNITY_COORDINATOR_EMAIL_ADDRESS}"
+  export UNIFY_COORDINATOR_EMAIL_ADDRESS="$SELF_HOST_COORDINATOR_EMAIL_ADDRESS"
+  export ORCHESTRA_UNIFY_COORDINATOR_EMAIL_ADDRESS="${ORCHESTRA_UNIFY_COORDINATOR_EMAIL_ADDRESS:-$UNIFY_COORDINATOR_EMAIL_ADDRESS}"
 
-  export UNITY_COORDINATOR_PHONE_US="$SELF_HOST_COORDINATOR_PHONE_US"
-  export ORCHESTRA_UNITY_COORDINATOR_PHONE_US="${ORCHESTRA_UNITY_COORDINATOR_PHONE_US:-$UNITY_COORDINATOR_PHONE_US}"
-  export UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY="$SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY"
-  export ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY="${ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY:-$UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY}"
+  export UNIFY_COORDINATOR_PHONE_US="$SELF_HOST_COORDINATOR_PHONE_US"
+  export ORCHESTRA_UNIFY_COORDINATOR_PHONE_US="${ORCHESTRA_UNIFY_COORDINATOR_PHONE_US:-$UNIFY_COORDINATOR_PHONE_US}"
+  export UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY="$SELF_HOST_COORDINATOR_DEFAULT_PHONE_COUNTRY"
+  export ORCHESTRA_UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY="${ORCHESTRA_UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY:-$UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY}"
 
-  export UNITY_COORDINATOR_PHONE="${SELF_HOST_COORDINATOR_PHONE:-$UNITY_COORDINATOR_PHONE_US}"
+  export UNITY_COORDINATOR_PHONE="${SELF_HOST_COORDINATOR_PHONE:-$UNIFY_COORDINATOR_PHONE_US}"
   export ASSISTANT_NUMBER="$UNITY_COORDINATOR_PHONE"
   export COMMS_BRIDGE_SMS_NUMBER="$UNITY_COORDINATOR_PHONE"
 
-  export UNITY_COORDINATOR_WHATSAPP_NUMBER="$SELF_HOST_COORDINATOR_WHATSAPP_NUMBER"
-  export ASSISTANT_WHATSAPP_NUMBER="$UNITY_COORDINATOR_WHATSAPP_NUMBER"
-  export COMMS_BRIDGE_WHATSAPP_NUMBER="$UNITY_COORDINATOR_WHATSAPP_NUMBER"
+  export UNIFY_COORDINATOR_WHATSAPP_NUMBER="$SELF_HOST_COORDINATOR_WHATSAPP_NUMBER"
+  export ASSISTANT_WHATSAPP_NUMBER="$UNIFY_COORDINATOR_WHATSAPP_NUMBER"
+  export COMMS_BRIDGE_WHATSAPP_NUMBER="$UNIFY_COORDINATOR_WHATSAPP_NUMBER"
 }
 
 self_host_export_coordinator_contact_env
@@ -116,12 +116,12 @@ skip = {
     "UNIFY_KEY",
     "unify_key",
     "ORCHESTRA_URL",
-    "UNITY_COMMS_URL",
-    "UNITY_ADAPTERS_URL",
-    # Self-host always runs with Console, so the stack forces UNITY_CONSOLE_UI=on
+    "UNIFY_COMMS_URL",
+    "UNIFY_ADAPTERS_URL",
+    # Self-host always runs with Console, so the stack forces UNIFY_CONSOLE_UI=on
     # (see stack.sh / service.sh). Ignore the public unity/.env value, which is
     # the headless-install default, so it can't clobber the stack's export.
-    "UNITY_CONSOLE_UI",
+    "UNIFY_CONSOLE_UI",
 }
 if os.environ.get("SELF_HOST_SKIP_LIVEKIT_ENV_KEYS", "") == "1":
     skip.update(
@@ -170,7 +170,7 @@ self_host_export_comms_sa() {
   # the self-host state dir (~/.unity by default) and never written to a repo.
   # No-op when absent, so the default fully-local stack is unchanged.
   local sa_file
-  sa_file="${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/comms_sa.json}"
+  sa_file="${SELF_HOST_COMMS_SA_FILE:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/comms_sa.json}"
   if [[ ! -f "$sa_file" ]]; then
     return 0
   fi
@@ -187,7 +187,7 @@ self_host_export_comms_twilio() {
   # bridge can poll inbound. Read only from the self-host state dir; never
   # written to a repo. No-op when absent, so the default stack is unchanged.
   local twilio_file
-  twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/comms_twilio.env}"
+  twilio_file="${SELF_HOST_COMMS_TWILIO_FILE:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/comms_twilio.env}"
   [[ -f "$twilio_file" ]] || return 0
   load_self_host_env_file "$twilio_file"
   # Twilio credentials live in the local state file; Coordinator numbers come
@@ -217,7 +217,7 @@ self_host_pipedream_connect_configured() {
 }
 
 self_host_load_state_env_overlay() {
-  local state_env="${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/.env"
+  local state_env="${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/.env"
   [[ -f "$state_env" ]] || return 0
   load_self_host_env_file "$state_env"
 }
@@ -245,7 +245,7 @@ self_host_validate_provider_trigger_config() {
 self_host_export_provider_trigger_env() {
   self_host_provider_triggers_enabled || return 0
   export SELF_HOST=1
-  export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/provider-event-blobs}"
+  export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/provider-event-blobs}"
   mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
   [[ -n "${COMPOSIO_API_KEY:-}" ]] && export COMPOSIO_API_KEY
   [[ -n "${COMPOSIO_WEBHOOK_SECRET:-}" ]] && export COMPOSIO_WEBHOOK_SECRET
@@ -259,7 +259,7 @@ self_host_export_provider_trigger_env() {
 
 self_host_livekit_cloud_file() {
   printf '%s' \
-    "${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
+    "${SELF_HOST_LIVEKIT_CLOUD_FILE:-${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}/livekit_cloud.env}"
 }
 
 self_host_export_livekit_cloud() {
@@ -319,19 +319,19 @@ self_host_apply_user_desktops_export() {
 
 append_self_host_unity_runtime_env() {
   local -n _target_array="$1"
-  local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNITY_ENV_FILE:-${UNITY_REPO:-}/.env}}}"
+  local env_file="${2:-${SELF_HOST_ENV_FILE:-${UNIFY_ENV_FILE:-${UNIFY_REPO:-}/.env}}}"
   load_self_host_repo_env_file "$env_file"
 
   local workspace
   workspace="$(default_self_host_workspace)"
   ensure_self_host_workspace_dir
-  _target_array+=("UNITY_LOCAL_ROOT=$workspace")
+  _target_array+=("UNIFY_LOCAL_ROOT=$workspace")
   _target_array+=(
-    "UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=${UNITY_CONVERSATION_LOCAL_COMMS_ENABLED:-true}"
-    "UNITY_CONVERSATION_LOCAL_COMMS_MODE=${UNITY_CONVERSATION_LOCAL_COMMS_MODE:-local}"
-    "UNITY_CONVERSATION_LOCAL_COMMS_HOST=${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
-    "UNITY_CONVERSATION_LOCAL_COMMS_PORT=${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
-    "UNITY_GATEWAY_LOG_LEVEL=${UNITY_GATEWAY_LOG_LEVEL:-debug}"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED=${UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED:-true}"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_MODE=${UNIFY_CONVERSATION_LOCAL_COMMS_MODE:-local}"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_HOST=${UNIFY_CONVERSATION_LOCAL_COMMS_HOST:-127.0.0.1}"
+    "UNIFY_CONVERSATION_LOCAL_COMMS_PORT=${UNIFY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+    "UNIFY_GATEWAY_LOG_LEVEL=${UNIFY_GATEWAY_LOG_LEVEL:-debug}"
     "PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}"
   )
 
@@ -343,22 +343,22 @@ append_self_host_unity_runtime_env() {
   # with reasoning — land in a per-repo logs/<repo>/ dir. All are opt-out: any
   # value exported beforehand wins. Orchestra runs as a separate process; its
   # equivalent dirs are set where it is launched (console start_orchestra).
-  local _unity_repo_root="${UNITY_REPO_PATH:-${UNITY_REPO:-}}"
+  local _unity_repo_root="${UNIFY_REPO_PATH:-${UNIFY_REPO:-}}"
   if [[ -n "$_unity_repo_root" ]]; then
-    local _otel_log_dir="${UNITY_OTEL_LOG_DIR:-$_unity_repo_root/logs/all}"
+    local _otel_log_dir="${UNIFY_OTEL_LOG_DIR:-$_unity_repo_root/logs/all}"
     mkdir -p \
       "$_otel_log_dir" \
       "$_unity_repo_root/logs/unify" \
       "$_unity_repo_root/logs/unisdk" \
       "$_unity_repo_root/logs/unillm" 2>/dev/null || true
     _target_array+=(
-      "UNITY_OTEL=${UNITY_OTEL:-true}"
+      "UNIFY_OTEL=${UNIFY_OTEL:-true}"
       "UNISDK_OTEL=${UNISDK_OTEL:-true}"
       "UNILLM_OTEL=${UNILLM_OTEL:-true}"
-      "UNITY_OTEL_LOG_DIR=$_otel_log_dir"
+      "UNIFY_OTEL_LOG_DIR=$_otel_log_dir"
       "UNISDK_OTEL_LOG_DIR=${UNISDK_OTEL_LOG_DIR:-$_otel_log_dir}"
       "UNILLM_OTEL_LOG_DIR=${UNILLM_OTEL_LOG_DIR:-$_otel_log_dir}"
-      "UNITY_LOG_DIR=${UNITY_LOG_DIR:-$_unity_repo_root/logs/unify}"
+      "UNIFY_LOG_DIR=${UNIFY_LOG_DIR:-$_unity_repo_root/logs/unify}"
       "UNISDK_LOG_DIR=${UNISDK_LOG_DIR:-$_unity_repo_root/logs/unisdk}"
       "UNILLM_LOG_DIR=${UNILLM_LOG_DIR:-$_unity_repo_root/logs/unillm}"
     )
@@ -377,17 +377,17 @@ append_self_host_unity_runtime_env() {
       _target_array+=("$_livekit_key=${!_livekit_key}")
     fi
   done
-  if [[ -n "${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}" ]]; then
+  if [[ -n "${UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL:-}" ]]; then
     _target_array+=(
-      "UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=${UNITY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}"
+      "UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL=${UNIFY_CONVERSATION_LOCAL_COMMS_PUBLIC_URL}"
     )
   fi
 
   local key val
   for key in \
-    UNITY_WEB_TAVILY_API_KEY \
-    UNITY_WEB_ENABLED \
-    UNITY_ACTOR_ANTICAPTCHA_KEY \
+    UNIFY_WEB_TAVILY_API_KEY \
+    UNIFY_WEB_ENABLED \
+    UNIFY_ACTOR_ANTICAPTCHA_KEY \
     ANTICAPTCHA_KEY \
     UNIFY_MODEL \
     OPENAI_API_KEY \

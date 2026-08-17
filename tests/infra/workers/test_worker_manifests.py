@@ -99,7 +99,7 @@ def test_comms_deploy_carries_the_pipeline_backends_the_control_plane_probes() -
 
     ``/infra/pipeline/health`` answers ``ok`` only when both the artifact
     bucket and the Pub/Sub project resolve, and assistants read that answer to
-    decide whether a fleet exists at all. Without ``UNITY_PUBSUB_PROJECT_ID``
+    decide whether a fleet exists at all. Without ``UNIFY_PUBSUB_PROJECT_ID``
     the project stayed empty, health reported unusable, and every file
     ingestion parsed in the assistant's own process instead of dispatching --
     the one boundary the tier rule exists to hold. This caught that omission
@@ -122,14 +122,14 @@ def test_comms_deploy_carries_the_pipeline_backends_the_control_plane_probes() -
         ),
     ]:
         worker = (ROOT / worker_manifest).read_text()
-        bucket = _manifest_env_value(worker, "UNITY_GCS_ARTIFACT_BUCKET")
-        environment = _manifest_env_value(worker, "UNITY_GCP_PIPELINE_ENVIRONMENT")
-        project = _manifest_env_value(worker, "UNITY_PUBSUB_PROJECT_ID")
+        bucket = _manifest_env_value(worker, "UNIFY_GCS_ARTIFACT_BUCKET")
+        environment = _manifest_env_value(worker, "UNIFY_GCP_PIPELINE_ENVIRONMENT")
+        project = _manifest_env_value(worker, "UNIFY_PUBSUB_PROJECT_ID")
 
         text = (ROOT / relative_path).read_text()
-        assert f"UNITY_GCS_ARTIFACT_BUCKET={bucket}" in text
-        assert f"UNITY_GCP_PIPELINE_ENVIRONMENT={environment}" in text
-        assert "UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}" in text
+        assert f"UNIFY_GCS_ARTIFACT_BUCKET={bucket}" in text
+        assert f"UNIFY_GCP_PIPELINE_ENVIRONMENT={environment}" in text
+        assert "UNIFY_PUBSUB_PROJECT_ID=${PROJECT_ID}" in text
         # ``${PROJECT_ID}`` is the build's own project, which is where the
         # workers' topics live; pinning the literal here would drift instead.
         assert project == "gcp-project-runtime"

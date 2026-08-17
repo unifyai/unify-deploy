@@ -319,7 +319,7 @@ def _stack_subprocess_env() -> dict[str, str]:
         "COMMUNICATION_REPO_PATH",
         str(_resolve_sibling_repo("communication")),
     )
-    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unify")))
+    env.setdefault("UNIFY_REPO_PATH", str(_resolve_sibling_repo("unify")))
     env.setdefault("CONSOLE_REPO_PATH", str(_resolve_sibling_repo("console")))
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     # Keep Orchestra alive for the full pytest session; local.sh defaults to 600s.
@@ -1457,11 +1457,11 @@ def local_stack_urls() -> LocalStackUrls:
     )
     adapters_url = os.getenv(
         "TEST_ADAPTERS_URL",
-        config_values.get("UNITY_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
+        config_values.get("UNIFY_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
     ).rstrip("/")
     comms_url = os.getenv(
         "TEST_COMMS_APP_URL",
-        config_values.get("UNITY_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
+        config_values.get("UNIFY_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
     ).rstrip("/")
     pubsub_emulator_host = os.getenv(
         "PUBSUB_EMULATOR_HOST",

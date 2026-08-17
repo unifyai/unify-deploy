@@ -80,7 +80,7 @@ _FM_CONTEXTS = (
     "Functions/Meta",
 )
 
-_UNITY_DEPLOY_TEST_VENV = """
+_UNIFY_DEPLOY_TEST_VENV = """
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
@@ -149,13 +149,13 @@ dependencies = []
     # registered functions. FunctionManager correctly treats that as an
     # external import boundary for registration, even though the integration
     # suite only checks add_functions here and does not execute these callables.
-    "employment_hero": _UNITY_DEPLOY_TEST_VENV,
-    "hubspot": _UNITY_DEPLOY_TEST_VENV,
-    "matterport": _UNITY_DEPLOY_TEST_VENV,
-    "salesforce": _UNITY_DEPLOY_TEST_VENV,
-    "salto_ks": _UNITY_DEPLOY_TEST_VENV,
-    "valos": _UNITY_DEPLOY_TEST_VENV,
-    "webex": _UNITY_DEPLOY_TEST_VENV,
+    "employment_hero": _UNIFY_DEPLOY_TEST_VENV,
+    "hubspot": _UNIFY_DEPLOY_TEST_VENV,
+    "matterport": _UNIFY_DEPLOY_TEST_VENV,
+    "salesforce": _UNIFY_DEPLOY_TEST_VENV,
+    "salto_ks": _UNIFY_DEPLOY_TEST_VENV,
+    "valos": _UNIFY_DEPLOY_TEST_VENV,
+    "webex": _UNIFY_DEPLOY_TEST_VENV,
 }
 
 

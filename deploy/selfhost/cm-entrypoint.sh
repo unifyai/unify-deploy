@@ -66,38 +66,38 @@ build_cm_env() {
   export EVENTBUS_PUBSUB_STREAMING="${EVENTBUS_PUBSUB_STREAMING:-true}"
   export EVENTBUS_ORCHESTRA_PERSIST_MODE="${EVENTBUS_ORCHESTRA_PERSIST_MODE:-allowlist}"
   export EVENTBUS_ORCHESTRA_PERSIST_TOOLS="${EVENTBUS_ORCHESTRA_PERSIST_TOOLS:-act,execute_code,execute_function}"
-  export UNITY_LOCAL_SCHEDULER="${UNITY_LOCAL_SCHEDULER:-true}"
+  export UNIFY_LOCAL_SCHEDULER="${UNIFY_LOCAL_SCHEDULER:-true}"
   export GRPC_VERBOSITY="${GRPC_VERBOSITY:-ERROR}"
-  export UNITY_RUNTIME_OWNER="${UNITY_RUNTIME_OWNER:-compose}"
-  export UNITY_DESKTOP_SHARED_MOUNT="${UNITY_DESKTOP_SHARED_MOUNT:-1}"
-  export UNITY_LOCAL_ROOT="${UNITY_LOCAL_ROOT:-/Unity/Local}"
+  export UNIFY_RUNTIME_OWNER="${UNIFY_RUNTIME_OWNER:-compose}"
+  export UNIFY_DESKTOP_SHARED_MOUNT="${UNIFY_DESKTOP_SHARED_MOUNT:-1}"
+  export UNIFY_LOCAL_ROOT="${UNIFY_LOCAL_ROOT:-/Unity/Local}"
 
   # The curated workflow catalogue ships inside unify_deploy; resolving
   # it here (rather than hardcoding a path) survives editable installs,
   # wheels, and image layout changes alike. Empty means no shelf: unify
   # skips the WorkflowManager entirely.
-  if [ -z "${UNITY_WORKFLOWS_DIR:-}" ]; then
-    UNITY_WORKFLOWS_DIR="$(python3 -c 'from unify_deploy.assistant_deployments.workflows import workflows_root; print(workflows_root())' 2>/dev/null || true)"
+  if [ -z "${UNIFY_WORKFLOWS_DIR:-}" ]; then
+    UNIFY_WORKFLOWS_DIR="$(python3 -c 'from unify_deploy.assistant_deployments.workflows import workflows_root; print(workflows_root())' 2>/dev/null || true)"
   fi
-  export UNITY_WORKFLOWS_DIR
+  export UNIFY_WORKFLOWS_DIR
 
   export PUBSUB_EMULATOR_HOST="${PUBSUB_EMULATOR_HOST:-pubsub-emulator:8085}"
   export GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
   export ORCHESTRA_URL="${ORCHESTRA_URL:-http://orchestra:8000/v0}"
-  export UNITY_COMMS_URL="${UNITY_COMMS_URL:-http://gateway:8001}"
-  export UNITY_ADAPTERS_URL="${UNITY_ADAPTERS_URL:-http://gateway:8001}"
+  export UNIFY_COMMS_URL="${UNIFY_COMMS_URL:-http://gateway:8001}"
+  export UNIFY_ADAPTERS_URL="${UNIFY_ADAPTERS_URL:-http://gateway:8001}"
 
   # Files always parse off this process when a fleet is reachable, and here one
   # is: the ingestion worker services share the pipeline-artifacts volume with
   # the service fronting /infra/pipeline/*. Left unset, every file would parse
   # in-process instead -- which works, but rehearses none of the parse/ingest
   # process split the hosted stack runs.
-  export UNITY_INGESTION_PIPELINE_URL="${UNITY_INGESTION_PIPELINE_URL:-$UNITY_COMMS_URL}"
+  export UNIFY_INGESTION_PIPELINE_URL="${UNIFY_INGESTION_PIPELINE_URL:-$UNIFY_COMMS_URL}"
 
-  export UNITY_CONVERSATION_LOCAL_COMMS_ENABLED=true
-  export UNITY_CONVERSATION_LOCAL_COMMS_MODE=local
-  export UNITY_CONVERSATION_LOCAL_COMMS_HOST="${UNITY_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"
-  export UNITY_CONVERSATION_LOCAL_COMMS_PORT="${UNITY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
+  export UNIFY_CONVERSATION_LOCAL_COMMS_ENABLED=true
+  export UNIFY_CONVERSATION_LOCAL_COMMS_MODE=local
+  export UNIFY_CONVERSATION_LOCAL_COMMS_HOST="${UNIFY_CONVERSATION_LOCAL_COMMS_HOST:-0.0.0.0}"
+  export UNIFY_CONVERSATION_LOCAL_COMMS_PORT="${UNIFY_CONVERSATION_LOCAL_COMMS_PORT:-8787}"
 
   : "${LIVEKIT_URL:?LIVEKIT_URL must point at your LiveKit Cloud websocket URL}"
   : "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set}"

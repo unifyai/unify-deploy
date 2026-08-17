@@ -238,8 +238,8 @@ echo "  /Unity/.config, .local, .cache created for unityuser"
 
 # Shell config for unityuser desktop terminal sessions
 cat > /Unity/.bashrc << 'BASHRC'
-if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
-    export UNITY_SHELL_INIT=1
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNIFY_SHELL_INIT" ]]; then
+    export UNIFY_SHELL_INIT=1
     cd /Unity
 fi
 BASHRC
@@ -271,10 +271,10 @@ echo "VNC default password configured"
 # metadata is readable by every process on the VM, so a credential placed there
 # to reach them would be available to all of them for nothing.
 MAGNITUDE_URL="https://github.com/unifyai/magnitude.git"
-UNITY_URL="https://github.com/unifyai/unity.git"
+UNIFY_URL="https://github.com/unifyai/unity.git"
 case "$DEPLOY_ENV" in
-    staging) UNITY_BRANCH="staging" ;;
-    *) UNITY_BRANCH="main" ;;
+    staging) UNIFY_BRANCH="staging" ;;
+    *) UNIFY_BRANCH="main" ;;
 esac
 
 # =============================================================================
@@ -323,7 +323,7 @@ echo "=== Updating Agent Service ==="
 OBS_SCALING_POLICY_PATH="/unify/common/observation_scaling_policy.json"
 
 saved_hash=$(get_saved_commit_hash /agent-service)
-remote_hash=$(get_remote_commit_hash "$UNITY_URL" "$UNITY_BRANCH")
+remote_hash=$(get_remote_commit_hash "$UNIFY_URL" "$UNIFY_BRANCH")
 needs_update=true
 
 if [[ -f "/agent-service/package.json" && -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" && -f "$OBS_SCALING_POLICY_PATH" ]]; then
@@ -337,7 +337,7 @@ fi
 
 if [[ "$needs_update" == "true" ]]; then
     tmp_dir=$(mktemp -d)
-    git clone --depth 1 --branch "$UNITY_BRANCH" --filter=blob:none --sparse "$UNITY_URL" "$tmp_dir" 2>&1
+    git clone --depth 1 --branch "$UNIFY_BRANCH" --filter=blob:none --sparse "$UNIFY_URL" "$tmp_dir" 2>&1
     cd "$tmp_dir"
     git sparse-checkout set agent-service unify/common 2>&1
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")

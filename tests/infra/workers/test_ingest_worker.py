@@ -241,7 +241,7 @@ def test_guard_scratch_usage_ignores_filesystem_wide_tmp_stats(
         "gettempdir",
         fail_if_old_overlay_guard_is_used,
     )
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "10")
+    monkeypatch.setenv("UNIFY_INGEST_TMP_MAX_BYTES", "10")
 
     ingest_worker._guard_scratch_usage(
         scratch_dir=scratch_dir,
@@ -258,7 +258,7 @@ def test_guard_scratch_usage_raises_when_scratch_exceeds_threshold(
     scratch_dir = tmp_path / "ingest_run_large"
     scratch_dir.mkdir()
     (scratch_dir / "large.csv").write_bytes(b"abcdef")
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "5")
+    monkeypatch.setenv("UNIFY_INGEST_TMP_MAX_BYTES", "5")
 
     with pytest.raises(
         RuntimeError,
@@ -279,7 +279,7 @@ def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
     monkeypatch,
 ) -> None:
     """Cleanup may remove the scratch dir before the post-ingest guard runs."""
-    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "1")
+    monkeypatch.setenv("UNIFY_INGEST_TMP_MAX_BYTES", "1")
 
     ingest_worker._guard_scratch_usage(
         scratch_dir=tmp_path / "missing",
@@ -529,7 +529,7 @@ async def _run_completion_gate_message(
         ),
     )
     if max_retries_env is not None:
-        monkeypatch.setenv("UNITY_INGESTION_INCOMPLETE_MAX_RETRIES", max_retries_env)
+        monkeypatch.setenv("UNIFY_INGESTION_INCOMPLETE_MAX_RETRIES", max_retries_env)
     monkeypatch.setattr(worker_utils, "_shutdown_event", None)
     monkeypatch.setattr(ingest_worker, "_spawn_control_watcher", lambda *_a: _Watch())
     monkeypatch.setattr(ingest_worker, "_mark_ingest_running", lambda **_kwargs: None)

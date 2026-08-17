@@ -21,7 +21,7 @@ DEPLOY_ENV = "staging"
 @pytest.fixture(autouse=True)
 def _relay_config(monkeypatch):
     monkeypatch.setenv("RECALL_RELAY_SECRET", RELAY_SECRET)
-    monkeypatch.setenv("UNITY_MEET_SCREENSHARE_BUCKET", BUCKET)
+    monkeypatch.setenv("UNIFY_MEET_SCREENSHARE_BUCKET", BUCKET)
     monkeypatch.setenv("DEPLOY_ENV", DEPLOY_ENV)
 
 
@@ -341,7 +341,7 @@ def test_no_frame_reads_as_nobody_sharing() -> None:
 
 def test_an_unprovisioned_bucket_reads_as_nobody_sharing(monkeypatch) -> None:
     """A new environment must join meetings, just without shared screens."""
-    monkeypatch.setenv("UNITY_MEET_SCREENSHARE_BUCKET", "")
+    monkeypatch.setenv("UNIFY_MEET_SCREENSHARE_BUCKET", "")
     resp = _client().get(
         f"/meet/screenshare/unity_25_gmeet/focus.jpg?token={RELAY_SECRET}",
     )

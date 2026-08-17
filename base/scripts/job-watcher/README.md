@@ -100,5 +100,5 @@ Injected via `unity-config` (ConfigMap) and `unity-secrets` (Secret):
 | Variable | Source | Purpose |
 |---|---|---|
 | `ORCHESTRA_URL` | deployment manifest | Orchestra API base URL, used by `unify` SDK (differs per environment) |
-| `UNITY_COMMS_URL` | deployment manifest | Comms service base URL (differs per environment) |
+| `UNIFY_COMMS_URL` | deployment manifest | Comms service base URL (differs per environment) |
 | `ORCHESTRA_ADMIN_KEY` | unity-secrets | Auth for comms infra endpoints |

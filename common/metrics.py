@@ -102,7 +102,7 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
-UNITY_JOBS_RUNNING = Gauge(
+UNIFY_JOBS_RUNNING = Gauge(
     "unity_jobs_running",
     "Number of Unity K8s jobs with unity-status=running, "
     "sampled on every inventory call (webhook + scheduled).",
@@ -110,7 +110,7 @@ UNITY_JOBS_RUNNING = Gauge(
     multiprocess_mode="livemax",
 )
 
-UNITY_JOBS_IDLE = Gauge(
+UNIFY_JOBS_IDLE = Gauge(
     "unity_jobs_idle",
     "Number of Unity K8s jobs with unity-status=idle, "
     "sampled on every inventory call (webhook + scheduled).",

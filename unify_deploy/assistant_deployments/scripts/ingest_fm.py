@@ -62,13 +62,13 @@ def _dispatch_fm(
     bucket_name = settings.artifact_store.bucket
     if not project_id:
         logger.error(
-            "UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
+            "UNIFY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
             "GCP project via env or unset --dispatch to run in-process.",
         )
         return 2
     if not bucket_name:
         logger.error(
-            "UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
+            "UNIFY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
         )
         return 2
 

@@ -217,7 +217,7 @@ def ensure_deployment_runtime(
         reconcile_handle = RuntimeReconcileHandle(status=status)
 
     if resolved.console_config and os.environ.get(
-        "UNITY_DEPLOY_WAKE_CONSOLE_REPAIR",
+        "UNIFY_DEPLOY_WAKE_CONSOLE_REPAIR",
         "",
     ).lower() in {"1", "true", "yes"}:
         with _timed_hook_phase("sync_console_config"):

@@ -10,11 +10,11 @@ to a known-good steady state.
 | Setting | Production | Staging | Where |
 | --- | --- | --- | --- |
 | HPA `minReplicas`/`maxReplicas` | `1` / `20` | `1` / `15` | `ingest-worker-deployment*.yaml` |
-| `UNITY_INGEST_ATTEMPT_LEASE_TTL` | `480`s | `480`s | `ingest-worker-deployment*.yaml` |
-| `UNITY_INGEST_LEASE_MAX_LIFETIME_S` (code default) | `1800`s | `1800`s | `entrypoint_ingest._lease_lifetime_cap` |
-| `UNITY_QUEUED_STALE_AGE_SECONDS` (code default) | `900`s | `900`s | `pipeline_observability.queued_stale_age_seconds` |
+| `UNIFY_INGEST_ATTEMPT_LEASE_TTL` | `480`s | `480`s | `ingest-worker-deployment*.yaml` |
+| `UNIFY_INGEST_LEASE_MAX_LIFETIME_S` (code default) | `1800`s | `1800`s | `entrypoint_ingest._lease_lifetime_cap` |
+| `UNIFY_QUEUED_STALE_AGE_SECONDS` (code default) | `900`s | `900`s | `pipeline_observability.queued_stale_age_seconds` |
 
-The code default for `UNITY_INGEST_ATTEMPT_LEASE_TTL` is `480` and matches the
+The code default for `UNIFY_INGEST_ATTEMPT_LEASE_TTL` is `480` and matches the
 manifests; the env var is the single source of truth in the cluster.
 
 ## Backfill mode (pin the fleet)
@@ -37,7 +37,7 @@ steadier throughput and avoids churn.
 
    ```bash
    kubectl -n production set env deploy/unity-ingest-worker \
-     UNITY_INGEST_ATTEMPT_LEASE_TTL=480
+     UNIFY_INGEST_ATTEMPT_LEASE_TTL=480
    ```
 
 3. Monitor throughput from durable checkpoints (immune to worker log spam):
@@ -94,16 +94,16 @@ A non-zero exit means at least one table's checkpoint is short of its declared
 - **running-stale / queued-stale "limbo"**: the `stale-reconciler` CronJob
   (`reconcile-stale --execute`, every 15m) republishes from the parse outbox /
   checkpoints. `queued-stale` only triggers after
-  `UNITY_QUEUED_STALE_AGE_SECONDS` so a freshly-dispatched job whose message is
+  `UNIFY_QUEUED_STALE_AGE_SECONDS` so a freshly-dispatched job whose message is
   still in flight is never prematurely recovered.
 - **Duplicate live attempt**: deferred until just after the holder's lease is
   stealable (expiry + steal-grace + buffer), bounded by
-  `UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS`.
+  `UNIFY_DUPLICATE_DEFER_MAX_ATTEMPTS`.
 
 ### Do not run `retry` and `recover-stale` concurrently
 
 Both publish ingest messages. Running them at the same time on the same job
 creates the duplicate-message lease/checkpoint race that can silently
-under-ingest. The in-flight publish guard (`UNITY_INFLIGHT_GUARD_SECONDS`) skips
+under-ingest. The in-flight publish guard (`UNIFY_INFLIGHT_GUARD_SECONDS`) skips
 a second publish within the window unless `--force` is passed — do not override
 it without confirming no message is in flight.

@@ -105,7 +105,7 @@ The egress is started via `start_room_egress()` in `unify/gateway/common/livekit
 - **Format:** MP3 (audio-only, `file_type=3`)
 - **Mixing:** Room Composite — all audio tracks in the room are mixed into a single file
 - **Upload target:** GCS bucket via `GCPUpload` with credentials from `GCP_SA_KEY`
-- **Webhook:** On completion, LiveKit calls `{UNITY_ADAPTERS_URL}/livekit/recording-complete?assistant_id=X&room_name=Y`, signed with `LIVEKIT_API_KEY`
+- **Webhook:** On completion, LiveKit calls `{UNIFY_ADAPTERS_URL}/livekit/recording-complete?assistant_id=X&room_name=Y`, signed with `LIVEKIT_API_KEY`
 
 `start_room_egress` refuses to start in three cases, each of which would otherwise produce a broken or duplicate recording:
 
@@ -343,7 +343,7 @@ attendees of a meeting we joined.
 
 ## Self-Host Divergence
 
-The self-hosted single-process stack does **not** use the flow above. It keeps its own egress helper in `unify/conversation_manager/local_providers/livekit.py`, started from `local_ingress.py`, because its completion webhook must land on `/local/livekit/recording-complete` — a route only the local ingress serves. The gateway always points completion webhooks at `UNITY_ADAPTERS_URL`, which in self-host resolves to the gateway itself (no such route), so routing self-host recording through `/phone/start-recording` would upload a file whose completion event nobody receives.
+The self-hosted single-process stack does **not** use the flow above. It keeps its own egress helper in `unify/conversation_manager/local_providers/livekit.py`, started from `local_ingress.py`, because its completion webhook must land on `/local/livekit/recording-complete` — a route only the local ingress serves. The gateway always points completion webhooks at `UNIFY_ADAPTERS_URL`, which in self-host resolves to the gateway itself (no such route), so routing self-host recording through `/phone/start-recording` would upload a file whose completion event nobody receives.
 
 `_start_session_recording` therefore returns early when `LOCAL_COMMS_ENABLED` is set (or `LOCAL_COMMS_MODE == "local"`), leaving the local ingress in charge.
 
@@ -395,8 +395,8 @@ No recording playback surface exists yet. `CallPill.recordingUrl` is declared bu
 | `LIVEKIT_API_KEY` | comms app + adapters | LiveKit API key — used to start egress and verify webhook signatures |
 | `LIVEKIT_API_SECRET` | comms app + adapters | LiveKit API secret — used alongside `LIVEKIT_API_KEY` |
 | `LIVEKIT_URL` | comms app + adapters | LiveKit server URL |
-| `UNITY_ADAPTERS_URL` | comms app | Public URL of the adapters service — the base for the egress completion webhook |
-| `UNITY_COMMS_URL` | assistant runtime | Public URL of the comms gateway — where `start_call_recording()` POSTs |
+| `UNIFY_ADAPTERS_URL` | comms app | Public URL of the adapters service — the base for the egress completion webhook |
+| `UNIFY_COMMS_URL` | assistant runtime | Public URL of the comms gateway — where `start_call_recording()` POSTs |
 | `GCP_PROJECT_ID` | adapters | GCP project ID — used for Pub/Sub topic path construction |
 | `DEPLOY_ENV` | comms app | Object prefix: `staging` / `production` / `preview` |
 
@@ -418,7 +418,7 @@ For recording to work end-to-end, the following must be true:
 
 2. **`GCP_SA_KEY`** must be set on both the adapters and communication Cloud Run services. This is a GCS service account JSON string with write permissions on the `unity-call-recordings` bucket. This is the same key already used by the adapters for other GCS operations (message attachments, Gmail).
 
-3. **`UNITY_ADAPTERS_URL` must be publicly reachable** from LiveKit's infrastructure, so the egress completion webhook can reach `/livekit/recording-complete` on the adapters.
+3. **`UNIFY_ADAPTERS_URL` must be publicly reachable** from LiveKit's infrastructure, so the egress completion webhook can reach `/livekit/recording-complete` on the adapters.
 
 4. **The `/livekit/recording-complete` adapter endpoint** has no application-level auth beyond LiveKit's own webhook signing (verified via `WebhookReceiver`/`TokenVerifier`). If there's infrastructure-level auth (API gateway, load balancer) that blocks unauthenticated requests to the adapters service, the webhook will be rejected.
 

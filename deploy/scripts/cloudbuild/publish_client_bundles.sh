@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ENVIRONMENT="${1:-staging}"
-BUCKET="${UNITY_CLIENT_BUNDLE_BUCKET:-unity-client-bundles}"
+BUCKET="${UNIFY_CLIENT_BUNDLE_BUCKET:-unity-client-bundles}"
 SHA="${2:-$(git rev-parse HEAD)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"

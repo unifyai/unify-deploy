@@ -310,7 +310,7 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "unity-seed-builtins-staging" in script
     assert "unity-seed-builtins" in script
     assert "--integration-bootstrap-manifest" in script
-    assert "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api" in script
+    assert "UNIFY_INTEGRATION_BOOTSTRAP_EXECUTOR=api" in script
     assert "storage cp" not in script
     assert "--request-gcs-uri" not in script
     assert "orchestra.workers.builtins_artifacts_seed_job" not in script

@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 import requests
 
-from communication.infra.vm_config import pool_target_idle
+from communication.infra.vm_config import POOL_TARGET_IDLE as VM_POOL_TARGET_IDLE
 
 from .conftest import (
     ADAPTERS_URL,
@@ -69,7 +69,7 @@ pytestmark = [pytest.mark.integration]
 print = integration_print
 
 _STRESS_IDLE_CONTAINER_TARGET = 3
-_STRESS_IDLE_VM_TARGET = pool_target_idle("ubuntu")
+_STRESS_IDLE_VM_TARGET = VM_POOL_TARGET_IDLE
 _STRESS_SETUP_CLEANUP_TIMEOUT_SECONDS = 60
 _STRESS_FAST_TEARDOWN_TIMEOUT_SECONDS = 30
 _STRESS_CLEANUP_PARALLELISM = 6

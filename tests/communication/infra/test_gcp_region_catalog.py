@@ -137,7 +137,7 @@ def test_vm_ref_rejects_a_region_that_disagrees_with_its_pool_location():
                 "poolLocation": "europe-southwest1",
                 "region": "us-central1",
                 "zone": "europe-southwest1-a",
-            }
+            },
         )
 
 

@@ -74,8 +74,8 @@ jobs:
       TEST_GCP_PROJECT_ID: gcp-project-runtime
       TEST_VM_PROJECT_ID: gcp-project-vms
       TEST_ORCHESTRA_URL: https://internal.example.com/v0
-      TEST_COMMS_APP_URL: ${{ secrets.UNITY_COMMS_URL }}
-      TEST_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
+      TEST_COMMS_APP_URL: ${{ secrets.UNIFY_COMMS_URL }}
+      TEST_ADAPTERS_URL: ${{ secrets.UNIFY_ADAPTERS_URL }}
       # A dedicated, long-lived deployed (is_local=false, non-desktop) staging
       # assistant the wakeup/VM tests reuse. Its runtime is cleaned every run;
       # the assistant row itself is intentionally persistent.
