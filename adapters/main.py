@@ -5125,6 +5125,122 @@ async def _handle_teams_lifecycle(
         logger.info(f"lifecycle: rebuild request sent (timeout ok): {e}")
 
 
+class TenantTokenPayload(BaseModel):
+    assistant_id: str
+    tenant_id: str
+
+
+@app.post(
+    "/microsoft/token-for-tenant",
+    dependencies=[Depends(require_admin_or_user_key)],
+)
+async def microsoft_token_for_tenant(payload: TenantTokenPayload, request: Request):
+    """Mint a Graph access token scoped to a *counterparty* tenant.
+
+    Content shared from another organisation lives in that organisation's
+    tenant, and a token stamped with the assistant's own tenant cannot address
+    it -- Graph answers 404 for the item as though it were absent. A refresh
+    token is bound to (user, client) and not to a tenant, so the one already
+    stored redeems against the owning tenant directly.
+
+    This lives here rather than in the runtime because redeeming needs the
+    application's client secret, which must not leave the deploy layer: the
+    runtime holds provider tokens but never the app credential that mints them.
+
+    Returns ``consent_required`` rather than an error when the counterparty
+    tenant has not consented to the app -- that is a normal first-contact state
+    with a user-facing remedy, not a failure.
+    """
+    await require_assistant_ownership(request, payload.assistant_id)
+
+    admin_key = SETTINGS.orchestra_admin_key
+    if not admin_key:
+        raise HTTPException(
+            status_code=500,
+            detail="ORCHESTRA_ADMIN_KEY not configured",
+        )
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{SETTINGS.orchestra_url}/admin/assistant",
+            params={
+                "agent_id": str(payload.assistant_id),
+                "from_fields": "agent_id,secrets",
+            },
+            headers={"Authorization": f"Bearer {admin_key}"},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Could not read assistant secrets")
+    rows = resp.json()
+    if isinstance(rows, dict):
+        rows = rows.get("info") or []
+    assistant = next(
+        (r for r in rows if str(r.get("agent_id")) == str(payload.assistant_id)),
+        None,
+    )
+    if assistant is None:
+        raise HTTPException(status_code=404, detail="Assistant not found")
+
+    refresh_token = (assistant.get("secrets") or {}).get("MICROSOFT_REFRESH_TOKEN")
+    if not refresh_token:
+        raise HTTPException(status_code=409, detail="No Microsoft account connected")
+
+    creds = _resolve_ms_refresh_credentials(
+        assistant,
+        resource_tenant=payload.tenant_id,
+    )
+    if creds is None:
+        raise HTTPException(status_code=500, detail="Microsoft OAuth is not configured")
+    tenant_id, client_id, client_secret, scope, _source = creds
+
+    async with httpx.AsyncClient(timeout=45) as client:
+        token_resp = await client.post(
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": scope,
+            },
+        )
+    body = token_resp.json() if token_resp.content else {}
+    if token_resp.status_code == 200 and body.get("access_token"):
+        return {
+            "status": "ok",
+            "tenant_id": tenant_id,
+            "access_token": body["access_token"],
+            "expires_in": body.get("expires_in", 3600),
+            "scope": body.get("scope", ""),
+        }
+
+    description = str(body.get("error_description") or "")
+    if "AADSTS65001" in description:
+        # First contact with this organisation. Their administrator consents
+        # once, permanently, and it covers every environment because staging
+        # and production share one app registration.
+        return {
+            "status": "consent_required",
+            "tenant_id": tenant_id,
+            "message": (
+                "This content belongs to another organisation whose "
+                "administrator has not yet approved access."
+            ),
+        }
+    logger.warning(
+        "token-for-tenant failed tenant=%s status=%s error=%s",
+        tenant_id,
+        token_resp.status_code,
+        body.get("error"),
+    )
+    return {
+        "status": "error",
+        "tenant_id": tenant_id,
+        "error": body.get("error") or f"HTTP {token_resp.status_code}",
+        "error_description": description[:400],
+    }
+
+
 @app.post("/microsoft/router")
 async def microsoft_router(request: Request):
     """
@@ -6026,6 +6142,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
 
 def _resolve_ms_refresh_credentials(
     assistant: dict,
+    resource_tenant: str | None = None,
 ) -> tuple[str, str, str, str, str] | None:
     """Resolve ``(tenant_id, client_id, client_secret, scope, source)``
     for redeeming an assistant's Microsoft refresh token.
@@ -6093,6 +6210,26 @@ def _resolve_ms_refresh_credentials(
     if not client_id or not client_secret:
         return None
     stored_scopes = secrets.get("MICROSOFT_GRANTED_SCOPES")
+    if resource_tenant:
+        # Content shared from another organisation lives in that organisation's
+        # tenant, and a token stamped with ours cannot address it -- Graph
+        # answers 404 for the item as though it did not exist. Refresh tokens
+        # are bound to (user, client) and not to a tenant, so the token already
+        # stored redeems against the owning tenant directly, provided that
+        # tenant has consented to the app.
+        #
+        # ``.default`` is correct *here* and wrong on the consent URL: on a
+        # token request it means "whatever this tenant has consented to", which
+        # is exactly the least privilege the counterparty agreed to. On an
+        # authorize request it means "everything this app ever registered",
+        # which is how you end up asking a customer's IT for mail-send.
+        return (
+            resource_tenant,
+            client_id,
+            client_secret,
+            "https://graph.microsoft.com/.default",
+            source,
+        )
     return (
         "common",
         client_id,
