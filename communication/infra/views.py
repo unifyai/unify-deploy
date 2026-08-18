@@ -264,13 +264,30 @@ async def _assert_job_owned_by_assistant(
         )
 
 
+def _require_orchestra_assistant(assistant_id: str) -> dict[str, Any]:
+    """Resolve the assistant from Orchestra, refusing an id it does not know.
+
+    ``get_assistant`` degrades a miss to the local stub so inbound webhooks
+    keep answering. Here a miss must stop the request instead: everything an
+    infra endpoint plants under an assistant id -- a Pub/Sub topic, a
+    bootstrap Secret, a pool disk, a static IP, a DNS record -- is orphaned
+    the moment it is created for an assistant that does not exist, and the
+    session teardown path never learns to remove it.
+    """
+    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    if not orchestra_assistant.get("assistant_id"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Assistant {assistant_id} does not exist in Orchestra",
+        )
+    return orchestra_assistant
+
+
 def _resolve_session_desktop_requirements(
-    assistant_id: str,
-    desktop_mode: str,
+    orchestra_assistant: dict[str, Any],
     raw_desktop_required: str,
 ) -> tuple[str, bool, bool]:
-    """Resolve desktop mode, entitlement, and VM requirement from Orchestra."""
-    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    """Resolve desktop mode, entitlement, and VM requirement for the assistant."""
     entitled = managed_desktop_entitled(orchestra_assistant)
     effective_desktop_mode = orchestra_assistant.get("desktop_mode", "none")
     parsed_override = _parse_desktop_required_form(
@@ -1331,16 +1348,17 @@ async def start_job(
     )
 
     try:
-        batch_api, core_api, _, coord_api = await _get_k8s_clients()
-        custom_api = await asyncio.to_thread(get_custom_objects_api)
-        orchestra_assistant = get_assistant(assistant_id=assistant_id)
+        # An id Orchestra does not know is refused before anything is
+        # created under it: no lease, no topic, no Secret, no session.
+        orchestra_assistant = _require_orchestra_assistant(assistant_id)
         effective_desktop_mode, desktop_entitled, session_desktop_required = (
             _resolve_session_desktop_requirements(
-                assistant_id,
-                desktop_mode,
+                orchestra_assistant,
                 desktop_required,
             )
         )
+        batch_api, core_api, _, coord_api = await _get_k8s_clients()
+        custom_api = await asyncio.to_thread(get_custom_objects_api)
         startup_payload = _build_startup_payload(
             api_key=api_key,
             medium=medium,
@@ -3288,6 +3306,9 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
     disk, generates SSH keys, and updates metadata to trigger the on-VM
     watcher.
     """
+    # The disk, static IP and DNS record are all named after the assistant
+    # id; an id Orchestra does not know is refused before any of them exist.
+    _require_orchestra_assistant(request.assistant_id)
     try:
         result = await asyncio.get_running_loop().run_in_executor(
             ASSIGN_EXECUTOR,

@@ -343,6 +343,27 @@ Both the `UNIFY_*` and `UNITY_*` URL pairs now exist, so the old "workflows read
 
 So a workflow in `unify`, `unillm`, or `unisdk` referencing `secrets.TOGETHER_API_KEY` or `secrets.UNIFY_COMMS_URL` resolves to the **empty string** unless that repo holds its own copy. Nothing errors — the step runs with a blank value. `unify` and `unillm` each keep a repo-level `TOGETHER_API_KEY` for exactly this reason; the org copy is unreachable from them.
 
+**This is observed, not inferred** (verified 2026-08-17). The runner's own `env:` group dump in `unify` Tests run [32024407234](https://github.com/unifyai/unify/actions/runs/32024407234) (job `95370713080`) prints `UNIFY_COMMS_URL:` blank while every other secret on the same job — `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `UNIFY_KEY` — renders `***`. Masking is the discriminator: GitHub replaces a non-empty secret with `***`, so a blank value is a genuinely empty one. `TOGETHER_API_KEY` renders `***` there **because of `unify`'s repo-level copy**, not because the org secret reached it — it is not a counterexample.
+
+The authoritative check is the "org secrets shared with this repo" endpoint, which resolves all three layers for you:
+
+```bash
+gh api repos/unifyai/<repo>/actions/organization-secrets --paginate --jq '.secrets[].name'
+```
+
+Across the repo set it splits exactly on visibility, with no exceptions:
+
+| Repo | Visibility | Org secrets actually reachable |
+|---|---|---|
+| `unify` | public | `CI_CLONE_APP_PRIVATE_KEY`, `CI_DISPATCH_APP_PRIVATE_KEY` |
+| `unillm`, `unisdk` | public | `CI_CLONE_APP_PRIVATE_KEY` |
+| `unify-deploy` | internal | the above + all five `private` secrets |
+| `orchestra`, `console` | private | all five `private` secrets (+ `CI_CLONE_*` where granted) |
+
+The three public repos reach **only** their `selected` grants. None of the five `private` org secrets appears for any of them.
+
+`unify`'s workflows no longer reference `secrets.UNIFY_COMMS_URL` at all — the four dead references were deleted once this was confirmed, and re-adding one is the wrong fix ([§9](#9-known-rename-loose-ends--gotchas) row 4). The run cited above predates that removal; it remains the evidence for how a `private` org secret resolves in a public repo.
+
 **Where the keys actually live now** (repo-level `R`, environment-scoped `[env]`):
 
 | Repo | Secrets |
@@ -377,7 +398,12 @@ gh api orgs/unifyai/actions/variables --jq '.variables[] | "\(.name)\t\(.visibil
 gh api orgs/unifyai/actions/secrets/<NAME>/repositories --jq '[.repositories[].name]|join(", ")'  # visibility=selected only
 gh api repos/unifyai/<repo>/actions/secrets --jq '.secrets[].name'
 gh api repos/unifyai/<repo>/environments/<env>/secrets --jq '.secrets[].name'
+
+# Start here: which ORG secrets this repo can actually read, visibility already applied.
+gh api repos/unifyai/<repo>/actions/organization-secrets --paginate --jq '.secrets[].name'
 ```
+
+A secret must be absent from **all three** layers to be genuinely unreachable — a repo- or environment-level copy silently shadows the org one, which is why `TOGETHER_API_KEY` works in `unify` and `UNIFY_COMMS_URL` does not. Confirm against a run rather than a table where you can: the `env:` group at the top of any job log renders reachable secrets as `***` and unreachable ones as blank.
 
 Per-repo CI wiring is described in [§8](#8-cicd-cloud-build-github-actions-branches).
 
@@ -544,7 +570,9 @@ This ordering was learned the hard way on 2026-08-11: this repo reached `main` a
 > for this: `tunnel_config.py` (tag/IP → `unity-tunnel-server*`), `vm_config.py` +
 > `vm_helpers.py` (per-OS pool prefix: Ubuntu `unity-pool-*`, Windows `unity-pool-*`;
 > Windows image family/tags → `unity-*`), and `unity` CI (`tests.yml`,
-> `llm-cache-refresh.yml`) read the real `UNIFY_COMMS_URL` secret. The 2026-06-22
+> `llm-cache-refresh.yml`) reference the `UNIFY_COMMS_URL` secret by its current
+> name — though as a public repo it cannot actually read it, and resolves it
+> empty (row 4). The 2026-06-22
 > production `assistant-session-controller` crash-loop was a **controller defect**
 > (the timer reconcile ran per-session GCP VM/disk ownership scans over ~110 terminal
 > sessions every interval, starving its liveness probe), **not** a name mismatch; fixed
@@ -558,7 +586,7 @@ Prioritized. `P0` = can break production, `P1` = breaks CI / partial degradation
 | 1 | **P0** | Tunnel fixes stranded on `staging` | `8b5097a9` (tunnel bucket/VM → `unity-*`) and `244ad103` (SFTP firewall band) are on `origin/staging` **not `origin/main`**. Prod `common/settings.py` may still point tunnel at non-existent `unity-tunnel-*`. **Merging `staging`→`main` is required** for these (but does **not** fix #2/#3 which are identical on both branches). |
 | 2 | **P0** | Pool image families (RESOLVED 2026-06-24) | Code wanted `unity-pool-ubuntu-vm`; only `unity-pool-ubuntu-vm` existed → 404 on every desktop provision → `assistant-session-controller` CrashLoop. Fixed by creating `unity-pool-*` families. **Keep the families fresh:** `build-ubuntu.sh`/`build-windows.sh` publish to them. |
 | 3 | **P0** | Archive bucket (RESOLVED 2026-06-24) | Code wanted `unity-assistant-archives`; only `unity-assistant-archives` existed → no cross-session file persistence. Fixed by bucket create + rsync (183 objects). |
-| 4 | **P1** | CI URL name split | Name mismatch RESOLVED — both `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` and legacy `UNITY_*` now exist as org secrets, and `unify`'s + `unify-deploy`'s workflows read `secrets.UNIFY_*`. **A different failure replaced it:** all four are `visibility=private`, which excludes public repos, so `unify`'s `secrets.UNIFY_COMMS_URL` resolves **empty** — silently, no error. `unify-deploy` (internal) is unaffected. Fix by adding a repo-level copy in `unify`, or by granting the org secrets `selected` visibility including it. See [§7.2](#72-github-actions-secrets-ci). |
+| 4 | **P2** | `unify` CI cannot read the comms URL secret (CONFIRMED 2026-08-17) | Name mismatch RESOLVED — both `UNIFY_ADAPTERS_URL`/`UNIFY_COMMS_URL` and legacy `UNITY_*` exist as org secrets, and `unify`'s + `unify-deploy`'s workflows read `secrets.UNIFY_*`. Separately, all four are `visibility=private`, which excludes public repos, so `unify`'s `secrets.UNIFY_COMMS_URL` resolves **empty** — silently, no error, in all four workflows that reference it (`flow-smoke.yml:213`, `flow-smoke-release-gate.yml:92`, `tests.yml:780`, `llm-cache-refresh.yml:237`). `unify-deploy` (internal) is unaffected. **This did not replace the name mismatch and is not new:** the predecessor `secrets.UNITY_COMMS_URL` was equally empty on runs [31721270820](https://github.com/unifyai/unify/actions/runs/31721270820) (2026-08-13) and [31829096018](https://github.com/unifyai/unify/actions/runs/31829096018) (2026-08-14), before the 2026-08-16 `UNIFY_*` rename (`unify@87801169d`) — both names carry the same `private` visibility, so the rename neither caused nor fixed it. **Impact today is nil, which is why it went unnoticed:** `tests/flows/conftest.py:55` hard-sets `UNIFY_COMMS_URL=""` for flow tests regardless of the secret, conversation-manager tests stub every outbound comms call autouse, and `_post_to_comms` degrades to a `LOGGER.debug` returning `False`. **RESOLVED 2026-08-17 by deleting all four references** (`unify@1a4d2dfb2`) — the lines were a trap, not a missing credential. Populating the secret would have been the harmful fix: `TaskSettings.LOCAL_SCHEDULER_ENABLED` is derived from `UNIFY_COMMS_URL` at import ([`unify/task_scheduler/settings.py`](https://github.com/unifyai/unify/blob/staging/unify/task_scheduler/settings.py)), so a real URL switches CI off the in-process `LocalActivationScheduler` onto Communication's Cloud Tasks queues and points `_post_to_comms`/`drain_gate` at the **hosted** service with `UNIFY_KEY`. Removal is behaviourally identical to the status quo, since every consumer reads the variable with an empty default and unset == set-to-empty. Do **not** add a repo-level copy in `unify` or widen the org secret to `selected` — CI has no comms service, and wants none. See [§7.2](#72-github-actions-secrets-ci). |
 | 5 | **P1** | Environment naming split + orphans | Live envs: `unify` uses legacy `unity-testing` / `unity-llm-cache-refresh` (both populated, both load-bearing — its workflows name them explicitly), while `unillm` and `unisdk` use `unify-testing`. `unify`'s `droid-testing` and `github-pages` hold **no secrets** — orphans, safe to delete. Renaming the `unity-*` envs means editing the `environment:` key in `unify`'s `tests.yml`, `flow-smoke.yml`, `flow-smoke-release-gate.yml`, `llm-cache-refresh.yml` in the same change, or the jobs lose their secrets silently. |
 | 6 | **P1** | Stale Cloud Build triggers | Triggers bound to `repositories/unity` / `unity-deploy` (e.g. `adapters-unity-deploy`, `unity-comms-app-*`) fail at source-fetch (~3-6s, no steps) even though GitHub redirects the repo. Recreate as `unity-*` triggers against `repositories/unity` / `unity-deploy`. Compat files `cloudbuild/unity-comms-app*.yaml` exist for old trigger names. |
 | 7 | **P1** | Referenced-but-unconfigured secrets | `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (console build-arg), `TWILIO_*`/`LIVEKIT_*`/`GCP_SA_KEY` (unity-deploy `hosted-tests.yml`) are not configured → empty/skip. |
