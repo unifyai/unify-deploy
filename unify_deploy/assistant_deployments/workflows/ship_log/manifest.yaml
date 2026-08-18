@@ -79,6 +79,7 @@ params_schema:
   post_at:
     label: Post at
     type: text
+    default: "17:30"
     required: false
     help: >
       The time the log is written, in 24-hour form — for example "17:30".
@@ -86,6 +87,7 @@ params_schema:
   include_reviews:
     label: Count reviews you gave
     type: boolean
+    default: true
     required: false
     help: >
       Turn off to report only your own changes. Left empty, reviews you

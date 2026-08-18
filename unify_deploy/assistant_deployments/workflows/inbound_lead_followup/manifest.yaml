@@ -73,6 +73,7 @@ params_schema:
   budget_hours:
     label: Respond within
     type: number
+    default: 4
     required: false
     help: >
       How many working hours a new inbound lead may wait before the

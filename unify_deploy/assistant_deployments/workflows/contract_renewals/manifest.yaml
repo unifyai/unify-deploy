@@ -65,6 +65,7 @@ params_schema:
   lead_days:
     label: Warn before the decision date
     type: number
+    default: 30
     required: false
     suffix: days
     help: >
