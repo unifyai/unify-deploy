@@ -76,6 +76,7 @@ params_schema:
   stale_after_days:
     label: Nudge after
     type: number
+    default: 1
     required: false
     suffix: working days
     help: >

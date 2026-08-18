@@ -58,6 +58,7 @@ params_schema:
   include_prereleases:
     label: Include pre-releases
     type: boolean
+    default: false
     required: false
     help: >
       Turn on to include release candidates and betas. Left empty, only
