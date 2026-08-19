@@ -5445,6 +5445,46 @@ async def microsoft_oauth_callback(request: Request):
             status_code=400,
         )
 
+    admin_consent = request.query_params.get("admin_consent")
+    consent_tenant = request.query_params.get("tenant")
+    if admin_consent is not None:
+        # A different flow lands here. Approving an application for a whole
+        # organisation goes through /v2.0/adminconsent, which redirects with
+        # ``admin_consent=True&tenant=<id>`` and deliberately no code -- there is
+        # no user session to exchange, the grant is recorded at the moment the
+        # administrator clicks Accept.
+        #
+        # Falling through to the authorization-code path meant an administrator
+        # who did exactly what we asked was told "Missing authorization code",
+        # which reads as failure after a successful approval. Observed live with
+        # a customer's IT: the grant had landed and the page said otherwise.
+        granted = str(admin_consent).lower() == "true"
+        logger.info(
+            "admin consent callback tenant=%s granted=%s",
+            consent_tenant,
+            granted,
+        )
+        if not granted:
+            return Response(
+                content=(
+                    "Approval was not granted. Nothing has changed, and the "
+                    "assistant still cannot read content owned by this "
+                    "organisation."
+                ),
+                status_code=200,
+                media_type="text/plain",
+            )
+        return Response(
+            content=(
+                "Approved. This organisation's shared content is now readable "
+                "by the assistant that requested it, using the read-only "
+                "permissions shown on the approval screen. Nothing further is "
+                "needed and this page can be closed."
+            ),
+            status_code=200,
+            media_type="text/plain",
+        )
+
     if not code:
         return Response(content="Missing authorization code", status_code=400)
 
