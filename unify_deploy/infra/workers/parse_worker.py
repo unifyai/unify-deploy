@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from google.cloud import storage
 
 from unify.common.pipeline._utils import utc_now_iso
-from unify.common.pipeline.artifact_store import ArtifactStore
+from unify.common.pipeline.artifact_store import ArtifactNotFound, ArtifactStore
 from unify.common.pipeline.run_journal import (
     NullJournal,
     RunJournal,
@@ -393,6 +393,8 @@ async def _replay_parse_outbox_if_needed(
 ) -> bool:
     try:
         outbox = artifact_store.get_json(_parse_outbox_key(run_id))
+    except ArtifactNotFound:
+        return False
     except Exception as exc:
         if _is_not_found_error(exc):
             return False

@@ -724,10 +724,13 @@ def _is_not_found_error(exc: BaseException) -> bool:
     The GCS SDK can surface a 404 as either
     ``google.api_core.exceptions.NotFound`` (wrapped by the storage client) or
     ``google.resumable_media.common.InvalidResponse`` (when the underlying
-    resumable-media download fails before the Storage client wraps it). We
-    accept either, plus a defensive string fallback, so the caller never has
-    to care which layer raised.
+    resumable-media download fails before the Storage client wraps it).
+    ``GcsArtifactStore.get_json`` then translates that into the port type
+    ``ArtifactNotFound``. We accept all of those, plus a defensive string
+    fallback, so the caller never has to care which layer raised.
     """
+    if isinstance(exc, ArtifactNotFound):
+        return True
     try:
         from google.api_core.exceptions import NotFound as _ApiNotFound
 
