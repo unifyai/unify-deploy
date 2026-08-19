@@ -236,6 +236,25 @@ done
 ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
 echo "  /Unity/.config, .local, .cache created for unityuser"
 
+# Browser downloads land inside the synced tree rather than beside it.
+# Only /Unity/Local is bisynced to the assistant's pod, so a file saved to the
+# XDG default at /Unity/Downloads was reachable by the desktop and by nothing
+# else: the assistant could drive a browser, download a file, and then be unable
+# to read, parse or ingest what it had just fetched. Redirecting the XDG path
+# keeps every dialog, breadcrumb and browser default reading /Unity/Downloads
+# while the bytes are written where the sync can see them -- the alternative,
+# asking the assistant to remember to move each file afterwards, is the same
+# class of silent omission that hid a shared folder for a week.
+mkdir -p /Unity/Local/Downloads
+chown unityuser:unityuser /Unity/Local /Unity/Local/Downloads
+if [ -d /Unity/Downloads ] && [ ! -L /Unity/Downloads ]; then
+    # A real directory from a previous boot: preserve anything already in it.
+    find /Unity/Downloads -mindepth 1 -maxdepth 1 -exec mv -t /Unity/Local/Downloads -- {} + 2>/dev/null || true
+    rmdir /Unity/Downloads 2>/dev/null || true
+fi
+ln -sfn /Unity/Local/Downloads /Unity/Downloads
+echo "  /Unity/Downloads -> /Unity/Local/Downloads (inside the synced tree)"
+
 # Shell config for unityuser desktop terminal sessions
 cat > /Unity/.bashrc << 'BASHRC'
 if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNIFY_SHELL_INIT" ]]; then
