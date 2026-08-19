@@ -352,7 +352,11 @@ def _dispatch(
 ) -> int:
     import os
 
-    from google.cloud import storage
+    from unify_deploy.utils.load_repo_env import (
+        drop_stale_google_application_credentials,
+    )
+
+    drop_stale_google_application_credentials()
 
     from unify.common.pipeline import DispatchTarget, publish_parse_request
     from unify.common.pipeline.deployment.types import (
@@ -364,6 +368,7 @@ def _dispatch(
     from unify_deploy.infra.gcp.artifact_store import GcsArtifactStore
     from unify_deploy.infra.gcp.deployment_stores import GcsDeploymentJobStore
     from unify_deploy.infra.gcp.settings import GcpPipelineSettings
+    from unify_deploy.infra.workers.worker_utils import build_gcp_clients
 
     settings = GcpPipelineSettings()
     project_id = settings.pubsub.project_id
@@ -398,7 +403,7 @@ def _dispatch(
         )
         return 2
 
-    storage_client = storage.Client(project=project_id)
+    storage_client, publisher_client, _subscriber = build_gcp_clients()
     artifact_store = GcsArtifactStore(
         client=storage_client,
         settings=settings.artifact_store,
@@ -455,6 +460,8 @@ def _dispatch(
                 dm_binding=dm_binding,
                 dispatch_id=dispatch_id,
                 table_config=table_config,
+                storage_client=storage_client,
+                publisher_client=publisher_client,
                 **source_kwargs,
             )
 
@@ -466,7 +473,7 @@ def _dispatch(
                     manifest_path="",
                 ),
                 run_mode="file_manager" if args.mode == "fm" else "data_manager",
-                execution_target="staging",
+                execution_target=settings.environment,
                 status="queued",
             )
             job_store.upsert_job(job)

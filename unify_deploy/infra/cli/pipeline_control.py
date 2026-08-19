@@ -114,6 +114,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_submit.add_argument("--create-table-prefix", default="")
     p_submit.add_argument(
+        "--destination",
+        default="personal",
+        metavar="personal|team:<id>",
+        help=(
+            "DmBinding.destination (DM mode). 'personal' (default) writes "
+            "to the assistant Data root; 'team:<id>' writes to "
+            "Teams/<id>/Data/<context> after membership validation."
+        ),
+    )
+    p_submit.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -1183,6 +1193,17 @@ async def cmd_submit(args: argparse.Namespace) -> None:
         source_files = source_files[: args.limit]
 
     settings = infra.settings
+    from unify.common.context_registry import ContextRegistry
+
+    try:
+        destination = ContextRegistry.canonical_destination(args.destination)
+    except ValueError as exc:
+        logger.error("--destination is invalid: %s", exc)
+        raise SystemExit(2) from exc
+    if destination is not None and args.mode != "dm":
+        logger.error("--destination is only supported with --mode dm.")
+        raise SystemExit(2)
+
     target = DispatchTarget(
         project_id=settings.pubsub.project_id,
         bucket_name=settings.artifact_store.bucket,
@@ -1226,6 +1247,7 @@ async def cmd_submit(args: argparse.Namespace) -> None:
                 assistant_id=args.assistant_id,
                 target_context=dm_context,
                 create_table_prefix=args.create_table_prefix,
+                destination=destination,
             )
 
         table_config = (
@@ -1252,7 +1274,7 @@ async def cmd_submit(args: argparse.Namespace) -> None:
                     manifest_path="",
                 ),
                 run_mode=run_mode,
-                execution_target="staging",
+                execution_target=settings.environment,
                 status="queued",
             )
             job_store.upsert_job(job)
