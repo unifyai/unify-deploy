@@ -254,8 +254,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--project",
-        required=True,
-        help="Unify project name",
+        default="Assistants",
+        help=(
+            "Unify project name (default: Assistants). Production ingest "
+            "always uses the default Assistants project; do not pass a "
+            "client name here."
+        ),
     )
     parser.add_argument(
         "--overwrite",

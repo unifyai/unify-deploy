@@ -186,7 +186,13 @@ def activate_project(
     """Activate a Unify project for ingestion.
 
     Calls ``unify.init()`` and optionally deletes/recreates the project.
+    The default Unify project is ``Assistants`` and must never be
+    overwritten or deleted by this helper.
     """
+    if overwrite and project_name == "Assistants":
+        raise ValueError(
+            "Refusing to overwrite the default Assistants project",
+        )
     if overwrite:
         try:
             from unisdk import delete_project
