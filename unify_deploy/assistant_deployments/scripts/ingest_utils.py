@@ -105,6 +105,17 @@ def initialize_environment(
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
 
+    # unisdk ships a `unify/` namespace directory. If that repo is on
+    # sys.path ahead of the sibling unify checkout, `import unify` becomes a
+    # namespace package and `unify.init` never exists. Prefer the real
+    # package so operator ingest scripts can initialise the runtime.
+    sibling_unify = project_root.parent / "unify"
+    if sibling_unify.is_dir():
+        sibling_str = str(sibling_unify)
+        if sibling_str in sys.path:
+            sys.path.remove(sibling_str)
+        sys.path.insert(0, sibling_str)
+
     env_file = project_root / ".env"
     if env_file.exists():
         try:
@@ -113,6 +124,11 @@ def initialize_environment(
             load_dotenv(str(env_file), override=False)
         except ImportError:
             pass
+        from unify_deploy.utils.load_repo_env import (
+            drop_stale_google_application_credentials,
+        )
+
+        drop_stale_google_application_credentials()
     level = logging.DEBUG if debug else logging.INFO
 
     root_logger = logging.getLogger()

@@ -54,6 +54,7 @@ def _dispatch_dm(
     project_name: str,
     user_id: str,
     assistant_id: str,
+    destination: str | None = None,
 ) -> int:
     """Publish one ParseRequested per source_file with DM-mode binding.
 
@@ -70,12 +71,20 @@ def _dispatch_dm(
     per-table mapping is out of scope for this flag -- the common case
     is one-table-per-file in DM pipelines.
 
+    ``destination`` is the same personal / ``team:<id>`` axis used by
+    ``dispatch_pipeline.py``. Canonical ``None`` means the assistant's
+    personal Data root; ``team:<id>`` writes to the shared team Data
+    root after the ingest worker validates membership.
+
     Current DM dispatch is assistant-scoped too: ``user_id`` is carried
     for provenance / routing and ``assistant_id`` identifies the
     assistant whose Orchestra-bound api key authorizes the ingest via
     ``GET /v0/admin/assistant?agent_id=...``.
     """
+    from uuid import uuid4
+
     from unify.common.pipeline import DispatchTarget, publish_parse_request
+    from unify.common.pipeline.config import build_table_config_for_source_file
     from unify.common.pipeline.types import DmBinding
     from unify_deploy.infra.gcp.settings import GcpPipelineSettings
 
@@ -100,13 +109,17 @@ def _dispatch_dm(
         env_suffix=settings.env_suffix(),
     )
 
+    dispatch_id = uuid4().hex
     logger.info(
-        "=== DM Dispatch [project=%s, env=%s, bucket=%s, user_id=%s, assistant_id=%s] ===",
+        "=== DM Dispatch %s [project=%s, env=%s, bucket=%s, user_id=%s, "
+        "assistant_id=%s, destination=%s] ===",
+        dispatch_id,
         project_name,
         settings.environment,
         bucket_name,
         user_id,
         assistant_id,
+        destination or "personal",
     )
     logger.info("Dispatching %d source file(s)...", len(config.source_files))
 
@@ -132,6 +145,7 @@ def _dispatch_dm(
             user_id=user_id,
             assistant_id=assistant_id,
             target_context=tables[0].context,
+            destination=destination,
         )
         try:
             result = publish_parse_request(
@@ -139,6 +153,8 @@ def _dispatch_dm(
                 logical_path=sf.file_path,
                 ingestion_mode="dm",
                 dm_binding=dm_binding,
+                dispatch_id=dispatch_id,
+                table_config=build_table_config_for_source_file(config, sf),
                 source_local_path=sf.file_path,
             )
             logger.info(
@@ -158,6 +174,58 @@ def _dispatch_dm(
         errors,
     )
     return 1 if errors else 0
+
+
+def _format_ingest_tool_error(result: object, context_path: str) -> str:
+    """Turn a DataManager tool-error payload into a usable ingest failure."""
+
+    if isinstance(result, dict):
+        message = result.get("message") or result.get("error") or str(result)
+        details = result.get("details")
+        if details:
+            return (
+                f"DataManager.ingest failed for {context_path!r}: {message} "
+                f"(details={details})"
+            )
+        return f"DataManager.ingest failed for {context_path!r}: {message}"
+    return (
+        f"DataManager.ingest returned {type(result).__name__} for "
+        f"{context_path!r}; expected IngestResult with rows_inserted."
+    )
+
+
+def _hydrate_inprocess_team_destination(destination: str | None) -> None:
+    """Let in-process ``--destination team:N`` pass ContextRegistry membership.
+
+    Cloud ingest workers hydrate ``SESSION_DETAILS.team_ids`` from Orchestra
+    inside ``_with_unify_key``. This laptop path only runs
+    ``populate_from_env``, so ``TEAM_IDS`` is usually empty and every
+    ``dm.ingest(..., destination='team:N')`` returns a tool-error dict
+    instead of ``IngestResult``. Trust the explicit CLI destination the
+    same way a worker would after a successful membership lookup.
+    """
+    from unify.session_details import SESSION_DETAILS
+
+    if destination is None:
+        return
+    team_id = int(destination.split(":", 1)[1])
+    current = list(SESSION_DETAILS.team_ids)
+    owner = SESSION_DETAILS.owner_team_id
+    if team_id in current or (owner is not None and int(owner) == team_id):
+        logger.info(
+            "Team destination %s already in SESSION_DETAILS.team_ids=%s",
+            destination,
+            sorted(current),
+        )
+        return
+    SESSION_DETAILS.team_ids = current + [team_id]
+    logger.info(
+        "In-process ingest hydrated SESSION_DETAILS.team_ids with %s "
+        "(was %s). Cloud workers get this from Orchestra; this script "
+        "trusts the explicit --destination.",
+        destination,
+        sorted(current),
+    )
 
 
 def main() -> int:
@@ -292,6 +360,18 @@ def main() -> int:
             "ASSISTANT_ID environment variable when omitted."
         ),
     )
+    parser.add_argument(
+        "--destination",
+        default="personal",
+        metavar="personal|team:<id>",
+        help=(
+            "Data destination for ingest writes. Same grammar as "
+            "dispatch_pipeline.py: 'personal' (default) writes to the "
+            "assistant Data root; 'team:<id>' writes to Teams/<id>/Data/"
+            "<context> after membership is validated. Used for both "
+            "in-process ingest and --dispatch."
+        ),
+    )
     args = parser.parse_args()
 
     from unify_deploy.assistant_deployments.scripts.ingest_utils import (
@@ -336,6 +416,14 @@ def main() -> int:
         project_root=project_root,
     )
 
+    from unify.common.context_registry import ContextRegistry
+
+    try:
+        destination = ContextRegistry.canonical_destination(args.destination)
+    except ValueError as exc:
+        logger.error("--destination is invalid: %s", exc)
+        return 2
+
     if args.dispatch:
         import os
 
@@ -360,9 +448,11 @@ def main() -> int:
             project_name=args.project,
             user_id=user_id,
             assistant_id=assistant_id,
+            destination=destination,
         )
 
     activate_project(args.project, overwrite=args.overwrite)
+    _hydrate_inprocess_team_destination(destination)
 
     diagnostics = config.diagnostics.model_dump()
     reporter, run_dir = create_pipeline_reporter(
@@ -506,8 +596,10 @@ def main() -> int:
         },
     )
 
-    # Record parse costs
-    if instrumentation.has_cost_tracking:
+    # Record parse costs when the current Unify instrumentation still
+    # exposes that optional surface. PipelineInstrumentation dropped
+    # has_cost_tracking / add_parse_costs; skip rather than fail the run.
+    if getattr(instrumentation, "has_cost_tracking", False):
         from unify.file_manager.managers.utils.executor import (
             _extract_parse_cost_metrics,
         )
@@ -515,7 +607,9 @@ def main() -> int:
         for pr in parse_results:
             lp = str(getattr(pr, "logical_path", "") or "")
             metrics = _extract_parse_cost_metrics(pr, lp, config.parse)
-            instrumentation.add_parse_costs(file_path=lp, **metrics)
+            add_parse_costs = getattr(instrumentation, "add_parse_costs", None)
+            if add_parse_costs is not None:
+                add_parse_costs(file_path=lp, **metrics)
 
     # Optional deployment job tracking
     job = None
@@ -744,7 +838,12 @@ def main() -> int:
                     post_ingest=p["post_ingest_config"],
                     on_task_complete=p["chunk_callback"],
                     expected_total_rows=item.row_count,
+                    destination=destination,
                 )
+                if isinstance(result, dict) or not hasattr(result, "rows_inserted"):
+                    raise RuntimeError(
+                        _format_ingest_tool_error(result, p["context_path"]),
+                    )
                 return {
                     "ingest_result": result,
                     "context": p["context_path"],
@@ -821,7 +920,13 @@ def main() -> int:
                     ),
                 )
 
-        instrumentation.add_observability_costs()
+        add_observability_costs = getattr(
+            instrumentation,
+            "add_observability_costs",
+            None,
+        )
+        if add_observability_costs is not None:
+            add_observability_costs()
 
     # Finalize deployment job tracking
     if job is not None and job_store is not None:
