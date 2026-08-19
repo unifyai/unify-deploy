@@ -13,6 +13,7 @@ cover/
 .env
 .env.old
 .env.temp
+gcp_sa_key.json
 *.secrets.json
 *.csv
 *.xlsx
