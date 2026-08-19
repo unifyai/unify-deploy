@@ -23,7 +23,8 @@ import argparse
 import logging
 import sys
 import time
-from typing import TYPE_CHECKING, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from unify.common.pipeline.config import (
@@ -32,6 +33,55 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolved_source_path(path: str) -> str:
+    """Normalize a source-file path so config lookup and parse results match."""
+
+    return str(Path(path).expanduser().resolve())
+
+
+def _index_table_specs(
+    config: PipelineConfig,
+) -> dict[Tuple[str, str], "SourceTableSpec"]:
+    """Map ``(resolved file path, sheet)`` to the per-file table spec.
+
+    Sheet names repeat across weekly Client Beta drops (``dimDate``,
+    ``dimEmployees``, ...). Indexing by sheet alone made the last
+    ``pipeline_config.json`` entry win, so every week's file was ingested
+    into the last week's context.
+    """
+
+    index: dict[Tuple[str, str], SourceTableSpec] = {}
+    for sf in config.source_files:
+        for ts in sf.tables:
+            index[(_resolved_source_path(sf.file_path), ts.sheet)] = ts
+    return index
+
+
+def _lookup_table_spec(
+    index: dict[Tuple[str, str], "SourceTableSpec"],
+    file_path: str,
+    sheet: str,
+) -> Optional["SourceTableSpec"]:
+    return index.get((_resolved_source_path(file_path), sheet))
+
+
+def _index_column_descriptions(
+    config: PipelineConfig,
+) -> dict[Tuple[str, str], dict[str, str]]:
+    """Map ``(resolved file path, table)`` to column descriptions."""
+
+    index: dict[Tuple[str, str], dict[str, str]] = {}
+    if not config.ingest.business_contexts:
+        return index
+    for fc in config.ingest.business_contexts.file_contexts:
+        for tc in fc.table_contexts:
+            if tc.column_descriptions:
+                index[(_resolved_source_path(fc.file_path), tc.table)] = (
+                    tc.column_descriptions
+                )
+    return index
 
 
 def _resolve_embed_columns(
@@ -567,17 +617,8 @@ def main() -> int:
 
     dm = DataManager()
 
-    table_specs: dict[str, SourceTableSpec] = {}
-    for sf in config.source_files:
-        for ts in sf.tables:
-            table_specs[ts.sheet] = ts
-
-    sheet_col_descs: dict[str, dict[str, str]] = {}
-    if config.ingest.business_contexts:
-        for fc in config.ingest.business_contexts.file_contexts:
-            for tc in fc.table_contexts:
-                if tc.column_descriptions:
-                    sheet_col_descs[tc.table] = tc.column_descriptions
+    table_specs = _index_table_specs(config)
+    col_desc_index = _index_column_descriptions(config)
 
     embed_strategy = "off" if args.no_embed else config.embed.strategy
     infer_untyped = config.ingest.infer_untyped_fields
@@ -731,8 +772,15 @@ def main() -> int:
             work_items: list[ArtifactWorkItem] = []
             for t in pr.tables:
                 label = t.sheet_name or t.label
-                spec = table_specs.get(label)
+                spec = _lookup_table_spec(table_specs, lp, label)
                 if spec is None:
+                    logger.error(
+                        "No pipeline table spec for sheet %r in %s; skipping. "
+                        "Sheet names are not unique across source files — "
+                        "the spec must match this file path.",
+                        label,
+                        lp,
+                    )
                     continue
                 if args.tables and not any(f in label for f in args.tables):
                     logger.info("Skipping '%s' (not in --tables filter)", label)
@@ -771,7 +819,7 @@ def main() -> int:
                     if not args.no_embed
                     else None
                 )
-                col_descs = sheet_col_descs.get(label, {})
+                col_descs = col_desc_index.get((_resolved_source_path(lp), label), {})
                 post_ingest_config = config.effective_post_ingest(spec)
 
                 rows_payload = None
