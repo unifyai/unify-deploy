@@ -138,6 +138,7 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
 
 
 def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypatch):
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
     pool_vm = SimpleNamespace(
         name="unity-pool-ubuntu-2-staging",
         labels=_current_contract_labels(**{"pool-role": "idle", "vm-type": "ubuntu"}),
@@ -178,6 +179,127 @@ def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypa
     )
 
     assert claimed["vm_name"] == "unity-pool-ubuntu-2-staging"
+
+
+def test_claim_idle_vm_ignores_foreign_environment_candidates(monkeypatch):
+    monkeypatch.setenv("DEPLOY_ENV", "production")
+    labels = _current_contract_labels(**{"pool-role": "idle", "vm-type": "ubuntu"})
+    staging_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-europe-west2-2-staging",
+        labels=labels,
+        label_fingerprint="staging-fp",
+        network_interfaces=[],
+        metadata=SimpleNamespace(items=[]),
+    )
+    production_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-europe-west2-3",
+        labels=labels,
+        label_fingerprint="production-fp",
+        network_interfaces=[],
+        metadata=SimpleNamespace(items=[]),
+    )
+    client = MagicMock()
+    client.list.return_value = [staging_vm, production_vm]
+    client.get.return_value = production_vm
+    client.set_labels.return_value = SimpleNamespace(result=lambda: None)
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.random.choice",
+        lambda vms: vms[0],
+    )
+
+    claimed = _claim_idle_vm_inner(
+        client,
+        label_filter="labels.pool-role = idle",
+        assistant_id="assistant-1406",
+        binding_id="binding-1406",
+        vm_type="ubuntu",
+        vm_number=None,
+    )
+
+    assert claimed["vm_name"] == "unity-pool-ubuntu-europe-west2-3"
+    assert client.get.call_args.kwargs["instance"] == production_vm.name
+
+
+def test_claim_idle_vm_replenishes_when_only_foreign_candidates_exist(monkeypatch):
+    monkeypatch.setenv("DEPLOY_ENV", "production")
+    staging_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-europe-west2-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "environment": "staging",
+            },
+        ),
+    )
+    client = MagicMock()
+    client.list.return_value = [staging_vm]
+    replenished = []
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.replenish_pool",
+        lambda vm_type: replenished.append(vm_type),
+    )
+
+    with pytest.raises(ValueError, match="No idle ubuntu pool VMs available"):
+        _claim_idle_vm_inner(
+            client,
+            label_filter="labels.pool-role = idle",
+            assistant_id="assistant-1406",
+            binding_id="binding-1406",
+            vm_type="ubuntu",
+            vm_number=None,
+        )
+
+    assert replenished == ["ubuntu"]
+    client.get.assert_not_called()
+    client.set_labels.assert_not_called()
+
+
+def test_pool_state_does_not_count_foreign_environment_capacity(monkeypatch):
+    monkeypatch.setenv("DEPLOY_ENV", "production")
+    production_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-europe-west2-3",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "environment": "production",
+            },
+        ),
+        status="RUNNING",
+    )
+    staging_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-europe-west2-2-staging",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "vm-type": "ubuntu",
+                "environment": "staging",
+            },
+        ),
+        status="RUNNING",
+    )
+    client = MagicMock()
+    client.list.return_value = [staging_vm, production_vm]
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+
+    _, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names = (
+        vm_helpers_module._list_pool_state("ubuntu")
+    )
+
+    assert pool_vms == [production_vm]
+    assert idle_vms == [production_vm]
+    assert stopped_vms == []
+    assert in_flight_vms == []
+    assert existing_names == {production_vm.name}
+    assert (
+        "labels.environment=production"
+        in client.list.call_args.kwargs["request"].filter
+    )
 
 
 def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypatch):
@@ -2356,7 +2478,7 @@ def test_reconcile_ignores_non_assistant_and_attached_disks(monkeypatch):
             name="unity-disk-ssd-pool-staging",
             last_detach_seconds_ago=old_detach,
             type_url=(
-                "projects/gcp-project-vms/zones/us-central1-f/" "diskTypes/pd-ssd"
+                "projects/gcp-project-vms/zones/us-central1-f/diskTypes/pd-ssd"
             ),
         ),
     ]
