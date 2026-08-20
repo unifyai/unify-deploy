@@ -293,6 +293,91 @@ class TestRecovering:
         assert response.status_code == 404
 
 
+class TestHowARefusalIsClassified:
+    """A malformed request is the caller's fault, and the code has to say so.
+
+    500 reads as transient, so a caller that trusts the status code retries a
+    rejection that will refuse identically every time. That is what happened
+    with an invalid ``execution_target``: every brokered publish came back as
+    "refused (500)", and only the ingestion run's own next_step guidance --
+    "a retry would fail the same way" -- stopped an assistant from looping on
+    it. Prose should not have to counteract the status code.
+    """
+
+    def test_a_validation_error_is_the_callers_fault(self):
+        from pydantic import BaseModel, ValidationError
+
+        class _Job(BaseModel):
+            target: str
+
+        try:
+            _Job(target=None)  # type: ignore[arg-type]
+        except ValidationError as exc:
+            handled = plane._handled(exc)
+
+        assert handled.status_code == 422
+
+    def test_an_unexpected_failure_is_still_a_server_fault(self):
+        handled = plane._handled(RuntimeError("object store unreachable"))
+
+        assert handled.status_code == 500
+
+    def test_a_validation_error_keeps_the_field_that_was_wrong(self):
+        # The detail is what tells the caller which field to fix, so it must
+        # survive the translation rather than collapse to a generic message.
+        from pydantic import BaseModel, ValidationError
+
+        class _Job(BaseModel):
+            execution_target: str
+
+        try:
+            _Job()  # type: ignore[call-arg]
+        except ValidationError as exc:
+            handled = plane._handled(exc)
+
+        assert "execution_target" in str(handled.detail)
+
+
+class TestExecutionTargetMapping:
+    """Environment names and execution targets are different vocabularies.
+
+    Environment detection answers "which deployment is this" and can say
+    ``development``; the job model's target answers "where does this execute"
+    and accepts only local, local_with_gcp, staging and production. Feeding one
+    into the other sent ``hosted`` into a field that rejects it, and would have
+    sent ``development`` from every self-host deployment.
+    """
+
+    @pytest.mark.parametrize(
+        "environment,expected",
+        [
+            ("staging", "staging"),
+            ("production", "production"),
+            ("development", "local"),
+            ("local", "local"),
+            ("local_with_gcp", "local_with_gcp"),
+            ("STAGING", "staging"),
+        ],
+    )
+    def test_each_environment_maps_to_a_valid_target(self, environment, expected):
+        from unify_deploy.infra.pipeline_ops import _execution_target
+
+        assert _execution_target(environment) == expected
+
+    @pytest.mark.parametrize("environment", ["", None, "hosted", "nonsense"])
+    def test_an_unrecognised_environment_falls_back_to_a_valid_target(
+        self,
+        environment,
+    ):
+        # Never the invalid value it was given: a bad environment must not
+        # become a bad target and fail validation downstream.
+        from unify.common.pipeline.deployment.types import DeploymentExecutionTarget
+        from unify_deploy.infra.pipeline_ops import _execution_target
+        from typing import get_args
+
+        assert _execution_target(environment) in get_args(DeploymentExecutionTarget)
+
+
 class TestHealth:
     def test_health_reports_unusable_when_no_backends_are_configured(
         self,

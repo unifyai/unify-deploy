@@ -226,6 +226,27 @@ def _upload_target(
     )
 
 
+def _execution_target(environment: str) -> str:
+    """Map a deployment environment onto a ``DeploymentExecutionTarget``.
+
+    The two vocabularies overlap without being the same. Environment detection
+    answers "which deployment is this" and can say ``development``; the job
+    model's target answers "where does this execute" and accepts only ``local``,
+    ``local_with_gcp``, ``staging`` and ``production``. Feeding one straight
+    into the other is what sent ``hosted`` -- and would have sent
+    ``development`` from any self-host deployment -- into a field that rejects
+    both, surfacing as a 500 from the control plane rather than a named bad
+    value.
+    """
+    return {
+        "development": "local",
+        "local": "local",
+        "local_with_gcp": "local_with_gcp",
+        "staging": "staging",
+        "production": "production",
+    }.get((environment or "").strip().lower(), "production")
+
+
 def publish_submit(
     *,
     infra: Any,
@@ -299,7 +320,13 @@ def publish_submit(
                 dispatch_id=run_key,
                 bundle_ref=DeploymentBundleRef(bundle_id=job_id, manifest_path=""),
                 run_mode="file_manager" if ingestion_mode == "fm" else "data_manager",
-                execution_target="hosted",
+                # The deployment's own environment, as the CLI publish path
+                # already does. "hosted" is not a member of
+                # DeploymentExecutionTarget, so every brokered publish was
+                # refused by model validation before a single file was parsed --
+                # and the refusal surfaced as a 500 from the control plane,
+                # which reads as an outage rather than a bad field.
+                execution_target=_execution_target(settings.environment),
                 status="queued",
                 metadata={
                     "source_file": source.logical_path,
