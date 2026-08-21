@@ -51,7 +51,11 @@ def test_lease_lifetime_cap_defaults(monkeypatch) -> None:
 
     max_lifetime_s, max_extensions = entrypoint_ingest._lease_lifetime_cap()
 
-    assert max_lifetime_s == 1800.0
+    # An hour, not the previous 30 minutes. The cap bounds one *message*, and a
+    # message is one whole file: 30 minutes was sized against a chunk time, so
+    # every multi-million-row file tripped it repeatedly and paid a redelivery
+    # and a resume each time.
+    assert max_lifetime_s == 3600.0
     assert max_extensions is None
 
 
@@ -82,5 +86,26 @@ def test_lease_lifetime_cap_ignores_garbage(monkeypatch) -> None:
     max_lifetime_s, max_extensions = entrypoint_ingest._lease_lifetime_cap()
 
     # Falls back to the safe default lifetime; bad extension count is ignored.
-    assert max_lifetime_s == 1800.0
+    assert max_lifetime_s == 3600.0
     assert max_extensions is None
+
+
+def test_surrender_grace_defaults_and_tunes(monkeypatch) -> None:
+    # The window in which a surrendering body must reach a chunk boundary. The
+    # lease keeps being renewed for this long so the message does not become
+    # reclaimable while the predecessor still holds the attempt lease.
+    monkeypatch.delenv("UNIFY_INGEST_LEASE_SURRENDER_GRACE_S", raising=False)
+    assert entrypoint_ingest._surrender_grace_seconds() == 900.0
+
+    monkeypatch.setenv("UNIFY_INGEST_LEASE_SURRENDER_GRACE_S", "120")
+    assert entrypoint_ingest._surrender_grace_seconds() == 120.0
+
+
+def test_surrender_grace_refuses_a_disabling_value(monkeypatch) -> None:
+    # Zero would mean "nack immediately", which is the defect this replaced.
+    # Garbage and zero both fall back to the default rather than to no grace.
+    monkeypatch.setenv("UNIFY_INGEST_LEASE_SURRENDER_GRACE_S", "0")
+    assert entrypoint_ingest._surrender_grace_seconds() == 900.0
+
+    monkeypatch.setenv("UNIFY_INGEST_LEASE_SURRENDER_GRACE_S", "not-a-number")
+    assert entrypoint_ingest._surrender_grace_seconds() == 900.0
