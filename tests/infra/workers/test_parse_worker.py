@@ -68,6 +68,22 @@ def test_merge_table_config_rejects_unmatched_multi_table_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_replay_parse_outbox_treats_missing_artifact_as_no_replay() -> None:
+    from unify.common.pipeline.artifact_store import ArtifactNotFound
+
+    class _Store:
+        def get_json(self, key: str):
+            raise ArtifactNotFound(f"Artifact not found: {key}")
+
+    replayed = await parse_worker._replay_parse_outbox_if_needed(
+        _Store(),
+        work_queue=None,
+        run_id="dc00ad723eaf4015ab06006e3294c63f",
+    )
+    assert replayed is False
+
+
+@pytest.mark.asyncio
 async def test_parse_duplicate_live_lease_raises_duplicate_attempt(monkeypatch) -> None:
     async def _no_outbox(*_args, **_kwargs):
         return False

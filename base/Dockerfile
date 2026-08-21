@@ -10,7 +10,6 @@
 # host assets are the same bytes the canvas origin serves, so what the assistant
 # reviews is what a viewer sees.
 FROM node:22-slim AS canvas
-ARG BRANCH=main
 ARG CANVAS_BRANDING_SHA=unknown
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
@@ -19,8 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
 
 # CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
-# kit would be baked in indefinitely. Branch logic mirrors the dependency clones
-# below: main→main, everything else→staging.
+# kit would be baked in indefinitely. branding is single-branch, so the kit is
+# always read from main -- it is a content repo with no environment to stage
+# into, unlike the dependency clones below which do track the deploy channel.
 #
 # branding and its packages/iso submodule are private and are each read with
 # their own repo-scoped read-only deploy key. A deploy key authorises exactly
@@ -46,7 +46,7 @@ RUN --mount=type=secret,id=branding_deploy_key \
     git config --global url."git@iso.gh:unifyai/iso-animation".insteadOf "git@github.com:unifyai/iso-animation" && \
     chmod +x /tmp/install-canvas-toolchain.sh && \
     /tmp/install-canvas-toolchain.sh \
-        --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
+        --branch main \
         --toolchain /opt/canvas-toolchain \
         --host /opt/canvas-host; \
     status=$?; \

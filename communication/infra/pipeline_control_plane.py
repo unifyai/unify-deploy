@@ -143,8 +143,18 @@ def _handled(exc: Exception) -> HTTPException:
     """Translate an operation's refusal into its HTTP shape."""
     from unify_deploy.infra.pipeline_ops import PipelineOpError
 
+    from pydantic import ValidationError
+
     if isinstance(exc, PipelineOpError):
         return HTTPException(status_code=exc.status_code, detail=str(exc))
+    if isinstance(exc, ValidationError):
+        # A malformed request is not a server fault, and the difference decides
+        # what the caller does next: 500 reads as transient, so a caller that
+        # trusts the status code retries a rejection that will refuse
+        # identically every time. Observed with an invalid execution_target,
+        # where every brokered publish came back as "refused (500)".
+        logger.warning("Pipeline control plane rejected a request: %s", exc)
+        return HTTPException(status_code=422, detail=str(exc))
     logger.exception("Pipeline control plane operation failed")
     return HTTPException(status_code=500, detail=str(exc) or "operation failed")
 

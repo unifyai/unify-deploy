@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from functools import partial
 from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
-from google.protobuf import duration_pb2
 import json
 import logging
 import os
@@ -264,13 +263,30 @@ async def _assert_job_owned_by_assistant(
         )
 
 
+def _require_orchestra_assistant(assistant_id: str) -> dict[str, Any]:
+    """Resolve the assistant from Orchestra, refusing an id it does not know.
+
+    ``get_assistant`` degrades a miss to the local stub so inbound webhooks
+    keep answering. Here a miss must stop the request instead: everything an
+    infra endpoint plants under an assistant id -- a Pub/Sub topic, a
+    bootstrap Secret, a pool disk, a static IP, a DNS record -- is orphaned
+    the moment it is created for an assistant that does not exist, and the
+    session teardown path never learns to remove it.
+    """
+    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    if not orchestra_assistant.get("assistant_id"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Assistant {assistant_id} does not exist in Orchestra",
+        )
+    return orchestra_assistant
+
+
 def _resolve_session_desktop_requirements(
-    assistant_id: str,
-    desktop_mode: str,
+    orchestra_assistant: dict[str, Any],
     raw_desktop_required: str,
 ) -> tuple[str, bool, bool]:
-    """Resolve desktop mode, entitlement, and VM requirement from Orchestra."""
-    orchestra_assistant = get_assistant(assistant_id=assistant_id)
+    """Resolve desktop mode, entitlement, and VM requirement for the assistant."""
     entitled = managed_desktop_entitled(orchestra_assistant)
     effective_desktop_mode = orchestra_assistant.get("desktop_mode", "none")
     parsed_override = _parse_desktop_required_form(
@@ -758,9 +774,6 @@ def _ensure_subscription(
     topic_path: str,
     subscription_path: str,
     filter_str: str,
-    *,
-    enable_message_ordering: bool = False,
-    message_retention_seconds: int | None = None,
 ):
     """Create or update a single subscription (blocking). Idempotent."""
     expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
@@ -770,12 +783,6 @@ def _ensure_subscription(
         "expiration_policy": expiration_policy,
         "filter": filter_str,
     }
-    if message_retention_seconds is not None:
-        request["message_retention_duration"] = duration_pb2.Duration(
-            seconds=message_retention_seconds,
-        )
-    if enable_message_ordering:
-        request["enable_message_ordering"] = True
 
     try:
         subscriber.create_subscription(request=request)
@@ -783,19 +790,6 @@ def _ensure_subscription(
     except Exception as e:
         if "already exists" not in str(e).lower():
             raise
-
-    if enable_message_ordering:
-        existing = subscriber.get_subscription(
-            request={"subscription": subscription_path},
-        )
-        if not existing.enable_message_ordering:
-            # enable_message_ordering cannot be changed on an existing
-            # subscription — the only way to add it is delete + recreate.
-            subscriber.delete_subscription(
-                request={"subscription": subscription_path},
-            )
-            subscriber.create_subscription(request=request)
-            return
 
     # The Pub/Sub emulator does not implement subscription field masks the
     # same way as production GCS Pub/Sub. Subscriptions are already created
@@ -816,11 +810,17 @@ def _ensure_subscription(
 
 
 async def _ensure_topic_and_subscriptions(topic_name: str) -> dict[str, str]:
-    """Create the assistant topic and its four subscriptions. Idempotent.
+    """Create the assistant topic and its two subscriptions. Idempotent.
 
     Returns a mapping of the resource paths that were ensured. Safe to call
     repeatedly: topic creation swallows "already exists" and each
     subscription is upserted via ``_ensure_subscription``.
+
+    Only the threads something actually pulls get a durable subscription.
+    The console reads ``action_event`` and ``system_error`` through
+    per-connection ephemeral subscriptions it creates and deletes around each
+    SSE connection, so durable ones for those threads accrue one per assistant
+    against the project's 10,000-subscription ceiling and are never read.
     """
     publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
 
@@ -832,14 +832,6 @@ async def _ensure_topic_and_subscriptions(topic_name: str) -> dict[str, str]:
     outbound_subscription_path = subscriber.subscription_path(
         SETTINGS.gcp_project_id,
         f"{topic_name}-outbound-sub",
-    )
-    actions_subscription_path = subscriber.subscription_path(
-        SETTINGS.gcp_project_id,
-        f"{topic_name}-actions-sub",
-    )
-    system_error_subscription_path = subscriber.subscription_path(
-        SETTINGS.gcp_project_id,
-        f"{topic_name}-system-error-sub",
     )
 
     # Create topic (idempotent)
@@ -868,29 +860,11 @@ async def _ensure_topic_and_subscriptions(topic_name: str) -> dict[str, str]:
             outbound_subscription_path,
             'attributes.thread = "unify_message_outbound"',
         ),
-        asyncio.to_thread(
-            _ensure_subscription,
-            subscriber,
-            topic_path,
-            actions_subscription_path,
-            'attributes.thread = "action_event"',
-            enable_message_ordering=True,
-            message_retention_seconds=1800,
-        ),
-        asyncio.to_thread(
-            _ensure_subscription,
-            subscriber,
-            topic_path,
-            system_error_subscription_path,
-            'attributes.thread = "system_error"',
-        ),
     )
 
     return {
         "topic_path": topic_path,
         "subscription_path": subscription_path,
-        "actions_subscription_path": actions_subscription_path,
-        "system_error_subscription_path": system_error_subscription_path,
     }
 
 
@@ -956,8 +930,6 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "message": "Topic and subscriptions ensured with no expiration",
             "topic_name": ensured["topic_path"],
             "subscription_name": ensured["subscription_path"],
-            "actions_subscription_name": ensured["actions_subscription_path"],
-            "system_error_subscription_name": ensured["system_error_subscription_path"],
             "project_id": SETTINGS.gcp_project_id,
         }
     except Exception as e:
@@ -1331,16 +1303,17 @@ async def start_job(
     )
 
     try:
-        batch_api, core_api, _, coord_api = await _get_k8s_clients()
-        custom_api = await asyncio.to_thread(get_custom_objects_api)
-        orchestra_assistant = get_assistant(assistant_id=assistant_id)
+        # An id Orchestra does not know is refused before anything is
+        # created under it: no lease, no topic, no Secret, no session.
+        orchestra_assistant = _require_orchestra_assistant(assistant_id)
         effective_desktop_mode, desktop_entitled, session_desktop_required = (
             _resolve_session_desktop_requirements(
-                assistant_id,
-                desktop_mode,
+                orchestra_assistant,
                 desktop_required,
             )
         )
+        batch_api, core_api, _, coord_api = await _get_k8s_clients()
+        custom_api = await asyncio.to_thread(get_custom_objects_api)
         startup_payload = _build_startup_payload(
             api_key=api_key,
             medium=medium,
@@ -3288,6 +3261,9 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
     disk, generates SSH keys, and updates metadata to trigger the on-VM
     watcher.
     """
+    # The disk, static IP and DNS record are all named after the assistant
+    # id; an id Orchestra does not know is refused before any of them exist.
+    _require_orchestra_assistant(request.assistant_id)
     try:
         result = await asyncio.get_running_loop().run_in_executor(
             ASSIGN_EXECUTOR,

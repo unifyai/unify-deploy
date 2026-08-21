@@ -13,6 +13,10 @@ INSTALL_BASE = (
     REPO_ROOT
     / "communication/infra/scripts/ubuntu-vm-custom-image/packer/scripts/install-base.sh"
 )
+SUPERVISOR_CONFIG = (
+    REPO_ROOT
+    / "communication/infra/scripts/ubuntu-vm-custom-image/packer/files/supervisord.conf"
+)
 POWERSHELL = shutil.which("pwsh")
 
 RELEASE_TRIGGER_CASES = [
@@ -428,6 +432,25 @@ def test_bash_watcher_repairs_unityuser_workspace_access_before_agent_start():
     # Repair after that extraction and before agent-service starts with
     # UNIFY_LOCAL_ROOT there.
     assert repair_after_profile_restore < text.index("# Agent Service .env")
+
+
+def test_agent_service_uses_supervisor_with_stable_desktop_dbus():
+    watcher = BASH_WATCHER.read_text()
+    supervisor = SUPERVISOR_CONFIG.read_text()
+
+    assert "supervisorctl start services:agent-service" in watcher
+    assert "supervisorctl stop services:agent-service" in watcher
+    assert "su -s /bin/bash unityuser -c" not in watcher
+    assert 'pkill -f "node"' not in watcher
+
+    agent_program = supervisor.split("[program:agent-service]", 1)[1].split(
+        "[program:caddy]",
+        1,
+    )[0]
+    assert 'DBUS_SESSION_BUS_ADDRESS="autolaunch:"' in agent_program
+    assert "autorestart=true" in agent_program
+    assert "redirect_stderr=true" in agent_program
+    assert "stdout_logfile=/var/log/supervisor/agent-service.log" in agent_program
 
 
 def test_powershell_watcher_scrubs_magnitude_and_archives_profile():

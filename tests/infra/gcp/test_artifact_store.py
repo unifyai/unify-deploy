@@ -45,6 +45,13 @@ def _make_store(*, max_retries: int = 3) -> GcsArtifactStore:
 
 
 class TestIsNotFoundError:
+    def test_detects_artifact_not_found_port_error(self):
+        from unify.common.pipeline.artifact_store import ArtifactNotFound
+
+        assert _is_not_found_error(
+            ArtifactNotFound("Artifact not found: jobs/x/outbox/parse.json"),
+        )
+
     def test_detects_google_api_core_not_found(self):
         from google.api_core.exceptions import NotFound
 

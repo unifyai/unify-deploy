@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12, <4.0"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -8842,6 +8842,7 @@ dependencies = [
     { name = "google-cloud-storage" },
     { name = "itsdangerous" },
     { name = "jinja2" },
+    { name = "jsonschema" },
     { name = "kubernetes" },
     { name = "langchain" },
     { name = "langchain-anthropic" },
@@ -8904,6 +8905,7 @@ requires-dist = [
     { name = "google-cloud-storage", specifier = ">=3.4.1" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "jsonschema", specifier = ">=4.20" },
     { name = "kubernetes", specifier = ">=35.0.0,<36.0.0" },
     { name = "langchain", specifier = ">=0.3.27" },
     { name = "langchain-anthropic", specifier = ">=1.0.0" },

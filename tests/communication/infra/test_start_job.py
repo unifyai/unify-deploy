@@ -47,6 +47,7 @@ def _mock_orchestra_assistant_lookup():
     with patch(
         "communication.infra.views.get_assistant",
         return_value={
+            "assistant_id": "assistant-123",
             "desktop_mode": "ubuntu",
             "managed_desktop_status": "active",
         },
@@ -1044,6 +1045,54 @@ def test_start_job_returns_503_when_new_activation_needs_control_plane(client):
     mock_create_or_update_assistant_session.assert_not_called()
 
 
+def test_start_job_returns_404_for_assistant_unknown_to_orchestra(client):
+    """An id Orchestra does not know must be refused before anything is created.
+
+    The northbound form carries everything needed to build a session, so a
+    caller pointed at the wrong deployment (a staging id against production
+    comms) used to sail through: lease, Pub/Sub topic and subscriptions,
+    bootstrap Secret and AssistantSession were all planted for an assistant
+    that did not exist, and session teardown removed only the last two.
+
+    ``get_assistant`` renders a miss as the local stub with ``assistant_id``
+    unset rather than raising, so that is the shape the guard must catch.
+    """
+
+    with (
+        patch(
+            "communication.infra.views.get_assistant",
+            return_value={"assistant_id": None, "desktop_mode": "none"},
+        ),
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+        ) as mock_get_k8s_clients,
+        patch("communication.infra.views.acquire_named_lease") as mock_acquire_lease,
+        patch(
+            "communication.infra.views._ensure_assistant_topic_on_wake",
+            new_callable=AsyncMock,
+        ) as mock_ensure_topic,
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post(
+            "/infra/job/start",
+            data=_start_job_payload(assistant_id="8201"),
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Assistant 8201 does not exist in Orchestra"
+    mock_get_k8s_clients.assert_not_called()
+    mock_acquire_lease.assert_not_called()
+    mock_ensure_topic.assert_not_called()
+    mock_create_or_update_bootstrap_secret.assert_not_called()
+    mock_create_or_update_assistant_session.assert_not_called()
+
+
 def test_start_job_rejects_reuse_of_terminating_session(client):
     core_api = MagicMock()
     custom_api = MagicMock()
@@ -1321,6 +1370,7 @@ def test_start_job_never_requires_desktop_without_the_addon(client):
     with patch(
         "communication.infra.views.get_assistant",
         return_value={
+            "assistant_id": "assistant-123",
             "desktop_mode": "none",
             "managed_desktop_status": "disabled",
         },
@@ -1342,6 +1392,7 @@ def test_start_job_never_requires_desktop_when_addon_is_not_active(client):
     with patch(
         "communication.infra.views.get_assistant",
         return_value={
+            "assistant_id": "assistant-123",
             "desktop_mode": "ubuntu",
             "managed_desktop_status": None,
         },

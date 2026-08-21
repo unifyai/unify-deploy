@@ -64,7 +64,7 @@ steps:
     UNISDK_SHA=$$(git ls-remote https://github.com/unifyai/unisdk.git refs/heads/staging | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://github.com/unifyai/unillm.git refs/heads/staging | cut -f1)
     MAGNITUDE_SHA=$$(git ls-remote https://github.com/unifyai/magnitude.git refs/heads/main | cut -f1)
-    BRANDING_SHA=$$(ssh_with /workspace/.k_branding git@github.com:unifyai/branding.git refs/heads/staging)
+    BRANDING_SHA=$$(ssh_with /workspace/.k_branding git@github.com:unifyai/branding.git refs/heads/main)
     echo "$${UNISDK_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
     echo "$${MAGNITUDE_SHA}" > /workspace/magnitude_sha.txt
     echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt

@@ -44,6 +44,19 @@ def _mock_idle_pool_replenishment():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _mock_orchestra_assistant_lookup():
+    with patch(
+        "communication.infra.views.get_assistant",
+        return_value={
+            "assistant_id": "assistant-123",
+            "desktop_mode": "ubuntu",
+            "managed_desktop_status": "active",
+        },
+    ):
+        yield
+
+
 def _start_job_payload() -> dict[str, str]:
     return {
         "api_key": "test-api-key",

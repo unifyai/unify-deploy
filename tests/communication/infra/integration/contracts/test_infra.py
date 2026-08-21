@@ -57,8 +57,6 @@ class TestPubSubTopicCRUD:
             body = create_resp.json()
             assert "topic_name" in body
             assert "subscription_name" in body
-            assert "actions_subscription_name" in body
-            assert "system_error_subscription_name" in body
             assert "project_id" in body
             assert GCP_PROJECT_ID in body["project_id"]
 

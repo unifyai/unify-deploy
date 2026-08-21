@@ -493,8 +493,7 @@ notify_release_complete() {
 }
 
 kill_agent_service() {
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
+    supervisorctl stop services:agent-service >/dev/null 2>&1 || true
 
     for i in $(seq 1 10); do
         if ! ss -tlnp | grep -q ':3000 '; then
@@ -839,12 +838,17 @@ EOF
     chmod 600 /agent-service/.env
     log "Agent Service .env configured"
 
-    # Start Agent Service as unityuser
+    # Supervisor owns the long-lived process and supplies the desktop's stable
+    # autolaunched D-Bus. Login-scoped /run/user buses disappear after each
+    # SFTP poll and Chromium aborts if it inherited one through su/PAM.
     kill_agent_service
     touch /var/log/agent-service.log
     chown unityuser:unityuser /var/log/agent-service.log
-    su -s /bin/bash unityuser -c "cd /agent-service && nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &"
-    log "Agent Service started (as unityuser)"
+    if ! supervisorctl start services:agent-service; then
+        log "ERROR: Supervisor failed to start Agent Service"
+        return 1
+    fi
+    log "Agent Service started by Supervisor"
 
     log "Waiting for Agent Service on port 3000..."
     for i in $(seq 1 60); do

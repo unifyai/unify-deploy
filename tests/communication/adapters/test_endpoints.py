@@ -647,6 +647,46 @@ def test_microsoft_auth_callback_with_error(test_client):
     assert "access_denied" in response.text
 
 
+def test_microsoft_auth_callback_admin_consent_granted(test_client):
+    """An administrator approving for their whole organisation lands here.
+
+    Approving an application for a tenant goes through /v2.0/adminconsent,
+    which redirects with ``admin_consent=True&tenant=<id>`` and deliberately no
+    code -- there is no user session to exchange, and the grant is recorded when
+    Accept is clicked. Falling through to the authorization-code path told an
+    administrator who did exactly what we asked that the authorization code was
+    missing, which reads as failure after a successful approval. Observed live
+    with a customer's IT.
+    """
+    response = test_client.make_request(
+        "GET",
+        "/microsoft/auth/callback",
+        params={
+            "admin_consent": "True",
+            "tenant": "cfe84544-5e06-4f30-a4a0-5cf558a66462",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Missing authorization code" not in response.text
+    assert "Approved" in response.text
+
+
+def test_microsoft_auth_callback_admin_consent_declined(test_client):
+    """A declined approval says nothing changed rather than claiming success."""
+    response = test_client.make_request(
+        "GET",
+        "/microsoft/auth/callback",
+        params={
+            "admin_consent": "False",
+            "tenant": "cfe84544-5e06-4f30-a4a0-5cf558a66462",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "not granted" in response.text
+
+
 def test_microsoft_auth_callback_invalid_state(test_client):
     """Test Microsoft OAuth callback handles invalid state parameter."""
     endpoint = "/microsoft/auth/callback"

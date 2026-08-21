@@ -155,9 +155,25 @@ PRESET_PARSE_SUB="${UNIFY_PARSE_SUB:-}"
 PRESET_INGEST_SUB="${UNIFY_INGEST_SUB:-}"
 PRESET_DLQ_SUB="${UNIFY_DLQ_SUB:-}"
 PRESET_ARTIFACT_BUCKET="${UNIFY_GCS_ARTIFACT_BUCKET:-}"
+# .env may overwrite a valid caller-supplied key with a stale path.
+CALLER_GAC="${GOOGLE_APPLICATION_CREDENTIALS:-}"
 _ENV_FILE="$REPO_ROOT/.env"
 if [ -f "$_ENV_FILE" ]; then
   set -a; . "$_ENV_FILE"; set +a
+fi
+
+# A stale GOOGLE_APPLICATION_CREDENTIALS path in .env (for example a
+# missing local service-account JSON) makes google.auth.default() fail
+# before gcloud / ADC can be used. Prefer a caller-supplied file that
+# exists; otherwise drop the var so dispatch can use gcloud ADC.
+if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
+  if [[ -n "$CALLER_GAC" && -f "$CALLER_GAC" ]]; then
+    echo "WARNING: .env GOOGLE_APPLICATION_CREDENTIALS path does not exist; using caller-supplied $CALLER_GAC"
+    export GOOGLE_APPLICATION_CREDENTIALS="$CALLER_GAC"
+  else
+    echo "WARNING: GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS does not exist; unsetting so dispatch can use application-default / gcloud credentials."
+    unset GOOGLE_APPLICATION_CREDENTIALS
+  fi
 fi
 
 if [[ -n "$PIPELINE_ENV_ARG" ]]; then
@@ -219,7 +235,7 @@ if (( ! MONITOR_ONLY )); then
 
   echo "[1/5] Dispatching pipeline job..."
   cd "$REPO_ROOT"
-  uv run unify_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
+  uv run --no-env-file unify_deploy/scripts/dispatch_pipeline.py "${DISPATCH_ARGS[@]}" 2>&1 | tee "$LOG_DIR/dispatch.log"
   DISPATCH_EXIT=${PIPESTATUS[0]}
 
   if [ "$DISPATCH_EXIT" -ne 0 ]; then

@@ -1913,6 +1913,10 @@ def _pool_name_env_suffixes() -> tuple[str, ...]:
     return tuple(suffixes)
 
 
+def _current_pool_environment_label() -> str:
+    return "staging" if SETTINGS.deploy_env == "staging" else "production"
+
+
 def _parse_pool_vm_identity(
     vm_name: str,
     vm_type: str | None = None,
@@ -1956,6 +1960,22 @@ def _parse_pool_vm_identity(
                         continue
                 return prefix, candidate_type, number, env_suffix
     return None
+
+
+def _is_current_environment_pool_vm(instance: Any, vm_type: str | None = None) -> bool:
+    """Return whether a pool VM is safe for this environment to operate on.
+
+    The name is the durable boundary because older VMs may predate the
+    ``environment`` label. When the label is present, require it to agree with
+    the name and the controller as a second guard against cross-environment
+    claims in shared GCP projects and zones.
+    """
+    parsed = _parse_pool_vm_identity(str(getattr(instance, "name", "")), vm_type)
+    if parsed is None or parsed[3] != SETTINGS.env_suffix:
+        return False
+    labels = dict(getattr(instance, "labels", None) or {})
+    environment = str(labels.get("environment", "") or "")
+    return not environment or environment == _current_pool_environment_label()
 
 
 def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
@@ -2586,6 +2606,8 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
     )
     results = []
     for instance in client.list(request=request):
+        if not _is_current_environment_pool_vm(instance, vm_type):
+            continue
         labels = dict(instance.labels) if instance.labels else {}
         external_ip = None
         if instance.network_interfaces:
@@ -3155,6 +3177,7 @@ def claim_idle_vm(
     client = compute_v1.InstancesClient()
     label_filter = (
         f"labels.pool-role=idle AND labels.vm-type={vm_type} "
+        f"AND labels.environment={_current_pool_environment_label()} "
         f"AND labels.{POOL_CONTRACT_GENERATION_LABEL}={POOL_VM_CONTRACT_GENERATION} "
         "AND status=RUNNING"
     )
@@ -3194,7 +3217,15 @@ def _claim_idle_vm_inner(
             zone=_current_vm_placement().zone,
             filter=label_filter,
         )
-        idle_vms = list(client.list(request=request))
+        listed_idle_vms = list(client.list(request=request))
+        idle_vms = [
+            vm for vm in listed_idle_vms if _is_current_environment_pool_vm(vm, vm_type)
+        ]
+        if len(idle_vms) != len(listed_idle_vms):
+            logger.warning(
+                "Ignoring foreign-environment idle pool VMs: %s",
+                [vm.name for vm in listed_idle_vms if vm not in idle_vms],
+            )
         if not idle_vms:
             replenish_pool(vm_type)
             raise ValueError(
@@ -3231,6 +3262,15 @@ def _claim_idle_vm_inner(
                 zone=_current_vm_placement().zone,
                 instance=candidate_name,
             )
+            if not _is_current_environment_pool_vm(fresh, vm_type):
+                _log_vm_pool_event(
+                    "claim_skipped",
+                    assistant_id=assistant_id,
+                    vm_name=candidate_name,
+                    vm_type=vm_type,
+                    reason="foreign_environment",
+                )
+                continue
             if not _has_current_pool_contract(fresh):
                 logger.info(
                     "Skipping stale-contract idle VM %s during claim",
@@ -5507,14 +5547,23 @@ def _list_pool_state(vm_type: str):
     claimable (provisioning, starting, or releasing).
     """
     client = compute_v1.InstancesClient()
-    type_filter = f"labels.vm-type={vm_type}"
+    type_filter = (
+        f"labels.vm-type={vm_type} "
+        f"AND labels.environment={_current_pool_environment_label()}"
+    )
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
         zone=_current_vm_placement().zone,
         filter=type_filter,
     )
     all_vms = list(client.list(request=request))
-    all_pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
+    all_pool_vms = [
+        vm
+        for vm in all_vms
+        if vm.labels
+        and vm.labels.get("pool-role")
+        and _is_current_environment_pool_vm(vm, vm_type)
+    ]
     pool_vms = [vm for vm in all_pool_vms if _has_current_pool_contract(vm)]
     idle_vms = [
         vm
@@ -5585,8 +5634,7 @@ def _start_one_stopped_vm(client, vm) -> bool:
             instance=vm.name,
         )
         logger.info(
-            "Replenish: start request submitted for stopped VM %s "
-            "(pool-role=starting)",
+            "Replenish: start request submitted for stopped VM %s (pool-role=starting)",
             vm.name,
         )
         _log_vm_pool_event(
@@ -5729,11 +5777,16 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
         zone=_current_vm_placement().zone,
         filter=(
             f"labels.pool-role=idle AND labels.vm-type={vm_type} "
+            f"AND labels.environment={_current_pool_environment_label()} "
             f"AND labels.{POOL_CONTRACT_GENERATION_LABEL}={POOL_VM_CONTRACT_GENERATION} "
             "AND status=RUNNING"
         ),
     )
-    idle_vms = list(client.list(request=request))
+    idle_vms = [
+        vm
+        for vm in client.list(request=request)
+        if _is_current_environment_pool_vm(vm, vm_type)
+    ]
     if not idle_vms:
         return []
 

@@ -2,15 +2,12 @@
 Unit tests for the /infra/pubsub/topic create and delete endpoints.
 
 These tests verify:
-- All four subscriptions are created with correct filters
-- The actions subscription has 30-minute message retention
-- The actions subscription has message ordering enabled
-- The "already exists" path updates existing subscriptions and creates the
-  actions subscription if it is missing (migration from older assistants)
-- Existing actions subscriptions without ordering are deleted and recreated
-  (enable_message_ordering cannot be updated on an existing subscription)
-- Deletion iterates all attached subscriptions (no code change needed, but
-  we verify the existing behaviour still holds with the new subscription)
+- Both subscriptions are created with correct filters, and no durable
+  subscription is created for a thread nothing pulls
+- The "already exists" path updates existing subscriptions and creates only
+  the ones that are missing
+- Deletion iterates all attached subscriptions, so subscriptions provisioned
+  before they stopped being created are still cleaned up
 """
 
 import json
@@ -116,14 +113,14 @@ class TestCreatePubSubTopic:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_creates_all_four_subscriptions(
+    def test_creates_both_subscriptions(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """All four subscriptions should be created on a fresh topic."""
+        """Both subscriptions should be created on a fresh topic."""
         publisher, subscriber, captured = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -136,7 +133,7 @@ class TestCreatePubSubTopic:
         )
 
         assert response.status_code == 200
-        assert len(captured) == 4
+        assert len(captured) == 2
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
@@ -191,14 +188,22 @@ class TestCreatePubSubTopic:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_actions_sub_has_correct_filter(
+    def test_unread_threads_get_no_durable_subscription(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """The -actions-sub should filter FOR action_event messages."""
+        """Only inbound and outbound get a durable subscription.
+
+        ``action_event`` and ``system_error`` are read over per-connection
+        ephemeral subscriptions the console creates and deletes around each SSE
+        connection. A durable one per assistant for those threads is never
+        pulled, and at four subscriptions per assistant the project reached its
+        10,000-subscription ceiling, which fails every new ephemeral
+        subscription and takes chat down.
+        """
         publisher, subscriber, captured = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -207,96 +212,24 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
-        assert req["filter"] == 'attributes.thread = "action_event"'
-        assert req["name"].endswith("-actions-sub")
+        created = {req["name"] for req in captured}
+        assert created == {
+            "projects/gcp-project-runtime/subscriptions/unity-test-staging-sub",
+            "projects/gcp-project-runtime/subscriptions/unity-test-staging-outbound-sub",
+        }
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_actions_sub_has_message_ordering_enabled(
+    def test_response_carries_topic_and_inbound_subscription(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """The -actions-sub should have message ordering enabled so events
-        are delivered in publish order."""
-        publisher, subscriber, captured = _setup_pubsub_mocks(
-            mock_pub_cls,
-            mock_sub_cls,
-            mock_creds,
-        )
-
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
-
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
-        assert req.get("enable_message_ordering") is True
-
-    @patch("communication.infra.views.Credentials.from_service_account_info")
-    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
-    @patch("communication.infra.views.pubsub_v1.PublisherClient")
-    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_actions_sub_has_30min_message_retention(
-        self,
-        mock_pub_cls,
-        mock_sub_cls,
-        mock_creds,
-        client,
-    ):
-        """The -actions-sub should have a 30-minute message retention."""
-        publisher, subscriber, captured = _setup_pubsub_mocks(
-            mock_pub_cls,
-            mock_sub_cls,
-            mock_creds,
-        )
-
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
-
-        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
-        retention = req["message_retention_duration"]
-        assert (
-            retention.seconds == 1800
-        ), f"Expected 1800s (30 min) retention, got {retention.seconds}s"
-
-    @patch("communication.infra.views.Credentials.from_service_account_info")
-    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
-    @patch("communication.infra.views.pubsub_v1.PublisherClient")
-    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_system_error_sub_has_correct_filter(
-        self,
-        mock_pub_cls,
-        mock_sub_cls,
-        mock_creds,
-        client,
-    ):
-        """The -system-error-sub should filter FOR system_error messages."""
-        publisher, subscriber, captured = _setup_pubsub_mocks(
-            mock_pub_cls,
-            mock_sub_cls,
-            mock_creds,
-        )
-
-        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
-
-        req = _request_for_subscription(captured, "unity-test-staging-system-error-sub")
-        assert req["filter"] == 'attributes.thread = "system_error"'
-        assert req["name"].endswith("-system-error-sub")
-
-    @patch("communication.infra.views.Credentials.from_service_account_info")
-    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
-    @patch("communication.infra.views.pubsub_v1.PublisherClient")
-    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_response_includes_system_error_subscription_name(
-        self,
-        mock_pub_cls,
-        mock_sub_cls,
-        mock_creds,
-        client,
-    ):
-        """The response body should include the system error subscription path."""
+        """The response body should name the topic and the inbound subscription."""
         publisher, subscriber, captured = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -310,36 +243,9 @@ class TestCreatePubSubTopic:
 
         data = response.json()
         assert data["success"] is True
-        assert "system_error_subscription_name" in data
-        assert data["system_error_subscription_name"].endswith("-system-error-sub")
-
-    @patch("communication.infra.views.Credentials.from_service_account_info")
-    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
-    @patch("communication.infra.views.pubsub_v1.PublisherClient")
-    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_response_includes_actions_subscription_name(
-        self,
-        mock_pub_cls,
-        mock_sub_cls,
-        mock_creds,
-        client,
-    ):
-        """The response body should include the actions subscription path."""
-        publisher, subscriber, captured = _setup_pubsub_mocks(
-            mock_pub_cls,
-            mock_sub_cls,
-            mock_creds,
-        )
-
-        response = client.post(
-            "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
-        )
-
-        data = response.json()
-        assert data["success"] is True
-        assert "actions_subscription_name" in data
-        assert data["actions_subscription_name"].endswith("-actions-sub")
+        assert data["subscription_name"].endswith("-sub")
+        assert "actions_subscription_name" not in data
+        assert "system_error_subscription_name" not in data
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
@@ -366,7 +272,7 @@ class TestCreatePubSubTopic:
         )
 
         assert response.status_code == 200
-        assert len(captured) == 4
+        assert len(captured) == 2
 
 
 # =========================================================================
@@ -381,16 +287,15 @@ class TestCreatePubSubTopicAlreadyExists:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_updates_existing_subs_when_already_exist_and_ordered(
+    def test_updates_existing_subs_when_already_exist(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """When all subscriptions already exist and the actions sub already
-        has ordering enabled, expiration policies should be updated without
-        recreating the actions subscription."""
+        """When both subscriptions already exist, their expiration policies
+        should be updated and neither recreated."""
         publisher, subscriber, _ = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -402,85 +307,29 @@ class TestCreatePubSubTopicAlreadyExists:
 
         subscriber.create_subscription.side_effect = always_exists
 
-        # Actions sub already has ordering — no delete+recreate needed
-        existing_sub = MagicMock()
-        existing_sub.enable_message_ordering = True
-        subscriber.get_subscription.return_value = existing_sub
-
         response = client.post(
             "/infra/pubsub/topic",
             data={"topic_name": "unity-test-staging"},
         )
 
         assert response.status_code == 200
-        # 4 updates: main + outbound + actions (expiration only) + system-error
-        assert subscriber.update_subscription.call_count == 4
+        # 2 updates: main + outbound
+        assert subscriber.update_subscription.call_count == 2
         subscriber.delete_subscription.assert_not_called()
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_recreates_actions_sub_when_ordering_not_enabled(
+    def test_creates_only_the_missing_subscription(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """When the actions sub exists but lacks message ordering, it should
-        be deleted and recreated with ordering enabled. This is necessary
-        because enable_message_ordering cannot be updated on an existing sub."""
-        publisher, subscriber, _ = _setup_pubsub_mocks(
-            mock_pub_cls,
-            mock_sub_cls,
-            mock_creds,
-        )
-
-        seen_names = set()
-
-        def create_side_effect(*, request):
-            name = request.get("name", "")
-            if name not in seen_names:
-                # First attempt for every subscription — already exists
-                seen_names.add(name)
-                raise Exception("Resource already exists")
-            # Second attempt (recreate after delete) — succeeds
-            return MagicMock()
-
-        subscriber.create_subscription.side_effect = create_side_effect
-
-        # Actions sub exists WITHOUT ordering — must delete and recreate
-        existing_sub = MagicMock()
-        existing_sub.enable_message_ordering = False
-        subscriber.get_subscription.return_value = existing_sub
-
-        response = client.post(
-            "/infra/pubsub/topic",
-            data={"topic_name": "unity-test-staging"},
-        )
-
-        assert response.status_code == 200
-        # main + outbound + system-error updated (actions was recreated, not updated)
-        assert subscriber.update_subscription.call_count == 3
-        subscriber.delete_subscription.assert_called_once()
-        # 5 total creates: 4 initial (all failed) + 1 actions-sub recreate (succeeded)
-        assert subscriber.create_subscription.call_count == 5
-
-    @patch("communication.infra.views.Credentials.from_service_account_info")
-    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
-    @patch("communication.infra.views.pubsub_v1.PublisherClient")
-    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_creates_actions_sub_when_only_old_subs_exist(
-        self,
-        mock_pub_cls,
-        mock_sub_cls,
-        mock_creds,
-        client,
-    ):
-        """Migration path: main-sub and outbound-sub exist, but actions-sub
-        does not. The except block should update the two existing subs and
-        successfully create the actions sub."""
+        """Mixed state: the main sub exists, the outbound one does not. The
+        existing sub takes the update path and the missing one is created."""
         publisher, subscriber, _ = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -494,7 +343,7 @@ class TestCreatePubSubTopicAlreadyExists:
             if call_count["n"] == 1:
                 # First call (main-sub) — already exists
                 raise Exception("Resource already exists")
-            # Remaining calls (outbound, actions, system-error) — succeed
+            # Remaining call (outbound) — succeeds
             return MagicMock()
 
         subscriber.create_subscription.side_effect = create_sub_side_effect
@@ -507,8 +356,8 @@ class TestCreatePubSubTopicAlreadyExists:
         assert response.status_code == 200
         # Only the main-sub triggered the "already exists" path → 1 update
         assert subscriber.update_subscription.call_count == 1
-        # 4 total create_subscription calls: 1 failed + 3 succeeded
-        assert subscriber.create_subscription.call_count == 4
+        # 2 total create_subscription calls: 1 failed + 1 succeeded
+        assert subscriber.create_subscription.call_count == 2
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")

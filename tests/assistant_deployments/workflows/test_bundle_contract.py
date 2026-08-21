@@ -225,6 +225,22 @@ def test_every_param_explains_itself(slug: str):
                 re.IGNORECASE,
             ), f"{slug}: optional param {name} must say what happens when it is omitted"
 
+        # Prose is for the person; `default` is for the installer. A number or
+        # a flag whose fallback lives only in help text gets applied by a model
+        # re-reading English on every run -- one live briefing received its
+        # `focus` as the two-character string "''" that way. Text params are
+        # exempt because their fallback is usually a behaviour ("goes on your
+        # primary calendar"), which there is no value to write down.
+        if spec.get("type") in {"number", "boolean"} and not spec.get("required"):
+            assert "default" in spec, (
+                f"{slug}: optional {spec['type']} param {name} promises a fallback "
+                "in its help text but declares no `default` the installer can apply"
+            )
+            expected = int if spec["type"] == "number" else bool
+            assert isinstance(spec["default"], expected) and not (
+                spec["type"] == "number" and isinstance(spec["default"], bool)
+            ), f"{slug}: param {name} declares a `default` of the wrong type"
+
 
 @pytest.mark.parametrize("slug", SLUGS)
 def test_it_actually_sets_something_up(slug: str):
