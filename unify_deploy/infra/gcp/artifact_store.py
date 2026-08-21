@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional, Sequence
 from urllib.parse import urlparse
 
 from google.api_core.exceptions import NotFound, PreconditionFailed
@@ -668,14 +668,31 @@ class GcsArtifactStore:
             return None
         return IngestCheckpoint.model_validate(data)
 
-    def delete_checkpoints(self, job_id: str) -> None:
-        """Discard every recorded checkpoint for one job (no-op if absent).
+    def delete_checkpoints(
+        self,
+        job_id: str,
+        *,
+        artifact_ids: Optional[Sequence[str]] = None,
+    ) -> None:
+        """Discard recorded checkpoints for one job (no-op if absent).
 
-        Exists for full re-runs only; the lease, not this, is what keeps a live
-        attempt safe from concurrent writers.
+        ``artifact_ids`` narrows the discard to those tables, for re-attempting
+        one file out of a batch: the rest of the batch's marks describe rows
+        that committed correctly, and discarding them would silently widen a
+        one-file retry into a re-ingest of everything.
+
+        The lease, not this, is what keeps a live attempt safe from concurrent
+        writers.
         """
         prefix = self._full_key(f"jobs/{_safe_fragment(job_id)}/checkpoints/")
+        if artifact_ids is not None:
+            wanted = {_safe_fragment(artifact_id) for artifact_id in artifact_ids}
+            if not wanted:
+                return
         for blob in self.bucket.client.list_blobs(self.bucket, prefix=prefix):
+            if artifact_ids is not None:
+                if blob.name.rsplit("/", 1)[-1] not in wanted:
+                    continue
             self._with_retry(
                 blob.delete,
                 operation=f"delete_checkpoint({blob.name})",
