@@ -440,11 +440,12 @@ def test_agent_service_uses_supervisor_with_stable_desktop_dbus():
 
     assert "supervisorctl start services:agent-service" in watcher
     assert "supervisorctl stop services:agent-service" in watcher
-    assert 'su -s /bin/bash unityuser -c' not in watcher
+    assert "su -s /bin/bash unityuser -c" not in watcher
     assert 'pkill -f "node"' not in watcher
 
     agent_program = supervisor.split("[program:agent-service]", 1)[1].split(
-        "[program:caddy]", 1
+        "[program:caddy]",
+        1,
     )[0]
     assert 'DBUS_SESSION_BUS_ADDRESS="autolaunch:"' in agent_program
     assert "autorestart=true" in agent_program
