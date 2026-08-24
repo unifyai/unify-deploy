@@ -132,6 +132,7 @@ class LeaseController:
         max_consecutive_failures: int = 3,
         max_lifetime_s: float | None = None,
         max_extensions: int | None = None,
+        surrender_grace_s: float = 900.0,
     ):
         self._work_queue = work_queue
         self._receipt_id = receipt_id
@@ -143,10 +144,25 @@ class LeaseController:
         self._run_id = run_id
         self._stage = stage
         self._max_consecutive_failures = max(1, int(max_consecutive_failures))
-        # Lease-lifetime cap (defense-in-depth). When a single message is held
-        # past either bound we stop extending, flag surrender, and nack so the
-        # message becomes reclaimable — this is what lets pause/stop actually
-        # reclaim an in-flight chunk instead of extending the deadline forever.
+        # Lease-lifetime cap (defense-in-depth). Past either bound we flag
+        # surrender so the worker body unwinds at its next safe boundary, which
+        # is what lets pause/stop reclaim an in-flight chunk instead of
+        # extending the deadline forever.
+        #
+        # We keep extending while it unwinds. Nacking at the moment the cap
+        # trips made the message reclaimable *immediately*, while the body was
+        # still mid-chunk holding the attempt lease -- so the successor arrived,
+        # found a live holder, and raised DuplicateLiveAttempt. With chunks
+        # taking ~50s that race fired on every file longer than the cap, and
+        # burned a delivery attempt each time until the message dead-lettered
+        # while the original was still committing rows.
+        #
+        # The body's own surrender path already nacks: it raises RetryWorkItem
+        # at a chunk boundary, after releasing the lease, and the entrypoint
+        # turns that into the redelivery. This one was a premature duplicate of
+        # it. ``surrender_grace_s`` bounds the wait so a wedged body is still
+        # reclaimed rather than holding the message forever.
+        #
         # ``None`` disables the cap (preserves the prior unbounded behavior for
         # callers that do not opt in).
         self._max_lifetime_s = (
@@ -155,7 +171,9 @@ class LeaseController:
         self._max_extensions = (
             int(max_extensions) if max_extensions and max_extensions > 0 else None
         )
+        self._surrender_grace_s = max(float(surrender_grace_s), 0.0)
         self._surrendered = threading.Event()
+        self._surrendered_at: float = 0.0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._state: Literal[
@@ -310,9 +328,11 @@ class LeaseController:
             next_tick = now + self._period_s
 
             # Enforce the lifetime cap BEFORE extending again. Once exceeded we
-            # stop renewing the deadline, flag surrender (so the worker body can
-            # unwind at its next safe boundary), nack for immediate redelivery,
-            # and exit the loop. The durable checkpoint makes resume safe.
+            # flag surrender so the worker body unwinds at its next safe
+            # boundary, and keep renewing the deadline until it does: the body
+            # still holds the attempt lease until it reaches that boundary, and
+            # making the message reclaimable before then hands a successor a
+            # lease it cannot take. The durable checkpoint makes resume safe.
             elapsed = now - self._started_at
             over_lifetime = (
                 self._max_lifetime_s is not None and elapsed >= self._max_lifetime_s
@@ -321,11 +341,11 @@ class LeaseController:
                 self._max_extensions is not None
                 and self._extensions >= self._max_extensions
             )
-            if over_lifetime or over_extensions:
+            if (over_lifetime or over_extensions) and not self._surrendered.is_set():
                 logger.warning(
                     "Lease lifetime cap reached (job=%s receipt_hash=%s "
                     "elapsed=%.0fs extensions=%d max_lifetime_s=%s "
-                    "max_extensions=%s) — surrendering for reclaim",
+                    "max_extensions=%s) — surrendering at the next boundary",
                     self._job_id or "?",
                     self._receipt_hash,
                     elapsed,
@@ -334,8 +354,26 @@ class LeaseController:
                     self._max_extensions,
                 )
                 self._surrendered.set()
-                self.nack_now(reason="lease:max_lifetime")
-                return
+                self._surrendered_at = now
+
+            # A body that never reaches a boundary would otherwise hold the
+            # message for as long as it runs, which is the failure the cap
+            # exists to prevent. Nacking here is the last resort, not the
+            # ordinary path.
+            if self._surrendered.is_set():
+                draining_for = now - self._surrendered_at
+                if draining_for >= self._surrender_grace_s:
+                    logger.error(
+                        "Surrender grace exhausted (job=%s receipt_hash=%s "
+                        "draining_for=%.0fs grace=%.0fs) — nacking without a "
+                        "clean handoff; a successor may contend for the lease",
+                        self._job_id or "?",
+                        self._receipt_hash,
+                        draining_for,
+                        self._surrender_grace_s,
+                    )
+                    self.nack_now(reason="lease:surrender_grace_exhausted")
+                    return
 
             try:
                 extend_started = time.monotonic()

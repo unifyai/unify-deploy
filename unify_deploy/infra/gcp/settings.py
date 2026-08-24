@@ -65,7 +65,13 @@ class PubSubQueueSettings(BaseSettings):
     ingest_subscription: str = "unity-ingest-sub"
     dead_letter_subscription: str = "unity-dead-letter-sub"
     sa_key_json: str = ""
-    ack_deadline_seconds: int = 600
+    # No ack_deadline_seconds here. It sat at 600 while the live subscription
+    # ran at 120, and nothing in this repo read it: neither subscription
+    # creator passes a deadline, and every modify_ack_deadline call computes
+    # its own. A number that configures nothing but reads as configuration is
+    # worse than its absence -- it sent an investigation after a deadline
+    # mismatch that did not exist, when the real cause was the lease-lifetime
+    # cap nacking mid-chunk. The deadline is provisioned outside this repo.
     max_messages: int = 1
 
 

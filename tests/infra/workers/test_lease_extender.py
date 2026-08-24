@@ -299,10 +299,17 @@ def test_lease_controller_heartbeat_failures_do_not_stop_extension() -> None:
     assert ledger.attempts == len(queue.calls)
 
 
-def test_lease_controller_surrenders_after_max_lifetime() -> None:
-    """Past ``max_lifetime_s`` the controller stops extending, flags
-    surrender, and nacks (deadline 0) so the message is reclaimable —
-    this is what lets pause/stop reclaim an in-flight chunk."""
+def test_lease_controller_surrenders_without_nacking_mid_chunk() -> None:
+    """Past ``max_lifetime_s`` the controller flags surrender and keeps the
+    deadline alive, so the body can reach a chunk boundary and release the
+    attempt lease before the message becomes reclaimable.
+
+    Nacking the instant the cap tripped was the defect: the successor arrived
+    while the predecessor still held the lease, raised DuplicateLiveAttempt,
+    and burned a delivery attempt. With ~50s chunks that fired on every file
+    longer than the cap until the message dead-lettered -- while the original
+    was still committing rows.
+    """
     queue = _StubQueue()
     controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
@@ -311,21 +318,80 @@ def test_lease_controller_surrenders_after_max_lifetime() -> None:
         period_seconds=0.05,
         extension_seconds=300,
         max_lifetime_s=0.12,
+        surrender_grace_s=30.0,
     )
 
     controller.start()
     time.sleep(0.6)
 
     assert controller.surrendered is True
-    # At least one real extension fired before the cap was hit.
+    # Still renewing: the body has not surrendered yet, so the message must
+    # stay held rather than becoming reclaimable underneath it.
     assert any(seconds == 300 for _, seconds in queue.calls)
-    # The final call is the surrender nack (deadline 0) for immediate reclaim.
-    assert queue.calls[-1] == ("rcpt-cap", 0)
+    assert 0 not in [seconds for _, seconds in queue.calls]
     controller.stop(outcome="nack")
 
 
+def test_lease_controller_nacks_once_the_surrender_grace_is_exhausted() -> None:
+    """A body that never reaches a boundary must not hold the message forever.
+
+    This is the backstop the cap exists for, kept as a last resort rather than
+    the ordinary path.
+    """
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-wedged",
+        job_id="job-wedged",
+        period_seconds=0.05,
+        extension_seconds=300,
+        max_lifetime_s=0.1,
+        surrender_grace_s=0.2,
+    )
+
+    controller.start()
+    time.sleep(0.8)
+
+    assert controller.surrendered is True
+    assert queue.calls[-1] == ("rcpt-wedged", 0)
+    controller.stop(outcome="nack")
+
+
+def test_the_ordinary_surrender_path_nacks_from_the_body_not_the_controller() -> None:
+    """With a grace longer than the run, the controller never nacks at all.
+
+    The body's own surrender raises RetryWorkItem at a chunk boundary and the
+    entrypoint turns that into the redelivery. The controller's job is only to
+    keep the message held until then.
+    """
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-clean",
+        job_id="job-clean",
+        period_seconds=0.05,
+        extension_seconds=300,
+        max_lifetime_s=0.1,
+        surrender_grace_s=60.0,
+    )
+
+    controller.start()
+    time.sleep(0.5)
+    # Stopping with "ack" stands in for the body finishing its unwind: the
+    # entrypoint owns the nack, so the controller must not have issued one.
+    controller.stop(outcome="ack")
+
+    assert controller.surrendered is True
+    assert all(seconds != 0 for _, seconds in queue.calls)
+
+
 def test_lease_controller_surrenders_after_max_extensions() -> None:
-    """``max_extensions`` bounds the number of renewals before surrender."""
+    """``max_extensions`` bounds the renewals before surrender is flagged.
+
+    It does not bound the renewals during the drain: holding the message is
+    the whole point of the drain, so extensions continue until the body
+    unwinds or the grace runs out.
+    """
     queue = _StubQueue()
     controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
@@ -334,15 +400,15 @@ def test_lease_controller_surrenders_after_max_extensions() -> None:
         period_seconds=0.04,
         extension_seconds=300,
         max_extensions=2,
+        surrender_grace_s=30.0,
     )
 
     controller.start()
-    time.sleep(0.6)
+    time.sleep(0.4)
 
     assert controller.surrendered is True
-    assert controller.extensions == 2
-    # Two real extensions, then the surrender nack.
-    assert [s for _, s in queue.calls] == [300, 300, 0]
+    assert controller.extensions >= 2
+    assert all(seconds == 300 for _, seconds in queue.calls)
     controller.stop(outcome="nack")
 
 

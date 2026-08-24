@@ -61,15 +61,23 @@ def _lease_lifetime_cap() -> tuple[float | None, int | None]:
 
     Defense-in-depth so a single chunk can never hold a message forever
     (we observed 2.5h / 76 extensions), which is what made pause/stop
-    unable to reclaim an in-flight chunk. The default (30 min) sits well
-    above a healthy chunk time once the O(n^2) counter scan is gone; set
-    ``UNIFY_INGEST_LEASE_MAX_LIFETIME_S=0`` to disable.
+    unable to reclaim an in-flight chunk.
+
+    The cap governs one *message*, and a message is one whole file. The
+    previous 30-minute default was chosen against a healthy *chunk* time,
+    which is the wrong unit by two orders of magnitude: a multi-million-row
+    file runs for hours, so every such file tripped the cap repeatedly and
+    paid a redelivery and a resume each time. An hour reduces that churn
+    without removing the backstop. It stops mattering once a message carries
+    a chunk range rather than a file, at which point nothing comes near it.
+
+    Set ``UNIFY_INGEST_LEASE_MAX_LIFETIME_S=0`` to disable.
     """
-    raw_lifetime = os.environ.get("UNIFY_INGEST_LEASE_MAX_LIFETIME_S", "1800")
+    raw_lifetime = os.environ.get("UNIFY_INGEST_LEASE_MAX_LIFETIME_S", "3600")
     try:
         lifetime = float(raw_lifetime)
     except ValueError:
-        lifetime = 1800.0
+        lifetime = 3600.0
     max_lifetime_s = lifetime if lifetime > 0 else None
 
     raw_extensions = os.environ.get("UNIFY_INGEST_LEASE_MAX_EXTENSIONS", "")
@@ -80,6 +88,26 @@ def _lease_lifetime_cap() -> tuple[float | None, int | None]:
     max_extensions = extensions if extensions > 0 else None
 
     return max_lifetime_s, max_extensions
+
+
+def _surrender_grace_seconds() -> float:
+    """How long a surrendering body has to reach a safe boundary.
+
+    The lease keeps being renewed for this long after the cap trips, so the
+    body can release the attempt lease before the message becomes reclaimable.
+    Nacking the instant the cap tripped handed the successor a lease the
+    predecessor still held, which is what produced DuplicateLiveAttempt on
+    every file longer than the cap.
+
+    Sized as several chunk times: long enough that an ordinary chunk finishes
+    inside it, short enough that a wedged body is still reclaimed.
+    """
+    raw = os.environ.get("UNIFY_INGEST_LEASE_SURRENDER_GRACE_S", "900")
+    try:
+        grace = float(raw)
+    except ValueError:
+        grace = 900.0
+    return grace if grace > 0 else 900.0
 
 
 def _duplicate_defer_seconds(expires_at: str) -> int:
@@ -232,6 +260,7 @@ async def main() -> None:
                         stage="ingest" if heartbeat_ledger else None,
                         max_lifetime_s=lease_max_lifetime_s,
                         max_extensions=lease_max_extensions,
+                        surrender_grace_s=_surrender_grace_seconds(),
                     )
                     lease_extender.start()
                     lease_outcome = "error"
